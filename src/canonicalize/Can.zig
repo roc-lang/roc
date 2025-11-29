@@ -1753,6 +1753,10 @@ pub fn canonicalizeFile(
         .platform => |h| {
             self.env.module_kind = .platform;
             try self.createExposedScope(h.exposes);
+            // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
+            // These need to be in the exposed scope so they become exports
+            // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
+            try self.addPlatformProvidesItems(h.provides);
             // Extract required type signatures for type checking
             // This stores the types in env.requires_types without creating local definitions
             // Pass requires_rigids so R1, R2, etc. are in scope when processing signatures
@@ -2531,6 +2535,17 @@ fn createExposedScope(
     self.exposed_scope.deinit(gpa);
     self.exposed_scope = Scope.init(false);
 
+    try self.addToExposedScope(exposes);
+}
+
+/// Add items to the exposed scope without resetting it.
+/// Used for platforms which have both 'exposes' (for apps) and 'provides' (for the host).
+fn addToExposedScope(
+    self: *Self,
+    exposes: AST.Collection.Idx,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
@@ -2650,6 +2665,42 @@ fn createExposedScope(
                 // Malformed exposed items are already captured as diagnostics during parsing
                 _ = malformed;
             },
+        }
+    }
+}
+
+/// Add platform provides items to the exposed scope.
+/// Platform provides uses curly braces { main_for_host!: "main" } so it's parsed as record fields.
+/// The string value is the FFI symbol name exported to the host (becomes roc__<symbol>).
+fn addPlatformProvidesItems(
+    self: *Self,
+    provides: AST.Collection.Idx,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    const collection = self.parse_ir.store.getCollection(provides);
+    const record_fields = self.parse_ir.store.recordFieldSlice(.{ .span = collection.span });
+
+    for (record_fields) |field_idx| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+
+        // Get the identifier text from the field name token
+        if (self.parse_ir.tokens.resolveIdentifier(field.name)) |ident_idx| {
+            // Add to exposed_items for permanent storage
+            try self.env.addExposedById(ident_idx);
+
+            // Add to exposed_scope so it becomes an export
+            const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
+            try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+
+            // Also track in exposed_ident_texts
+            const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
+            const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+            const region = self.parse_ir.tokenizedRegionToRegion(field.region);
+            _ = try self.exposed_ident_texts.getOrPut(gpa, ident_text);
+            if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
+                ptr.* = region;
+            }
         }
     }
 }
@@ -8238,7 +8289,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             // canonicalize the expr directly without adding it as a statement
             switch (ast_stmt) {
                 .expr => |expr_stmt| {
-                    //
                     last_expr = try self.canonicalizeExprOrMalformed(expr_stmt.expr);
                 },
                 .dbg => |dbg_stmt| {

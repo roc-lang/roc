@@ -440,7 +440,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = undefined, // Will be set later during canonicalization
-        .module_name_idx = undefined, // Will be set later during canonicalization
+        .module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
@@ -2624,12 +2624,19 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
             const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
             return self.getIdentStoreConst().findByString(qualified);
         } else {
-            // Need to add module prefix
+            // Try module-qualified name first (e.g., "Builtin.Num.U64.from_numeral")
             const qualified = std.fmt.bufPrint(&buf, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
-            return self.getIdentStoreConst().findByString(qualified);
+            if (self.getIdentStoreConst().findByString(qualified)) |idx| {
+                return idx;
+            }
+            // Fallback: try without module prefix (e.g., "Color.as_str" for app-defined types)
+            // This handles the case where methods are registered with just the type-qualified name
+            const simple_qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
+            return self.getIdentStoreConst().findByString(simple_qualified);
         }
     } else {
         // Use heap allocation for large identifiers (rare case)
+        // Try module-qualified name first
         const qualified = if (type_name.len > self.module_name.len and
             std.mem.startsWith(u8, type_name, self.module_name) and
             type_name[self.module_name.len] == '.')
@@ -2639,7 +2646,19 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
         else
             std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
         defer self.gpa.free(qualified);
-        return self.getIdentStoreConst().findByString(qualified);
+        if (self.getIdentStoreConst().findByString(qualified)) |idx| {
+            return idx;
+        }
+        // Fallback for the module-qualified case
+        if (type_name.len <= self.module_name.len or
+            !std.mem.startsWith(u8, type_name, self.module_name) or
+            type_name[self.module_name.len] != '.')
+        {
+            const simple_qualified = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null;
+            defer self.gpa.free(simple_qualified);
+            return self.getIdentStoreConst().findByString(simple_qualified);
+        }
+        return null;
     }
 }
 

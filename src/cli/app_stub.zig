@@ -161,12 +161,12 @@ fn addRocCallAbiStub(
     wip.cursor = .{ .block = entry };
 
     // Generate actual implementation based on function name
-    if (std.mem.eql(u8, name, "addInts")) {
+    if (std.mem.eql(u8, name, "add_ints")) {
         try addIntsImplementation(&wip, llvm_builder);
-    } else if (std.mem.eql(u8, name, "multiplyInts")) {
+    } else if (std.mem.eql(u8, name, "multiply_ints")) {
         try multiplyIntsImplementation(&wip, llvm_builder);
-    } else if (std.mem.eql(u8, name, "processString")) {
-        // processString not supported in cross-compilation stubs - only int platform supported
+    } else if (std.mem.eql(u8, name, "process_string")) {
+        // process_string not supported in cross-compilation stubs - only int platform supported
         _ = try wip.retVoid();
     } else {
         // Default: just return void for unknown functions
@@ -180,11 +180,11 @@ fn addRocCallAbiStub(
 pub fn getTestPlatformEntrypoints(allocator: Allocator, platform_type: []const u8) ![]PlatformEntrypoint {
     if (std.mem.eql(u8, platform_type, "int")) {
         // Based on test/int/platform/host.zig:
-        // extern fn roc__addInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-        // extern fn roc__multiplyInts(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+        // extern fn roc__add_ints(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+        // extern fn roc__multiply_ints(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
         const entrypoints = try allocator.alloc(PlatformEntrypoint, 2);
-        entrypoints[0] = PlatformEntrypoint{ .name = "addInts" };
-        entrypoints[1] = PlatformEntrypoint{ .name = "multiplyInts" };
+        entrypoints[0] = PlatformEntrypoint{ .name = "add_ints" };
+        entrypoints[1] = PlatformEntrypoint{ .name = "multiply_ints" };
         return entrypoints;
     }
 

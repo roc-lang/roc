@@ -1,7 +1,7 @@
-app [addInts, multiplyInts] { pf: platform "./platform/main.roc" }
+app [add_ints, multiply_ints] { pf: platform "./platform/main.roc" }
 
-addInts : I64, I64 -> I64
-addInts = |a, b| a + b
+add_ints : I64, I64 -> I64
+add_ints = |a, b| a + b
 
-multiplyInts : I64, I64 -> I64
-multiplyInts = |a, b| a * b
+multiply_ints : I64, I64 -> I64
+multiply_ints = |a, b| a * b

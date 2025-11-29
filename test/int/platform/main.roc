@@ -1,9 +1,11 @@
 platform ""
-    requires {} { addInts : I64, I64 -> I64, multiplyInts : I64, I64 -> I64 }
+    requires {} { add_ints : I64, I64 -> I64, multiply_ints : I64, I64 -> I64 }
     exposes []
     packages {}
-    provides { addInts: "addInts", multiplyInts: "multiplyInts" }
+    provides { add_ints_for_host: "add_ints", multiply_ints_for_host: "multiply_ints" }
 
-addInts : I64, I64 -> I64
+add_ints_for_host : I64, I64 -> I64
+add_ints_for_host = add_ints
 
-multiplyInts : I64, I64 -> I64
+multiply_ints_for_host : I64, I64 -> I64
+multiply_ints_for_host = multiply_ints

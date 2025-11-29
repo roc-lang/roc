@@ -2,7 +2,7 @@ platform ""
     requires {} { main! : () => {} }
     exposes [Stdout, Stderr, Stdin]
     packages {}
-    provides { main_for_host! }
+    provides { main_for_host!: "main" }
 
 import Stdout
 import Stderr

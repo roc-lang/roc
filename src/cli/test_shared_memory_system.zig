@@ -121,18 +121,8 @@ test "integration - shared memory setup and parsing" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
-    // Create a temporary Roc file with simple arithmetic
-    var temp_dir = testing.tmpDir(.{});
-    defer temp_dir.cleanup();
-
-    const roc_content = "app [main] { pf: platform \"test\" }\n\nmain = 42 + 58";
-
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(roc_content) catch unreachable;
-
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
-    defer allocs.gpa.free(roc_path);
+    // Use the real int test platform
+    const roc_path = "test/int/app.roc";
 
     // Test that we can set up shared memory with ModuleEnv
     const shm_handle = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
@@ -159,7 +149,7 @@ test "integration - shared memory setup and parsing" {
     std.log.debug("Integration test: Successfully set up shared memory with size: {} bytes\n", .{shm_handle.size});
 }
 
-test "integration - compilation pipeline for different expressions" {
+test "integration - compilation pipeline for different platforms" {
     if (builtin.os.tag == .windows) {
         return;
     }
@@ -170,30 +160,17 @@ test "integration - compilation pipeline for different expressions" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
-    const test_cases = [_][]const u8{
-        "100 - 58",
-        "7 * 6",
-        "15 / 3",
-        "42 + 0",
+    // Test with our real test platforms
+    const test_apps = [_][]const u8{
+        "test/int/app.roc",
+        "test/str/app.roc",
+        "test/fx/app.roc",
     };
 
-    for (test_cases) |expression| {
-        // Prepend boilerplate to make a complete Roc app
-        const roc_content = try std.fmt.allocPrint(allocs.gpa, "app [main] {{ pf: platform \"test\" }}\n\nmain = {s}", .{expression});
-        defer allocs.gpa.free(roc_content);
-        var temp_dir = testing.tmpDir(.{});
-        defer temp_dir.cleanup();
-
-        var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-        defer roc_file.close();
-        roc_file.writeAll(roc_content) catch unreachable;
-
-        const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
-        defer allocs.gpa.free(roc_path);
-
+    for (test_apps) |roc_path| {
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
         const shm_handle = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path) catch |err| {
-            std.log.warn("Failed to set up shared memory for expression: {s}, error: {}\n", .{ roc_content, err });
+            std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
             continue;
         };
 
@@ -214,11 +191,11 @@ test "integration - compilation pipeline for different expressions" {
 
         // Verify shared memory was set up successfully
         try testing.expect(shm_handle.size > 0);
-        std.log.debug("Successfully compiled expression: '{s}' (shared memory size: {} bytes)\n", .{ roc_content, shm_handle.size });
+        std.log.debug("Successfully compiled {s} (shared memory size: {} bytes)\n", .{ roc_path, shm_handle.size });
     }
 }
 
-test "integration - error handling in compilation" {
+test "integration - error handling for non-existent file" {
     if (builtin.os.tag == .windows) {
         return;
     }
@@ -229,26 +206,15 @@ test "integration - error handling in compilation" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
-    var temp_dir = testing.tmpDir(.{});
-    defer temp_dir.cleanup();
+    // Test with a non-existent file path
+    const roc_path = "test/nonexistent/app.roc";
 
-    // Test with invalid syntax
-    const invalid_roc_content = "app [main] { pf: platform \"test\" }\n\nmain = 42 + + 58"; // Invalid syntax
-
-    var roc_file = temp_dir.dir.createFile("test.roc", .{}) catch unreachable;
-    defer roc_file.close();
-    roc_file.writeAll(invalid_roc_content) catch unreachable;
-
-    const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
-    defer allocs.gpa.free(roc_path);
-
-    // This should fail during parsing/compilation
+    // This should fail because the file doesn't exist
     const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
 
-    // We expect this to either fail or succeed (depending on parser error handling)
-    // The important thing is that it doesn't crash
+    // We expect this to fail - the important thing is that it doesn't crash
     if (result) |shm_handle| {
-        // Clean up shared memory resources if successful
+        // Clean up shared memory resources if somehow successful
         defer {
             if (comptime builtin.os.tag == .windows) {
                 _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
@@ -262,8 +228,10 @@ test "integration - error handling in compilation" {
                 _ = posix.close(shm_handle.fd);
             }
         }
-        std.log.debug("Compilation succeeded even with invalid syntax (size: {} bytes)\n", .{shm_handle.size});
+        // This shouldn't happen with a non-existent file
+        return error.UnexpectedSuccess;
     } else |err| {
+        // Expected to fail
         std.log.debug("Compilation failed as expected with error: {}\n", .{err});
     }
 }

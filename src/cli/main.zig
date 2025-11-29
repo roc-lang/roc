@@ -625,7 +625,8 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     }
 
     // Create the complete platform shim
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items) catch |err| {
+    // Note: Symbol names include platform-specific prefixes (underscore for macOS)
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
@@ -1103,15 +1104,16 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
     _ = ipc.platform.windows.CloseHandle(process_info.hThread);
 
-    // Check exit code
+    // Check exit code and propagate to parent
     if (exit_code != 0) {
-        std.log.err("Child process {s} exited with code: {}", .{ exe_path, exit_code });
+        std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
         if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
             std.log.err("Child process crashed with access violation (segfault)", .{});
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             std.log.err("Child process crashed with exception code: 0x{X}", .{exit_code});
         }
-        return error.ProcessExitedWithError;
+        // Propagate the exit code (truncated to u8 for compatibility)
+        std.process.exit(@truncate(exit_code));
     }
 
     std.log.debug("Child process completed successfully", .{});
@@ -1198,9 +1200,9 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             if (exit_code == 0) {
                 std.log.debug("Child process completed successfully", .{});
             } else {
-                // The host exited with an error - it should have printed any error messages
+                // Propagate the exit code from the child process to our parent
                 std.log.debug("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
-                return error.ProcessExitedWithError;
+                std.process.exit(exit_code);
             }
         },
         .Signal => |signal| {
@@ -1212,7 +1214,8 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             } else if (signal == 9) { // SIGKILL
                 std.log.err("Child process was killed (SIGKILL)", .{});
             }
-            return error.ProcessKilledBySignal;
+            // Standard POSIX convention: exit with 128 + signal number
+            std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
         .Stopped => |signal| {
             std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
@@ -1358,6 +1361,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         entry_count: u32,
         def_indices_offset: u64,
         module_envs_offset: u64,
+        /// Offset to platform's main.roc env (0 if no platform, entry points are in app)
+        platform_main_env_offset: u64,
+        /// Offset to app env (always present, used for e_lookup_required resolution)
+        app_env_offset: u64,
     };
 
     const header_ptr = try shm_allocator.create(Header);
@@ -1624,7 +1631,24 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Store app env at the last index (N-1, after platform modules at 0..N-2)
     module_env_offsets_ptr[total_module_count - 1] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
 
-    const exports_slice = app_env.store.sliceDefs(app_env.exports);
+    // Store app env offset for e_lookup_required resolution
+    header_ptr.app_env_offset = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
+
+    // Entry points are defined in the platform's `provides` section.
+    // The platform wraps app-provided functions (from `requires`) and exports them for the host.
+    // For example: `provides { main_for_host!: "main" }` where `main_for_host! = main!`
+    const platform_env = platform_main_env orelse {
+        std.log.err("No platform found. Every Roc app requires a platform.", .{});
+        return error.NoPlatformFound;
+    };
+    const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
+    if (exports_slice.len == 0) {
+        std.log.err("Platform has no exports in `provides` clause.", .{});
+        return error.NoEntrypointFound;
+    }
+
+    // Store platform env offset for entry point lookups
+    header_ptr.platform_main_env_offset = @intFromPtr(platform_env) - @intFromPtr(shm.base_ptr);
     header_ptr.entry_count = @intCast(exports_slice.len);
 
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
@@ -2347,15 +2371,39 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
             const provides_coll = parse_ast.store.getCollection(platform_header.provides);
             const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
 
-            // Extract all field names as entrypoints
+            // Extract FFI symbol names from provides clause
+            // Format: `provides { roc_identifier: "ffi_symbol_name" }`
+            // The string value specifies the symbol name exported to the host (becomes roc__<symbol>)
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
-                const field_name = parse_ast.resolve(field.name);
-                // Strip trailing '!' from effectful function names for the exported symbol
-                const symbol_name = if (std.mem.endsWith(u8, field_name, "!"))
-                    field_name[0 .. field_name.len - 1]
-                else
-                    field_name;
+
+                // Require explicit string value for symbol name
+                const symbol_name = if (field.value) |value_idx| blk: {
+                    const value_expr = parse_ast.store.getExpr(value_idx);
+                    switch (value_expr) {
+                        .string => |str_like| {
+                            const parts = parse_ast.store.exprSlice(str_like.parts);
+                            if (parts.len > 0) {
+                                const first_part = parse_ast.store.getExpr(parts[0]);
+                                switch (first_part) {
+                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
+                                    else => {},
+                                }
+                            }
+                            std.log.err("Invalid provides entry: string value is empty", .{});
+                            return error.InvalidProvidesEntry;
+                        },
+                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
+                        else => {
+                            std.log.err("Invalid provides entry: expected string value for symbol name", .{});
+                            return error.InvalidProvidesEntry;
+                        },
+                    }
+                } else {
+                    const field_name = parse_ast.resolve(field.name);
+                    std.log.err("Provides entry '{s}' missing symbol name. Use format: {{ {s}: \"symbol_name\" }}", .{ field_name, field_name });
+                    return error.InvalidProvidesEntry;
+                };
                 try entrypoints.append(try allocs.arena.dupe(u8, symbol_name));
             }
 
