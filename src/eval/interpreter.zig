@@ -1684,50 +1684,97 @@ pub const Interpreter = struct {
                 const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
                 const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
 
-                // Note: The builtin listConcat already handles empty list optimization
-                // and proper refcounting, so we don't need to special-case it here.
-
-                const elem_layout_idx_a = list_a_arg.layout.data.list;
-                const elem_layout_a = self.runtime_layout_store.getLayout(elem_layout_idx_a);
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout_a);
-                const elem_alignment = elem_layout_a.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                // Get element layout - handle list_of_zst by checking both lists for a proper element layout.
+                // When concatenating a list_of_zst (e.g., empty list []) with a regular list,
+                // we need to use the element layout from the regular list.
+                const elem_layout_result: struct { elem_layout: Layout, result_layout: Layout } = blk: {
+                    // Try to get element layout from list_a first
+                    if (list_a_arg.layout.tag == .list) {
+                        const elem_idx = list_a_arg.layout.data.list;
+                        const elem_lay = self.runtime_layout_store.getLayout(elem_idx);
+                        // Check if this is actually a non-ZST element
+                        if (self.runtime_layout_store.layoutSize(elem_lay) > 0) {
+                            break :blk .{ .elem_layout = elem_lay, .result_layout = list_a_arg.layout };
+                        }
+                    }
+                    // Try list_b
+                    if (list_b_arg.layout.tag == .list) {
+                        const elem_idx = list_b_arg.layout.data.list;
+                        const elem_lay = self.runtime_layout_store.getLayout(elem_idx);
+                        if (self.runtime_layout_store.layoutSize(elem_lay) > 0) {
+                            break :blk .{ .elem_layout = elem_lay, .result_layout = list_b_arg.layout };
+                        }
+                    }
+                    // Both are ZST - use ZST layout
+                    break :blk .{ .elem_layout = Layout.zst(), .result_layout = list_a_arg.layout };
+                };
+                const elem_layout = elem_layout_result.elem_layout;
+                const result_layout = elem_layout_result.result_layout;
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
+                // If either list is empty, just return a copy of the other (avoid allocation)
+                if (list_a.len() == 0) {
+                    return try self.pushCopy(list_b_arg, roc_ops);
+                }
+                if (list_b.len() == 0) {
+                    return try self.pushCopy(list_a_arg, roc_ops);
+                }
+
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout_a.isRefcounted();
+                const elements_refcounted = elem_layout.isRefcounted();
 
-                // Set up context for refcount callbacks
-                var refcount_context = RefcountContext{
-                    .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout_a,
-                    .roc_ops = roc_ops,
-                };
+                // Create a fresh list by allocating and copying elements.
+                // We can't use the builtin listConcat here because it consumes its input lists
+                // (handles refcounting internally), but we're working with StackValues that
+                // have their own lifetime management - the caller will decref the args.
+                const total_count = list_a.len() + list_b.len();
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+                const header: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
 
-                // Call listConcat with proper inc/dec callbacks.
-                // If elements are refcounted, pass callbacks that will inc/dec each element.
-                // Otherwise, pass no-op callbacks.
-                const result_list = builtins.list.listConcat(
-                    list_a.*,
-                    list_b.*,
+                const runtime_list = builtins.list.RocList.allocateExact(
                     elem_alignment_u32,
+                    total_count,
                     elem_size,
                     elements_refcounted,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
                     roc_ops,
                 );
 
-                // Allocate space for the result list
-                var out = try self.pushRaw(list_a_arg.layout, 0);
-                out.is_initialized = false;
+                if (elem_size > 0) {
+                    if (runtime_list.bytes) |buffer| {
+                        // Copy elements from list_a
+                        if (list_a.bytes) |src_a| {
+                            @memcpy(buffer[0 .. list_a.len() * elem_size], src_a[0 .. list_a.len() * elem_size]);
+                        }
+                        // Copy elements from list_b
+                        if (list_b.bytes) |src_b| {
+                            const offset = list_a.len() * elem_size;
+                            @memcpy(buffer[offset .. offset + list_b.len() * elem_size], src_b[0 .. list_b.len() * elem_size]);
+                        }
+                    }
+                }
 
-                // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
-
+                header.* = runtime_list;
                 out.is_initialized = true;
+
+                // Handle refcounting for copied elements - increment refcount for each element
+                // since we copied them (the elements are now shared with the original lists)
+                if (elements_refcounted) {
+                    var refcount_context = RefcountContext{
+                        .layout_store = &self.runtime_layout_store,
+                        .elem_layout = elem_layout,
+                        .roc_ops = roc_ops,
+                    };
+                    if (runtime_list.bytes) |buffer| {
+                        var i: usize = 0;
+                        while (i < total_count) : (i += 1) {
+                            listElementInc(@ptrCast(&refcount_context), buffer + i * elem_size);
+                        }
+                    }
+                }
+
                 return out;
             },
             .list_is_unique => {
@@ -6783,13 +6830,19 @@ pub const Interpreter = struct {
                     const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
                     if (!should_continue) {
                         // return_result continuation signals completion
-                        return value_stack.pop() orelse return error.Crash;
+                        if (value_stack.pop()) |val| {
+                            return val;
+                        } else {
+                            self.triggerCrash("eval: value_stack empty after return_result", false, roc_ops);
+                            return error.Crash;
+                        }
                     }
                 },
             }
         }
 
         // Should never reach here - return_result should have exited the loop
+        self.triggerCrash("eval: should never reach here - return_result should have exited the loop", false, roc_ops);
         return error.Crash;
     }
 
@@ -9627,11 +9680,17 @@ pub const Interpreter = struct {
                 var i: usize = arg_count;
                 while (i > 0) {
                     i -= 1;
-                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                    arg_values[i] = value_stack.pop() orelse {
+                        self.triggerCrash("call_invoke_closure: value_stack empty when popping arguments", false, roc_ops);
+                        return error.Crash;
+                    };
                 }
 
                 // Pop function value
-                const func_val = value_stack.pop() orelse return error.Crash;
+                const func_val = value_stack.pop() orelse {
+                    self.triggerCrash("call_invoke_closure: value_stack empty when popping function", false, roc_ops);
+                    return error.Crash;
+                };
 
                 // Handle closure invocation
                 if (func_val.layout.tag == .closure) {
@@ -9807,11 +9866,9 @@ pub const Interpreter = struct {
 
                         var result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
 
-                        // Decref args (except for list_concat which handles its own refcounting)
-                        if (low_level.op != .list_concat) {
-                            for (arg_values) |arg| {
-                                arg.decref(&self.runtime_layout_store, roc_ops);
-                            }
+                        // Decref args after builtin completes
+                        for (arg_values) |arg| {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
                         }
 
                         // Restore environment and free arg_rt_vars
@@ -10559,7 +10616,10 @@ pub const Interpreter = struct {
             },
             .for_loop_iterate => |fl_in| {
                 // For loop iteration: list has been evaluated, start iterating
-                const list_value = value_stack.pop() orelse return error.Crash;
+                const list_value = value_stack.pop() orelse {
+                    self.triggerCrash("for_loop_iterate: value_stack empty", false, roc_ops);
+                    return error.Crash;
+                };
 
                 // Get the list layout
                 if (list_value.layout.tag != .list) {
@@ -10648,7 +10708,10 @@ pub const Interpreter = struct {
             },
             .for_loop_body_done => |fl| {
                 // For loop body completed, clean up and continue to next iteration
-                const body_result = value_stack.pop() orelse return error.Crash;
+                const body_result = value_stack.pop() orelse {
+                    self.triggerCrash("for_loop_body_done: value_stack empty", false, roc_ops);
+                    return error.Crash;
+                };
                 body_result.decref(&self.runtime_layout_store, roc_ops);
 
                 // Clean up bindings for this iteration
@@ -10802,7 +10865,10 @@ pub const Interpreter = struct {
             },
             .reassign_value => |rv| {
                 // Reassign statement: update binding
-                const new_val = value_stack.pop() orelse return error.Crash;
+                const new_val = value_stack.pop() orelse {
+                    self.triggerCrash("reassign_value: value_stack empty", false, roc_ops);
+                    return error.Crash;
+                };
                 // Search through all bindings and reassign
                 var j: usize = self.bindings.items.len;
                 while (j > 0) {

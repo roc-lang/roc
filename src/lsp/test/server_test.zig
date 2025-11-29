@@ -150,3 +150,39 @@ test "server rejects re-initialization requests" {
     const error_obj = parsed_error.value.object.get("error") orelse return error.ExpectedError;
     try std.testing.expect(error_obj.object.get("code").?.integer == @intFromEnum(protocol.ErrorCode.invalid_request));
 }
+
+test "server tracks documents on didOpen/didChange" {
+    const allocator = std.testing.allocator;
+    const open_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.roc","version":1,"text":"app main = 0"}}}
+    );
+    defer allocator.free(open_msg);
+    const change_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///test.roc","version":2},"contentChanges":[{"text":"app main = 42","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":12}}}]}}
+    );
+    defer allocator.free(change_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg.len);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, change_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [32]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null);
+    defer server.deinit();
+    try server.run();
+
+    const maybe_doc = server.getDocumentForTesting("file:///test.roc");
+    try std.testing.expect(maybe_doc != null);
+    const doc = maybe_doc.?;
+    try std.testing.expectEqualStrings("app main = 42", doc.text);
+    try std.testing.expectEqual(@as(i64, 2), doc.version);
+}

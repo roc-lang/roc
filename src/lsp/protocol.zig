@@ -191,9 +191,7 @@ pub const ServerInfo = struct {
 };
 
 /// Capabilities advertised back to the editor.
-pub const ServerCapabilities = struct {
-    positionEncoding: []const u8 = "utf-16",
-};
+pub const ServerCapabilities = @import("capabilities.zig").ServerCapabilities;
 
 /// Response body returned after a successful initialization.
 pub const InitializeResult = struct {

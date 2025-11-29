@@ -423,8 +423,40 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         try out.append(')');
         return out.toOwnedSlice();
     }
+    if (value.layout.tag == .list) {
+        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+        errdefer out.deinit();
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
+        const len = roc_list.len();
+        try out.append('[');
+        if (len > 0) {
+            const elem_layout_idx = value.layout.data.list;
+            const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
+            const elem_size = ctx.layout_store.layoutSize(elem_layout);
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                if (roc_list.bytes) |bytes| {
+                    const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
+                    const elem_val = StackValue{ .layout = elem_layout, .ptr = elem_ptr, .is_initialized = true };
+                    const rendered = try renderValueRoc(ctx, elem_val);
+                    defer gpa.free(rendered);
+                    try out.appendSlice(rendered);
+                    if (i + 1 < len) try out.appendSlice(", ");
+                }
+            }
+        }
+        try out.append(']');
+        return out.toOwnedSlice();
+    }
     if (value.layout.tag == .list_of_zst) {
-        return try gpa.dupe(u8, "<list_of_zst>");
+        // list_of_zst is used for empty lists - render as []
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
+        const len = roc_list.len();
+        if (len == 0) {
+            return try gpa.dupe(u8, "[]");
+        }
+        // Non-empty list of ZST - show count
+        return try std.fmt.allocPrint(gpa, "[<{d} zero-sized elements>]", .{len});
     }
     if (value.layout.tag == .record) {
         var out = std.array_list.AlignedManaged(u8, null).init(gpa);

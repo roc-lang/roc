@@ -83,7 +83,16 @@ Builtin :: [].{
 			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
 
 		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |_, _| []
+		keep_if = |list, predicate|
+			List.fold(list, [], |acc, elem|
+				if predicate(elem) { List.concat(acc, [elem]) } else { acc }
+			)
+
+		drop_if : List(a), (a -> Bool) -> List(a)
+		drop_if = |list, predicate|
+			List.fold(list, [], |acc, elem|
+				if predicate(elem) { acc } else { List.concat(acc, [elem]) }
+			)
 
 		fold : List(item), state, (state, item -> state) -> state
 		fold = |list, init, step| {
