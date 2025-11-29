@@ -66,6 +66,8 @@ Builtin :: [].{
 			True
 		}
 
+		append : List(a), a -> List(a)
+
 		first : List(item) -> Try(item, [ListWasEmpty])
 		first = |list| List.get(list, 0)
 
