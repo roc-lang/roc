@@ -2670,8 +2670,8 @@ fn addToExposedScope(
 }
 
 /// Add platform provides items to the exposed scope.
-/// Platform provides uses curly braces { main_for_host! } so it's parsed as record fields,
-/// not as exposed items.
+/// Platform provides uses curly braces { main_for_host!: "main" } so it's parsed as record fields.
+/// The string value is the FFI symbol name exported to the host (becomes roc__<symbol>).
 fn addPlatformProvidesItems(
     self: *Self,
     provides: AST.Collection.Idx,
@@ -2683,11 +2683,6 @@ fn addPlatformProvidesItems(
 
     for (record_fields) |field_idx| {
         const field = self.parse_ir.store.getRecordField(field_idx);
-
-        // Only add items that are platform-defined (no value), not passthrough items.
-        // - `provides { main_for_host! }` - value is null, platform DEFINES this
-        // - `provides { processString: "processString" }` - value is set, PASSTHROUGH from requires
-        if (field.value != null) continue;
 
         // Get the identifier text from the field name token
         if (self.parse_ir.tokens.resolveIdentifier(field.name)) |ident_idx| {

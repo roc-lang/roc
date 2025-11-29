@@ -1633,16 +1633,21 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Store app env offset for e_lookup_required resolution
     header_ptr.app_env_offset = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
 
-    // Store platform main env offset if available (for entry point lookups)
-    header_ptr.platform_main_env_offset = if (platform_main_env) |penv|
-        @intFromPtr(penv) - @intFromPtr(shm.base_ptr)
-    else
-        0;
+    // Entry points are defined in the platform's `provides` section.
+    // The platform wraps app-provided functions (from `requires`) and exports them for the host.
+    // For example: `provides { main_for_host!: "main" }` where `main_for_host! = main!`
+    const platform_env = platform_main_env orelse {
+        std.log.err("No platform found. Every Roc app requires a platform.", .{});
+        return error.NoPlatformFound;
+    };
+    const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
+    if (exports_slice.len == 0) {
+        std.log.err("Platform has no exports in `provides` clause.", .{});
+        return error.NoEntrypointFound;
+    }
 
-    // Determine entry points: use platform's exports (e.g., main_for_host!) if available,
-    // otherwise fall back to app's exports (for standalone apps without platforms)
-    const entry_env: *ModuleEnv = if (platform_main_env) |penv| penv else &app_env;
-    const exports_slice = entry_env.store.sliceDefs(entry_env.exports);
+    // Store platform env offset for entry point lookups
+    header_ptr.platform_main_env_offset = @intFromPtr(platform_env) - @intFromPtr(shm.base_ptr);
     header_ptr.entry_count = @intCast(exports_slice.len);
 
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
@@ -2365,15 +2370,39 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
             const provides_coll = parse_ast.store.getCollection(platform_header.provides);
             const provides_fields = parse_ast.store.recordFieldSlice(.{ .span = provides_coll.span });
 
-            // Extract all field names as entrypoints
+            // Extract FFI symbol names from provides clause
+            // Format: `provides { roc_identifier: "ffi_symbol_name" }`
+            // The string value specifies the symbol name exported to the host (becomes roc__<symbol>)
             for (provides_fields) |field_idx| {
                 const field = parse_ast.store.getRecordField(field_idx);
-                const field_name = parse_ast.resolve(field.name);
-                // Strip trailing '!' from effectful function names for the exported symbol
-                const symbol_name = if (std.mem.endsWith(u8, field_name, "!"))
-                    field_name[0 .. field_name.len - 1]
-                else
-                    field_name;
+
+                // Require explicit string value for symbol name
+                const symbol_name = if (field.value) |value_idx| blk: {
+                    const value_expr = parse_ast.store.getExpr(value_idx);
+                    switch (value_expr) {
+                        .string => |str_like| {
+                            const parts = parse_ast.store.exprSlice(str_like.parts);
+                            if (parts.len > 0) {
+                                const first_part = parse_ast.store.getExpr(parts[0]);
+                                switch (first_part) {
+                                    .string_part => |sp| break :blk parse_ast.resolve(sp.token),
+                                    else => {},
+                                }
+                            }
+                            std.log.err("Invalid provides entry: string value is empty", .{});
+                            return error.InvalidProvidesEntry;
+                        },
+                        .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
+                        else => {
+                            std.log.err("Invalid provides entry: expected string value for symbol name", .{});
+                            return error.InvalidProvidesEntry;
+                        },
+                    }
+                } else {
+                    const field_name = parse_ast.resolve(field.name);
+                    std.log.err("Provides entry '{s}' missing symbol name. Use format: {{ {s}: \"symbol_name\" }}", .{ field_name, field_name });
+                    return error.InvalidProvidesEntry;
+                };
                 try entrypoints.append(try allocs.arena.dupe(u8, symbol_name));
             }
 

@@ -61,7 +61,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__main_for_host(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -199,5 +199,5 @@ fn platform_main() !void {
     // currently dereference both of these eagerly even though it won't use either,
     // causing a segfault if you pass null. This should be changed! Dereferencing
     // garbage memory is obviously pointless, and there's no reason we should do it.
-    roc__main_for_host(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
+    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
 }
