@@ -2199,30 +2199,34 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             } else if (self.peek() == .OpArrow) {
                 const s = self.pos;
                 self.advance();
-                if (self.peek() == .LowerIdent) {
-                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                    const ident = try self.store.addExpr(.{ .ident = .{
-                        .region = .{ .start = self.pos, .end = self.pos },
-                        .token = self.pos,
-                        .qualifiers = empty_qualifiers,
-                    } });
-                    self.advance();
-                    const ident_suffixed = try self.parseExprSuffix(s, ident);
-                    expression = try self.store.addExpr(.{ .local_dispatch = .{
-                        .region = .{ .start = start, .end = self.pos },
-                        .operator = s,
-                        .left = expression,
-                        .right = ident_suffixed,
-                    } });
-                } else if (self.peek() == .UpperIdent) { // UpperIdent - should be a tag
-                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                    const tag = try self.store.addExpr(.{ .tag = .{
-                        .region = .{ .start = self.pos, .end = self.pos },
-                        .token = self.pos,
-                        .qualifiers = empty_qualifiers,
-                    } });
-                    self.advance();
-                    const ident_suffixed = try self.parseExprSuffix(s, tag);
+                const first_token_tag = self.peek();
+                if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
+                    const ident_start = self.pos;
+                    const qual_result = try self.parseQualificationChain();
+                    // Use final token as end position to avoid newline tokens
+                    self.pos = qual_result.final_token + 1;
+
+                    // Determine if final token is a tag (UpperIdent or ends with NoSpaceDotUpperIdent)
+                    // For unqualified names, check the original token; for qualified names, use is_upper
+                    const is_tag = if (qual_result.qualifiers.span.len == 0)
+                        first_token_tag == .UpperIdent
+                    else
+                        qual_result.is_upper;
+
+                    const expr_node = if (is_tag)
+                        try self.store.addExpr(.{ .tag = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+
+                    const ident_suffixed = try self.parseExprSuffix(s, expr_node);
                     expression = try self.store.addExpr(.{ .local_dispatch = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
