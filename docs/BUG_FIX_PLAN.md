@@ -11,7 +11,7 @@ This document provides a detailed plan for fixing the remaining bugs found durin
 | 3 | Custom type aliases panic | FIXED | - |
 | 4 | `?` operator not implemented | **BUG** | Medium |
 | 5-8 | Missing builtins (Num.to_str, List.range, etc.) | Feature Request | - |
-| 9 | Numeric fold produces garbage values | **BUG** | Hard |
+| 9 | Numeric fold produces garbage values | FIXED | Hard |
 | 10 | For loop on list literals segfault | FIXED | - |
 | 11 | List.first error handling crash | FIXED | - |
 | 12 | String literal matching in match broken | FIXED | Medium |
@@ -303,8 +303,46 @@ Run a single reproduction manually:
 
 **Key Insight:** The interpreter's `str_literal` pattern matching code was correct all along - the bug was that canonicalization was storing empty/wrong strings in the pattern, so the comparison always failed and fell through to the wildcard case
 
-### Bug 9 Investigation Notes
-- TBD
+### Bug 9 Investigation Notes (FIXED)
+
+**Root Cause:** Flex type variables were defaulting to Dec (128-bit decimal) instead of I64 (64-bit integer) at runtime.
+
+**Details:**
+- When a numeric literal like `42` appears without explicit type annotation, its type is a flex variable
+- The `getRuntimeLayout` function defaulted flex vars to Dec (128-bit)
+- When the value was later used in a context expecting I64 (e.g., `I64.to_str()`), only 8 bytes were read from 16 bytes of Dec data
+- This produced garbage values because the memory layout didn't match
+
+**Debugging Process:**
+1. Created isolated test cases to narrow down the issue:
+   - Simple var reassignment in for loop: WORKED
+   - Var inside lambda without for loop: FAILED
+   - Lambda with explicit type annotation: WORKED
+   - Lambda with inferred type: FAILED
+2. Determined the issue was with untyped lambdas returning numeric values
+3. Found that U8, I32, U64 all worked with type annotations, but unannotated numeric returns failed
+4. Root cause: `getRuntimeLayout` in interpreter.zig at line 5563-5571 defaulted flex vars to Dec
+
+**Fix Location:** `src/eval/interpreter.zig` lines 5563-5571
+
+**Fix Implementation:**
+Changed the default from Dec (128-bit decimal) to I64 (64-bit signed integer):
+
+```zig
+// BEFORE:
+if (resolved.desc.content == .flex) {
+    const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
+    ...
+}
+
+// AFTER:
+if (resolved.desc.content == .flex) {
+    const i64_layout = layout.Layout.int(types.Int.Precision.i64);
+    ...
+}
+```
+
+**Key Insight:** Integer literals should default to I64, not Dec. The original code was using Dec as the default for all unresolved numeric types, which is incorrect for integer literals. Decimal literals (with fractional parts) are handled separately via `e_dec`, `e_frac_f32`, `e_frac_f64` expression types
 
 ### Bug 4 Implementation Notes
 - TBD

@@ -711,10 +711,9 @@ test "BUG: question mark operator not implemented" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "suffix_single_question") != null);
 }
 
-test "BUG: numeric fold produces incorrect values" {
-    // Bug 9: Using List.fold with numeric accumulators produces garbage values.
-    // Expected output: "Sum: 15"
-    // Actual output: "Sum: -3446744073709551616" (or similar garbage)
+test "numeric fold produces correct values" {
+    // Bug 9 (FIXED): List.fold with numeric accumulators now produces correct values.
+    // Regression test to ensure numeric fold operations work correctly.
     const allocator = testing.allocator;
 
     try ensureRocBinary(allocator);
@@ -729,18 +728,8 @@ test "BUG: numeric fold produces incorrect values" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // The bug is that we get garbage values instead of correct sum
-    // Once fixed, this test should check for "Sum: 15"
-    // For now, we verify the bug exists by checking the output is NOT correct
-    if (std.mem.indexOf(u8, run_result.stdout, "Sum: 15") != null) {
-        // Bug has been fixed! Update this test to expect correct behavior
-        std.debug.print("\n*** BUG FIXED: numeric fold now produces correct values! ***\n", .{});
-        std.debug.print("Please update this test to expect correct behavior.\n", .{});
-        return error.BugHasBeenFixed;
-    }
-
-    // Verify we get some output starting with "Sum: " (even if incorrect)
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Sum: ") != null);
+    // Verify we get the correct sum: 1+2+3+4+5 = 15
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Sum: 15") != null);
 }
 
 test "string literal pattern matching" {

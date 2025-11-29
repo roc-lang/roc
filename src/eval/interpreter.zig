@@ -5645,14 +5645,15 @@ pub const Interpreter = struct {
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
 
-        // If we have a flex var, default it to Dec
-        // This is the interpreter-time defaulting for numeric literals
+        // If we have a flex var, default it to I64 (not Dec)
+        // This is the interpreter-time defaulting for unresolved numeric types.
+        // Integer literals should default to I64, not Dec.
         if (resolved.desc.content == .flex) {
-            // Directly return Dec's scalar layout
-            const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
-            const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
-            slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;
-            return dec_layout;
+            // Default to I64 for better compatibility with integer operations
+            const i64_layout = layout.Layout.int(types.Int.Precision.i64);
+            const i64_layout_idx = try self.runtime_layout_store.insertLayout(i64_layout);
+            slot_ptr.* = @intFromEnum(i64_layout_idx) + 1;
+            return i64_layout;
         }
         if (slot_ptr.* != 0) {
             const layout_idx_plus_one = slot_ptr.*;
