@@ -20,8 +20,9 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
-fn isNativeOrMusl(target: ResolvedTarget) bool {
-    return target.query.isNativeCpu() and target.query.isNativeOs() and
+fn isNativeishOrMusl(target: ResolvedTarget) bool {
+    return target.result.cpu.arch == builtin.target.cpu.arch and
+        target.query.isNativeOs() and
         (target.query.isNativeAbi() or target.result.abi.isMusl());
 }
 
@@ -1081,7 +1082,7 @@ pub fn build(b: *std.Build) void {
     const is_windows = target.result.os.tag == .windows;
 
     // fx platform effectful functions test - only run when not cross-compiling
-    if (isNativeOrMusl(target)) {
+    if (isNativeishOrMusl(target)) {
         // Create fx test platform host static library
         const test_platform_fx_host_lib = createTestPlatformHostLib(
             b,
@@ -1118,7 +1119,7 @@ pub fn build(b: *std.Build) void {
     }
 
     var build_afl = false;
-    if (!isNativeOrMusl(target)) {
+    if (!isNativeishOrMusl(target)) {
         std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
     } else if (is_windows) {
         // Windows does not support fuzzing - only build repro executables
