@@ -1358,6 +1358,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         entry_count: u32,
         def_indices_offset: u64,
         module_envs_offset: u64,
+        /// Offset to platform's main.roc env (0 if no platform, entry points are in app)
+        platform_main_env_offset: u64,
+        /// Offset to app env (always present, used for e_lookup_required resolution)
+        app_env_offset: u64,
     };
 
     const header_ptr = try shm_allocator.create(Header);
@@ -1624,7 +1628,19 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Store app env at the last index (N-1, after platform modules at 0..N-2)
     module_env_offsets_ptr[total_module_count - 1] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
 
-    const exports_slice = app_env.store.sliceDefs(app_env.exports);
+    // Store app env offset for e_lookup_required resolution
+    header_ptr.app_env_offset = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
+
+    // Store platform main env offset if available (for entry point lookups)
+    header_ptr.platform_main_env_offset = if (platform_main_env) |penv|
+        @intFromPtr(penv) - @intFromPtr(shm.base_ptr)
+    else
+        0;
+
+    // Determine entry points: use platform's exports (e.g., main_for_host!) if available,
+    // otherwise fall back to app's exports (for standalone apps without platforms)
+    const entry_env: *ModuleEnv = if (platform_main_env) |penv| penv else &app_env;
+    const exports_slice = entry_env.store.sliceDefs(entry_env.exports);
     header_ptr.entry_count = @intCast(exports_slice.len);
 
     const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);

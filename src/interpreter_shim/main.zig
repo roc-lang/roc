@@ -19,7 +19,8 @@ const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
-var global_env_ptr: ?*ModuleEnv = null;
+var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (platform or app)
+var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
 var shm_mutex: std.Thread.Mutex = .{};
@@ -40,6 +41,8 @@ const Header = struct {
     entry_count: u32,
     def_indices_offset: u64,
     module_envs_offset: u64, // Offset to array of module env offsets
+    platform_main_env_offset: u64, // 0 if no platform, entry points are in app
+    app_env_offset: u64, // Always present, used for e_lookup_required resolution
 };
 
 /// Comprehensive error handling for the shim
@@ -106,7 +109,7 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     };
 
     // Set up ModuleEnv from shared memory
-    const env_ptr = try setupModuleEnv(&shm, roc_ops);
+    const setup_result = try setupModuleEnv(&shm, roc_ops);
 
     // Load builtin modules from compiled binary (same as CLI does)
     const builtin_modules = eval.BuiltinModules.init(allocator) catch |err| {
@@ -117,7 +120,8 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
 
     // Store globals
     global_shm = shm;
-    global_env_ptr = env_ptr;
+    global_env_ptr = setup_result.primary_env;
+    global_app_env_ptr = setup_result.app_env;
     global_builtin_modules = builtin_modules;
 
     // Mark as initialized (release semantics ensure all writes above are visible)
@@ -132,12 +136,13 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     // Use the global shared memory and environment
     const shm = global_shm.?;
     const env_ptr = global_env_ptr.?;
+    const app_env = global_app_env_ptr;
 
     // Get builtin modules
     const builtin_modules = &global_builtin_modules.?;
 
     // Set up interpreter infrastructure (per-call, as it's lightweight)
-    var interpreter = try createInterpreter(env_ptr, builtin_modules, roc_ops);
+    var interpreter = try createInterpreter(env_ptr, app_env, builtin_modules, roc_ops);
     defer interpreter.deinit();
 
     // Get expression info from shared memory using entry_idx
@@ -169,8 +174,14 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
 }
 
+/// Result of setting up module environments
+const SetupResult = struct {
+    primary_env: *ModuleEnv, // Platform main env or app env (for entry points)
+    app_env: *ModuleEnv, // App env (for e_lookup_required resolution)
+};
+
 /// Set up ModuleEnv from shared memory with proper relocation (multi-module format)
-fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*ModuleEnv {
+fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!SetupResult {
     // Validate memory layout - we need at least space for the header
     const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
     if (shm.total_size < min_required_size) {
@@ -227,20 +238,29 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!*Modu
     // Store imported envs globally
     global_imported_envs = imported_envs;
 
-    // Get and relocate the app module (last in the array)
-    const app_module_offset = module_env_offsets[module_count - 1];
-    const app_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(app_module_offset));
+    // Get and relocate the app module using the header's app_env_offset
+    const app_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.app_env_offset));
     const app_env_ptr: *ModuleEnv = @ptrFromInt(app_env_addr);
-
-    // Relocate all pointers in the app ModuleEnv
     app_env_ptr.relocate(@intCast(offset));
     app_env_ptr.gpa = allocator;
 
-    return app_env_ptr;
+    // Determine primary env: platform main if available, otherwise app
+    const primary_env: *ModuleEnv = if (header_ptr.platform_main_env_offset != 0) blk: {
+        const platform_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.platform_main_env_offset));
+        const platform_env_ptr: *ModuleEnv = @ptrFromInt(platform_env_addr);
+        platform_env_ptr.relocate(@intCast(offset));
+        platform_env_ptr.gpa = allocator;
+        break :blk platform_env_ptr;
+    } else app_env_ptr;
+
+    return SetupResult{
+        .primary_env = primary_env,
+        .app_env = app_env_ptr,
+    };
 }
 
 /// Create and initialize interpreter with heap-allocated stable objects
-fn createInterpreter(env_ptr: *ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
+fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
     const allocator = std.heap.page_allocator;
 
     // Use builtin types from the loaded builtin modules
@@ -281,7 +301,15 @@ fn createInterpreter(env_ptr: *ModuleEnv, builtin_modules: *const eval.BuiltinMo
     // Resolve imports - map each import name to its index in imported_envs
     env_ptr.imports.resolveImports(env_ptr, imported_envs);
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping) catch {
+    // Also resolve imports for the app env if it's different from the primary env
+    // This is needed when the platform calls the app's main! via e_lookup_required
+    if (app_env) |a_env| {
+        if (a_env != env_ptr) {
+            a_env.imports.resolveImports(a_env, imported_envs);
+        }
+    }
+
+    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };

@@ -203,6 +203,9 @@ pub const Interpreter = struct {
     /// Root module used for method idents (is_lt, is_eq, etc.) - never changes during execution
     root_env: *can.ModuleEnv,
     builtin_module_env: ?*const can.ModuleEnv,
+    /// App module for resolving e_lookup_required (platform requires clause)
+    /// When the primary env is the platform, this points to the app that provides required values.
+    app_env: ?*can.ModuleEnv,
     /// Array of all module environments, indexed by resolved module index
     /// Used to resolve imports via pre-resolved indices in env.imports.resolved_modules
     all_module_envs: []const *const can.ModuleEnv,
@@ -234,7 +237,7 @@ pub const Interpreter = struct {
     /// Value being returned early from a function (set by s_return, consumed at function boundaries)
     early_return_value: ?StackValue,
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping, app_env: ?*can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -251,13 +254,17 @@ pub const Interpreter = struct {
         else
             0;
 
-        if (other_envs.len > 0 and import_count > 0) {
+        // Calculate total import count including app imports
+        const app_import_count: usize = if (app_env) |a_env| a_env.imports.imports.items.items.len else 0;
+        const total_import_count = import_count + app_import_count;
+
+        if (other_envs.len > 0 and total_import_count > 0) {
             // Allocate capacity for all imports (even if some are duplicates)
             try module_envs.ensureTotalCapacity(allocator, @intCast(other_envs.len));
             try module_ids.ensureTotalCapacity(allocator, @intCast(other_envs.len));
-            try import_envs.ensureTotalCapacity(allocator, @intCast(import_count));
+            try import_envs.ensureTotalCapacity(allocator, @intCast(total_import_count));
 
-            // Process ALL imports using pre-resolved module indices
+            // Process ALL imports from primary env using pre-resolved module indices
             // Note: Some imports may be unresolved (e.g., platform modules in test context).
             // We skip unresolved imports here - errors will occur at point-of-use if the
             // code actually tries to access an unresolved import.
@@ -286,9 +293,30 @@ pub const Interpreter = struct {
                     }
                 }
             }
+
+            // Also process app env imports if app_env is different from primary env
+            // This is needed when the platform calls the app's main! via e_lookup_required
+            if (app_env) |a_env| {
+                if (a_env != env) {
+                    for (0..app_import_count) |i| {
+                        const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+
+                        // Use pre-resolved module index - skip if not resolved
+                        const resolved_idx = a_env.imports.getResolvedModule(import_idx) orelse continue;
+
+                        if (resolved_idx >= other_envs.len) continue;
+
+                        const module_env = other_envs[resolved_idx];
+
+                        // Store in import_envs for app's imports
+                        // Use put instead of putAssumeCapacity since we may have overlapping indices
+                        try import_envs.put(allocator, import_idx, module_env);
+                    }
+                }
+            }
         }
 
-        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping);
+        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -307,6 +335,7 @@ pub const Interpreter = struct {
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const can.ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
+        app_env: ?*can.ModuleEnv,
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -325,6 +354,7 @@ pub const Interpreter = struct {
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
+            .app_env = app_env,
             .all_module_envs = all_module_envs,
             .module_envs = module_envs,
             .module_ids = module_ids,
@@ -5042,10 +5072,17 @@ pub const Interpreter = struct {
                 }
             },
             .record_destructure => |rec_pat| {
+                const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
+
+                // Empty record pattern {} matches zero-sized types
+                if (destructs.len == 0) {
+                    // No fields to destructure - matches any empty record (including zst)
+                    return value.layout.tag == .record or value.layout.tag == .zst;
+                }
+
                 if (value.layout.tag != .record) return false;
                 var accessor = try value.asRecord(&self.runtime_layout_store);
 
-                const destructs = self.env.store.sliceRecordDestructs(rec_pat.destructs);
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
 
@@ -5495,9 +5532,11 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
-                                // Keep the original tag name - it should already exist in the module's ident store
+                                // Translate the tag name from source module's ident store to runtime layout store's ident store
+                                const source_name_str = module.getIdent(tag.name);
+                                const rt_tag_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
                                 tag.* = .{
-                                    .name = tag.name,
+                                    .name = rt_tag_name,
                                     .args = rt_args_range,
                                 };
                             }
@@ -6833,11 +6872,55 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            .e_lookup_required => {
+            .e_lookup_required => |lookup| {
                 // Required lookups reference values from the app that provides values to the
-                // platform's `requires` clause. These are not available during compile-time
-                // evaluation.
-                return error.TypeMismatch;
+                // platform's `requires` clause.
+                if (self.app_env) |app_env| {
+                    // Get the required type info from the platform's requires_types
+                    const requires_items = self.env.requires_types.items.items;
+                    const requires_idx_val = @intFromEnum(lookup.requires_idx);
+                    if (requires_idx_val >= requires_items.len) {
+                        return error.TypeMismatch;
+                    }
+                    const required_type = requires_items[requires_idx_val];
+                    const required_ident = self.env.getIdent(required_type.ident);
+
+                    // Find the matching export in the app
+                    const exports = app_env.store.sliceDefs(app_env.exports);
+                    var found_expr: ?can.CIR.Expr.Idx = null;
+                    for (exports) |def_idx| {
+                        const def = app_env.store.getDef(def_idx);
+                        // Get the def's identifier from its pattern
+                        const pattern = app_env.store.getPattern(def.pattern);
+                        if (pattern == .assign) {
+                            const def_ident_text = app_env.getIdent(pattern.assign.ident);
+                            if (std.mem.eql(u8, def_ident_text, required_ident)) {
+                                found_expr = def.expr;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (found_expr) |app_expr_idx| {
+                        // Switch to app env for evaluation (like evalLookupExternal)
+                        const saved_env = self.env;
+                        const saved_bindings_len = self.bindings.items.len;
+                        self.env = @constCast(app_env);
+                        defer {
+                            self.env = saved_env;
+                            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                        }
+
+                        // Evaluate the app's exported expression synchronously
+                        const result = try self.evalWithExpectedType(app_expr_idx, roc_ops, expected_rt_var);
+                        try value_stack.push(result);
+                    } else {
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    // No app_env - can't resolve required lookups
+                    return error.TypeMismatch;
+                }
             },
 
             .e_runtime_error => {
@@ -10971,7 +11054,7 @@ test "interpreter: translateTypeVar for str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     // Get the actual Str type from the Builtin module using the str_stmt index
@@ -11008,7 +11091,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -11060,7 +11143,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -11117,7 +11200,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -11145,7 +11228,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -11183,7 +11266,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     // Create nominal Str type (no constraints)
@@ -11231,7 +11314,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -11281,7 +11364,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -11337,7 +11420,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping);
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
     defer interp.deinit();
 
     // Register module B
