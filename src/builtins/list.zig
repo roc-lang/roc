@@ -11,10 +11,12 @@ const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
 const increfDataPtrC = utils.increfDataPtrC;
 
+/// Pointer to the bytes of a list element or similar data
 pub const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
-pub const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
+const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
+/// Function copying data between 2 Opaques with a slot for the element's width
 pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
@@ -548,6 +550,7 @@ pub fn listAppendUnsafe(
     return output;
 }
 
+/// Add element to end of list. Will reserve additional space or reallocate if necessary beforehand.
 pub fn listAppend(
     list: RocList,
     alignment: u32,
@@ -1353,168 +1356,115 @@ pub fn listConcatUtf8(
     }
 }
 
+/// Specialized copy fn which takes pointers as pointers to U8 and copies from src to dest.
 pub fn copy_u8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*u8, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u8, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to I8 and copies from src to dest.
 pub fn copy_i8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*i8, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*i8, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*i8, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i8, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to U16 and copies from src to dest.
 pub fn copy_u16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*u16, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u16, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to I16 and copies from src to dest.
 pub fn copy_i16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*i16, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*i16, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*i16, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i16, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to U32 and copies from src to dest.
 pub fn copy_u32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*u32, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*u32, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*u32, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u32, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to I32 and copies from src to dest.
 pub fn copy_i32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*i32, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i32, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to U64 and copies from src to dest.
 pub fn copy_u64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*u64, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*u64, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*u64, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u64, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to I64 and copies from src to dest.
 pub fn copy_i64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*i64, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*i64, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*i64, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i64, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to U128 and copies from src to dest.
 pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*u128, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*u128, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*u128, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u128, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to I128 and copies from src to dest.
 pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*i128, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*i128, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*i128, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i128, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to Boxes and copies from src to dest.
 pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest)));
-        const src_ptr = @as(*usize, @ptrCast(@alignCast(src)));
-        dest_ptr.* = src_ptr.*;
-        if (dest_ptr.* != 0) {
-            const rc_box: [*]u8 = @ptrFromInt(dest_ptr.*);
-            utils.increfDataPtrC(@as(?[*]u8, rc_box), 1);
-        }
-    }
+    const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest)));
+    const src_ptr = @as(*usize, @ptrCast(@alignCast(src)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to ZST Boxes and copies from src to dest.
 pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
-    if (dest != null) {
-        const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest.?)));
-        dest_ptr.* = 0;
-    }
+    const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest.?)));
+    dest_ptr.* = 0;
 }
 
+/// Specialized copy fn which takes pointers as pointers to Lists and copies from src to dest.
 pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-        if (src_ptr.bytes) |bytes| {
-            utils.increfDataPtrC(bytes, 1);
-        }
-    }
+    const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to ZST Lists and copies from src to dest.
 pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-    }
+    const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to a RocStr and copies from src to dest.
 pub fn copy_str(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    if (dest != null and src != null) {
-        const dest_ptr = @as(*RocStr, @ptrCast(@alignCast(dest.?)));
-        const src_ptr = @as(*RocStr, @ptrCast(@alignCast(src.?)));
-        dest_ptr.* = src_ptr.*;
-        // dest_ptr.* = src_ptr.clone(self.ops);
-    }
+    const dest_ptr = @as(*RocStr, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*RocStr, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
 }
 
+/// Specialized copy fn which takes pointers as pointers to u8 and copies from src to dest.
 pub fn copy_fallback(dest: Opaque, source: Opaque, width: usize) callconv(.c) void {
     const src: []u8 = source.?[0..width];
     const dst: []u8 = dest.?[0..width];
-
-    // Skip memcpy if source and destination overlap to avoid aliasing error
-    const src_start = @intFromPtr(src.ptr);
-    const src_end = src_start + width;
-    const dst_start = @intFromPtr(dst.ptr);
-    const dst_end = dst_start + width;
-
-    // Check if ranges overlap
-    if ((src_start < dst_end) and (dst_start < src_end)) {
-        // Overlapping regions - skip if they're identical, otherwise use memmove
-        if (src.ptr == dst.ptr) {
-            return;
-        }
-        // Use manual copy for overlapping but non-identical regions
-        if (dst_start < src_start) {
-            // Copy forward
-            var i: usize = 0;
-            while (i < width) : (i += 1) {
-                dst[i] = src[i];
-            }
-        } else {
-            // Copy backward
-            var i: usize = width;
-            while (i > 0) {
-                i -= 1;
-                dst[i] = src[i];
-            }
-        }
-        return;
-    }
-
-    @memcpy(dst, src);
+    @memmove(dst, src);
 }
 
 test "listConcat: non-unique with unique overlapping" {
