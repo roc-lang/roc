@@ -4894,13 +4894,128 @@ pub fn canonicalizeExpr(
                 .free_vars = null,
             };
         },
-        .local_dispatch => |_| {
-            const feature = try self.env.insertString("canonicalize local_dispatch expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        .local_dispatch => |local_dispatch| {
+            // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
+            // and `arg1->fn` to `fn(arg1)`
+            const region = self.parse_ir.tokenizedRegionToRegion(local_dispatch.region);
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the left expression (first argument)
+            const can_first_arg = try self.canonicalizeExpr(local_dispatch.left) orelse return null;
+
+            // Get the right expression to determine the function and additional args
+            const right_expr = self.parse_ir.store.getExpr(local_dispatch.right);
+
+            switch (right_expr) {
+                .apply => |apply| {
+                    // Case: `arg1->fn(arg2, arg3)` - function call with additional args
+                    // Check if this is a tag application
+                    const ast_fn = self.parse_ir.store.getExpr(apply.@"fn");
+                    if (ast_fn == .tag) {
+                        // Tag application: `arg1->Tag(arg2)` becomes `Tag(arg1, arg2)`
+                        const tag_expr = ast_fn.tag;
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+
+                        // Build args: first_arg followed by apply.args
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_first_arg.idx);
+
+                        const additional_args = self.parse_ir.store.exprSlice(apply.args);
+                        for (additional_args) |arg| {
+                            if (try self.canonicalizeExpr(arg)) |can_arg| {
+                                try self.env.store.addScratchExpr(can_arg.idx);
+                            }
+                        }
+
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                    }
+
+                    // Normal function call
+                    const can_fn_expr = try self.canonicalizeExpr(apply.@"fn") orelse return null;
+
+                    // Build args: first_arg followed by apply.args
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+
+                    const additional_args = self.parse_ir.store.exprSlice(apply.args);
+                    for (additional_args) |arg| {
+                        if (try self.canonicalizeExpr(arg)) |can_arg| {
+                            try self.env.store.addScratchExpr(can_arg.idx);
+                        }
+                    }
+
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                },
+                .ident, .tag => {
+                    // Case: `arg1->fn` or `arg1->Tag` - simple function/tag call with single arg
+                    if (right_expr == .tag) {
+                        const tag_expr = right_expr.tag;
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_first_arg.idx);
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                    }
+
+                    // It's an ident
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                },
+                else => {
+                    // Unexpected expression type on right side of arrow
+                    const feature = try self.env.insertString("arrow with complex expression");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                },
+            }
         },
         .bin_op => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
