@@ -1,13 +1,16 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
+import pf.Stderr
+
+str : Str -> Str
+str = |s| s
 
 main! = || {
-    list : List(U64)
-    list = []
-    x = List.first(list)
-    match x {
-        Ok(_v) => Stdout.line!("got value")
-        Err(ListWasEmpty) => Stdout.line!("was empty")
+    x = List.get([], 0)
+    if Try.is_ok(x) {
+        Stdout.line!("is ok")
+    } else {
+        Stdout.line!("is err")
     }
 }
