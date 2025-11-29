@@ -668,7 +668,21 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
+    var past_double_dash = false;
+
     for (args) |arg| {
+        // After "--", all remaining args go to the app (no flag processing)
+        if (past_double_dash) {
+            try app_args.append(arg);
+            continue;
+        }
+
+        // Check for "--" separator
+        if (mem.eql(u8, arg, "--")) {
+            past_double_dash = true;
+            continue;
+        }
+
         if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .run variant
             app_args.deinit();
@@ -781,6 +795,48 @@ test "roc run" {
         const result = try parse(gpa, &[_][]const u8{"--opt=notreal"});
         defer result.deinit(gpa);
         try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
+    }
+    // Test -- separator: args after -- should go to app_args
+    {
+        const result = try parse(gpa, &[_][]const u8{ "foo.roc", "--", "arg1", "arg2" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expectEqual(@as(usize, 2), result.run.app_args.len);
+        try testing.expectEqualStrings("arg1", result.run.app_args[0]);
+        try testing.expectEqualStrings("arg2", result.run.app_args[1]);
+    }
+    // Test -- separator is not included in app_args
+    {
+        const result = try parse(gpa, &[_][]const u8{ "foo.roc", "--", "onlyarg" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(usize, 1), result.run.app_args.len);
+        try testing.expectEqualStrings("onlyarg", result.run.app_args[0]);
+    }
+    // Test flags after -- are treated as app args, not roc flags
+    {
+        const result = try parse(gpa, &[_][]const u8{ "foo.roc", "--", "--help", "-v", "--version" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.run, std.meta.activeTag(result));
+        try testing.expectEqual(@as(usize, 3), result.run.app_args.len);
+        try testing.expectEqualStrings("--help", result.run.app_args[0]);
+        try testing.expectEqualStrings("-v", result.run.app_args[1]);
+        try testing.expectEqualStrings("--version", result.run.app_args[2]);
+    }
+    // Test -- with flags before it still parses roc flags
+    {
+        const result = try parse(gpa, &[_][]const u8{ "--opt=speed", "foo.roc", "--", "arg1" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expectEqual(.speed, result.run.opt);
+        try testing.expectEqual(@as(usize, 1), result.run.app_args.len);
+        try testing.expectEqualStrings("arg1", result.run.app_args[0]);
+    }
+    // Test -- without any args after it
+    {
+        const result = try parse(gpa, &[_][]const u8{ "foo.roc", "--" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expectEqual(@as(usize, 0), result.run.app_args.len);
     }
 }
 

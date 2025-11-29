@@ -449,6 +449,7 @@ pub const Expr = union(enum) {
         str_release_excess_capacity,
         str_to_utf8,
         str_from_utf8_lossy,
+        str_from_utf8,
         str_split_on,
         str_join_with,
 
@@ -473,6 +474,7 @@ pub const Expr = union(enum) {
         list_get_unsafe,
         list_concat,
         list_with_capacity,
+        list_sort_with,
 
         // Bool operations
         bool_is_eq,
@@ -536,6 +538,244 @@ pub const Expr = union(enum) {
         i8_to_f32, // I8 -> F32 (safe)
         i8_to_f64, // I8 -> F64 (safe)
         i8_to_dec, // I8 -> Dec (safe)
+
+        // Numeric conversion operations (U16)
+        u16_to_i8_wrap, // U16 -> I8 (wrapping)
+        u16_to_i8_try, // U16 -> Try(I8, [OutOfRange])
+        u16_to_i16_wrap, // U16 -> I16 (wrapping)
+        u16_to_i16_try, // U16 -> Try(I16, [OutOfRange])
+        u16_to_i32, // U16 -> I32 (safe)
+        u16_to_i64, // U16 -> I64 (safe)
+        u16_to_i128, // U16 -> I128 (safe)
+        u16_to_u8_wrap, // U16 -> U8 (wrapping)
+        u16_to_u8_try, // U16 -> Try(U8, [OutOfRange])
+        u16_to_u32, // U16 -> U32 (safe)
+        u16_to_u64, // U16 -> U64 (safe)
+        u16_to_u128, // U16 -> U128 (safe)
+        u16_to_f32, // U16 -> F32 (safe)
+        u16_to_f64, // U16 -> F64 (safe)
+        u16_to_dec, // U16 -> Dec (safe)
+
+        // Numeric conversion operations (I16)
+        i16_to_i8_wrap, // I16 -> I8 (wrapping)
+        i16_to_i8_try, // I16 -> Try(I8, [OutOfRange])
+        i16_to_i32, // I16 -> I32 (safe)
+        i16_to_i64, // I16 -> I64 (safe)
+        i16_to_i128, // I16 -> I128 (safe)
+        i16_to_u8_wrap, // I16 -> U8 (wrapping)
+        i16_to_u8_try, // I16 -> Try(U8, [OutOfRange])
+        i16_to_u16_wrap, // I16 -> U16 (wrapping)
+        i16_to_u16_try, // I16 -> Try(U16, [OutOfRange])
+        i16_to_u32_wrap, // I16 -> U32 (wrapping)
+        i16_to_u32_try, // I16 -> Try(U32, [OutOfRange])
+        i16_to_u64_wrap, // I16 -> U64 (wrapping)
+        i16_to_u64_try, // I16 -> Try(U64, [OutOfRange])
+        i16_to_u128_wrap, // I16 -> U128 (wrapping)
+        i16_to_u128_try, // I16 -> Try(U128, [OutOfRange])
+        i16_to_f32, // I16 -> F32 (safe)
+        i16_to_f64, // I16 -> F64 (safe)
+        i16_to_dec, // I16 -> Dec (safe)
+
+        // Numeric conversion operations (U32)
+        u32_to_i8_wrap, // U32 -> I8 (wrapping)
+        u32_to_i8_try, // U32 -> Try(I8, [OutOfRange])
+        u32_to_i16_wrap, // U32 -> I16 (wrapping)
+        u32_to_i16_try, // U32 -> Try(I16, [OutOfRange])
+        u32_to_i32_wrap, // U32 -> I32 (wrapping)
+        u32_to_i32_try, // U32 -> Try(I32, [OutOfRange])
+        u32_to_i64, // U32 -> I64 (safe)
+        u32_to_i128, // U32 -> I128 (safe)
+        u32_to_u8_wrap, // U32 -> U8 (wrapping)
+        u32_to_u8_try, // U32 -> Try(U8, [OutOfRange])
+        u32_to_u16_wrap, // U32 -> U16 (wrapping)
+        u32_to_u16_try, // U32 -> Try(U16, [OutOfRange])
+        u32_to_u64, // U32 -> U64 (safe)
+        u32_to_u128, // U32 -> U128 (safe)
+        u32_to_f32, // U32 -> F32 (safe)
+        u32_to_f64, // U32 -> F64 (safe)
+        u32_to_dec, // U32 -> Dec (safe)
+
+        // Numeric conversion operations (I32)
+        i32_to_i8_wrap, // I32 -> I8 (wrapping)
+        i32_to_i8_try, // I32 -> Try(I8, [OutOfRange])
+        i32_to_i16_wrap, // I32 -> I16 (wrapping)
+        i32_to_i16_try, // I32 -> Try(I16, [OutOfRange])
+        i32_to_i64, // I32 -> I64 (safe)
+        i32_to_i128, // I32 -> I128 (safe)
+        i32_to_u8_wrap, // I32 -> U8 (wrapping)
+        i32_to_u8_try, // I32 -> Try(U8, [OutOfRange])
+        i32_to_u16_wrap, // I32 -> U16 (wrapping)
+        i32_to_u16_try, // I32 -> Try(U16, [OutOfRange])
+        i32_to_u32_wrap, // I32 -> U32 (wrapping)
+        i32_to_u32_try, // I32 -> Try(U32, [OutOfRange])
+        i32_to_u64_wrap, // I32 -> U64 (wrapping)
+        i32_to_u64_try, // I32 -> Try(U64, [OutOfRange])
+        i32_to_u128_wrap, // I32 -> U128 (wrapping)
+        i32_to_u128_try, // I32 -> Try(U128, [OutOfRange])
+        i32_to_f32, // I32 -> F32 (safe)
+        i32_to_f64, // I32 -> F64 (safe)
+        i32_to_dec, // I32 -> Dec (safe)
+
+        // Numeric conversion operations (U64)
+        u64_to_i8_wrap, // U64 -> I8 (wrapping)
+        u64_to_i8_try, // U64 -> Try(I8, [OutOfRange])
+        u64_to_i16_wrap, // U64 -> I16 (wrapping)
+        u64_to_i16_try, // U64 -> Try(I16, [OutOfRange])
+        u64_to_i32_wrap, // U64 -> I32 (wrapping)
+        u64_to_i32_try, // U64 -> Try(I32, [OutOfRange])
+        u64_to_i64_wrap, // U64 -> I64 (wrapping)
+        u64_to_i64_try, // U64 -> Try(I64, [OutOfRange])
+        u64_to_i128, // U64 -> I128 (safe)
+        u64_to_u8_wrap, // U64 -> U8 (wrapping)
+        u64_to_u8_try, // U64 -> Try(U8, [OutOfRange])
+        u64_to_u16_wrap, // U64 -> U16 (wrapping)
+        u64_to_u16_try, // U64 -> Try(U16, [OutOfRange])
+        u64_to_u32_wrap, // U64 -> U32 (wrapping)
+        u64_to_u32_try, // U64 -> Try(U32, [OutOfRange])
+        u64_to_u128, // U64 -> U128 (safe)
+        u64_to_f32, // U64 -> F32 (safe)
+        u64_to_f64, // U64 -> F64 (safe)
+        u64_to_dec, // U64 -> Dec (safe)
+
+        // Numeric conversion operations (I64)
+        i64_to_i8_wrap, // I64 -> I8 (wrapping)
+        i64_to_i8_try, // I64 -> Try(I8, [OutOfRange])
+        i64_to_i16_wrap, // I64 -> I16 (wrapping)
+        i64_to_i16_try, // I64 -> Try(I16, [OutOfRange])
+        i64_to_i32_wrap, // I64 -> I32 (wrapping)
+        i64_to_i32_try, // I64 -> Try(I32, [OutOfRange])
+        i64_to_i128, // I64 -> I128 (safe)
+        i64_to_u8_wrap, // I64 -> U8 (wrapping)
+        i64_to_u8_try, // I64 -> Try(U8, [OutOfRange])
+        i64_to_u16_wrap, // I64 -> U16 (wrapping)
+        i64_to_u16_try, // I64 -> Try(U16, [OutOfRange])
+        i64_to_u32_wrap, // I64 -> U32 (wrapping)
+        i64_to_u32_try, // I64 -> Try(U32, [OutOfRange])
+        i64_to_u64_wrap, // I64 -> U64 (wrapping)
+        i64_to_u64_try, // I64 -> Try(U64, [OutOfRange])
+        i64_to_u128_wrap, // I64 -> U128 (wrapping)
+        i64_to_u128_try, // I64 -> Try(U128, [OutOfRange])
+        i64_to_f32, // I64 -> F32 (safe)
+        i64_to_f64, // I64 -> F64 (safe)
+        i64_to_dec, // I64 -> Dec (safe)
+
+        // Numeric conversion operations (U128)
+        u128_to_i8_wrap, // U128 -> I8 (wrapping)
+        u128_to_i8_try, // U128 -> Try(I8, [OutOfRange])
+        u128_to_i16_wrap, // U128 -> I16 (wrapping)
+        u128_to_i16_try, // U128 -> Try(I16, [OutOfRange])
+        u128_to_i32_wrap, // U128 -> I32 (wrapping)
+        u128_to_i32_try, // U128 -> Try(I32, [OutOfRange])
+        u128_to_i64_wrap, // U128 -> I64 (wrapping)
+        u128_to_i64_try, // U128 -> Try(I64, [OutOfRange])
+        u128_to_i128_wrap, // U128 -> I128 (wrapping)
+        u128_to_i128_try, // U128 -> Try(I128, [OutOfRange])
+        u128_to_u8_wrap, // U128 -> U8 (wrapping)
+        u128_to_u8_try, // U128 -> Try(U8, [OutOfRange])
+        u128_to_u16_wrap, // U128 -> U16 (wrapping)
+        u128_to_u16_try, // U128 -> Try(U16, [OutOfRange])
+        u128_to_u32_wrap, // U128 -> U32 (wrapping)
+        u128_to_u32_try, // U128 -> Try(U32, [OutOfRange])
+        u128_to_u64_wrap, // U128 -> U64 (wrapping)
+        u128_to_u64_try, // U128 -> Try(U64, [OutOfRange])
+        u128_to_f32, // U128 -> F32 (safe)
+        u128_to_f64, // U128 -> F64 (safe)
+        u128_to_dec_try_unsafe, // U128 -> { success: Bool, val: Dec }
+
+        // Numeric conversion operations (I128)
+        i128_to_i8_wrap, // I128 -> I8 (wrapping)
+        i128_to_i8_try, // I128 -> Try(I8, [OutOfRange])
+        i128_to_i16_wrap, // I128 -> I16 (wrapping)
+        i128_to_i16_try, // I128 -> Try(I16, [OutOfRange])
+        i128_to_i32_wrap, // I128 -> I32 (wrapping)
+        i128_to_i32_try, // I128 -> Try(I32, [OutOfRange])
+        i128_to_i64_wrap, // I128 -> I64 (wrapping)
+        i128_to_i64_try, // I128 -> Try(I64, [OutOfRange])
+        i128_to_u8_wrap, // I128 -> U8 (wrapping)
+        i128_to_u8_try, // I128 -> Try(U8, [OutOfRange])
+        i128_to_u16_wrap, // I128 -> U16 (wrapping)
+        i128_to_u16_try, // I128 -> Try(U16, [OutOfRange])
+        i128_to_u32_wrap, // I128 -> U32 (wrapping)
+        i128_to_u32_try, // I128 -> Try(U32, [OutOfRange])
+        i128_to_u64_wrap, // I128 -> U64 (wrapping)
+        i128_to_u64_try, // I128 -> Try(U64, [OutOfRange])
+        i128_to_u128_wrap, // I128 -> U128 (wrapping)
+        i128_to_u128_try, // I128 -> Try(U128, [OutOfRange])
+        i128_to_f32, // I128 -> F32 (safe)
+        i128_to_f64, // I128 -> F64 (safe)
+        i128_to_dec_try_unsafe, // I128 -> { success: Bool, val: Dec }
+
+        // Numeric conversion operations (F32)
+        f32_to_i8_trunc, // F32 -> I8 (truncating)
+        f32_to_i8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I8 }
+        f32_to_i16_trunc, // F32 -> I16 (truncating)
+        f32_to_i16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I16 }
+        f32_to_i32_trunc, // F32 -> I32 (truncating)
+        f32_to_i32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I32 }
+        f32_to_i64_trunc, // F32 -> I64 (truncating)
+        f32_to_i64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I64 }
+        f32_to_i128_trunc, // F32 -> I128 (truncating)
+        f32_to_i128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I128 }
+        f32_to_u8_trunc, // F32 -> U8 (truncating)
+        f32_to_u8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U8 }
+        f32_to_u16_trunc, // F32 -> U16 (truncating)
+        f32_to_u16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U16 }
+        f32_to_u32_trunc, // F32 -> U32 (truncating)
+        f32_to_u32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U32 }
+        f32_to_u64_trunc, // F32 -> U64 (truncating)
+        f32_to_u64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U64 }
+        f32_to_u128_trunc, // F32 -> U128 (truncating)
+        f32_to_u128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U128 }
+        f32_to_f64, // F32 -> F64 (safe widening)
+
+        // Numeric conversion operations (F64)
+        f64_to_i8_trunc, // F64 -> I8 (truncating)
+        f64_to_i8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I8 }
+        f64_to_i16_trunc, // F64 -> I16 (truncating)
+        f64_to_i16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I16 }
+        f64_to_i32_trunc, // F64 -> I32 (truncating)
+        f64_to_i32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I32 }
+        f64_to_i64_trunc, // F64 -> I64 (truncating)
+        f64_to_i64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I64 }
+        f64_to_i128_trunc, // F64 -> I128 (truncating)
+        f64_to_i128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I128 }
+        f64_to_u8_trunc, // F64 -> U8 (truncating)
+        f64_to_u8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U8 }
+        f64_to_u16_trunc, // F64 -> U16 (truncating)
+        f64_to_u16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U16 }
+        f64_to_u32_trunc, // F64 -> U32 (truncating)
+        f64_to_u32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U32 }
+        f64_to_u64_trunc, // F64 -> U64 (truncating)
+        f64_to_u64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U64 }
+        f64_to_u128_trunc, // F64 -> U128 (truncating)
+        f64_to_u128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U128 }
+        f64_to_f32_wrap, // F64 -> F32 (lossy narrowing)
+        f64_to_f32_try_unsafe, // F64 -> { success: Bool, val: F32 }
+
+        // Numeric conversion operations (Dec)
+        dec_to_i8_trunc, // Dec -> I8 (truncating)
+        dec_to_i8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I8 }
+        dec_to_i16_trunc, // Dec -> I16 (truncating)
+        dec_to_i16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I16 }
+        dec_to_i32_trunc, // Dec -> I32 (truncating)
+        dec_to_i32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I32 }
+        dec_to_i64_trunc, // Dec -> I64 (truncating)
+        dec_to_i64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I64 }
+        dec_to_i128_trunc, // Dec -> I128 (truncating)
+        dec_to_i128_try_unsafe, // Dec -> { is_int: Bool, val: I128 } - always in range
+        dec_to_u8_trunc, // Dec -> U8 (truncating)
+        dec_to_u8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U8 }
+        dec_to_u16_trunc, // Dec -> U16 (truncating)
+        dec_to_u16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U16 }
+        dec_to_u32_trunc, // Dec -> U32 (truncating)
+        dec_to_u32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U32 }
+        dec_to_u64_trunc, // Dec -> U64 (truncating)
+        dec_to_u64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U64 }
+        dec_to_u128_trunc, // Dec -> U128 (truncating)
+        dec_to_u128_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U128 }
+        dec_to_f32_wrap, // Dec -> F32 (lossy narrowing)
+        dec_to_f32_try_unsafe, // Dec -> { success: Bool, val: F32 }
+        dec_to_f64, // Dec -> F64 (lossy conversion)
     };
 
     pub const Idx = enum(u32) { _ };

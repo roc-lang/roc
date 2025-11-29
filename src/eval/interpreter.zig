@@ -570,6 +570,23 @@ pub const Interpreter = struct {
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
     }
 
+    /// Push raw bytes with a specific size and alignment (for building records/tuples)
+    pub fn pushRawBytes(self: *Interpreter, size: usize, alignment: usize) !StackValue {
+        if (size == 0) {
+            return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = null, .is_initialized = true };
+        }
+        const align_enum: std.mem.Alignment = switch (alignment) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            8 => .@"8",
+            16 => .@"16",
+            else => .@"1",
+        };
+        const ptr = try self.stack_memory.alloca(@intCast(size), align_enum);
+        return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = ptr, .is_initialized = true };
+    }
+
     pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
@@ -1146,6 +1163,293 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_from_utf8 => {
+                // Str.from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem: Utf8Problem, index: U64 })])
+                std.debug.assert(args.len == 1);
+
+                const list_arg = args[0];
+                std.debug.assert(list_arg.ptr != null);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const result = builtins.str.fromUtf8C(roc_list.*, .Immutable, roc_ops);
+
+                // Get the return layout from the caller - it should be a Try tag union
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("str_from_utf8 requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
+                const result_layout = try self.getRuntimeLayout(result_rt_var);
+
+                // Resolve the Try type to get tag indices
+                const resolved = self.resolveBaseVar(result_rt_var);
+                if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
+                    self.triggerCrash("str_from_utf8: expected tag union return type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Find tag indices for Ok and Err
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(result_rt_var, &tag_list);
+
+                var ok_index: ?usize = null;
+                var err_index: ?usize = null;
+
+                const ok_ident = self.env.idents.ok;
+                const err_ident = self.env.idents.err;
+
+                for (tag_list.items, 0..) |tag_info, i| {
+                    if (tag_info.name == ok_ident) {
+                        ok_index = i;
+                    } else if (tag_info.name == err_ident) {
+                        err_index = i;
+                    }
+                }
+
+                if (result.is_ok) {
+                    // Return Ok(string)
+                    if (result_layout.tag == .tuple) {
+                        // Tuple (payload, tag)
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                        // Element 0 is the payload - clear it first since it's a union
+                        const payload_field = try acc.getElement(0);
+                        if (payload_field.ptr) |payload_ptr| {
+                            const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                            if (payload_bytes_len > 0) {
+                                const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                                @memset(bytes, 0);
+                            }
+                            // Write Str to the payload area
+                            const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
+                            str_ptr.* = result.string;
+                        }
+
+                        // Element 1 is the tag discriminant
+                        const tag_field = try acc.getElement(1);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(ok_index orelse 0));
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else if (result_layout.tag == .record) {
+                        // Record { tag, payload }
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                            self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                            self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+
+                        // Write tag discriminant
+                        const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(ok_index orelse 0));
+                        }
+
+                        // Clear payload area first since it's a union
+                        const payload_field = try acc.getFieldByIndex(payload_field_idx);
+                        if (payload_field.ptr) |payload_ptr| {
+                            const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                            if (payload_bytes_len > 0) {
+                                const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
+                                @memset(bytes, 0);
+                            }
+                            // Write Str to the payload area
+                            const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
+                            str_ptr.* = result.string;
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else {
+                        self.triggerCrash("str_from_utf8: unexpected result layout", false, roc_ops);
+                        return error.Crash;
+                    }
+                } else {
+                    // Return Err(BadUtf8({ problem: Utf8Problem, index: U64 }))
+                    if (result_layout.tag == .tuple) {
+                        // Tuple (payload, tag)
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asTuple(&self.runtime_layout_store);
+
+                        // Element 1 is the tag discriminant
+                        const tag_field = try acc.getElement(1);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(err_index orelse 1));
+                        }
+
+                        // Element 0 is the payload - need to construct BadUtf8 record
+                        const payload_field = try acc.getElement(0);
+                        if (payload_field.layout.tag == .tuple) {
+                            // BadUtf8 is represented as a tuple containing the error record
+                            var err_tuple = try payload_field.asTuple(&self.runtime_layout_store);
+                            // First element should be the record { problem, index }
+                            const inner_payload = try err_tuple.getElement(0);
+                            if (inner_payload.layout.tag == .record) {
+                                var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                // Set problem field (tag union represented as u8)
+                                if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                    const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                    if (problem_field.ptr) |ptr| {
+                                        const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = @intFromEnum(result.problem_code);
+                                    }
+                                }
+                                // Set index field (U64)
+                                if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                    const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                    if (index_field.ptr) |ptr| {
+                                        const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = result.byte_index;
+                                    }
+                                }
+                            }
+                            // Set BadUtf8 tag discriminant (index 0 since it's the only variant)
+                            const err_tag = try err_tuple.getElement(1);
+                            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
+                                var tmp = err_tag;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(0);
+                            }
+                        } else if (payload_field.layout.tag == .record) {
+                            // Payload is a record with tag and payload for BadUtf8
+                            var err_rec = try payload_field.asRecord(&self.runtime_layout_store);
+                            if (err_rec.findFieldIndex(self.env.idents.tag)) |tag_idx| {
+                                const inner_tag = try err_rec.getFieldByIndex(tag_idx);
+                                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
+                                    var tmp = inner_tag;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(0); // BadUtf8 is index 0
+                                }
+                            }
+                            if (err_rec.findFieldIndex(self.env.idents.payload)) |inner_payload_idx| {
+                                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx);
+                                if (inner_payload.layout.tag == .record) {
+                                    var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                    if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                        const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                        if (problem_field.ptr) |ptr| {
+                                            const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = @intFromEnum(result.problem_code);
+                                        }
+                                    }
+                                    if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                        const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                        if (index_field.ptr) |ptr| {
+                                            const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = result.byte_index;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else if (result_layout.tag == .record) {
+                        // Record { tag, payload }
+                        var dest = try self.pushRaw(result_layout, 0);
+                        var acc = try dest.asRecord(&self.runtime_layout_store);
+
+                        const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
+                            self.triggerCrash("str_from_utf8: tag field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
+                            self.triggerCrash("str_from_utf8: payload field not found", false, roc_ops);
+                            return error.Crash;
+                        };
+
+                        // Write tag discriminant for Err
+                        const tag_field = try acc.getFieldByIndex(tag_field_idx);
+                        if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
+                            var tmp = tag_field;
+                            tmp.is_initialized = false;
+                            try tmp.setInt(@intCast(err_index orelse 1));
+                        }
+
+                        // Write error payload - need to construct BadUtf8({ problem, index })
+                        const outer_payload = try acc.getFieldByIndex(payload_field_idx);
+                        if (outer_payload.layout.tag == .tuple) {
+                            var err_tuple = try outer_payload.asTuple(&self.runtime_layout_store);
+                            const inner_payload = try err_tuple.getElement(0);
+                            if (inner_payload.layout.tag == .record) {
+                                var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                    const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                    if (problem_field.ptr) |ptr| {
+                                        const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = @intFromEnum(result.problem_code);
+                                    }
+                                }
+                                if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                    const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                    if (index_field.ptr) |ptr| {
+                                        const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                        typed_ptr.* = result.byte_index;
+                                    }
+                                }
+                            }
+                            const err_tag = try err_tuple.getElement(1);
+                            if (err_tag.layout.tag == .scalar and err_tag.layout.data.scalar.tag == .int) {
+                                var tmp = err_tag;
+                                tmp.is_initialized = false;
+                                try tmp.setInt(0);
+                            }
+                        } else if (outer_payload.layout.tag == .record) {
+                            var err_rec = try outer_payload.asRecord(&self.runtime_layout_store);
+                            if (err_rec.findFieldIndex(self.env.idents.tag)) |inner_tag_idx| {
+                                const inner_tag = try err_rec.getFieldByIndex(inner_tag_idx);
+                                if (inner_tag.layout.tag == .scalar and inner_tag.layout.data.scalar.tag == .int) {
+                                    var tmp = inner_tag;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(0);
+                                }
+                            }
+                            if (err_rec.findFieldIndex(self.env.idents.payload)) |inner_payload_idx| {
+                                const inner_payload = try err_rec.getFieldByIndex(inner_payload_idx);
+                                if (inner_payload.layout.tag == .record) {
+                                    var inner_acc = try inner_payload.asRecord(&self.runtime_layout_store);
+                                    if (inner_acc.findFieldIndex(self.env.idents.problem)) |problem_idx| {
+                                        const problem_field = try inner_acc.getFieldByIndex(problem_idx);
+                                        if (problem_field.ptr) |ptr| {
+                                            const typed_ptr: *u8 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = @intFromEnum(result.problem_code);
+                                        }
+                                    }
+                                    if (inner_acc.findFieldIndex(self.env.idents.index)) |index_idx| {
+                                        const index_field = try inner_acc.getFieldByIndex(index_idx);
+                                        if (index_field.ptr) |ptr| {
+                                            const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
+                                            typed_ptr.* = result.byte_index;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else {
+                        self.triggerCrash("str_from_utf8: unexpected result layout for Err", false, roc_ops);
+                        return error.Crash;
+                    }
+                }
+            },
             .str_split_on => {
                 // Str.split_on : Str, Str -> List(Str)
                 std.debug.assert(args.len == 2);
@@ -1356,6 +1660,12 @@ pub const Interpreter = struct {
 
                 // Copy to new location and increment refcount
                 return try self.pushCopy(elem_value, roc_ops);
+            },
+            .list_sort_with => {
+                // list_sort_with is handled specially in call_invoke_closure continuation
+                // because it requires continuation-based evaluation for the comparison function
+                self.triggerCrash("list_sort_with should be handled in call_invoke_closure, not callLowLevelBuiltin", false, roc_ops);
+                return error.Crash;
             },
             .list_concat => {
                 // List.concat : List(a), List(a) -> List(a)
@@ -2508,6 +2818,247 @@ pub const Interpreter = struct {
             .i8_to_f32 => return self.intToFloat(i8, f32, args),
             .i8_to_f64 => return self.intToFloat(i8, f64, args),
             .i8_to_dec => return self.intToDec(i8, args),
+
+            // U16 conversion operations
+            .u16_to_i8_wrap => return self.intConvertWrap(u16, i8, args),
+            .u16_to_i8_try => return self.intConvertTry(u16, i8, args, return_rt_var),
+            .u16_to_i16_wrap => return self.intConvertWrap(u16, i16, args),
+            .u16_to_i16_try => return self.intConvertTry(u16, i16, args, return_rt_var),
+            .u16_to_i32 => return self.intConvert(u16, i32, args),
+            .u16_to_i64 => return self.intConvert(u16, i64, args),
+            .u16_to_i128 => return self.intConvert(u16, i128, args),
+            .u16_to_u8_wrap => return self.intConvertWrap(u16, u8, args),
+            .u16_to_u8_try => return self.intConvertTry(u16, u8, args, return_rt_var),
+            .u16_to_u32 => return self.intConvert(u16, u32, args),
+            .u16_to_u64 => return self.intConvert(u16, u64, args),
+            .u16_to_u128 => return self.intConvert(u16, u128, args),
+            .u16_to_f32 => return self.intToFloat(u16, f32, args),
+            .u16_to_f64 => return self.intToFloat(u16, f64, args),
+            .u16_to_dec => return self.intToDec(u16, args),
+
+            // I16 conversion operations
+            .i16_to_i8_wrap => return self.intConvertWrap(i16, i8, args),
+            .i16_to_i8_try => return self.intConvertTry(i16, i8, args, return_rt_var),
+            .i16_to_i32 => return self.intConvert(i16, i32, args),
+            .i16_to_i64 => return self.intConvert(i16, i64, args),
+            .i16_to_i128 => return self.intConvert(i16, i128, args),
+            .i16_to_u8_wrap => return self.intConvertWrap(i16, u8, args),
+            .i16_to_u8_try => return self.intConvertTry(i16, u8, args, return_rt_var),
+            .i16_to_u16_wrap => return self.intConvertWrap(i16, u16, args),
+            .i16_to_u16_try => return self.intConvertTry(i16, u16, args, return_rt_var),
+            .i16_to_u32_wrap => return self.intConvertWrap(i16, u32, args),
+            .i16_to_u32_try => return self.intConvertTry(i16, u32, args, return_rt_var),
+            .i16_to_u64_wrap => return self.intConvertWrap(i16, u64, args),
+            .i16_to_u64_try => return self.intConvertTry(i16, u64, args, return_rt_var),
+            .i16_to_u128_wrap => return self.intConvertWrap(i16, u128, args),
+            .i16_to_u128_try => return self.intConvertTry(i16, u128, args, return_rt_var),
+            .i16_to_f32 => return self.intToFloat(i16, f32, args),
+            .i16_to_f64 => return self.intToFloat(i16, f64, args),
+            .i16_to_dec => return self.intToDec(i16, args),
+
+            // U32 conversion operations
+            .u32_to_i8_wrap => return self.intConvertWrap(u32, i8, args),
+            .u32_to_i8_try => return self.intConvertTry(u32, i8, args, return_rt_var),
+            .u32_to_i16_wrap => return self.intConvertWrap(u32, i16, args),
+            .u32_to_i16_try => return self.intConvertTry(u32, i16, args, return_rt_var),
+            .u32_to_i32_wrap => return self.intConvertWrap(u32, i32, args),
+            .u32_to_i32_try => return self.intConvertTry(u32, i32, args, return_rt_var),
+            .u32_to_i64 => return self.intConvert(u32, i64, args),
+            .u32_to_i128 => return self.intConvert(u32, i128, args),
+            .u32_to_u8_wrap => return self.intConvertWrap(u32, u8, args),
+            .u32_to_u8_try => return self.intConvertTry(u32, u8, args, return_rt_var),
+            .u32_to_u16_wrap => return self.intConvertWrap(u32, u16, args),
+            .u32_to_u16_try => return self.intConvertTry(u32, u16, args, return_rt_var),
+            .u32_to_u64 => return self.intConvert(u32, u64, args),
+            .u32_to_u128 => return self.intConvert(u32, u128, args),
+            .u32_to_f32 => return self.intToFloat(u32, f32, args),
+            .u32_to_f64 => return self.intToFloat(u32, f64, args),
+            .u32_to_dec => return self.intToDec(u32, args),
+
+            // I32 conversion operations
+            .i32_to_i8_wrap => return self.intConvertWrap(i32, i8, args),
+            .i32_to_i8_try => return self.intConvertTry(i32, i8, args, return_rt_var),
+            .i32_to_i16_wrap => return self.intConvertWrap(i32, i16, args),
+            .i32_to_i16_try => return self.intConvertTry(i32, i16, args, return_rt_var),
+            .i32_to_i64 => return self.intConvert(i32, i64, args),
+            .i32_to_i128 => return self.intConvert(i32, i128, args),
+            .i32_to_u8_wrap => return self.intConvertWrap(i32, u8, args),
+            .i32_to_u8_try => return self.intConvertTry(i32, u8, args, return_rt_var),
+            .i32_to_u16_wrap => return self.intConvertWrap(i32, u16, args),
+            .i32_to_u16_try => return self.intConvertTry(i32, u16, args, return_rt_var),
+            .i32_to_u32_wrap => return self.intConvertWrap(i32, u32, args),
+            .i32_to_u32_try => return self.intConvertTry(i32, u32, args, return_rt_var),
+            .i32_to_u64_wrap => return self.intConvertWrap(i32, u64, args),
+            .i32_to_u64_try => return self.intConvertTry(i32, u64, args, return_rt_var),
+            .i32_to_u128_wrap => return self.intConvertWrap(i32, u128, args),
+            .i32_to_u128_try => return self.intConvertTry(i32, u128, args, return_rt_var),
+            .i32_to_f32 => return self.intToFloat(i32, f32, args),
+            .i32_to_f64 => return self.intToFloat(i32, f64, args),
+            .i32_to_dec => return self.intToDec(i32, args),
+
+            // U64 conversion operations
+            .u64_to_i8_wrap => return self.intConvertWrap(u64, i8, args),
+            .u64_to_i8_try => return self.intConvertTry(u64, i8, args, return_rt_var),
+            .u64_to_i16_wrap => return self.intConvertWrap(u64, i16, args),
+            .u64_to_i16_try => return self.intConvertTry(u64, i16, args, return_rt_var),
+            .u64_to_i32_wrap => return self.intConvertWrap(u64, i32, args),
+            .u64_to_i32_try => return self.intConvertTry(u64, i32, args, return_rt_var),
+            .u64_to_i64_wrap => return self.intConvertWrap(u64, i64, args),
+            .u64_to_i64_try => return self.intConvertTry(u64, i64, args, return_rt_var),
+            .u64_to_i128 => return self.intConvert(u64, i128, args),
+            .u64_to_u8_wrap => return self.intConvertWrap(u64, u8, args),
+            .u64_to_u8_try => return self.intConvertTry(u64, u8, args, return_rt_var),
+            .u64_to_u16_wrap => return self.intConvertWrap(u64, u16, args),
+            .u64_to_u16_try => return self.intConvertTry(u64, u16, args, return_rt_var),
+            .u64_to_u32_wrap => return self.intConvertWrap(u64, u32, args),
+            .u64_to_u32_try => return self.intConvertTry(u64, u32, args, return_rt_var),
+            .u64_to_u128 => return self.intConvert(u64, u128, args),
+            .u64_to_f32 => return self.intToFloat(u64, f32, args),
+            .u64_to_f64 => return self.intToFloat(u64, f64, args),
+            .u64_to_dec => return self.intToDec(u64, args),
+
+            // I64 conversion operations
+            .i64_to_i8_wrap => return self.intConvertWrap(i64, i8, args),
+            .i64_to_i8_try => return self.intConvertTry(i64, i8, args, return_rt_var),
+            .i64_to_i16_wrap => return self.intConvertWrap(i64, i16, args),
+            .i64_to_i16_try => return self.intConvertTry(i64, i16, args, return_rt_var),
+            .i64_to_i32_wrap => return self.intConvertWrap(i64, i32, args),
+            .i64_to_i32_try => return self.intConvertTry(i64, i32, args, return_rt_var),
+            .i64_to_i128 => return self.intConvert(i64, i128, args),
+            .i64_to_u8_wrap => return self.intConvertWrap(i64, u8, args),
+            .i64_to_u8_try => return self.intConvertTry(i64, u8, args, return_rt_var),
+            .i64_to_u16_wrap => return self.intConvertWrap(i64, u16, args),
+            .i64_to_u16_try => return self.intConvertTry(i64, u16, args, return_rt_var),
+            .i64_to_u32_wrap => return self.intConvertWrap(i64, u32, args),
+            .i64_to_u32_try => return self.intConvertTry(i64, u32, args, return_rt_var),
+            .i64_to_u64_wrap => return self.intConvertWrap(i64, u64, args),
+            .i64_to_u64_try => return self.intConvertTry(i64, u64, args, return_rt_var),
+            .i64_to_u128_wrap => return self.intConvertWrap(i64, u128, args),
+            .i64_to_u128_try => return self.intConvertTry(i64, u128, args, return_rt_var),
+            .i64_to_f32 => return self.intToFloat(i64, f32, args),
+            .i64_to_f64 => return self.intToFloat(i64, f64, args),
+            .i64_to_dec => return self.intToDec(i64, args),
+
+            // U128 conversion operations
+            .u128_to_i8_wrap => return self.intConvertWrap(u128, i8, args),
+            .u128_to_i8_try => return self.intConvertTry(u128, i8, args, return_rt_var),
+            .u128_to_i16_wrap => return self.intConvertWrap(u128, i16, args),
+            .u128_to_i16_try => return self.intConvertTry(u128, i16, args, return_rt_var),
+            .u128_to_i32_wrap => return self.intConvertWrap(u128, i32, args),
+            .u128_to_i32_try => return self.intConvertTry(u128, i32, args, return_rt_var),
+            .u128_to_i64_wrap => return self.intConvertWrap(u128, i64, args),
+            .u128_to_i64_try => return self.intConvertTry(u128, i64, args, return_rt_var),
+            .u128_to_i128_wrap => return self.intConvertWrap(u128, i128, args),
+            .u128_to_i128_try => return self.intConvertTry(u128, i128, args, return_rt_var),
+            .u128_to_u8_wrap => return self.intConvertWrap(u128, u8, args),
+            .u128_to_u8_try => return self.intConvertTry(u128, u8, args, return_rt_var),
+            .u128_to_u16_wrap => return self.intConvertWrap(u128, u16, args),
+            .u128_to_u16_try => return self.intConvertTry(u128, u16, args, return_rt_var),
+            .u128_to_u32_wrap => return self.intConvertWrap(u128, u32, args),
+            .u128_to_u32_try => return self.intConvertTry(u128, u32, args, return_rt_var),
+            .u128_to_u64_wrap => return self.intConvertWrap(u128, u64, args),
+            .u128_to_u64_try => return self.intConvertTry(u128, u64, args, return_rt_var),
+            .u128_to_f32 => return self.intToFloat(u128, f32, args),
+            .u128_to_f64 => return self.intToFloat(u128, f64, args),
+
+            // I128 conversion operations
+            .i128_to_i8_wrap => return self.intConvertWrap(i128, i8, args),
+            .i128_to_i8_try => return self.intConvertTry(i128, i8, args, return_rt_var),
+            .i128_to_i16_wrap => return self.intConvertWrap(i128, i16, args),
+            .i128_to_i16_try => return self.intConvertTry(i128, i16, args, return_rt_var),
+            .i128_to_i32_wrap => return self.intConvertWrap(i128, i32, args),
+            .i128_to_i32_try => return self.intConvertTry(i128, i32, args, return_rt_var),
+            .i128_to_i64_wrap => return self.intConvertWrap(i128, i64, args),
+            .i128_to_i64_try => return self.intConvertTry(i128, i64, args, return_rt_var),
+            .i128_to_u8_wrap => return self.intConvertWrap(i128, u8, args),
+            .i128_to_u8_try => return self.intConvertTry(i128, u8, args, return_rt_var),
+            .i128_to_u16_wrap => return self.intConvertWrap(i128, u16, args),
+            .i128_to_u16_try => return self.intConvertTry(i128, u16, args, return_rt_var),
+            .i128_to_u32_wrap => return self.intConvertWrap(i128, u32, args),
+            .i128_to_u32_try => return self.intConvertTry(i128, u32, args, return_rt_var),
+            .i128_to_u64_wrap => return self.intConvertWrap(i128, u64, args),
+            .i128_to_u64_try => return self.intConvertTry(i128, u64, args, return_rt_var),
+            .i128_to_u128_wrap => return self.intConvertWrap(i128, u128, args),
+            .i128_to_u128_try => return self.intConvertTry(i128, u128, args, return_rt_var),
+            .i128_to_f32 => return self.intToFloat(i128, f32, args),
+            .i128_to_f64 => return self.intToFloat(i128, f64, args),
+
+            // U128 to Dec (try_unsafe - can overflow Dec's range)
+            .u128_to_dec_try_unsafe => return self.intToDecTryUnsafe(u128, args),
+            // I128 to Dec (try_unsafe - can overflow Dec's range)
+            .i128_to_dec_try_unsafe => return self.intToDecTryUnsafe(i128, args),
+
+            // F32 conversion operations
+            .f32_to_i8_trunc => return self.floatToIntTrunc(f32, i8, args),
+            .f32_to_i8_try_unsafe => return self.floatToIntTryUnsafe(f32, i8, args),
+            .f32_to_i16_trunc => return self.floatToIntTrunc(f32, i16, args),
+            .f32_to_i16_try_unsafe => return self.floatToIntTryUnsafe(f32, i16, args),
+            .f32_to_i32_trunc => return self.floatToIntTrunc(f32, i32, args),
+            .f32_to_i32_try_unsafe => return self.floatToIntTryUnsafe(f32, i32, args),
+            .f32_to_i64_trunc => return self.floatToIntTrunc(f32, i64, args),
+            .f32_to_i64_try_unsafe => return self.floatToIntTryUnsafe(f32, i64, args),
+            .f32_to_i128_trunc => return self.floatToIntTrunc(f32, i128, args),
+            .f32_to_i128_try_unsafe => return self.floatToIntTryUnsafe(f32, i128, args),
+            .f32_to_u8_trunc => return self.floatToIntTrunc(f32, u8, args),
+            .f32_to_u8_try_unsafe => return self.floatToIntTryUnsafe(f32, u8, args),
+            .f32_to_u16_trunc => return self.floatToIntTrunc(f32, u16, args),
+            .f32_to_u16_try_unsafe => return self.floatToIntTryUnsafe(f32, u16, args),
+            .f32_to_u32_trunc => return self.floatToIntTrunc(f32, u32, args),
+            .f32_to_u32_try_unsafe => return self.floatToIntTryUnsafe(f32, u32, args),
+            .f32_to_u64_trunc => return self.floatToIntTrunc(f32, u64, args),
+            .f32_to_u64_try_unsafe => return self.floatToIntTryUnsafe(f32, u64, args),
+            .f32_to_u128_trunc => return self.floatToIntTrunc(f32, u128, args),
+            .f32_to_u128_try_unsafe => return self.floatToIntTryUnsafe(f32, u128, args),
+            .f32_to_f64 => return self.floatWiden(f32, f64, args),
+
+            // F64 conversion operations
+            .f64_to_i8_trunc => return self.floatToIntTrunc(f64, i8, args),
+            .f64_to_i8_try_unsafe => return self.floatToIntTryUnsafe(f64, i8, args),
+            .f64_to_i16_trunc => return self.floatToIntTrunc(f64, i16, args),
+            .f64_to_i16_try_unsafe => return self.floatToIntTryUnsafe(f64, i16, args),
+            .f64_to_i32_trunc => return self.floatToIntTrunc(f64, i32, args),
+            .f64_to_i32_try_unsafe => return self.floatToIntTryUnsafe(f64, i32, args),
+            .f64_to_i64_trunc => return self.floatToIntTrunc(f64, i64, args),
+            .f64_to_i64_try_unsafe => return self.floatToIntTryUnsafe(f64, i64, args),
+            .f64_to_i128_trunc => return self.floatToIntTrunc(f64, i128, args),
+            .f64_to_i128_try_unsafe => return self.floatToIntTryUnsafe(f64, i128, args),
+            .f64_to_u8_trunc => return self.floatToIntTrunc(f64, u8, args),
+            .f64_to_u8_try_unsafe => return self.floatToIntTryUnsafe(f64, u8, args),
+            .f64_to_u16_trunc => return self.floatToIntTrunc(f64, u16, args),
+            .f64_to_u16_try_unsafe => return self.floatToIntTryUnsafe(f64, u16, args),
+            .f64_to_u32_trunc => return self.floatToIntTrunc(f64, u32, args),
+            .f64_to_u32_try_unsafe => return self.floatToIntTryUnsafe(f64, u32, args),
+            .f64_to_u64_trunc => return self.floatToIntTrunc(f64, u64, args),
+            .f64_to_u64_try_unsafe => return self.floatToIntTryUnsafe(f64, u64, args),
+            .f64_to_u128_trunc => return self.floatToIntTrunc(f64, u128, args),
+            .f64_to_u128_try_unsafe => return self.floatToIntTryUnsafe(f64, u128, args),
+            .f64_to_f32_wrap => return self.floatNarrow(f64, f32, args),
+            .f64_to_f32_try_unsafe => return self.floatNarrowTryUnsafe(f64, f32, args),
+
+            // Dec conversion operations
+            .dec_to_i8_trunc => return self.decToIntTrunc(i8, args),
+            .dec_to_i8_try_unsafe => return self.decToIntTryUnsafe(i8, args),
+            .dec_to_i16_trunc => return self.decToIntTrunc(i16, args),
+            .dec_to_i16_try_unsafe => return self.decToIntTryUnsafe(i16, args),
+            .dec_to_i32_trunc => return self.decToIntTrunc(i32, args),
+            .dec_to_i32_try_unsafe => return self.decToIntTryUnsafe(i32, args),
+            .dec_to_i64_trunc => return self.decToIntTrunc(i64, args),
+            .dec_to_i64_try_unsafe => return self.decToIntTryUnsafe(i64, args),
+            .dec_to_i128_trunc => return self.decToIntTrunc(i128, args),
+            .dec_to_i128_try_unsafe => return self.decToI128TryUnsafe(args),
+            .dec_to_u8_trunc => return self.decToIntTrunc(u8, args),
+            .dec_to_u8_try_unsafe => return self.decToIntTryUnsafe(u8, args),
+            .dec_to_u16_trunc => return self.decToIntTrunc(u16, args),
+            .dec_to_u16_try_unsafe => return self.decToIntTryUnsafe(u16, args),
+            .dec_to_u32_trunc => return self.decToIntTrunc(u32, args),
+            .dec_to_u32_try_unsafe => return self.decToIntTryUnsafe(u32, args),
+            .dec_to_u64_trunc => return self.decToIntTrunc(u64, args),
+            .dec_to_u64_try_unsafe => return self.decToIntTryUnsafe(u64, args),
+            .dec_to_u128_trunc => return self.decToIntTrunc(u128, args),
+            .dec_to_u128_try_unsafe => return self.decToIntTryUnsafe(u128, args),
+            .dec_to_f32_wrap => return self.decToF32Wrap(args),
+            .dec_to_f32_try_unsafe => return self.decToF32TryUnsafe(args),
+            .dec_to_f64 => return self.decToF64(args),
         }
     }
 
@@ -2776,6 +3327,353 @@ pub const Interpreter = struct {
         @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = dec_value;
         out.is_initialized = true;
         return out;
+    }
+
+    /// Helper for integer to Dec try_unsafe conversions (for u128/i128 which can overflow)
+    /// Returns { success: Bool, val_or_memory_garbage: Dec }
+    fn intToDecTryUnsafe(self: *Interpreter, comptime From: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const int_arg = args[0];
+        std.debug.assert(int_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
+
+        // Dec's max whole number is ~1.7×10^20, which is less than u128's max (~3.4×10^38)
+        // Dec is stored as i128 * 10^18, so max safe value is i128.max / 10^18
+        const dec_max_whole: i128 = @divFloor(std.math.maxInt(i128), RocDec.one_point_zero_i128);
+        const dec_min_whole: i128 = @divFloor(std.math.minInt(i128), RocDec.one_point_zero_i128);
+
+        // Check if conversion is safe
+        const success = if (From == u128)
+            from_value <= @as(u128, @intCast(dec_max_whole))
+        else if (From == i128)
+            from_value >= dec_min_whole and from_value <= dec_max_whole
+        else
+            @compileError("intToDecTryUnsafe only supports u128 and i128");
+
+        // Build the result record: { success: Bool, val_or_memory_garbage: Dec }
+        return try self.buildSuccessValRecord(success, if (success) RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 } else RocDec{ .num = 0 });
+    }
+
+    /// Helper for float to int truncating conversions
+    fn floatToIntTrunc(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Truncate float to integer (clamping to range and truncating fractional part)
+        const to_value: To = floatToIntSaturating(From, To, from_value);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for float to int try_unsafe conversions
+    /// Returns { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn floatToIntTryUnsafe(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+
+        // Check if it's an integer (no fractional part) and not NaN/Inf
+        const is_int = !std.math.isNan(from_value) and !std.math.isInf(from_value) and @trunc(from_value) == from_value;
+
+        // Check if in range for target type
+        const min_val: From = @floatFromInt(std.math.minInt(To));
+        const max_val: From = @floatFromInt(std.math.maxInt(To));
+        const in_range = from_value >= min_val and from_value <= max_val;
+
+        const val: To = if (is_int and in_range) @intFromFloat(from_value) else 0;
+
+        // Build the result record: { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+        return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
+    }
+
+    /// Helper for float widening (F32 -> F64)
+    fn floatWiden(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for float narrowing (F64 -> F32)
+    fn floatNarrow(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        const to_layout = Layout.frac(comptime fracTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for float narrowing try_unsafe (F64 -> F32)
+    /// Returns { success: Bool, val_or_memory_garbage: F32 }
+    fn floatNarrowTryUnsafe(self: *Interpreter, comptime From: type, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const float_arg = args[0];
+        std.debug.assert(float_arg.ptr != null);
+
+        const from_value: From = @as(*const From, @ptrCast(@alignCast(float_arg.ptr.?))).*;
+        const to_value: To = @floatCast(from_value);
+
+        // Check if the conversion is lossless (converting back gives the same value)
+        // Also check for infinity which indicates overflow
+        const success = !std.math.isInf(to_value) or std.math.isInf(from_value);
+        const back: From = @floatCast(to_value);
+        const lossless = from_value == back or (std.math.isNan(from_value) and std.math.isNan(back));
+
+        return try self.buildSuccessValRecordF32(success and lossless, to_value);
+    }
+
+    /// Helper for Dec to int truncating conversions
+    fn decToIntTrunc(self: *Interpreter, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+
+        // Get the whole number part by dividing by one_point_zero
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        // Saturate to target range
+        const to_value: To = std.math.cast(To, whole_part) orelse if (whole_part < 0) std.math.minInt(To) else std.math.maxInt(To);
+
+        const to_layout = Layout.int(comptime intTypeFromZigType(To));
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = to_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for Dec to int try_unsafe conversions
+    /// Returns { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn decToIntTryUnsafe(self: *Interpreter, comptime To: type, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+
+        // Check if it's an integer (no fractional part)
+        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const is_int = remainder == 0;
+
+        // Get the whole number part
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        // Check if in range for target type
+        const in_range = std.math.cast(To, whole_part) != null;
+
+        const val: To = if (is_int and in_range) @intCast(whole_part) else 0;
+
+        return try self.buildIsIntInRangeValRecord(is_int, in_range, To, val);
+    }
+
+    /// Helper for Dec to i128 try_unsafe conversions (special case - always in range)
+    /// Returns { is_int: Bool, val_or_memory_garbage: I128 }
+    fn decToI128TryUnsafe(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+
+        // Check if it's an integer (no fractional part)
+        const remainder = @rem(dec_value.num, RocDec.one_point_zero_i128);
+        const is_int = remainder == 0;
+
+        // Get the whole number part - always fits in i128
+        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+
+        return try self.buildIsIntValRecord(is_int, whole_part);
+    }
+
+    /// Helper for Dec to F32 wrapping conversion
+    fn decToF32Wrap(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+        const f32_value: f32 = @floatCast(f64_value);
+
+        const to_layout = Layout.frac(.f32);
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = f32_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Helper for Dec to F32 try_unsafe conversion
+    /// Returns { success: Bool, val_or_memory_garbage: F32 }
+    fn decToF32TryUnsafe(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+        const f32_value: f32 = @floatCast(f64_value);
+
+        // Check if conversion is lossless by converting back
+        const back_f64: f64 = @floatCast(f32_value);
+        const back_dec = RocDec.fromF64(back_f64);
+        const success = back_dec != null and back_dec.?.num == dec_value.num;
+
+        return try self.buildSuccessValRecordF32(success, f32_value);
+    }
+
+    /// Helper for Dec to F64 conversion
+    fn decToF64(self: *Interpreter, args: []const StackValue) !StackValue {
+        std.debug.assert(args.len == 1);
+        const dec_arg = args[0];
+        std.debug.assert(dec_arg.ptr != null);
+
+        const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
+        const f64_value = dec_value.toF64();
+
+        const to_layout = Layout.frac(.f64);
+        var out = try self.pushRaw(to_layout, 0);
+        out.is_initialized = false;
+        @as(*f64, @ptrCast(@alignCast(out.ptr.?))).* = f64_value;
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Build a record { success: Bool, val_or_memory_garbage: Dec }
+    fn buildSuccessValRecord(self: *Interpreter, success: bool, val: RocDec) !StackValue {
+        // Layout: tuple (Dec, Bool) where element 0 is Dec (16 bytes) and element 1 is Bool (1 byte)
+        // Total size with alignment: 24 bytes (16 for Dec + 8 for alignment of Bool field)
+        const dec_layout = Layout.frac(.dec);
+        const bool_layout = Layout.int(.u8);
+
+        // We need to create a tuple layout for the result
+        // For now, allocate raw bytes and set them directly
+        // The tuple is (val_or_memory_garbage: Dec, success: Bool)
+        const tuple_size: usize = 24; // 16 bytes Dec + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 16);
+        out.is_initialized = false;
+
+        // Write Dec at offset 0
+        @as(*RocDec, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 16
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
+        bool_ptr.* = @intFromBool(success);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        _ = dec_layout;
+        _ = bool_layout;
+        return out;
+    }
+
+    /// Build a record { success: Bool, val_or_memory_garbage: F32 }
+    fn buildSuccessValRecordF32(self: *Interpreter, success: bool, val: f32) !StackValue {
+        // Layout: tuple (F32, Bool) where element 0 is F32 (4 bytes) and element 1 is Bool (1 byte)
+        const tuple_size: usize = 8; // 4 bytes F32 + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 4);
+        out.is_initialized = false;
+
+        // Write F32 at offset 0
+        @as(*f32, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 4
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 4);
+        bool_ptr.* = @intFromBool(success);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Build a record { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }
+    fn buildIsIntInRangeValRecord(self: *Interpreter, is_int: bool, in_range: bool, comptime To: type, val: To) !StackValue {
+        // Layout depends on To's size
+        const val_size = @sizeOf(To);
+        const val_align = @alignOf(To);
+        // Structure: (val, is_int, in_range) with proper alignment
+        const tuple_size: usize = val_size + 2; // val + 2 bools
+        const padded_size = (tuple_size + val_align - 1) / val_align * val_align;
+
+        var out = try self.pushRawBytes(padded_size, val_align);
+        out.is_initialized = false;
+
+        // Write val at offset 0
+        @as(*To, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write is_int at offset val_size
+        const is_int_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size);
+        is_int_ptr.* = @intFromBool(is_int);
+
+        // Write in_range at offset val_size + 1
+        const in_range_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + val_size + 1);
+        in_range_ptr.* = @intFromBool(in_range);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Build a record { is_int: Bool, val_or_memory_garbage: I128 } (for dec_to_i128 which is always in range)
+    fn buildIsIntValRecord(self: *Interpreter, is_int: bool, val: i128) !StackValue {
+        // Layout: tuple (I128, Bool)
+        const tuple_size: usize = 24; // 16 bytes I128 + padding + 1 byte bool
+        var out = try self.pushRawBytes(tuple_size, 16);
+        out.is_initialized = false;
+
+        // Write I128 at offset 0
+        @as(*i128, @ptrCast(@alignCast(out.ptr.?))).* = val;
+
+        // Write Bool at offset 16
+        const bool_ptr: *u8 = @ptrFromInt(@intFromPtr(out.ptr.?) + 16);
+        bool_ptr.* = @intFromBool(is_int);
+
+        out.is_initialized = true;
+        // Layout is set by pushRawBytes as .zst since we're working with raw bytes
+        return out;
+    }
+
+    /// Helper to convert float to int with saturation (for trunc operations)
+    fn floatToIntSaturating(comptime From: type, comptime To: type, value: From) To {
+        if (std.math.isNan(value)) return 0;
+
+        const min_val: From = @floatFromInt(std.math.minInt(To));
+        const max_val: From = @floatFromInt(std.math.maxInt(To));
+
+        if (value <= min_val) return std.math.minInt(To);
+        if (value >= max_val) return std.math.maxInt(To);
+
+        return @intFromFloat(value);
     }
 
     /// Convert Zig integer type to types.Int.Precision
@@ -3700,11 +4598,24 @@ pub const Interpreter = struct {
                         if (arg_vars.len == 0) {
                             payload_value = null;
                         } else if (arg_vars.len == 1) {
-                            // Use the layout from the record's stored field, not from the type system.
-                            // This ensures we preserve the actual element layout (e.g., List(Dec))
-                            // rather than the type system's generic layout.
+                            // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
+                            // union in memory is sized for the largest variant. When extracting a
+                            // specific variant's payload, we need the correct layout for that variant.
+                            //
+                            // Check if the arg var has a rigid substitution (from polymorphic method
+                            // instantiation). If so, use the substituted type's layout.
+                            const arg_var = arg_vars[0];
+                            const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                            const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                    // Use the substituted concrete type's layout
+                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                }
+                                break :blk field_value.layout;
+                            } else field_value.layout;
+
                             payload_value = StackValue{
-                                .layout = field_value.layout,
+                                .layout = effective_layout,
                                 .ptr = field_value.ptr,
                                 .is_initialized = field_value.is_initialized,
                             };
@@ -3747,11 +4658,24 @@ pub const Interpreter = struct {
                     if (arg_vars.len == 0) {
                         payload_value = null;
                     } else if (arg_vars.len == 1) {
-                        // Use the layout from the tuple's stored field, not from the type system.
-                        // This ensures we preserve the actual element layout (e.g., List(Dec))
-                        // rather than the type system's generic layout (e.g., List(opaque_ptr)).
+                        // For heterogeneous tag unions (like Try(Str, ErrorRecord)), the payload
+                        // union in memory is sized for the largest variant. When extracting a
+                        // specific variant's payload, we need the correct layout for that variant.
+                        //
+                        // Check if the arg var has a rigid substitution (from polymorphic method
+                        // instantiation). If so, use the substituted type's layout.
+                        const arg_var = arg_vars[0];
+                        const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                        const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                // Use the substituted concrete type's layout
+                                break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                            }
+                            break :blk field_value.layout;
+                        } else field_value.layout;
+
                         payload_value = StackValue{
-                            .layout = field_value.layout,
+                            .layout = effective_layout,
                             .ptr = field_value.ptr,
                             .is_initialized = field_value.is_initialized,
                         };
@@ -4568,9 +5492,11 @@ pub const Interpreter = struct {
                                     try rt_tag_args.append(self.allocator, try self.translateTypeVar(module, ct_arg_var));
                                 }
                                 const rt_args_range = try self.runtime_types.appendVars(rt_tag_args.items);
-                                // Keep the original tag name - it should already exist in the module's ident store
+                                // Translate tag name from source module's ident store to runtime_layout_store's ident store
+                                const source_name_str = module.getIdent(tag.name);
+                                const rt_tag_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
                                 tag.* = .{
-                                    .name = tag.name,
+                                    .name = rt_tag_name,
                                     .args = rt_args_range,
                                 };
                             }
@@ -5213,12 +6139,38 @@ pub const Interpreter = struct {
         /// Dbg statement - print value after evaluation.
         dbg_print_stmt: DbgPrintStmt,
 
+        /// Sort - process comparison result and continue insertion sort.
+        sort_compare_result: SortCompareResult,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
 
         pub const TrimBindings = struct {
             target_len: usize,
+        };
+
+        /// Sort compare result - process comparison and continue insertion sort.
+        /// Uses insertion sort algorithm which works well with continuation-based evaluation.
+        pub const SortCompareResult = struct {
+            /// The list being sorted (working copy, will be modified in place)
+            list_value: StackValue,
+            /// The comparison function closure
+            compare_fn: StackValue,
+            /// Return type variable for the sort call (for rendering result)
+            call_ret_rt_var: ?types.Var,
+            /// Saved rigid_subst to restore after sort completes
+            saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
+            /// Current outer index (element being inserted)
+            outer_index: usize,
+            /// Current inner index (position being compared)
+            inner_index: usize,
+            /// Total number of elements
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
         };
 
         pub const AndShortCircuit = struct {
@@ -5399,6 +6351,8 @@ pub const Interpreter = struct {
             call_ret_rt_var: types.Var,
             /// Whether type instantiation was performed
             did_instantiate: bool,
+            /// Saved rigid_subst to restore after the call completes
+            saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Allocated arg_rt_vars slice to free after call completes
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -5415,6 +6369,10 @@ pub const Interpreter = struct {
             has_active_closure: bool,
             /// Whether type instantiation was performed
             did_instantiate: bool,
+            /// Return type variable for the call (used for rendering results)
+            call_ret_rt_var: ?types.Var,
+            /// Saved rigid_subst to restore after method call (for polymorphic dispatch)
+            saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -5713,9 +6671,17 @@ pub const Interpreter = struct {
                     switch (cont) {
                         .call_invoke_closure => |ci| {
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (ci.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
                         .call_cleanup => |cc| {
                             if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (cc.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
                         .for_loop_iterate => |fl| {
                             // Decref the list value
@@ -5724,6 +6690,15 @@ pub const Interpreter = struct {
                         .for_loop_body_done => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .sort_compare_result => |sc| {
+                            // Decref the list and compare function
+                            sc.list_value.decref(&self.runtime_layout_store, roc_ops);
+                            sc.compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                            if (sc.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
                         else => {},
                     }
@@ -6372,6 +7347,14 @@ pub const Interpreter = struct {
                         func_rt_orig_resolved.desc.content.structure == .fn_effectful or
                         func_rt_orig_resolved.desc.content.structure == .fn_unbound);
 
+                var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
+                if (should_instantiate) {
+                    saved_rigid_subst = try self.rigid_subst.clone();
+                }
+                errdefer {
+                    if (saved_rigid_subst) |*saved| saved.deinit();
+                }
+
                 var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
                 defer subst_map.deinit();
                 const func_rt_var = if (should_instantiate)
@@ -6449,8 +7432,10 @@ pub const Interpreter = struct {
                     .arg_count = arg_indices.len,
                     .call_ret_rt_var = call_ret_rt_var,
                     .did_instantiate = should_instantiate,
+                    .saved_rigid_subst = saved_rigid_subst,
                     .arg_rt_vars_to_free = arg_rt_vars,
                 } } });
+                saved_rigid_subst = null;
 
                 // Push arg collection continuation (to be executed after function is evaluated)
                 try work_stack.push(.{ .apply_continuation = .{ .call_collect_args = .{
@@ -6767,10 +7752,12 @@ pub const Interpreter = struct {
             self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
             return error.Crash;
         }
-        const tu = resolved.desc.content.structure.tag_union;
-        const tags = self.runtime_types.getTagsSlice(tu.tags);
+        // Use appendUnionTags to properly handle tag union extensions
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(rt_var, &tag_list);
         // Find tag index by translating the source ident to the runtime store
-        const tag_index = try self.findTagIndexByIdent(self.env, zero.name, tags) orelse {
+        const tag_index = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items) orelse {
             const name_text = self.env.getIdent(zero.name);
             const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
             self.triggerCrash(msg, true, roc_ops);
@@ -8491,6 +9478,14 @@ pub const Interpreter = struct {
             .call_invoke_closure => |ci| {
                 // All arguments collected - pop them and the function, then invoke
                 // Stack state: [func_val, arg0, arg1, ...] (func at bottom, args on top)
+                var saved_rigid_subst = ci.saved_rigid_subst;
+                defer {
+                    if (saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+                }
+
                 const arg_count = ci.arg_count;
 
                 // Pop all arguments (in reverse order)
@@ -8529,7 +9524,155 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
+
+                        // Special handling for list_sort_with which requires continuation-based evaluation
+                        if (low_level.op == .list_sort_with) {
+                            // list_sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
+                            std.debug.assert(arg_values.len == 2);
+
+                            var list_arg = arg_values[0];
+                            const compare_fn = arg_values[1];
+                            // Get list info
+                            std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+                            const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                            const list_len = roc_list.len();
+
+                            // If list has 0 or 1 elements, it's already sorted
+                            if (list_len < 2) {
+                                // Return the list as-is - ownership transfers from arg to return value
+                                compare_fn.decref(&self.runtime_layout_store, roc_ops);
+
+                                self.env = saved_env;
+                                func_val.decref(&self.runtime_layout_store, roc_ops);
+                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                list_arg.rt_var = ci.call_ret_rt_var;
+                                try value_stack.push(list_arg);
+                                return true;
+                            }
+
+                            // Get element layout
+                            const elem_layout_idx = list_arg.layout.data.list;
+                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                            const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                            const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                            const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                            // Make a unique copy of the list for sorting
+                            const elements_refcounted = elem_layout.isRefcounted();
+                            var refcount_context = RefcountContext{
+                                .layout_store = &self.runtime_layout_store,
+                                .elem_layout = elem_layout,
+                                .roc_ops = roc_ops,
+                            };
+
+                            const working_list = roc_list.makeUnique(
+                                elem_alignment_u32,
+                                elem_size,
+                                elements_refcounted,
+                                if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                                if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                                if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                                if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                                roc_ops,
+                            );
+
+                            // Reuse list_arg directly - write the result of makeUnique back into it.
+                            // This transfers ownership properly:
+                            // - If the list was unique, makeUnique returns the same RocList (no clone)
+                            // - If the list was shared, makeUnique clones and decrefs the original
+                            // Either way, list_arg now owns the unique working list.
+                            const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                            list_arg_ptr.* = working_list;
+                            list_arg.rt_var = ci.call_ret_rt_var;
+
+                            // Restore environment
+                            self.env = saved_env;
+                            func_val.decref(&self.runtime_layout_store, roc_ops);
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                            // Start insertion sort at index 1
+                            // Get elements at indices 0 and 1 for first comparison
+                            const elem0_ptr = working_list.bytes.? + 0 * elem_size;
+                            const elem1_ptr = working_list.bytes.? + 1 * elem_size;
+
+                            const elem0_value = StackValue{
+                                .layout = elem_layout,
+                                .ptr = @ptrCast(elem0_ptr),
+                                .is_initialized = true,
+                            };
+                            const elem1_value = StackValue{
+                                .layout = elem_layout,
+                                .ptr = @ptrCast(elem1_ptr),
+                                .is_initialized = true,
+                            };
+
+                            // Copy elements for comparison (compare_fn will consume them)
+                            const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
+                            const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
+
+                            // Push continuation to handle comparison result
+                            try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
+                                .list_value = list_arg,
+                                .compare_fn = compare_fn,
+                                .call_ret_rt_var = ci.call_ret_rt_var,
+                                .saved_rigid_subst = saved_rigid_subst,
+                                .outer_index = 1,
+                                .inner_index = 0,
+                                .list_len = list_len,
+                                .elem_size = elem_size,
+                                .elem_layout = elem_layout,
+                            } } });
+                            saved_rigid_subst = null;
+
+                            // Invoke comparison function with (elem_at_outer, elem_at_inner)
+                            const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
+                            const cmp_saved_env = self.env;
+                            self.env = @constCast(cmp_header.source_env);
+
+                            const cmp_params = self.env.store.slicePatterns(cmp_header.params);
+                            if (cmp_params.len != 2) {
+                                self.env = cmp_saved_env;
+                                return error.TypeMismatch;
+                            }
+
+                            try self.active_closures.append(compare_fn);
+
+                            // Bind parameters
+                            try self.bindings.append(.{
+                                .pattern_idx = cmp_params[0],
+                                .value = arg0,
+                                .expr_idx = @enumFromInt(0),
+                                .source_env = self.env,
+                            });
+                            try self.bindings.append(.{
+                                .pattern_idx = cmp_params[1],
+                                .value = arg1,
+                                .expr_idx = @enumFromInt(0),
+                                .source_env = self.env,
+                            });
+
+                            // Push cleanup and evaluate body
+                            const bindings_start = self.bindings.items.len - 2;
+                            try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                                .saved_env = cmp_saved_env,
+                                .saved_bindings_len = bindings_start,
+                                .param_count = 2,
+                                .has_active_closure = true,
+                                .did_instantiate = false,
+                                .call_ret_rt_var = null,
+                                .saved_rigid_subst = null,
+                                .arg_rt_vars_to_free = null,
+                            } } });
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = cmp_header.body_idx,
+                                .expected_rt_var = null,
+                            } });
+
+                            return true;
+                        }
+
+                        var result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
 
                         // Decref args (except for list_concat which handles its own refcounting)
                         if (low_level.op != .list_concat) {
@@ -8542,6 +9685,7 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        result.rt_var = ci.call_ret_rt_var;
                         try value_stack.push(result);
                         return true;
                     }
@@ -8554,7 +9698,7 @@ pub const Interpreter = struct {
                         const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
 
                         const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
+                        var result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
 
                         // Decref all args
                         for (arg_values) |arg| {
@@ -8565,6 +9709,7 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        result.rt_var = ret_rt_var;
                         try value_stack.push(result);
                         return true;
                     }
@@ -8582,23 +9727,41 @@ pub const Interpreter = struct {
                     // Provide closure context for capture lookup
                     try self.active_closures.append(func_val);
 
-                    // Bind parameters
+                    // Bind parameters using pattern matching to handle destructuring
                     for (params, 0..) |param, idx| {
-                        try self.bindings.append(.{
-                            .pattern_idx = param,
-                            .value = arg_values[idx],
-                            .expr_idx = @enumFromInt(0),
-                            .source_env = self.env,
-                        });
+                        // Get the runtime type for this parameter
+                        const param_rt_var = if (ci.arg_rt_vars_to_free) |vars|
+                            (if (idx < vars.len) vars[idx] else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param)))
+                        else
+                            try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+
+                        // Use patternMatchesBind to properly handle complex patterns (e.g., list destructuring)
+                        // patternMatchesBind borrows the value and creates copies for bindings, so we need to
+                        // decref the original arg_value after successful binding
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                            // Pattern match failed - cleanup and error
+                            self.env = saved_env;
+                            _ = self.active_closures.pop();
+                            func_val.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            return error.TypeMismatch;
+                        }
+                        // Decref the original argument value since patternMatchesBind made copies
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
                     }
 
                     // Push cleanup continuation, then evaluate body
+                    const cleanup_saved_rigid_subst = saved_rigid_subst;
+                    saved_rigid_subst = null;
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
                         .saved_bindings_len = saved_bindings_len,
                         .param_count = params.len,
                         .has_active_closure = true,
                         .did_instantiate = ci.did_instantiate,
+                        .call_ret_rt_var = ci.call_ret_rt_var,
+                        .saved_rigid_subst = cleanup_saved_rigid_subst,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -8618,17 +9781,13 @@ pub const Interpreter = struct {
             .call_cleanup => |cleanup| {
                 // Function body evaluated - cleanup and return result
                 // Check for early return
-                if (self.early_return_value) |return_val| {
+                if (self.early_return_value) |return_val_in| {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
+                    var return_val = return_val_in;
 
-                    // Decref parameter bindings
-                    var k = cleanup.param_count;
-                    while (k > 0) {
-                        k -= 1;
-                        if (self.bindings.pop()) |binding| {
-                            binding.value.decref(&self.runtime_layout_store, roc_ops);
-                        }
+                    if (cleanup.call_ret_rt_var) |rt_var| {
+                        return_val.rt_var = rt_var;
                     }
 
                     // Pop active closure if needed
@@ -8638,9 +9797,17 @@ pub const Interpreter = struct {
                         }
                     }
 
-                    // Restore environment and free arg_rt_vars
+                    // Restore rigid_subst if we did polymorphic instantiation
+                    if (cleanup.saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+
+                    // Restore environment and cleanup bindings
+                    // Use trimBindingList to properly decref all bindings created by pattern matching
+                    // (which may be more than param_count due to destructuring)
                     self.env = cleanup.saved_env;
-                    self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                    self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
                     try value_stack.push(return_val);
@@ -8648,16 +9815,7 @@ pub const Interpreter = struct {
                 }
 
                 // Normal return - result is on value stack
-                const result = value_stack.pop() orelse return error.Crash;
-
-                // Decref parameter bindings
-                var k = cleanup.param_count;
-                while (k > 0) {
-                    k -= 1;
-                    if (self.bindings.pop()) |binding| {
-                        binding.value.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                }
+                var result = value_stack.pop() orelse return error.Crash;
 
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
@@ -8666,11 +9824,22 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // Restore environment and free arg_rt_vars
+                // Restore rigid_subst if we did polymorphic instantiation
+                if (cleanup.saved_rigid_subst) |saved| {
+                    self.rigid_subst.deinit();
+                    self.rigid_subst = saved;
+                }
+
+                // Restore environment and cleanup bindings
+                // Use trimBindingList to properly decref all bindings created by pattern matching
+                // (which may be more than param_count due to destructuring)
                 self.env = cleanup.saved_env;
-                self.bindings.shrinkRetainingCapacity(cleanup.saved_bindings_len);
+                self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
+                if (cleanup.call_ret_rt_var) |rt_var| {
+                    result.rt_var = rt_var;
+                }
                 try value_stack.push(result);
                 return true;
             },
@@ -8752,9 +9921,11 @@ pub const Interpreter = struct {
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                     .saved_env = saved_env,
                     .saved_bindings_len = saved_bindings_len,
-                    .param_count = 1,
+                    .param_count = params.len,
                     .has_active_closure = true,
                     .did_instantiate = false,
+                    .call_ret_rt_var = null,
+                    .saved_rigid_subst = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -8894,6 +10065,8 @@ pub const Interpreter = struct {
                     .param_count = 2,
                     .has_active_closure = true,
                     .did_instantiate = false,
+                    .call_ret_rt_var = null,
+                    .saved_rigid_subst = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -9037,6 +10210,8 @@ pub const Interpreter = struct {
                         .param_count = 1,
                         .has_active_closure = true,
                         .did_instantiate = false,
+                        .call_ret_rt_var = null,
+                        .saved_rigid_subst = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -9146,6 +10321,73 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
 
+                // Instantiate the method's type parameters for polymorphic dispatch.
+                // This is necessary so that when pattern matching extracts payloads from
+                // generic types like Try(ok, err), the rigid type variables (ok, err) are
+                // properly substituted with the concrete types from the call site.
+                const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
+                const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                const should_instantiate_method = lambda_resolved.desc.content == .structure and
+                    (lambda_resolved.desc.content.structure == .fn_pure or
+                        lambda_resolved.desc.content.structure == .fn_effectful or
+                        lambda_resolved.desc.content.structure == .fn_unbound);
+
+                var method_subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                defer method_subst_map.deinit();
+
+                var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
+                var did_instantiate = false;
+
+                if (should_instantiate_method) {
+                    // Instantiate the method type (replaces rigid vars with fresh flex vars)
+                    _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
+
+                    // Map the fresh flex vars to concrete types from the receiver.
+                    const recv_type_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                    if (recv_type_resolved.desc.content == .structure and
+                        recv_type_resolved.desc.content.structure == .nominal_type)
+                    {
+                        const receiver_nom = recv_type_resolved.desc.content.structure.nominal_type;
+                        const receiver_args = self.runtime_types.sliceNominalArgs(receiver_nom);
+
+                        const fn_args = switch (lambda_resolved.desc.content.structure) {
+                            .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                            .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                            .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                            else => &[_]types.Var{},
+                        };
+
+                        if (fn_args.len > 0) {
+                            const first_param_resolved = self.runtime_types.resolveVar(fn_args[0]);
+                            if (first_param_resolved.desc.content == .structure and
+                                first_param_resolved.desc.content.structure == .nominal_type)
+                            {
+                                const param_nom = first_param_resolved.desc.content.structure.nominal_type;
+                                const param_args = self.runtime_types.sliceNominalArgs(param_nom);
+
+                                const min_args = @min(param_args.len, receiver_args.len);
+                                for (0..min_args) |arg_idx| {
+                                    const param_arg_resolved = self.runtime_types.resolveVar(param_args[arg_idx]);
+                                    if (param_arg_resolved.desc.content == .rigid) {
+                                        try method_subst_map.put(param_arg_resolved.var_, receiver_args[arg_idx]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Save and update rigid_subst
+                    saved_rigid_subst = try self.rigid_subst.clone();
+                    var subst_iter = method_subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                    @memset(self.var_to_layout_slot.items, 0);
+                    did_instantiate = true;
+                }
+
                 try self.active_closures.append(method_func);
 
                 // Bind receiver first
@@ -9171,7 +10413,9 @@ pub const Interpreter = struct {
                     .saved_bindings_len = saved_bindings_len,
                     .param_count = expected_params,
                     .has_active_closure = true,
-                    .did_instantiate = false,
+                    .did_instantiate = did_instantiate,
+                    .call_ret_rt_var = null,
+                    .saved_rigid_subst = saved_rigid_subst,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -9241,6 +10485,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
@@ -9313,6 +10561,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
+                // Decref the element after successful pattern matching.
+                // patternMatchesBind creates copies via pushCopy which increfs, so the original
+                // incref we did above is now an extra reference that needs to be released.
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
                 try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
@@ -9457,6 +10709,230 @@ pub const Interpreter = struct {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
                     try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, roc_ops);
                 }
+                return true;
+            },
+            .sort_compare_result => |sc_in| {
+                var sc = sc_in;
+                var saved_rigid_subst = sc.saved_rigid_subst;
+                defer {
+                    if (saved_rigid_subst) |saved| {
+                        self.rigid_subst.deinit();
+                        self.rigid_subst = saved;
+                    }
+                }
+
+                // Process comparison result for insertion sort
+                const cmp_result = value_stack.pop() orelse return error.Crash;
+                defer cmp_result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Extract the comparison result (LT, EQ, GT tag)
+                // LT = 0, EQ = 1, GT = 2 (alphabetical order)
+                const is_less_than = blk: {
+                    if (cmp_result.layout.tag == .scalar) {
+                        // Tag union represented as a scalar (discriminant only)
+                        const discriminant = cmp_result.asI128();
+                        // Tag order is alphabetical: EQ=0, GT=1, LT=2
+                        break :blk discriminant == 2; // LT
+                    } else {
+                        // Try to get discriminant from tag union
+                        if (cmp_result.ptr) |ptr| {
+                            const discriminant: u8 = @as(*const u8, @ptrCast(ptr)).*;
+                            // Tag order is alphabetical: EQ=0, GT=1, LT=2
+                            break :blk discriminant == 2; // LT
+                        }
+                        break :blk false;
+                    }
+                };
+
+                const working_list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(sc.list_value.ptr.?));
+
+                if (is_less_than) {
+                    // Current element is less than compared element - swap them
+                    const outer_ptr = working_list_ptr.bytes.? + sc.outer_index * sc.elem_size;
+                    const inner_ptr = working_list_ptr.bytes.? + sc.inner_index * sc.elem_size;
+
+                    // Swap elements
+                    var temp_buffer: [256]u8 = undefined;
+                    if (sc.elem_size <= 256) {
+                        @memcpy(temp_buffer[0..sc.elem_size], outer_ptr[0..sc.elem_size]);
+                        @memcpy(outer_ptr[0..sc.elem_size], inner_ptr[0..sc.elem_size]);
+                        @memcpy(inner_ptr[0..sc.elem_size], temp_buffer[0..sc.elem_size]);
+                    } else {
+                        // For larger elements, allocate temp buffer
+                        const temp = try self.allocator.alloc(u8, sc.elem_size);
+                        defer self.allocator.free(temp);
+                        @memcpy(temp, outer_ptr[0..sc.elem_size]);
+                        @memcpy(outer_ptr[0..sc.elem_size], inner_ptr[0..sc.elem_size]);
+                        @memcpy(inner_ptr[0..sc.elem_size], temp);
+                    }
+
+                    // Continue comparing at inner_index - 1 if possible
+                    if (sc.inner_index > 0) {
+                        const new_inner = sc.inner_index - 1;
+                        const elem_at_inner = working_list_ptr.bytes.? + new_inner * sc.elem_size;
+                        const elem_at_current = working_list_ptr.bytes.? + sc.inner_index * sc.elem_size;
+
+                        const elem_inner_value = StackValue{
+                            .layout = sc.elem_layout,
+                            .ptr = @ptrCast(elem_at_inner),
+                            .is_initialized = true,
+                        };
+                        const elem_current_value = StackValue{
+                            .layout = sc.elem_layout,
+                            .ptr = @ptrCast(elem_at_current),
+                            .is_initialized = true,
+                        };
+
+                        // Copy elements for comparison
+                        const arg0 = try self.pushCopy(elem_current_value, roc_ops);
+                        const arg1 = try self.pushCopy(elem_inner_value, roc_ops);
+
+                        // Push continuation for next comparison
+                        // After swap, the element we're inserting is now at sc.inner_index
+                        // so we track that as our new "outer" position
+                        try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
+                            .list_value = sc.list_value,
+                            .compare_fn = sc.compare_fn,
+                            .call_ret_rt_var = sc.call_ret_rt_var,
+                            .saved_rigid_subst = saved_rigid_subst,
+                            .outer_index = sc.inner_index,
+                            .inner_index = new_inner,
+                            .list_len = sc.list_len,
+                            .elem_size = sc.elem_size,
+                            .elem_layout = sc.elem_layout,
+                        } } });
+                        saved_rigid_subst = null;
+
+                        // Invoke comparison function
+                        const cmp_header: *const layout.Closure = @ptrCast(@alignCast(sc.compare_fn.ptr.?));
+                        const cmp_saved_env = self.env;
+                        self.env = @constCast(cmp_header.source_env);
+
+                        const cmp_params = self.env.store.slicePatterns(cmp_header.params);
+
+                        try self.active_closures.append(sc.compare_fn);
+
+                        try self.bindings.append(.{
+                            .pattern_idx = cmp_params[0],
+                            .value = arg0,
+                            .expr_idx = @enumFromInt(0),
+                            .source_env = self.env,
+                        });
+                        try self.bindings.append(.{
+                            .pattern_idx = cmp_params[1],
+                            .value = arg1,
+                            .expr_idx = @enumFromInt(0),
+                            .source_env = self.env,
+                        });
+
+                        const bindings_start = self.bindings.items.len - 2;
+                        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                            .saved_env = cmp_saved_env,
+                            .saved_bindings_len = bindings_start,
+                            .param_count = 2,
+                            .has_active_closure = true,
+                            .did_instantiate = false,
+                            .call_ret_rt_var = null,
+                            .saved_rigid_subst = null,
+                            .arg_rt_vars_to_free = null,
+                        } } });
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = cmp_header.body_idx,
+                            .expected_rt_var = null,
+                        } });
+
+                        return true;
+                    }
+                }
+
+                // Element is in correct position or at start - move to next outer element
+                const next_outer = sc.outer_index + 1;
+                if (next_outer < sc.list_len) {
+                    // Start comparing next element
+                    const elem_at_outer = working_list_ptr.bytes.? + next_outer * sc.elem_size;
+                    const elem_at_prev = working_list_ptr.bytes.? + (next_outer - 1) * sc.elem_size;
+
+                    const elem_outer_value = StackValue{
+                        .layout = sc.elem_layout,
+                        .ptr = @ptrCast(elem_at_outer),
+                        .is_initialized = true,
+                    };
+                    const elem_prev_value = StackValue{
+                        .layout = sc.elem_layout,
+                        .ptr = @ptrCast(elem_at_prev),
+                        .is_initialized = true,
+                    };
+
+                    // Copy elements for comparison
+                    const arg0 = try self.pushCopy(elem_outer_value, roc_ops);
+                    const arg1 = try self.pushCopy(elem_prev_value, roc_ops);
+
+                    // Push continuation for next comparison
+                    try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
+                        .list_value = sc.list_value,
+                        .compare_fn = sc.compare_fn,
+                        .call_ret_rt_var = sc.call_ret_rt_var,
+                        .saved_rigid_subst = saved_rigid_subst,
+                        .outer_index = next_outer,
+                        .inner_index = next_outer - 1,
+                        .list_len = sc.list_len,
+                        .elem_size = sc.elem_size,
+                        .elem_layout = sc.elem_layout,
+                    } } });
+                    saved_rigid_subst = null;
+
+                    // Invoke comparison function
+                    const cmp_header: *const layout.Closure = @ptrCast(@alignCast(sc.compare_fn.ptr.?));
+                    const cmp_saved_env = self.env;
+                    self.env = @constCast(cmp_header.source_env);
+
+                    const cmp_params = self.env.store.slicePatterns(cmp_header.params);
+
+                    try self.active_closures.append(sc.compare_fn);
+
+                    try self.bindings.append(.{
+                        .pattern_idx = cmp_params[0],
+                        .value = arg0,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+                    try self.bindings.append(.{
+                        .pattern_idx = cmp_params[1],
+                        .value = arg1,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+
+                    const bindings_start = self.bindings.items.len - 2;
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = cmp_saved_env,
+                        .saved_bindings_len = bindings_start,
+                        .param_count = 2,
+                        .has_active_closure = true,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = null,
+                        .saved_rigid_subst = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = cmp_header.body_idx,
+                        .expected_rt_var = null,
+                    } });
+
+                    return true;
+                }
+
+                // Sorting complete - return the sorted list
+                sc.compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                if (saved_rigid_subst) |saved| {
+                    self.rigid_subst.deinit();
+                    self.rigid_subst = saved;
+                    saved_rigid_subst = null;
+                }
+                if (sc.call_ret_rt_var) |rt_var| {
+                    sc.list_value.rt_var = rt_var;
+                }
+                try value_stack.push(sc.list_value);
                 return true;
             },
         }

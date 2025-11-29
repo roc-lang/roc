@@ -20,6 +20,11 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     }
 }
 
+fn isNativeOrMusl(target: ResolvedTarget) bool {
+    return target.query.isNativeCpu() and target.query.isNativeOs() and
+        (target.query.isNativeAbi() or target.result.abi.isMusl());
+}
+
 const TestsSummaryStep = struct {
     step: Step,
     has_filters: bool,
@@ -492,7 +497,24 @@ fn setupTestPlatforms(
     b.getInstallStep().dependOn(&copy_test_int_host.step);
     test_platforms_step.dependOn(&copy_test_int_host.step);
 
-    // Cross-compile int platform host libraries for musl and glibc targets
+    // Create test platform host static library (fx) - native target
+    const test_platform_fx_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_fx_host",
+        "test/fx/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Copy the fx test platform host library to the source directory
+    const copy_test_fx_host = b.addUpdateSourceFiles();
+    const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
+    b.getInstallStep().dependOn(&copy_test_fx_host.step);
+    test_platforms_step.dependOn(&copy_test_fx_host.step);
+
+    // Cross-compile int and fx platform host libraries for musl and glibc targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
         .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
@@ -518,6 +540,22 @@ fn setupTestPlatforms(
         copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
         b.getInstallStep().dependOn(&copy_cross_int_host.step);
         test_platforms_step.dependOn(&copy_cross_int_host.step);
+
+        // Create cross-compiled fx host library
+        const cross_fx_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_fx_host_{s}", .{cross_target.name}),
+            "test/fx/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy to target-specific directory
+        const copy_cross_fx_host = b.addUpdateSourceFiles();
+        copy_cross_fx_host.addCopyFileToSource(cross_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libhost.a" }));
+        b.getInstallStep().dependOn(&copy_cross_fx_host.step);
+        test_platforms_step.dependOn(&copy_cross_fx_host.step);
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
@@ -1040,11 +1078,10 @@ pub fn build(b: *std.Build) void {
     check_fmt_step.dependOn(&check_fmt.step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
-    const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
     const is_windows = target.result.os.tag == .windows;
 
     // fx platform effectful functions test - only run when not cross-compiling
-    if (target.query.isNativeCpu() and target.query.isNativeOs() and target.query.isNativeAbi()) {
+    if (isNativeOrMusl(target)) {
         // Create fx test platform host static library
         const test_platform_fx_host_lib = createTestPlatformHostLib(
             b,
@@ -1081,7 +1118,7 @@ pub fn build(b: *std.Build) void {
     }
 
     var build_afl = false;
-    if (!is_native) {
+    if (!isNativeOrMusl(target)) {
         std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
     } else if (is_windows) {
         // Windows does not support fuzzing - only build repro executables
