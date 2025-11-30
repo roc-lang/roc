@@ -95,6 +95,52 @@ in:
   entry point that deserializes a `ModuleEnv`, constructs an interpreter, and
   returns rendered output.
 
+## Debugging
+
+The interpreter supports a compile-time tracing flag that enables detailed
+evaluation output. To build with tracing enabled:
+
+```bash
+zig build -Dtrace-eval=true
+```
+
+This flag is automatically enabled in Debug builds (`-Doptimize=Debug`). When
+enabled, the interpreter outputs detailed information about evaluation steps,
+which is useful for debugging issues in the interpreter or understanding how
+expressions are evaluated.
+
+For snapshot testing with tracing, use the `--trace-eval` flag:
+
+```bash
+./zig-out/bin/snapshot --trace-eval path/to/snapshot.md
+```
+
+Note: `--trace-eval` only works with REPL-type snapshots (`type=repl`).
+
+### Refcount Tracing
+
+For debugging memory management issues, use the `-Dtrace-refcount` flag:
+
+```bash
+zig build -Dtrace-refcount=true
+```
+
+When enabled, this outputs detailed refcount operations to stderr:
+
+```
+[REFCOUNT] DECREF str ptr=0x1234 len=5 cap=32
+[REFCOUNT] DECREF list ptr=0x5678 len=3 elems_rc=1 unique=1
+[REFCOUNT] INCREF str ptr=0x1234 len=5 cap=32
+```
+
+This is useful for:
+- Debugging segfaults in list/string operations
+- Verifying correct refcounting in new builtins
+- Understanding memory lifecycle during evaluation
+
+Unlike `-Dtrace-eval`, this flag defaults to `false` even in Debug builds due to
+the volume of output it produces.
+
 ## Tips for Contributors
 
 - Use the provided helpers (`StackValue.copyToPtr`, `StackValue.decref`, render

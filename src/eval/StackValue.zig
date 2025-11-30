@@ -6,12 +6,16 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const layout_mod = @import("layout");
+
+// Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
+const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -912,14 +916,31 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
 
 /// Increment reference count for refcounted types
 pub fn incref(self: StackValue) void {
+    if (comptime trace_refcount) {
+        traceRefcount("INCREF layout.tag={} ptr=0x{x}", .{ @intFromEnum(self.layout.tag), @intFromPtr(self.ptr) });
+    }
+
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
         const roc_str = self.asRocStr();
+        if (comptime trace_refcount) {
+            traceRefcount("INCREF str ptr=0x{x} len={} cap={}", .{
+                @intFromPtr(roc_str.getAllocationPtr()),
+                roc_str.len(),
+                roc_str.getCapacity(),
+            });
+        }
         roc_str.incref(1);
         return;
     }
     if (self.layout.tag == .list) {
         if (self.ptr == null) return;
         const list_value = @as(*const RocList, @ptrCast(@alignCast(self.ptr.?))).*;
+        if (comptime trace_refcount) {
+            traceRefcount("INCREF list ptr=0x{x} len={}", .{
+                @intFromPtr(list_value.getAllocationDataPtr()),
+                list_value.len(),
+            });
+        }
         // We don't know element layout here to store counts; assume caller already handled
         list_value.incref(1, false);
         return;
@@ -928,6 +949,9 @@ pub fn incref(self: StackValue) void {
         if (self.ptr == null) return;
         const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
         if (slot.* != 0) {
+            if (comptime trace_refcount) {
+                traceRefcount("INCREF box ptr=0x{x}", .{slot.*});
+            }
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
         }
@@ -935,13 +959,36 @@ pub fn incref(self: StackValue) void {
     }
 }
 
+/// Trace helper for refcount operations. Only active when built with -Dtrace-refcount=true.
+/// Output goes to stderr to avoid interfering with app stdout.
+/// Note: Tracing is disabled on freestanding targets (wasm) as they have no stderr.
+fn traceRefcount(comptime fmt: []const u8, args: anytype) void {
+    if (comptime trace_refcount and builtin.os.tag != .freestanding) {
+        const stderr_file: std.fs.File = .stderr();
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "[REFCOUNT] " ++ fmt ++ "\n", args) catch return;
+        stderr_file.writeAll(msg) catch {};
+    }
+}
+
 /// Decrement reference count for refcounted types
 pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
+    if (comptime trace_refcount) {
+        traceRefcount("DECREF layout.tag={} ptr=0x{x}", .{ @intFromEnum(self.layout.tag), @intFromPtr(self.ptr) });
+    }
+
     switch (self.layout.tag) {
         .scalar => switch (self.layout.data.scalar.tag) {
             .str => {
-                const roc_str = self.asRocStr();
-                roc_str.decref(ops);
+                if (comptime trace_refcount) {
+                    const roc_str = self.asRocStr();
+                    traceRefcount("DECREF str ptr=0x{x} len={} cap={}", .{
+                        @intFromPtr(roc_str.getAllocationPtr()),
+                        roc_str.len(),
+                        roc_str.getCapacity(),
+                    });
+                }
+                self.asRocStr().decref(ops);
                 return;
             },
             else => {},
@@ -954,12 +1001,26 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
             const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
             const elements_refcounted = elem_layout.isRefcounted();
+
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
+                    @intFromPtr(list_value.getAllocationDataPtr()),
+                    list_value.len(),
+                    @intFromBool(elements_refcounted),
+                    @intFromBool(list_value.isUnique()),
+                });
+            }
+
             if (elements_refcounted and list_value.isUnique()) {
                 if (list_value.getAllocationDataPtr()) |source| {
                     const count: usize = if (list_value.isSeamlessSlice()) blk: {
                         const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                         break :blk ptr[0];
                     } else list_value.len();
+
+                    if (comptime trace_refcount) {
+                        traceRefcount("DECREF list decref-ing {} elements", .{count});
+                    }
 
                     var idx: usize = 0;
                     while (idx < count) : (idx += 1) {
@@ -1002,6 +1063,14 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const payload_ptr = @as([*]u8, @ptrFromInt(unmasked_ptr));
             const refcount_ptr: *isize = @as(*isize, @ptrFromInt(unmasked_ptr - @sizeOf(isize)));
 
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF box ptr=0x{x} rc={} elem_rc={}", .{
+                    unmasked_ptr,
+                    refcount_ptr.*,
+                    @intFromBool(elem_layout.isRefcounted()),
+                });
+            }
+
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
                 if (elem_layout.isRefcounted()) {
                     const payload_value = StackValue{
@@ -1021,6 +1090,13 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (self.ptr == null) return;
             const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
             if (record_data.fields.count == 0) return;
+
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF record ptr=0x{x} fields={}", .{
+                    @intFromPtr(self.ptr),
+                    record_data.fields.count,
+                });
+            }
 
             const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
             const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
@@ -1055,6 +1131,13 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
             if (tuple_data.fields.count == 0) return;
 
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF tuple ptr=0x{x} fields={}", .{
+                    @intFromPtr(self.ptr),
+                    tuple_data.fields.count,
+                });
+            }
+
             const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
             const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
@@ -1087,6 +1170,13 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (captures_layout.tag == .record) {
                 const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
                 if (record_data.fields.count > 0) {
+                    if (comptime trace_refcount) {
+                        traceRefcount("DECREF closure ptr=0x{x} captures={}", .{
+                            @intFromPtr(self.ptr),
+                            record_data.fields.count,
+                        });
+                    }
+
                     // Calculate the offset to the captures record (after header, with alignment)
                     const header_size = @sizeOf(layout_mod.Closure);
                     const cap_align = captures_layout.alignment(layout_cache.targetUsize());

@@ -457,6 +457,92 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+/// Custom build step that clears the Roc cache directory.
+/// Uses Zig's native filesystem APIs for cross-platform support.
+const ClearRocCacheStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *ClearRocCacheStep {
+        const self = b.allocator.create(ClearRocCacheStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "clear-roc-cache",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+
+        const allocator = step.owner.allocator;
+
+        // Get the cache directory path using the same logic as cache_config.zig
+        const cache_dir = getCacheDir(allocator) catch |err| {
+            std.debug.print("Warning: Could not determine cache directory: {s}\n", .{@errorName(err)});
+            return;
+        };
+        defer allocator.free(cache_dir);
+
+        // Check if cache directory exists before trying to delete
+        std.fs.cwd().access(cache_dir, .{}) catch {
+            // Cache doesn't exist, nothing to do
+            std.debug.print("Roc cache not found (nothing to clear)\n", .{});
+            return;
+        };
+
+        // Try to delete the cache directory
+        std.fs.cwd().deleteTree(cache_dir) catch |err| {
+            std.debug.print("Warning: Could not clear cache at {s}: {s}\n", .{ cache_dir, @errorName(err) });
+            return;
+        };
+
+        std.debug.print("Cleared roc cache at {s}\n", .{cache_dir});
+    }
+
+    /// Get the Roc cache directory path (matches cache_config.zig logic)
+    fn getCacheDir(allocator: std.mem.Allocator) ![]u8 {
+        const cache_dir_name = switch (builtin.os.tag) {
+            .windows => "Roc",
+            else => "roc",
+        };
+
+        // Respect XDG_CACHE_HOME if set
+        if (std.process.getEnvVarOwned(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+            defer allocator.free(xdg_cache);
+            return std.fs.path.join(allocator, &[_][]const u8{ xdg_cache, cache_dir_name });
+        } else |_| {
+            // Fall back to platform defaults
+            const home_env = switch (builtin.os.tag) {
+                .windows => "APPDATA",
+                else => "HOME",
+            };
+
+            const home_dir = std.process.getEnvVarOwned(allocator, home_env) catch {
+                return error.NoHomeDirectory;
+            };
+            defer allocator.free(home_dir);
+
+            return switch (builtin.os.tag) {
+                .linux => std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", cache_dir_name }),
+                .macos => std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Caches", cache_dir_name }),
+                .windows => std.fs.path.join(allocator, &[_][]const u8{ home_dir, cache_dir_name }),
+                else => std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", cache_dir_name }),
+            };
+        }
+    }
+};
+
+/// Create a step that clears the Roc cache directory.
+/// This is useful when rebuilding test platforms to ensure stale cached hosts aren't used.
+fn createClearCacheStep(b: *std.Build) *Step {
+    const clear_cache = ClearRocCacheStep.create(b);
+    return &clear_cache.step;
+}
+
 fn setupTestPlatforms(
     b: *std.Build,
     target: ResolvedTarget,
@@ -464,6 +550,9 @@ fn setupTestPlatforms(
     roc_modules: modules.RocModules,
     test_platforms_step: *Step,
 ) void {
+    // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
+    const clear_cache_step = createClearCacheStep(b);
+
     // Create test platform host static library (str)
     const test_platform_host_lib = createTestPlatformHostLib(
         b,
@@ -478,8 +567,10 @@ fn setupTestPlatforms(
     const copy_test_host = b.addUpdateSourceFiles();
     const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_host.step);
-    test_platforms_step.dependOn(&copy_test_host.step);
+    // Clear cache after copying new host library
+    clear_cache_step.dependOn(&copy_test_host.step);
+    b.getInstallStep().dependOn(clear_cache_step);
+    test_platforms_step.dependOn(clear_cache_step);
 
     // Create test platform host static library (int) - native target
     const test_platform_int_host_lib = createTestPlatformHostLib(
@@ -495,8 +586,7 @@ fn setupTestPlatforms(
     const copy_test_int_host = b.addUpdateSourceFiles();
     const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_int_host.step);
-    test_platforms_step.dependOn(&copy_test_int_host.step);
+    clear_cache_step.dependOn(&copy_test_int_host.step);
 
     // Create test platform host static library (fx) - native target
     const test_platform_fx_host_lib = createTestPlatformHostLib(
@@ -512,8 +602,7 @@ fn setupTestPlatforms(
     const copy_test_fx_host = b.addUpdateSourceFiles();
     const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_fx_host.step);
-    test_platforms_step.dependOn(&copy_test_fx_host.step);
+    clear_cache_step.dependOn(&copy_test_fx_host.step);
 
     // Cross-compile int and fx platform host libraries for musl and glibc targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
@@ -539,8 +628,7 @@ fn setupTestPlatforms(
         // Copy to target-specific directory
         const copy_cross_int_host = b.addUpdateSourceFiles();
         copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
-        b.getInstallStep().dependOn(&copy_cross_int_host.step);
-        test_platforms_step.dependOn(&copy_cross_int_host.step);
+        clear_cache_step.dependOn(&copy_cross_int_host.step);
 
         // Create cross-compiled fx host library
         const cross_fx_host_lib = createTestPlatformHostLib(
@@ -555,8 +643,7 @@ fn setupTestPlatforms(
         // Copy to target-specific directory
         const copy_cross_fx_host = b.addUpdateSourceFiles();
         copy_cross_fx_host.addCopyFileToSource(cross_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libhost.a" }));
-        b.getInstallStep().dependOn(&copy_cross_fx_host.step);
-        test_platforms_step.dependOn(&copy_cross_fx_host.step);
+        clear_cache_step.dependOn(&copy_cross_fx_host.step);
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
@@ -602,6 +689,7 @@ pub fn build(b: *std.Build) void {
     const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
+    const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
 
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
@@ -633,6 +721,7 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_tracy", flag_enable_tracy != null);
     build_options.addOption(bool, "trace_eval", trace_eval);
+    build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     if (target.result.os.tag == .macos and flag_tracy_callstack) {
         std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
@@ -781,22 +870,7 @@ pub fn build(b: *std.Build) void {
     const clean_out_step = b.addRemoveDirTree(b.path("zig-out"));
 
     // Also clear the roc cache to avoid stale cached modules with old struct layouts
-    // The cache location follows the same logic as src/compile/cache_config.zig:
-    // - XDG_CACHE_HOME/roc if XDG_CACHE_HOME is set
-    // - ~/Library/Caches/roc on macOS
-    // - ~/.cache/roc on Linux
-    const clear_roc_cache_step = b.addSystemCommand(&.{
-        "sh", "-c",
-        \\if [ -n "$XDG_CACHE_HOME" ]; then
-        \\  rm -rf "$XDG_CACHE_HOME/roc"
-        \\elif [ "$(uname)" = "Darwin" ]; then
-        \\  rm -rf "$HOME/Library/Caches/roc"
-        \\else
-        \\  rm -rf "$HOME/.cache/roc"
-        \\fi
-        \\echo "Cleared roc cache"
-        ,
-    });
+    const clear_roc_cache_step = createClearCacheStep(b);
 
     // Discover .roc files again for the rebuild command
     const roc_files_force = discoverBuiltinRocFiles(b) catch |err| {
@@ -806,7 +880,7 @@ pub fn build(b: *std.Build) void {
 
     const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
     run_builtin_compiler_force.step.dependOn(&clean_out_step.step);
-    run_builtin_compiler_force.step.dependOn(&clear_roc_cache_step.step);
+    run_builtin_compiler_force.step.dependOn(clear_roc_cache_step);
     rebuild_builtins_step.dependOn(&run_builtin_compiler_force.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
