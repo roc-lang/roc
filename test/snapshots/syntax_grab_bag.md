@@ -255,12 +255,12 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
 UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
+UNDEFINED VARIABLE - syntax_grab_bag.md:190:2:190:14
 UNDEFINED VARIABLE - syntax_grab_bag.md:191:2:191:14
 DOES NOT EXIST - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
 UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
@@ -272,6 +272,7 @@ UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
 UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -697,15 +698,38 @@ This feature is not yet implemented: unsupported operator
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**syntax_grab_bag.md:189:26:189:33:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                        ^^^^^^^
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:189:34:189:38:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:190:2:190:14:**
+```roc
+	Stdout.line!(interpolated)?
+```
+	^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
@@ -738,18 +762,6 @@ The unused variable is declared here:
 	tag_with_payload = Ok(number)
 ```
 	^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `interpolated` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:165:2:165:14:**
-```roc
-	interpolated = "Hello, ${world}"
-```
-	^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -947,6 +959,17 @@ It has the type:
 
 But I expected it to be:
     _Str_
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**syntax_grab_bag.md:190:2:190:29:**
+```roc
+	Stdout.line!(interpolated)?
+```
+	^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2043,15 +2066,15 @@ expect {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-str (text """))))
+										(p-str (text "foo"))))
 								(value
 									(e-num (value "100"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-str (text """)))
+										(p-str (text "foo")))
 									(pattern (degenerate false)
-										(p-str (text """))))
+										(p-str (text "bar"))))
 								(value
 									(e-num (value "200"))))
 							(branch
@@ -2390,9 +2413,56 @@ expect {
 									(receiver
 										(e-dot-access (field "unknown")
 											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+												(e-match
+													(match
+														(cond
+															(e-call
+																(e-runtime-error (tag "ident_not_in_scope"))
+																(e-runtime-error (tag "ident_not_in_scope"))))
+														(branches
+															(branch
+																(patterns
+																	(pattern (degenerate false)
+																		(p-applied-tag)))
+																(value
+																	(e-lookup-local
+																		(p-assign (ident "#ok")))))
+															(branch
+																(patterns
+																	(pattern (degenerate false)
+																		(p-applied-tag)))
+																(value
+																	(e-return
+																		(e-tag (name "Err")
+																			(args
+																				(e-lookup-local
+																					(p-assign (ident "#err"))))))))))))))))))
 					(s-expr
-						(e-runtime-error (tag "not_implemented")))
+						(e-match
+							(match
+								(cond
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local
+											(p-assign (ident "interpolated")))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err"))))))))))))
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
