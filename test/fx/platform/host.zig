@@ -1,6 +1,9 @@
 ///! Platform host that tests effectful functions writing to stdout and stderr.
 const std = @import("std");
 const builtins = @import("builtins");
+const build_options = @import("build_options");
+
+const trace_refcount = build_options.trace_refcount;
 
 /// Host environment - contains GeneralPurposeAllocator for leak detection
 const HostEnv = struct {
@@ -33,10 +36,18 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 
     // Return pointer to the user data (after the size metadata)
     roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+
+    if (trace_refcount) {
+        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
+    }
 }
 
 /// Roc deallocation function with size-tracking metadata
 fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
+    if (trace_refcount) {
+        std.debug.print("[DEALLOC] ptr=0x{x} align={d}\n", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
+    }
+
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
@@ -91,7 +102,9 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     // Return pointer to the user data (after the size metadata)
     roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
-    std.log.debug("[REALLOC] old=0x{x} new=0x{x} new_size={d}", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+    if (trace_refcount) {
+        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+    }
 }
 
 /// Roc debug function

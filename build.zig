@@ -451,6 +451,7 @@ fn createTestPlatformHostLib(
     });
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
+    lib.root_module.addImport("build_options", roc_modules.build_options);
     // Force bundle compiler-rt to resolve runtime symbols like __main
     lib.bundle_compiler_rt = true;
 
