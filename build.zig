@@ -831,6 +831,11 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
+    // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
+    const clear_cache_step = createClearCacheStep(b);
+    roc_step.dependOn(clear_cache_step);
+    b.getInstallStep().dependOn(clear_cache_step);
+
     // CLI integration tests - run actual roc programs like CI does
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
