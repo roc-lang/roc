@@ -788,7 +788,7 @@ fn mkFlexWithFromNumeralConstraint(
             .constraints = constraint_range,
         },
     };
-    try self.types.setVarContent(flex_var, flex_content);
+    try self.unifyWith(flex_var, flex_content, env);
 
     return flex_var;
 }
@@ -4435,7 +4435,6 @@ fn checkBinopExpr(
 
                 // The return type is unknown, so create a fresh variable
                 const ret_var = try self.fresh(env, expr_region);
-                try env.var_pool.addVarToRank(ret_var, env.rank());
 
                 // Create the constraint function type
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
@@ -4443,7 +4442,6 @@ fn checkBinopExpr(
                     .ret = ret_var,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
-                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
                 // Create the static dispatch constraint
                 const constraint = StaticDispatchConstraint{
@@ -4459,7 +4457,6 @@ fn checkBinopExpr(
                     env,
                     expr_region,
                 );
-                try env.var_pool.addVarToRank(constrained_var, env.rank());
 
                 _ = try self.unify(constrained_var, lhs_var, env);
 
@@ -4567,7 +4564,6 @@ fn checkBinopExpr(
                 .ret = is_eq_ret_var,
                 .needs_instantiation = false,
             } } }, env, expr_region);
-            try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
             // Create the is_eq constraint
             const is_eq_constraint = StaticDispatchConstraint{
@@ -4583,7 +4579,6 @@ fn checkBinopExpr(
                 env,
                 expr_region,
             );
-            try env.var_pool.addVarToRank(constrained_var, env.rank());
 
             _ = try self.unify(constrained_var, lhs_var, env);
 
@@ -4622,7 +4617,6 @@ fn checkBinopExpr(
                 .ret = not_ret_var,
                 .needs_instantiation = false,
             } } }, env, expr_region);
-            try env.var_pool.addVarToRank(not_fn_var, env.rank());
 
             const not_constraint = StaticDispatchConstraint{
                 .fn_name = self.cir.idents.not,
@@ -4637,7 +4631,6 @@ fn checkBinopExpr(
                 env,
                 expr_region,
             );
-            try env.var_pool.addVarToRank(is_eq_ret_var, env.rank());
 
             // Unify placeholder with the real constrained var so they're the same
             _ = try self.unify(is_eq_ret_placeholder, is_eq_ret_var, env);
@@ -4649,7 +4642,6 @@ fn checkBinopExpr(
                 .ret = is_eq_ret_var,
                 .needs_instantiation = false,
             } } }, env, expr_region);
-            try env.var_pool.addVarToRank(is_eq_fn_var, env.rank());
 
             const is_eq_constraint = StaticDispatchConstraint{
                 .fn_name = self.cir.idents.is_eq,
@@ -4664,7 +4656,6 @@ fn checkBinopExpr(
                 env,
                 expr_region,
             );
-            try env.var_pool.addVarToRank(lhs_constrained_var, env.rank());
             _ = try self.unify(lhs_constrained_var, lhs_var, env);
 
             // The expression type is the return type of not
