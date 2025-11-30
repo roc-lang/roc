@@ -10621,7 +10621,16 @@ pub const Interpreter = struct {
                 const lhs_resolved = self.runtime_types.resolveVar(ba.receiver_rt_var);
 
                 // Get nominal type info, or handle anonymous structural types
-                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (lhs_resolved.desc.content) {
+                // Follow aliases to get to the underlying type
+                var current_var = ba.receiver_rt_var;
+                var current_resolved = lhs_resolved;
+                while (current_resolved.desc.content == .alias) {
+                    const alias = current_resolved.desc.content.alias;
+                    current_var = self.runtime_types.getAliasBackingVar(alias);
+                    current_resolved = self.runtime_types.resolveVar(current_var);
+                }
+
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (current_resolved.desc.content) {
                     .structure => |s| switch (s) {
                         .nominal_type => |nom| .{
                             .origin = nom.origin_module,
@@ -10646,6 +10655,27 @@ pub const Interpreter = struct {
                             break :blk null;
                         },
                         else => null,
+                    },
+                    // Flex, rigid, and error vars are unresolved type variables (e.g., numeric literals defaulting to Dec,
+                    // or type parameters in generic functions). For is_eq, use structural equality which works
+                    // for all numeric types and generic type parameters with is_eq constraints.
+                    // Error types can occur during generic instantiation when types couldn't be resolved.
+                    .flex, .rigid, .err => blk: {
+                        if (ba.method_ident == self.root_env.idents.is_eq) {
+                            var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
+                                if (err == error.NotImplemented) {
+                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                    return error.Crash;
+                                }
+                                return err;
+                            };
+                            // For != operator, negate the result
+                            if (ba.negate_result) result = !result;
+                            const result_val = try self.makeBoolValue(result);
+                            try value_stack.push(result_val);
+                            return true;
+                        }
+                        break :blk null;
                     },
                     else => null,
                 };
