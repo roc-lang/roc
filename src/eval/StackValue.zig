@@ -228,7 +228,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                     .is_initialized = true,
                 };
 
-                field_value.incref();
+                field_value.incref(layout_cache);
             }
         }
         return;
@@ -262,7 +262,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                     .is_initialized = true,
                 };
 
-                elem_value.incref();
+                elem_value.incref(layout_cache);
             }
         }
         return;
@@ -316,7 +316,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                             .is_initialized = true,
                         };
 
-                        field_value.incref();
+                        field_value.incref(layout_cache);
                     }
                 }
             }
@@ -1094,8 +1094,9 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
     }
 }
 
-/// Increment reference count for refcounted types
-pub fn incref(self: StackValue) void {
+/// Increment reference count for refcounted types.
+/// Must be symmetric with decref - handles records and tuples by recursively incref'ing fields.
+pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
     if (comptime trace_refcount) {
         traceRefcount("INCREF layout.tag={} ptr=0x{x}", .{ @intFromEnum(self.layout.tag), @intFromPtr(self.ptr) });
     }
@@ -1150,6 +1151,60 @@ pub fn incref(self: StackValue) void {
             }
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+        }
+        return;
+    }
+    // Handle records by recursively incref'ing each field (symmetric with decref)
+    if (self.layout.tag == .record) {
+        if (self.ptr == null) return;
+        const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
+        if (record_data.fields.count == 0) return;
+
+        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+        var field_index: usize = 0;
+        while (field_index < field_layouts.len) : (field_index += 1) {
+            const field_info = field_layouts.get(field_index);
+            const field_layout = layout_cache.getLayout(field_info.layout);
+
+            const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
+            const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+            const field_value = StackValue{
+                .layout = field_layout,
+                .ptr = field_ptr,
+                .is_initialized = true,
+            };
+
+            field_value.incref(layout_cache);
+        }
+        return;
+    }
+    // Handle tuples by recursively incref'ing each element (symmetric with decref)
+    if (self.layout.tag == .tuple) {
+        if (self.ptr == null) return;
+        const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
+        if (tuple_data.fields.count == 0) return;
+
+        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+        var elem_index: usize = 0;
+        while (elem_index < element_layouts.len) : (elem_index += 1) {
+            const elem_info = element_layouts.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_info.layout);
+
+            const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
+            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+
+            const elem_value = StackValue{
+                .layout = elem_layout,
+                .ptr = elem_ptr,
+                .is_initialized = true,
+            };
+
+            elem_value.incref(layout_cache);
         }
         return;
     }

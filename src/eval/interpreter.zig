@@ -48,7 +48,7 @@ fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
         .ptr = @ptrCast(elem_ptr),
         .is_initialized = true,
     };
-    elem_value.incref();
+    elem_value.incref(context.layout_store);
 }
 
 /// Decrement callback for list operations - decrements refcount of element via StackValue
@@ -10907,8 +10907,14 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         var args = [1]StackValue{receiver_value};
-                        // Builtins take ownership of arguments - no decref needed after
                         const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                        // Decref based on ownership semantics
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
                         try value_stack.push(result);
@@ -11224,7 +11230,7 @@ pub const Interpreter = struct {
                     .layout = elem_layout,
                     .is_initialized = true,
                 };
-                elem_value.incref();
+                elem_value.incref(&self.runtime_layout_store);
 
                 // Bind the pattern
                 const loop_bindings_start = self.bindings.items.len;
@@ -11303,7 +11309,7 @@ pub const Interpreter = struct {
                     .layout = fl.elem_layout,
                     .is_initialized = true,
                 };
-                elem_value.incref();
+                elem_value.incref(&self.runtime_layout_store);
 
                 // Bind the pattern
                 const new_loop_bindings_start = self.bindings.items.len;
