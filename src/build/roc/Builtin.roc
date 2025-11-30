@@ -69,13 +69,17 @@ Builtin :: [].{
 		append : List(a), a -> List(a)
 
 		first : List(item) -> Try(item, [ListWasEmpty])
-		first = |list| List.get(list, 0)
+		first = |list| if List.is_empty(list) {
+			Try.Err(ListWasEmpty)
+		} else {
+			Try.Ok(list_get_unsafe(list, 0))
+		}
 
-		get : List(item), U64 -> Try(item, [ListWasEmpty])
+		get : List(item), U64 -> Try(item, [OutOfBounds])
 		get = |list, index| if index < List.len(list) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
-			Try.Err(ListWasEmpty)
+			Try.Err(OutOfBounds)
 		}
 
 		map : List(a), (a -> b) -> List(b)
