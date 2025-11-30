@@ -230,21 +230,11 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr
         line = line[0 .. line.len - 1];
     }
 
-    // Allocate through Roc's allocation system to ensure proper size-tracking metadata
-    var roc_alloc_args = builtins.host_abi.RocAlloc{
-        .alignment = 1,
-        .length = line.len,
-        .answer = undefined,
-    };
-    ops.roc_alloc(&roc_alloc_args, ops.env);
-
-    // Copy line data to the Roc-allocated memory
-    const line_copy: [*]u8 = @ptrCast(roc_alloc_args.answer);
-    @memcpy(line_copy[0..line.len], line);
-
     // Create RocStr from the read line and return it
+    // RocStr.fromSlice handles allocation internally (either inline for small strings
+    // or via roc_alloc for big strings with proper refcount tracking)
     const result: *RocStr = @ptrCast(@alignCast(ret_ptr));
-    result.* = RocStr.init(line_copy, line.len, ops);
+    result.* = RocStr.fromSlice(line, ops);
 }
 
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
