@@ -118,6 +118,13 @@ pub const Interpreter = struct {
         TypeMismatch,
         ZeroSizedType,
     } || std.mem.Allocator.Error || layout.LayoutError;
+
+    /// Key for caching type translations, combining module identity with type variable.
+    const ModuleVarKey = struct {
+        module: *can.ModuleEnv,
+        var_: types.Var,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -189,18 +196,16 @@ pub const Interpreter = struct {
     var_to_layout_slot: std.array_list.Managed(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
-    // Translation cache: module+var key -> runtime_var
-    // Key is created by makeModuleVarKey() combining module pointer and resolved var.
-    translate_cache: std.AutoHashMap(u64, types.Var),
+    // Translation cache: (module, resolved_var) -> runtime_var
+    translate_cache: std.AutoHashMap(ModuleVarKey, types.Var),
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
 
     // Flex type context for polymorphic parameter type propagation.
-    // Key is created by makeModuleVarKey() - same format as translate_cache.
     // This allows numeric literals inside polymorphic functions to get the correct
     // concrete type when the function is called with a specific type context.
-    flex_type_context: std.AutoHashMap(u64, types.Var),
+    flex_type_context: std.AutoHashMap(ModuleVarKey, types.Var),
 
     // Polymorphic instantiation cache
 
@@ -364,9 +369,9 @@ pub const Interpreter = struct {
             .runtime_layout_store = undefined, // set below to point at result.runtime_types
             .var_to_layout_slot = slots,
             .empty_scope = scope,
-            .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
+            .translate_cache = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
-            .flex_type_context = std.AutoHashMap(u64, types.Var).init(allocator),
+            .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
@@ -5966,22 +5971,13 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Create a cache key combining a module and a resolved type variable.
-    /// This uses the module pointer (truncated to 32 bits) combined with the var index.
-    /// While using pointers as keys is not ideal, it provides unique identification
-    /// per module and is the established pattern for translate_cache.
-    /// TODO: Consider using proper module IDs once all modules have stable numeric identifiers.
-    fn makeModuleVarKey(module: *can.ModuleEnv, resolved_var: types.Var) u64 {
-        return (@as(u64, @truncate(@intFromPtr(module))) << 32) | @as(u64, @intFromEnum(resolved_var));
-    }
-
     /// Translate a compile-time type variable from a module's type store to the runtime type store.
     /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
     /// Uses caching to handle recursive types and avoid duplicate work.
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
-        const key = makeModuleVarKey(module, resolved.var_);
+        const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
         // Check flex_type_context BEFORE translate_cache for flex types.
         // This is critical for polymorphic functions: the same compile-time flex var
@@ -6910,7 +6906,7 @@ pub const Interpreter = struct {
             /// Saved rigid_subst to restore after method call (for polymorphic dispatch)
             saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
             /// Saved flex_type_context to restore after call (for polymorphic parameter types)
-            saved_flex_type_context: ?std.AutoHashMap(u64, types.Var),
+            saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -10453,7 +10449,7 @@ pub const Interpreter = struct {
                                 if (arg_rt_resolved.desc.content == .structure) {
                                     const param_ct_var = can.ModuleEnv.varFrom(param);
                                     const param_resolved = self.env.types.resolveVar(param_ct_var);
-                                    const flex_key = makeModuleVarKey(self.env, param_resolved.var_);
+                                    const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
                                     try self.flex_type_context.put(flex_key, vars[idx]);
                                 }
                             }
