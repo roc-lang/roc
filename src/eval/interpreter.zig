@@ -2033,9 +2033,17 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_eq expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
-                const result = switch (lhs) {
-                    .int => |l| l == rhs.int,
-                    .dec => |l| l.num == rhs.dec.num,
+                const result: bool = switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| l == r,
+                        .dec => |r| l == @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| l.num == r.num,
+                        .int => |r| l.num == @as(i128, r) * RocDec.one_point_zero_i128,
+                        else => return error.TypeMismatch,
+                    },
                     .f32, .f64 => {
                         self.triggerCrash("Equality comparison not supported for F32/F64 due to floating point imprecision", false, roc_ops);
                         return error.Crash;
@@ -2048,11 +2056,27 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_gt expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
-                const result = switch (lhs) {
-                    .int => |l| l > rhs.int,
-                    .f32 => |l| l > rhs.f32,
-                    .f64 => |l| l > rhs.f64,
-                    .dec => |l| l.num > rhs.dec.num,
+                const result: bool = switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| l > r,
+                        // Int vs Dec: convert Dec to Int for comparison
+                        .dec => |r| l > @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| l > r,
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| l > r,
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| l.num > r.num,
+                        // Dec vs Int: convert Int to Dec for comparison
+                        .int => |r| l.num > @as(i128, r) * RocDec.one_point_zero_i128,
+                        else => return error.TypeMismatch,
+                    },
                 };
                 return try self.makeBoolValue(result);
             },
@@ -2061,11 +2085,25 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_gte expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
-                const result = switch (lhs) {
-                    .int => |l| l >= rhs.int,
-                    .f32 => |l| l >= rhs.f32,
-                    .f64 => |l| l >= rhs.f64,
-                    .dec => |l| l.num >= rhs.dec.num,
+                const result: bool = switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| l >= r,
+                        .dec => |r| l >= @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| l >= r,
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| l >= r,
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| l.num >= r.num,
+                        .int => |r| l.num >= @as(i128, r) * RocDec.one_point_zero_i128,
+                        else => return error.TypeMismatch,
+                    },
                 };
                 return try self.makeBoolValue(result);
             },
@@ -2074,11 +2112,25 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_lt expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
-                const result = switch (lhs) {
-                    .int => |l| l < rhs.int,
-                    .f32 => |l| l < rhs.f32,
-                    .f64 => |l| l < rhs.f64,
-                    .dec => |l| l.num < rhs.dec.num,
+                const result: bool = switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| l < r,
+                        .dec => |r| l < @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| l < r,
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| l < r,
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| l.num < r.num,
+                        .int => |r| l.num < @as(i128, r) * RocDec.one_point_zero_i128,
+                        else => return error.TypeMismatch,
+                    },
                 };
                 return try self.makeBoolValue(result);
             },
@@ -2087,11 +2139,25 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 2); // low-level .num_is_lte expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
-                const result = switch (lhs) {
-                    .int => |l| l <= rhs.int,
-                    .f32 => |l| l <= rhs.f32,
-                    .f64 => |l| l <= rhs.f64,
-                    .dec => |l| l.num <= rhs.dec.num,
+                const result: bool = switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| l <= r,
+                        .dec => |r| l <= @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| l <= r,
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| l <= r,
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| l.num <= r.num,
+                        .int => |r| l.num <= @as(i128, r) * RocDec.one_point_zero_i128,
+                        else => return error.TypeMismatch,
+                    },
                 };
                 return try self.makeBoolValue(result);
             },
@@ -2125,10 +2191,24 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| try out.setInt(l + rhs.int),
-                    .f32 => |l| out.setF32(l + rhs.f32),
-                    .f64 => |l| out.setF64(l + rhs.f64),
-                    .dec => |l| out.setDec(RocDec.add(l, rhs.dec, roc_ops)),
+                    .int => |l| switch (rhs) {
+                        .int => |r| try out.setInt(l + r),
+                        .dec => |r| try out.setInt(l + @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| out.setF32(l + r),
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| out.setF64(l + r),
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| out.setDec(RocDec.add(l, r, roc_ops)),
+                        .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                        else => return error.TypeMismatch,
+                    },
                 }
                 out.is_initialized = true;
                 return out;
@@ -2143,10 +2223,24 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| try out.setInt(l - rhs.int),
-                    .f32 => |l| out.setF32(l - rhs.f32),
-                    .f64 => |l| out.setF64(l - rhs.f64),
-                    .dec => |l| out.setDec(RocDec.sub(l, rhs.dec, roc_ops)),
+                    .int => |l| switch (rhs) {
+                        .int => |r| try out.setInt(l - r),
+                        .dec => |r| try out.setInt(l - @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| out.setF32(l - r),
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| out.setF64(l - r),
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops)),
+                        .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                        else => return error.TypeMismatch,
+                    },
                 }
                 out.is_initialized = true;
                 return out;
@@ -2161,10 +2255,24 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| try out.setInt(l * rhs.int),
-                    .f32 => |l| out.setF32(l * rhs.f32),
-                    .f64 => |l| out.setF64(l * rhs.f64),
-                    .dec => |l| out.setDec(RocDec.mul(l, rhs.dec, roc_ops)),
+                    .int => |l| switch (rhs) {
+                        .int => |r| try out.setInt(l * r),
+                        .dec => |r| try out.setInt(l * @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| out.setF32(l * r),
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| out.setF64(l * r),
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops)),
+                        .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                        else => return error.TypeMismatch,
+                    },
                 }
                 out.is_initialized = true;
                 return out;
@@ -2179,21 +2287,43 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| {
-                        if (rhs.int == 0) return error.DivisionByZero;
-                        try out.setInt(@divTrunc(l, rhs.int));
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@divTrunc(l, r));
+                        },
+                        .dec => |r| {
+                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            if (r_int == 0) return error.DivisionByZero;
+                            try out.setInt(@divTrunc(l, r_int));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .f32 => |l| {
-                        if (rhs.f32 == 0) return error.DivisionByZero;
-                        out.setF32(l / rhs.f32);
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            out.setF32(l / r);
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .f64 => |l| {
-                        if (rhs.f64 == 0) return error.DivisionByZero;
-                        out.setF64(l / rhs.f64);
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            out.setF64(l / r);
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .dec => |l| {
-                        if (rhs.dec.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, rhs.dec, roc_ops));
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| {
+                            if (r.num == 0) return error.DivisionByZero;
+                            out.setDec(RocDec.div(l, r, roc_ops));
+                        },
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            out.setDec(RocDec.div(l, r_dec, roc_ops));
+                        },
+                        else => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -2209,22 +2339,44 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| {
-                        if (rhs.int == 0) return error.DivisionByZero;
-                        try out.setInt(@divTrunc(l, rhs.int));
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@divTrunc(l, r));
+                        },
+                        .dec => |r| {
+                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            if (r_int == 0) return error.DivisionByZero;
+                            try out.setInt(@divTrunc(l, r_int));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .f32 => |l| {
-                        if (rhs.f32 == 0) return error.DivisionByZero;
-                        out.setF32(@trunc(l / rhs.f32));
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            out.setF32(@trunc(l / r));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .f64 => |l| {
-                        if (rhs.f64 == 0) return error.DivisionByZero;
-                        out.setF64(@trunc(l / rhs.f64));
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            out.setF64(@trunc(l / r));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .dec => |l| {
-                        // For Dec, div and div_trunc are the same since it's already integer-like
-                        if (rhs.dec.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, rhs.dec, roc_ops));
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| {
+                            // For Dec, div and div_trunc are the same since it's already integer-like
+                            if (r.num == 0) return error.DivisionByZero;
+                            out.setDec(RocDec.div(l, r, roc_ops));
+                        },
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            out.setDec(RocDec.div(l, r_dec, roc_ops));
+                        },
+                        else => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -2240,21 +2392,43 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 switch (lhs) {
-                    .int => |l| {
-                        if (rhs.int == 0) return error.DivisionByZero;
-                        try out.setInt(@rem(l, rhs.int));
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@rem(l, r));
+                        },
+                        .dec => |r| {
+                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            if (r_int == 0) return error.DivisionByZero;
+                            try out.setInt(@rem(l, r_int));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .f32 => |l| {
-                        if (rhs.f32 == 0) return error.DivisionByZero;
-                        out.setF32(@rem(l, rhs.f32));
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            out.setF32(@rem(l, r));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .f64 => |l| {
-                        if (rhs.f64 == 0) return error.DivisionByZero;
-                        out.setF64(@rem(l, rhs.f64));
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            out.setF64(@rem(l, r));
+                        },
+                        else => return error.TypeMismatch,
                     },
-                    .dec => |l| {
-                        if (rhs.dec.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, rhs.dec, roc_ops));
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| {
+                            if (r.num == 0) return error.DivisionByZero;
+                            out.setDec(RocDec.rem(l, r, roc_ops));
+                        },
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            out.setDec(RocDec.rem(l, r_dec, roc_ops));
+                        },
+                        else => return error.TypeMismatch,
                     },
                 }
                 out.is_initialized = true;
@@ -4337,6 +4511,36 @@ pub const Interpreter = struct {
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
             const rhs_scalar = rhs.layout.data.scalar;
+
+            // Handle numeric type mismatches (Int vs Dec)
+            const lhs_is_numeric = lhs_scalar.tag == .int or lhs_scalar.tag == .frac;
+            const rhs_is_numeric = rhs_scalar.tag == .int or rhs_scalar.tag == .frac;
+            if (lhs_is_numeric and rhs_is_numeric) {
+                // Allow comparing Int with Dec by converting
+                const lhs_num = self.extractNumericValue(lhs) catch return error.TypeMismatch;
+                const rhs_num = self.extractNumericValue(rhs) catch return error.TypeMismatch;
+                return switch (lhs_num) {
+                    .int => |l| switch (rhs_num) {
+                        .int => |r| l == r,
+                        .dec => |r| l == @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        else => false,
+                    },
+                    .dec => |l| switch (rhs_num) {
+                        .dec => |r| l.num == r.num,
+                        .int => |r| l.num == @as(i128, r) * RocDec.one_point_zero_i128,
+                        else => false,
+                    },
+                    .f32 => |l| switch (rhs_num) {
+                        .f32 => |r| l == r,
+                        else => false,
+                    },
+                    .f64 => |l| switch (rhs_num) {
+                        .f64 => |r| l == r,
+                        else => false,
+                    },
+                };
+            }
+
             if (lhs_scalar.tag != rhs_scalar.tag) return error.TypeMismatch;
 
             switch (lhs_scalar.tag) {
@@ -7233,18 +7437,87 @@ pub const Interpreter = struct {
                         };
 
                         // Get LHS and RHS type info
+                        // Note: Both operands should be unified to the same type by the type checker
                         const lhs_ct_var = can.ModuleEnv.varFrom(binop.lhs);
-                        var lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
+                        const lhs_rt_var = try self.translateTypeVar(self.env, lhs_ct_var);
                         const rhs_ct_var = can.ModuleEnv.varFrom(binop.rhs);
                         const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
 
-                        // Resolve the lhs type - if flex/rigid, default to Dec
+                        // Ensure both operands have the same numeric type.
+                        // Strategy:
+                        // - If one operand is concrete (not flex/rigid), unify the other with it
+                        // - If both are unresolved (flex/rigid), default both to Dec
                         const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-                        if (lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid) {
+                        const rhs_resolved = self.runtime_types.resolveVar(rhs_rt_var);
+                        const lhs_is_flex = lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid;
+                        const rhs_is_flex = rhs_resolved.desc.content == .flex or rhs_resolved.desc.content == .rigid;
+
+                        if (lhs_is_flex and rhs_is_flex) {
+                            // Both unresolved - default both to Dec
                             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
                             const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                            lhs_rt_var = dec_var;
+                            _ = try unify.unify(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                unify.ModuleEnvLookup{
+                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                                },
+                                lhs_rt_var,
+                                dec_var,
+                            );
+                            _ = try unify.unify(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                unify.ModuleEnvLookup{
+                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                                },
+                                rhs_rt_var,
+                                dec_var,
+                            );
+                        } else if (lhs_is_flex and !rhs_is_flex) {
+                            // LHS is flex, RHS is concrete - unify LHS with RHS
+                            _ = try unify.unify(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                unify.ModuleEnvLookup{
+                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                                },
+                                lhs_rt_var,
+                                rhs_rt_var,
+                            );
+                        } else if (!lhs_is_flex and rhs_is_flex) {
+                            // RHS is flex, LHS is concrete - unify RHS with LHS
+                            _ = try unify.unify(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                unify.ModuleEnvLookup{
+                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
+                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
+                                },
+                                rhs_rt_var,
+                                lhs_rt_var,
+                            );
                         }
+                        // If both are concrete, they should already match (type checker ensures this)
 
                         // For != we need to negate the result of is_eq
                         const negate_result = binop.op == .ne;
