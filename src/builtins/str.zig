@@ -271,12 +271,15 @@ pub const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            const new_str = RocStr.allocateBig(str.length, str.length, roc_ops);
+            // Use len() instead of .length to handle seamless slices correctly.
+            // For seamless slices, .length has the SEAMLESS_SLICE_BIT set.
+            const length = str.len();
+            const new_str = RocStr.allocateBig(length, length, roc_ops);
 
-            var old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
-            var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
+            const old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
+            const new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
 
-            @memcpy(new_bytes[0..str.length], old_bytes[0..str.length]);
+            @memcpy(new_bytes[0..length], old_bytes[0..length]);
 
             return new_str;
         }

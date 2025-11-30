@@ -146,6 +146,16 @@ Builtin :: [].{
 			True
 		}
 
+		last : List(item) -> Try(item, [ListWasEmpty])
+		last = |list| if List.is_empty(list) {
+			Try.Err(ListWasEmpty)
+		} else {
+			Try.Ok(list_get_unsafe(list, List.len(list) - 1))
+		}
+
+		single : item -> List(item)
+		single = |x| [x]
+
 		drop_at : List(a), U64 -> List(a)
 
 		sublist : List(a), {start : U64, len : U64} -> List(a)
