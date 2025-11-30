@@ -383,7 +383,6 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         &self.type_writer,
         &self.unify_scratch,
         &self.occurs_scratch,
-        unifier.ModuleEnvLookup{ .auto_imported = self.module_envs },
         a,
         b,
         unifier.Conf{

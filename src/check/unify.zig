@@ -137,7 +137,6 @@ pub fn unify(
     type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     /// The "expected" variable
     a: Var,
     /// The "actual" variable
@@ -151,7 +150,6 @@ pub fn unify(
         type_writer,
         unify_scratch,
         occurs_scratch,
-        module_lookup,
         a,
         b,
         Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -165,29 +163,6 @@ pub const Conf = struct {
 
     /// If the "expect" var comes fro an annotation, or if it's anonymous
     pub const Ctx = enum { anon, anno };
-};
-
-/// Provides access to module environments needed for cross-module method lookups
-pub const ModuleEnvLookup = struct {
-    /// Auto-imported modules available during type checking (e.g. Bool, Try, Builtin)
-    auto_imported: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
-    /// Optional interpreter callback for resolving module envs at runtime
-    interpreter_lookup_ctx: ?*const anyopaque = null,
-    interpreter_lookup_fn: ?*const fn (?*const anyopaque, Ident.Idx) ?*const ModuleEnv = null,
-
-    pub fn get(self: ModuleEnvLookup, module_ident: Ident.Idx) ?*const ModuleEnv {
-        if (self.auto_imported) |map| {
-            if (map.get(module_ident)) |entry| {
-                return entry.env;
-            }
-        }
-        if (self.interpreter_lookup_fn) |getter| {
-            if (getter(self.interpreter_lookup_ctx, module_ident)) |env| {
-                return env;
-            }
-        }
-        return null;
-    }
 };
 
 /// Unify two type variables
@@ -206,7 +181,6 @@ pub fn unifyWithConf(
     type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     /// The "expected" variable
     a: Var,
     /// The "actual" variable
@@ -220,7 +194,7 @@ pub fn unifyWithConf(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch, module_lookup);
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -390,7 +364,6 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     depth: u8,
     skip_depth_check: bool,
 
@@ -400,14 +373,12 @@ const Unifier = struct {
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
-        module_lookup: ModuleEnvLookup,
     ) Unifier {
         return .{
             .module_env = module_env,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
-            .module_lookup = module_lookup,
             .depth = 0,
             .skip_depth_check = false,
         };
@@ -1119,318 +1090,6 @@ const Unifier = struct {
         }
 
         self.merge(vars, vars.b.desc.content);
-    }
-
-    /// Check if a nominal type has a from_int_digits method by unifying its signature
-    /// with the expected type: List(U8) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromIntDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.idents.from_int_digits) orelse return false;
-        const resolved = self.types_store.resolveVar(method_var);
-
-        const func = switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => structure.fn_pure,
-                .fn_effectful => structure.fn_effectful,
-                .fn_unbound => structure.fn_unbound,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        const ret_desc = self.types_store.resolveVar(func.ret);
-        const ret_nominal = switch (ret_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .nominal_type => structure.nominal_type,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (!self.isBuiltinTryNominal(ret_nominal)) return false;
-        const ret_args = self.types_store.sliceVars(ret_nominal.vars.nonempty);
-        if (ret_args.len < 3) return false;
-
-        const args_slice = self.types_store.sliceVars(func.args);
-        if (args_slice.len != 1) return false;
-
-        const list_u8_var = try self.createListU8Var();
-        self.unifyGuarded(args_slice[0], list_u8_var) catch return false;
-
-        const self_ret_var = try self.createNominalInstanceVar(nominal_type);
-        self.unifyGuarded(ret_args[1], self_ret_var) catch return false;
-
-        const try_error_var = try self.createOutOfRangeTagUnion();
-        self.unifyGuarded(ret_args[2], try_error_var) catch return false;
-
-        return true;
-    }
-
-    /// Check if a nominal type has a from_dec_digits method by unifying its signature
-    /// with the expected type: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromDecDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.idents.from_dec_digits) orelse return false;
-        const resolved = self.types_store.resolveVar(method_var);
-
-        const func = switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => structure.fn_pure,
-                .fn_effectful => structure.fn_effectful,
-                .fn_unbound => structure.fn_unbound,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        const ret_desc = self.types_store.resolveVar(func.ret);
-        const ret_nominal = switch (ret_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .nominal_type => structure.nominal_type,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (!self.isBuiltinTryNominal(ret_nominal)) return false;
-        const ret_args = self.types_store.sliceVars(ret_nominal.vars.nonempty);
-        if (ret_args.len < 3) return false;
-
-        const args_slice = self.types_store.sliceVars(func.args);
-        if (args_slice.len != 1) return false;
-
-        const before_ident = self.module_env.idents.before_dot;
-        const after_ident = self.module_env.idents.after_dot;
-
-        const record_desc = self.types_store.resolveVar(args_slice[0]);
-        const record = switch (record_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .record => structure.record,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        if (record.fields.len() != 2) return false;
-        const fields_slice = self.types_store.getRecordFieldsSlice(record.fields);
-        const names = fields_slice.items(.name);
-        const vars = fields_slice.items(.var_);
-
-        var before_idx: ?usize = null;
-        var after_idx: ?usize = null;
-        for (names, 0..) |name, idx| {
-            if (name == before_ident) {
-                before_idx = idx;
-            } else if (name == after_ident) {
-                after_idx = idx;
-            }
-        }
-
-        if (before_idx == null or after_idx == null) return false;
-
-        const list_u8_first = try self.createListU8Var();
-        const list_u8_second = try self.createListU8Var();
-
-        self.unifyGuarded(vars[before_idx.?], list_u8_first) catch return false;
-        self.unifyGuarded(vars[after_idx.?], list_u8_second) catch return false;
-
-        const self_ret_var = try self.createNominalInstanceVar(nominal_type);
-        self.unifyGuarded(ret_args[1], self_ret_var) catch return false;
-
-        const try_error_var = try self.createOutOfRangeTagUnion();
-        self.unifyGuarded(ret_args[2], try_error_var) catch return false;
-
-        return true;
-    }
-
-    fn getNominalMethodVar(
-        self: *Self,
-        nominal_type: NominalType,
-        method_ident: Ident.Idx,
-    ) Error!?Var {
-        const is_this_module = nominal_type.origin_module == self.module_env.module_name_idx;
-        const origin_env = if (is_this_module)
-            self.module_env
-        else
-            self.module_lookup.get(nominal_type.origin_module) orelse return null;
-
-        // For cross-module lookups, use lookupMethodIdentFromEnvConst to find the qualified method
-        const lookup_ident = if (is_this_module)
-            method_ident
-        else blk: {
-            // Look up the qualified method ident in the origin module using index-based lookup
-            break :blk origin_env.lookupMethodIdentFromEnvConst(self.module_env, nominal_type.ident.ident_idx, method_ident) orelse return null;
-        };
-
-        // Look up method by the ident
-        const method_def_idx: CIR.Def.Idx = blk: {
-            if (origin_env.getExposedNodeIndexById(lookup_ident)) |node_idx| {
-                break :blk @enumFromInt(@as(u32, node_idx));
-            }
-
-            if (Self.findDefIdxByIdent(origin_env, lookup_ident)) |def_idx| {
-                break :blk def_idx;
-            }
-
-            return null;
-        };
-
-        const ident_store = origin_env.getIdentStoreConst();
-        const origin_var = ModuleEnv.varFrom(method_def_idx);
-
-        var mapping = std.AutoHashMap(Var, Var).init(self.module_env.gpa);
-        defer mapping.deinit();
-
-        const start_slots = self.types_store.len();
-        const copied_var = copy_import.copyVar(
-            &origin_env.types,
-            self.types_store,
-            origin_var,
-            &mapping,
-            ident_store,
-            self.module_env.getIdentStore(),
-            self.module_env.gpa,
-        ) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return copied_var;
-    }
-
-    fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
-        const defs = origin_env.store.sliceDefs(origin_env.all_defs);
-        for (defs) |def_idx| {
-            const def = origin_env.store.getDef(def_idx);
-            const pattern = origin_env.store.getPattern(def.pattern);
-
-            if (pattern == .assign and pattern.assign.ident == ident_idx) {
-                return def_idx;
-            }
-        }
-
-        return null;
-    }
-
-    fn createListU8Var(self: *Self) Error!Var {
-        const start_slots = self.types_store.len();
-        const u8_var = self.types_store.register(.{
-            .content = .{ .err = {} },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        // Create nominal List(U8) - List is from Builtin module
-        // If List ident is not found, something is wrong with the environment
-        // This should never happen in a properly initialized compiler!
-        const list_ident = self.module_env.idents.list;
-
-        // Use the cached builtin_module ident which represents the "Builtin" module.
-        const origin_module = if (self.module_lookup.get(self.module_env.idents.builtin_module)) |_|
-            self.module_env.idents.builtin_module
-        else
-            // Builtin module not loaded (probably compiling Builtin itself), use current module
-            self.module_env.module_name_idx;
-
-        // List's backing is [ProvidedByCompiler] with closed extension (empty_tag_union)
-        // The element type (u8_var) is a type parameter, not the backing
-        const empty_tag_union_content = Content{ .structure = .empty_tag_union };
-        const ext_var = self.types_store.register(.{
-            .content = empty_tag_union_content,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        // Create the [ProvidedByCompiler] tag
-        const provided_tag_ident = self.module_env.idents.provided_by_compiler;
-        const provided_tag = self.types_store.mkTag(provided_tag_ident, &.{}) catch return error.AllocatorError;
-
-        const tag_union = TagUnion{
-            .tags = self.types_store.appendTags(&[_]Tag{provided_tag}) catch return error.AllocatorError,
-            .ext = ext_var,
-        };
-        const backing_content = Content{ .structure = .{ .tag_union = tag_union } };
-        const backing_var = self.types_store.register(.{
-            .content = backing_content,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        const list_content = self.types_store.mkNominal(
-            .{ .ident_idx = list_ident },
-            backing_var,
-            &[_]Var{u8_var},
-            origin_module,
-            false, // List is nominal (not opaque)
-        ) catch return error.AllocatorError;
-
-        const list_var = self.types_store.register(.{
-            .content = list_content,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return list_var;
-    }
-
-    fn createNominalInstanceVar(self: *Self, nominal_type: NominalType) Error!Var {
-        const start_slots = self.types_store.len();
-
-        const self_var = self.types_store.register(.{
-            .content = .{ .structure = .{ .nominal_type = nominal_type } },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return self_var;
-    }
-
-    fn isBuiltinTryNominal(self: *Self, nominal: NominalType) bool {
-        // Check if this is the Try type from the Builtin module
-        if (nominal.origin_module == self.module_env.idents.builtin_module and
-            nominal.ident.ident_idx == self.module_env.idents.@"try")
-        {
-            return true;
-        }
-
-        // Also check for fully qualified Builtin.Try
-        return nominal.ident.ident_idx == self.module_env.idents.builtin_try;
-    }
-
-    fn createOutOfRangeTagUnion(self: *Self) Error!Var {
-        const start_slots = self.types_store.len();
-        const tag = Tag{
-            .name = self.module_env.idents.out_of_range,
-            .args = Var.SafeList.Range.empty(),
-        };
-        const tags_range = self.types_store.appendTags(&[_]Tag{tag}) catch return error.AllocatorError;
-        const empty_ext = self.types_store.register(.{
-            .content = .{ .structure = .empty_tag_union },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        const tag_union_var = self.types_store.register(.{
-            .content = .{ .structure = .{ .tag_union = .{ .tags = tags_range, .ext = empty_ext } } },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return tag_union_var;
-    }
-
-    fn trackNewVars(self: *Self, start_slots: u64) error{AllocatorError}!void {
-        var slot = start_slots;
-        const end_slots = self.types_store.len();
-        while (slot < end_slots) : (slot += 1) {
-            const new_var = @as(Var, @enumFromInt(@as(u32, @intCast(slot))));
-            _ = self.scratch.fresh_vars.append(self.scratch.gpa, new_var) catch return error.AllocatorError;
-        }
     }
 
     // Unify nominal type //
