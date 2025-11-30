@@ -1118,6 +1118,8 @@ pub fn fromUtf8Lossy(
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (list.len() == 0) {
+        // Free the empty list since we consume ownership
+        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
         return RocStr.empty();
     }
 
@@ -1138,6 +1140,10 @@ pub fn fromUtf8Lossy(
         end_index += utf8EncodeLossy(c, ptr[end_index..]);
     }
     str.setLen(end_index);
+
+    // Free the input list since we consume ownership
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
+
     return str;
 }
 
