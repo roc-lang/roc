@@ -26,7 +26,12 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 
     const base_ptr = result orelse {
         const stderr: std.fs.File = .stderr();
-        stderr.writeAll("\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n") catch {};
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
+            total_size,
+            roc_alloc.alignment,
+        }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
+        stderr.writeAll(msg) catch {};
         std.process.exit(1);
     };
 
@@ -44,19 +49,22 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 
 /// Roc deallocation function with size-tracking metadata
 fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-    if (trace_refcount) {
-        std.debug.print("[DEALLOC] ptr=0x{x} align={d}\n", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
-    }
-
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
     // Calculate where the size metadata is stored
     const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
-
-    // Read the total size from metadata
     const total_size = size_ptr.*;
+
+    if (trace_refcount) {
+        std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
+            @intFromPtr(roc_dealloc.ptr),
+            roc_dealloc.alignment,
+            total_size,
+            size_storage_bytes,
+        });
+    }
 
     // Calculate the base pointer (start of actual allocation)
     const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);

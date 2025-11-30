@@ -8523,7 +8523,9 @@ pub const Interpreter = struct {
                     .expr_idx = def.expr,
                     .source_env = self.env,
                 });
-                return result;
+                // Return a copy to give the caller ownership while the binding retains ownership too.
+                // This is consistent with the pushCopy call above for already-bound values.
+                return try self.pushCopy(result, roc_ops);
             }
         }
 

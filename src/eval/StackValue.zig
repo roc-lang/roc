@@ -44,7 +44,7 @@ is_initialized: bool = false,
 rt_var: ?types.Var = null,
 
 /// Copy this stack value to a destination pointer with bounds checking
-pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, ops: *RocOps) !void {
+pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, _: *RocOps) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
@@ -61,11 +61,13 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .scalar) {
         switch (self.layout.data.scalar.tag) {
             .str => {
-                // Clone the RocStr into the interpreter's heap
+                // Copy the RocStr struct and incref the underlying data.
+                // This is more efficient than clone() which allocates new memory.
                 std.debug.assert(self.ptr != null);
                 const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
                 const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
-                dest_str.* = src_str.clone(ops);
+                dest_str.* = src_str.*;
+                src_str.incref(1);
                 return;
             },
             .int => {
@@ -923,11 +925,27 @@ pub fn incref(self: StackValue) void {
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
         const roc_str = self.asRocStr();
         if (comptime trace_refcount) {
-            traceRefcount("INCREF str ptr=0x{x} len={} cap={}", .{
-                @intFromPtr(roc_str.getAllocationPtr()),
-                roc_str.len(),
-                roc_str.getCapacity(),
-            });
+            // Small strings have no allocation - skip refcount tracing for them
+            if (roc_str.isSmallStr()) {
+                traceRefcount("INCREF str (small) len={}", .{roc_str.len()});
+            } else {
+                const alloc_ptr = roc_str.getAllocationPtr();
+                const rc_before: isize = if (alloc_ptr) |ptr| blk: {
+                    if (@intFromPtr(ptr) % 8 != 0) {
+                        traceRefcount("INCREF str ptr=0x{x} MISALIGNED!", .{@intFromPtr(ptr)});
+                        break :blk -999;
+                    }
+                    const isizes: [*]isize = @ptrCast(@alignCast(ptr));
+                    break :blk (isizes - 1)[0];
+                } else 0;
+                traceRefcount("INCREF str ptr=0x{x} len={} cap={} rc={} slice={}", .{
+                    @intFromPtr(alloc_ptr),
+                    roc_str.len(),
+                    roc_str.getCapacity(),
+                    rc_before,
+                    @intFromBool(roc_str.isSeamlessSlice()),
+                });
+            }
         }
         roc_str.incref(1);
         return;
@@ -990,15 +1008,32 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
     switch (self.layout.tag) {
         .scalar => switch (self.layout.data.scalar.tag) {
             .str => {
+                const roc_str = self.asRocStr();
                 if (comptime trace_refcount) {
-                    const roc_str = self.asRocStr();
-                    traceRefcount("DECREF str ptr=0x{x} len={} cap={}", .{
-                        @intFromPtr(roc_str.getAllocationPtr()),
-                        roc_str.len(),
-                        roc_str.getCapacity(),
-                    });
+                    // Small strings have no allocation - skip refcount tracing for them
+                    if (roc_str.isSmallStr()) {
+                        traceRefcount("DECREF str (small) len={}", .{roc_str.len()});
+                    } else {
+                        const alloc_ptr = roc_str.getAllocationPtr();
+                        // Only read refcount if pointer is aligned (safety check)
+                        const rc_before: isize = if (alloc_ptr) |ptr| blk: {
+                            if (@intFromPtr(ptr) % 8 != 0) {
+                                traceRefcount("DECREF str ptr=0x{x} MISALIGNED!", .{@intFromPtr(ptr)});
+                                break :blk -999;
+                            }
+                            const isizes: [*]isize = @ptrCast(@alignCast(ptr));
+                            break :blk (isizes - 1)[0];
+                        } else 0;
+                        traceRefcount("DECREF str ptr=0x{x} len={} cap={} rc={} slice={}", .{
+                            @intFromPtr(alloc_ptr),
+                            roc_str.len(),
+                            roc_str.getCapacity(),
+                            rc_before,
+                            @intFromBool(roc_str.isSeamlessSlice()),
+                        });
+                    }
                 }
-                self.asRocStr().decref(ops);
+                roc_str.decref(ops);
                 return;
             },
             else => {},
