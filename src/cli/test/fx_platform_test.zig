@@ -681,3 +681,67 @@ test "fx platform run from different cwd" {
     // Verify stdout contains expected messages
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
 }
+
+test "question mark operator" {
+    // Tests the `?` operator for error propagation.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/question_mark_operator.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The ? operator should unwrap Ok values and return "hello"
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
+}
+
+test "numeric fold" {
+    // Tests List.fold with numeric accumulators.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/numeric_fold.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Verify we get the correct sum: 1+2+3+4+5 = 15
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Sum: 15") != null);
+}
+
+test "string literal pattern matching" {
+    // Tests pattern matching on string literals in match expressions.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/string_pattern_matching.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Verify string patterns match correctly
+    const has_alice = std.mem.indexOf(u8, run_result.stdout, "Hello Alice!") != null;
+    const has_bob = std.mem.indexOf(u8, run_result.stdout, "Hey Bob!") != null;
+
+    try testing.expect(has_alice);
+    try testing.expect(has_bob);
+}

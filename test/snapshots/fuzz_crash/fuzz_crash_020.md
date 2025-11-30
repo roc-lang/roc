@@ -750,10 +750,27 @@ This feature is not yet implemented: unsupported operator
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+**UNDEFINED VARIABLE**
+Nothing is named `e_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_020.md:105:55:105:59:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                     ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:105:60:105:64:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                          ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.
@@ -1681,7 +1698,7 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-str (text """))))
+									(p-str (text "for"))))
 							(value
 								(e-num (value "20"))))
 						(branch
@@ -1914,7 +1931,30 @@ expect {
 									(receiver
 										(e-dot-access (field "unknown")
 											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+												(e-match
+													(match
+														(cond
+															(e-call
+																(e-runtime-error (tag "ident_not_in_scope"))
+																(e-runtime-error (tag "ident_not_in_scope"))))
+														(branches
+															(branch
+																(patterns
+																	(pattern (degenerate false)
+																		(p-applied-tag)))
+																(value
+																	(e-lookup-local
+																		(p-assign (ident "#ok")))))
+															(branch
+																(patterns
+																	(pattern (degenerate false)
+																		(p-applied-tag)))
+																(value
+																	(e-return
+																		(e-tag (name "Err")
+																			(args
+																				(e-lookup-local
+																					(p-assign (ident "#err"))))))))))))))))))
 					(e-tag (name "Stdo!")
 						(args
 							(e-string

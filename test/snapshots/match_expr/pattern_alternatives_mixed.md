@@ -142,9 +142,9 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-str (text """)))
+						(p-str (text "hello")))
 					(pattern (degenerate false)
-						(p-str (text """))))
+						(p-str (text "world"))))
 				(value
 					(e-string
 						(e-literal (string "greetings")))))
