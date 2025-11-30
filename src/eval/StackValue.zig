@@ -201,7 +201,12 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .record) {
-        // Copy raw bytes first, then recursively incref contained refcounted values
+        // Copy raw bytes first, then recursively incref all fields
+        // We call incref on ALL fields (not just isRefcounted()) because:
+        // - For directly refcounted types (str, list, box): increfs them
+        // - For nested records/tuples: recursively handles their contents
+        // - For scalars: incref is a no-op
+        // This is symmetric with decref which also processes all fields.
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
@@ -218,24 +223,27 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const field_info = field_layouts.get(field_index);
             const field_layout = layout_cache.getLayout(field_info.layout);
 
-            if (field_layout.isRefcounted()) {
-                const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
-                const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+            const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
+            const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
 
-                const field_value = StackValue{
-                    .layout = field_layout,
-                    .ptr = field_ptr,
-                    .is_initialized = true,
-                };
+            const field_value = StackValue{
+                .layout = field_layout,
+                .ptr = field_ptr,
+                .is_initialized = true,
+            };
 
-                field_value.incref(layout_cache);
-            }
+            field_value.incref(layout_cache);
         }
         return;
     }
 
     if (self.layout.tag == .tuple) {
-        // Copy raw bytes first, then recursively incref contained refcounted values
+        // Copy raw bytes first, then recursively incref all elements
+        // We call incref on ALL elements (not just isRefcounted()) because:
+        // - For directly refcounted types (str, list, box): increfs them
+        // - For nested records/tuples: recursively handles their contents
+        // - For scalars: incref is a no-op
+        // This is symmetric with decref which also processes all elements.
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
@@ -252,18 +260,16 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const elem_info = element_layouts.get(elem_index);
             const elem_layout = layout_cache.getLayout(elem_info.layout);
 
-            if (elem_layout.isRefcounted()) {
-                const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
-                const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+            const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
+            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
 
-                const elem_value = StackValue{
-                    .layout = elem_layout,
-                    .ptr = elem_ptr,
-                    .is_initialized = true,
-                };
+            const elem_value = StackValue{
+                .layout = elem_layout,
+                .ptr = elem_ptr,
+                .is_initialized = true,
+            };
 
-                elem_value.incref(layout_cache);
-            }
+            elem_value.incref(layout_cache);
         }
         return;
     }
@@ -298,26 +304,28 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
                 const rec_ptr: [*]u8 = @ptrCast(base_ptr + aligned_off);
 
-                // Iterate over each field in the captures record and incref refcounted fields.
-                // (Records don't have their own refcount - only their fields do)
+                // Iterate over each field in the captures record and incref all fields.
+                // We call incref on ALL fields (not just isRefcounted()) because:
+                // - For directly refcounted types (str, list, box): increfs them
+                // - For nested records/tuples: recursively handles their contents
+                // - For scalars: incref is a no-op
+                // This is symmetric with decref.
                 const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
                 var field_index: usize = 0;
                 while (field_index < field_layouts.len) : (field_index += 1) {
                     const field_info = field_layouts.get(field_index);
                     const field_layout = layout_cache.getLayout(field_info.layout);
 
-                    if (field_layout.isRefcounted()) {
-                        const field_offset = layout_cache.getRecordFieldOffset(captures_layout.data.record.idx, @intCast(field_index));
-                        const field_ptr = @as(*anyopaque, @ptrCast(rec_ptr + field_offset));
+                    const field_offset = layout_cache.getRecordFieldOffset(captures_layout.data.record.idx, @intCast(field_index));
+                    const field_ptr = @as(*anyopaque, @ptrCast(rec_ptr + field_offset));
 
-                        const field_value = StackValue{
-                            .layout = field_layout,
-                            .ptr = field_ptr,
-                            .is_initialized = true,
-                        };
+                    const field_value = StackValue{
+                        .layout = field_layout,
+                        .ptr = field_ptr,
+                        .is_initialized = true,
+                    };
 
-                        field_value.incref(layout_cache);
-                    }
+                    field_value.incref(layout_cache);
                 }
             }
         }
