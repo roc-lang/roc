@@ -67,6 +67,22 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
                 const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
                 dest_str.* = src_str.*;
+                if (comptime trace_refcount) {
+                    if (!src_str.isSmallStr()) {
+                        const alloc_ptr = src_str.getAllocationPtr();
+                        const rc_before: isize = if (alloc_ptr) |ptr| blk: {
+                            if (@intFromPtr(ptr) % 8 != 0) break :blk -999;
+                            const isizes: [*]isize = @ptrCast(@alignCast(ptr));
+                            break :blk (isizes - 1)[0];
+                        } else 0;
+                        traceRefcount("INCREF str (copyToPtr) ptr=0x{x} len={} rc={} slice={}", .{
+                            @intFromPtr(alloc_ptr),
+                            src_str.len(),
+                            rc_before,
+                            @intFromBool(src_str.isSeamlessSlice()),
+                        });
+                    }
+                }
                 src_str.incref(1);
                 return;
             },
@@ -159,6 +175,74 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
         const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
         dest_list.* = src_list.*;
+        return;
+    }
+
+    if (self.layout.tag == .record) {
+        // Copy raw bytes first, then recursively incref contained refcounted values
+        std.debug.assert(self.ptr != null);
+        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
+        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+        @memcpy(dst, src);
+
+        const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
+        if (record_data.fields.count == 0) return;
+
+        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+        var field_index: usize = 0;
+        while (field_index < field_layouts.len) : (field_index += 1) {
+            const field_info = field_layouts.get(field_index);
+            const field_layout = layout_cache.getLayout(field_info.layout);
+
+            if (field_layout.isRefcounted()) {
+                const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
+                const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+
+                const field_value = StackValue{
+                    .layout = field_layout,
+                    .ptr = field_ptr,
+                    .is_initialized = true,
+                };
+
+                field_value.incref();
+            }
+        }
+        return;
+    }
+
+    if (self.layout.tag == .tuple) {
+        // Copy raw bytes first, then recursively incref contained refcounted values
+        std.debug.assert(self.ptr != null);
+        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
+        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+        @memcpy(dst, src);
+
+        const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
+        if (tuple_data.fields.count == 0) return;
+
+        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+        var elem_index: usize = 0;
+        while (elem_index < element_layouts.len) : (elem_index += 1) {
+            const elem_info = element_layouts.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_info.layout);
+
+            if (elem_layout.isRefcounted()) {
+                const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
+                const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+
+                const elem_value = StackValue{
+                    .layout = elem_layout,
+                    .ptr = elem_ptr,
+                    .is_initialized = true,
+                };
+
+                elem_value.incref();
+            }
+        }
         return;
     }
 
@@ -827,6 +911,22 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
         const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
         const dest_str: *RocStr = @ptrCast(@alignCast(dest.ptr.?));
         dest_str.* = src_str.*;
+        if (comptime trace_refcount) {
+            if (!src_str.isSmallStr()) {
+                const alloc_ptr = src_str.getAllocationPtr();
+                const rc_before: isize = if (alloc_ptr) |ptr| blk: {
+                    if (@intFromPtr(ptr) % 8 != 0) break :blk -999;
+                    const isizes: [*]isize = @ptrCast(@alignCast(ptr));
+                    break :blk (isizes - 1)[0];
+                } else 0;
+                traceRefcount("INCREF str (copyTo) ptr=0x{x} len={} rc={} slice={}", .{
+                    @intFromPtr(alloc_ptr),
+                    src_str.len(),
+                    rc_before,
+                    @intFromBool(src_str.isSeamlessSlice()),
+                });
+            }
+        }
         dest_str.incref(1);
         return;
     }
@@ -1056,7 +1156,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 });
             }
 
-            if (elements_refcounted and list_value.isUnique()) {
+            // Always decref elements when unique, not just when isRefcounted().
+            // Records/tuples containing refcounted values also need their fields decreffed.
+            // Decref for non-refcounted types (like plain integers) is a no-op.
+            if (list_value.isUnique()) {
                 if (list_value.getAllocationDataPtr()) |source| {
                     const count: usize = if (list_value.isSeamlessSlice()) blk: {
                         const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
