@@ -10607,6 +10607,13 @@ pub const Interpreter = struct {
                     const low_level = lambda_expr.e_low_level_lambda;
                     var args = [1]StackValue{operand};
                     const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                    // Decref operand based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                        operand.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
                     self.env = saved_env;
                     try value_stack.push(result);
                     return true;
@@ -10764,6 +10771,16 @@ pub const Interpreter = struct {
                     const low_level = lambda_expr.e_low_level_lambda;
                     var args = [2]StackValue{ lhs, rhs };
                     var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                    // Decref arguments based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    for (args, 0..) |arg, arg_idx| {
+                        const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
+                        if (ownership == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
                     self.env = saved_env;
 
                     // For != operator, negate boolean result
@@ -11069,8 +11086,17 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // Builtins take ownership of arguments - no decref needed after
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, null);
+
+                    // Decref arguments based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    for (all_args, 0..) |arg, arg_idx| {
+                        const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
+                        if (ownership == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
                     method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
                     try value_stack.push(result);
