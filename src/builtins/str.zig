@@ -2689,8 +2689,8 @@ test "fromUtf8Lossy: ascii, emoji" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2900,8 +2900,8 @@ test "fromUtf8Lossy: invalid start byte" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2914,8 +2914,8 @@ test "fromUtf8Lossy: overlong encoding" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2928,8 +2928,8 @@ test "fromUtf8Lossy: expected continuation" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2942,8 +2942,8 @@ test "fromUtf8Lossy: unexpected end" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2961,8 +2961,8 @@ test "fromUtf8Lossy: encodes surrogate" {
     // becomes 0b1110_1101 0b10_1000_00 0b10_11_1101
     //           1110_wwww   10_xxxx_yy   10_yy_zzzz
     //         0xED        0x90         0xBD
-    var list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
