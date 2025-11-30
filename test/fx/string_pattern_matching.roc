@@ -2,9 +2,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
 
-# Bug 12: String literal matching in match doesn't work
-# Expected: "Hello Alice!" then "Hey Bob!"
-# Actual: "Hello stranger!" for both (always falls through to wildcard)
+# Tests pattern matching on string literals in match expressions.
 
 main! = || {
     greet("Alice")

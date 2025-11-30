@@ -682,14 +682,8 @@ test "fx platform run from different cwd" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
 }
 
-// =============================================================================
-// BUG REPRODUCTIONS - These tests document known bugs and will fail once fixed
-// =============================================================================
-
-test "question mark operator works" {
-    // Bug 4 (FIXED): The `?` postfix operator for error propagation now works.
-    // The operator desugars to a match expression that either unwraps Ok values
-    // or early returns Err values.
+test "question mark operator" {
+    // Tests the `?` operator for error propagation.
     const allocator = testing.allocator;
 
     try ensureRocBinary(allocator);
@@ -698,7 +692,7 @@ test "question mark operator works" {
         .allocator = allocator,
         .argv = &[_][]const u8{
             "./zig-out/bin/roc",
-            "test/fx/bug_04_question_mark_not_implemented.roc",
+            "test/fx/question_mark_operator.roc",
         },
     });
     defer allocator.free(run_result.stdout);
@@ -708,9 +702,8 @@ test "question mark operator works" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
 }
 
-test "numeric fold produces correct values" {
-    // Bug 9 (FIXED): List.fold with numeric accumulators now produces correct values.
-    // Regression test to ensure numeric fold operations work correctly.
+test "numeric fold" {
+    // Tests List.fold with numeric accumulators.
     const allocator = testing.allocator;
 
     try ensureRocBinary(allocator);
@@ -719,7 +712,7 @@ test "numeric fold produces correct values" {
         .allocator = allocator,
         .argv = &[_][]const u8{
             "./zig-out/bin/roc",
-            "test/fx/bug_09_numeric_fold_wrong.roc",
+            "test/fx/numeric_fold.roc",
         },
     });
     defer allocator.free(run_result.stdout);
@@ -730,8 +723,7 @@ test "numeric fold produces correct values" {
 }
 
 test "string literal pattern matching" {
-    // Bug 12 (FIXED): Pattern matching on specific string literals now works correctly.
-    // Regression test to ensure string patterns match properly in match expressions.
+    // Tests pattern matching on string literals in match expressions.
     const allocator = testing.allocator;
 
     try ensureRocBinary(allocator);
@@ -740,7 +732,7 @@ test "string literal pattern matching" {
         .allocator = allocator,
         .argv = &[_][]const u8{
             "./zig-out/bin/roc",
-            "test/fx/bug_12_string_match_broken.roc",
+            "test/fx/string_pattern_matching.roc",
         },
     });
     defer allocator.free(run_result.stdout);

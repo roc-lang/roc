@@ -163,6 +163,9 @@ pub const CommonIdents = extern struct {
     // from_utf8 error payload fields (BadUtf8 record)
     problem: Ident.Idx,
     index: Ident.Idx,
+    // Synthetic identifiers for ? operator desugaring
+    question_ok: Ident.Idx,
+    question_err: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -228,6 +231,9 @@ pub const CommonIdents = extern struct {
             // from_utf8 error payload fields (BadUtf8 record)
             .problem = try common.insertIdent(gpa, Ident.for_text("problem")),
             .index = try common.insertIdent(gpa, Ident.for_text("index")),
+            // Synthetic identifiers for ? operator desugaring
+            .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
+            .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
         };
     }
 
@@ -296,6 +302,9 @@ pub const CommonIdents = extern struct {
             // from_utf8 error payload fields (BadUtf8 record)
             .problem = common.findIdent("problem") orelse unreachable,
             .index = common.findIdent("index") orelse unreachable,
+            // Synthetic identifiers for ? operator desugaring
+            .question_ok = common.findIdent("#ok") orelse unreachable,
+            .question_err = common.findIdent("#err") orelse unreachable,
         };
     }
 };

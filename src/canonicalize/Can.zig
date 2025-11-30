@@ -5073,8 +5073,8 @@ pub fn canonicalizeExpr(
         .suffix_single_question => |unary| {
             // Desugar `expr?` into:
             //   match expr {
-            //       Ok($q_ok) => $q_ok,
-            //       Err($q_err) => return Err($q_err),
+            //       Ok(#ok) => #ok,
+            //       Err(#err) => return Err(#err),
             //   }
             const region = self.parse_ir.tokenizedRegionToRegion(unary.region);
 
@@ -5083,16 +5083,16 @@ pub fn canonicalizeExpr(
             // Canonicalize the inner expression (the expression before `?`)
             const can_cond = try self.canonicalizeExpr(unary.expr) orelse return null;
 
-            // Create synthetic identifiers for the Ok value and Err value
-            const ok_val_ident = try self.env.insertIdent(base.Ident.for_text("$q_ok"));
-            const err_val_ident = try self.env.insertIdent(base.Ident.for_text("$q_err"));
-            const ok_tag_ident = try self.env.insertIdent(base.Ident.for_text("Ok"));
-            const err_tag_ident = try self.env.insertIdent(base.Ident.for_text("Err"));
+            // Use pre-interned identifiers for the Ok/Err values and tag names
+            const ok_val_ident = self.env.idents.question_ok;
+            const err_val_ident = self.env.idents.question_err;
+            const ok_tag_ident = self.env.idents.ok;
+            const err_tag_ident = self.env.idents.err;
 
             // Mark the start of scratch match branches
             const scratch_top = self.env.store.scratchMatchBranchTop();
 
-            // === Branch 1: Ok($q_ok) => $q_ok ===
+            // === Branch 1: Ok(#ok) => #ok ===
             {
                 // Enter a new scope for this branch
                 try self.scopeEnter(self.env.gpa, false);
@@ -5111,7 +5111,7 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(ok_assign_pattern_idx);
                 const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
 
-                // Create the Ok tag pattern: Ok($q_ok)
+                // Create the Ok tag pattern: Ok(#ok)
                 const ok_tag_pattern_idx = try self.env.addPattern(Pattern{
                     .applied_tag = .{
                         .name = ok_tag_ident,
@@ -5128,7 +5128,7 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
                 const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-                // Create the branch body: lookup $q_ok
+                // Create the branch body: lookup #ok
                 const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                     .pattern_idx = ok_assign_pattern_idx,
                 } }, region);
@@ -5148,7 +5148,7 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchMatchBranch(ok_branch_idx);
             }
 
-            // === Branch 2: Err($q_err) => return Err($q_err) ===
+            // === Branch 2: Err(#err) => return Err(#err) ===
             {
                 // Enter a new scope for this branch
                 try self.scopeEnter(self.env.gpa, false);
@@ -5167,7 +5167,7 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(err_assign_pattern_idx);
                 const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
 
-                // Create the Err tag pattern: Err($q_err)
+                // Create the Err tag pattern: Err(#err)
                 const err_tag_pattern_idx = try self.env.addPattern(Pattern{
                     .applied_tag = .{
                         .name = err_tag_ident,
@@ -5184,15 +5184,15 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
                 const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-                // Create the branch body: return Err($q_err)
-                // First, create lookup for $q_err
+                // Create the branch body: return Err(#err)
+                // First, create lookup for #err
                 const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                     .pattern_idx = err_assign_pattern_idx,
                 } }, region);
                 // Mark the pattern as used
                 try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                // Create Err($q_err) tag expression
+                // Create Err(#err) tag expression
                 const err_tag_args_start = self.env.store.scratchExprTop();
                 try self.env.store.addScratchExpr(err_lookup_idx);
                 const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
@@ -5204,7 +5204,7 @@ pub fn canonicalizeExpr(
                     },
                 }, region);
 
-                // Create return Err($q_err) expression
+                // Create return Err(#err) expression
                 const return_expr_idx = try self.env.addExpr(CIR.Expr{ .e_return = .{
                     .expr = err_tag_expr_idx,
                 } }, region);
