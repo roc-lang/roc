@@ -2269,13 +2269,42 @@ test "dbg: in if-then-else branch" {
     try std.testing.expectEqualStrings("\"greater\"", host.dbg_messages.items[0]);
 }
 
-// TODO: Test "dbg: in match pattern" skipped - blocks in match branches have separate issues
-// This should test dbg inside match branches once that's fixed
-
-test "dbg: in for loop" {
-    // Note: Don't use explicit type annotation since it causes issues
+test "dbg: in match pattern" {
     const roc_src =
         \\{
+        \\    x = 5
+        \\    match x {
+        \\        0 => {
+        \\            dbg "zero"
+        \\        }
+        \\        _ => {
+        \\            dbg "other"
+        \\        }
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Only the taken branch should call dbg
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"other\"", host.dbg_messages.items[0]);
+}
+
+test "dbg: in for loop" {
+    const roc_src =
+        \\{
+        \\    items : List(I64)
         \\    items = [1, 2, 3]
         \\    for item in items {
         \\        dbg item
