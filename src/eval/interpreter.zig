@@ -9705,7 +9705,7 @@ pub const Interpreter = struct {
                 const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
-                // Return {} (empty record)
+                // Return {} (empty record) - dbg always returns unit like expect
                 const ct_var = can.ModuleEnv.varFrom(dp.expr_idx);
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
                 const layout_val = try self.getRuntimeLayout(rt_var);
