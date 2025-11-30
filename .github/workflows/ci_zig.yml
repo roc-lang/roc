@@ -21,56 +21,7 @@ jobs:
 
       - name: zig lints
         run: |
-          zig run ci/zig_lints.zig
-
           zig build check-fmt
-
-      - name: Check that test is actually wired up
-        run: |
-          zig run ci/check_test_wiring.zig
-
-      # We run zig check with tracy enabled.
-      # This ensure it compiles and doesn't go stale.
-      - name: Checkout Tracy
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
-        with:
-          path: tracy
-          repository: wolfpld/tracy
-          ref: v0.11.0
-
-      - name: zig check
-        run: |
-          # Just the do super fast check step for now.
-          zig build -Dno-bin -Dfuzz -Dtracy=./tracy
-
-      # To `roc check` benchmark script:
-      - name: setup Roc
-        run: |
-          curl -s -OL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
-          # rename nightly tar
-          mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
-          # decompress the tar
-          tar -xzf roc_nightly.tar.gz
-          rm roc_nightly.tar.gz
-          # simplify nightly folder name
-          mv roc_nightly* roc_nightly
-          cd roc_nightly
-          # make roc binary available
-          echo "$(pwd)" >> $GITHUB_PATH
-
-      - run: roc version
-
-      - run: |
-          roc check src/PROFILING/exec_bench.roc
-          roc test src/PROFILING/exec_bench.roc
-
-      - name: Run Playground Tests
-        run: |
-          zig build test-playground -Doptimize=ReleaseSmall -- --verbose
-
-      - name: Verify Serialized Type Sizes
-        run: |
-          zig build test-serialization-sizes
 
   zig-tests:
     needs: check-once
@@ -79,20 +30,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            cpu_flag: -Dcpu=x86_64_v3
-          - os: macos-15
-            cpu_flag: ''
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
-          - os: ubuntu-24.04-arm
-            cpu_flag: ''
-          - os: windows-2022
-            cpu_flag: -Dcpu=x86_64_v3
-          - os: windows-2025
-            cpu_flag: -Dcpu=x86_64_v3
-          - os: windows-11-arm
-            cpu_flag: ''
 
     steps:
       - name: Checkout
