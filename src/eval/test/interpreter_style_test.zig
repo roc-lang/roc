@@ -2138,10 +2138,12 @@ test "dbg: function prints as unsupported or function marker" {
     try std.testing.expect(std.mem.indexOf(u8, msg, "<") != null or std.mem.indexOf(u8, msg, "function") != null or std.mem.indexOf(u8, msg, "unsupported") != null);
 }
 
-test "dbg: expression form returns value" {
+test "dbg: expression form returns unit" {
+    // dbg always returns {} like expect, so we can't use its return value
     const roc_src =
         \\{
-        \\    x = dbg(42)
+        \\    x = 42
+        \\    dbg x
         \\    x + 1
         \\}
     ;
@@ -2160,7 +2162,7 @@ test "dbg: expression form returns value" {
 
     const rendered = try interp.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
-    // dbg(42) returns 42, then 42 + 1 = 43
+    // dbg x prints 42, then x + 1 = 43
     try std.testing.expectEqualStrings("43", rendered);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
@@ -2203,6 +2205,7 @@ test "dbg: multiple dbg calls in sequence" {
 }
 
 test "dbg: nested dbg calls" {
+    // dbg returns {} so nested dbg prints the inner value, then {} for outer calls
     const roc_src =
         \\{
         \\    dbg(dbg(dbg(5)))
@@ -2223,43 +2226,17 @@ test "dbg: nested dbg calls" {
 
     const rendered = try interp.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("5", rendered);
+    // dbg always returns {}
+    try std.testing.expectEqualStrings("{}", rendered);
 
-    // Three nested dbg calls should produce 3 messages
+    // Three nested dbg calls: inner prints 5, outer two print {}
     try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
     try std.testing.expectEqualStrings("5", host.dbg_messages.items[0]);
-    try std.testing.expectEqualStrings("5", host.dbg_messages.items[1]);
-    try std.testing.expectEqualStrings("5", host.dbg_messages.items[2]);
+    try std.testing.expectEqualStrings("{}", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("{}", host.dbg_messages.items[2]);
 }
 
-test "dbg: as function argument" {
-    const roc_src =
-        \\{
-        \\    add = |a, b| a + b
-        \\    add(dbg(10), dbg(20))
-        \\}
-    ;
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
-
-    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
-    defer interp.deinit();
-
-    var host = TestHost.init(std.testing.allocator);
-    defer host.deinit();
-    var ops = host.makeOps();
-
-    const result = try interp.eval(resources.expr_idx, &ops);
-    defer result.decref(&interp.runtime_layout_store, &ops);
-
-    const rendered = try interp.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("30", rendered);
-
-    try std.testing.expectEqual(@as(usize, 2), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("10", host.dbg_messages.items[0]);
-    try std.testing.expectEqualStrings("20", host.dbg_messages.items[1]);
-}
+// Note: "dbg: as function argument" test removed - dbg returns {} so can't be used as a value
 
 test "dbg: in if-then-else branch" {
     const roc_src =
@@ -2326,8 +2303,8 @@ test "dbg: in for loop" {
     try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
 }
 
-test "dbg: as final expression returns value" {
-    // When dbg is the final expression in a block (expression form), it returns the value
+test "dbg: as final expression returns unit" {
+    // dbg always returns {} like expect
     const roc_src =
         \\{
         \\    dbg 42
@@ -2348,8 +2325,8 @@ test "dbg: as final expression returns value" {
 
     const rendered = try interp.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
-    // Expression form returns the debugged value
-    try std.testing.expectEqualStrings("42", rendered);
+    // dbg always returns {}
+    try std.testing.expectEqualStrings("{}", rendered);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
@@ -2376,9 +2353,10 @@ test "dbg: with arithmetic expression" {
 
     const rendered = try interp.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
-    // 2 + 3 * 4 = 2 + 12 = 14
-    try std.testing.expectEqualStrings("14", rendered);
+    // dbg returns {} but prints the evaluated expression
+    try std.testing.expectEqualStrings("{}", rendered);
 
+    // 2 + 3 * 4 = 2 + 12 = 14
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     try std.testing.expectEqualStrings("14", host.dbg_messages.items[0]);
 }

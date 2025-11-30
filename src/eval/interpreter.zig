@@ -1895,6 +1895,91 @@ pub const Interpreter = struct {
 
                 return out;
             },
+            .list_append => {
+                // List.append: List(a), a -> List(a)
+                std.debug.assert(args.len == 2); // low-level .list_append expects 2 arguments
+
+                const roc_list_arg = args[0];
+                const elt_arg = args[1];
+
+                std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
+                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
+
+                // Extract element layout from List(a)
+                std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
+
+                // Format arguments into proper types
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                const append_elt: builtins.list.Opaque = non_null_bytes;
+
+                // Get element layout
+                const elem_layout_idx = roc_list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Determine if list can be mutated in place
+                const update_mode = if (roc_list.isUnique()) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
+                    .scalar => {
+                        switch (elem_layout.data.scalar.tag) {
+                            .str => break :copy &builtins.list.copy_str,
+                            .int => {
+                                switch (elem_layout.data.scalar.data.int) {
+                                    .u8 => break :copy &builtins.list.copy_u8,
+                                    .u16 => break :copy &builtins.list.copy_u16,
+                                    .u32 => break :copy &builtins.list.copy_u32,
+                                    .u64 => break :copy &builtins.list.copy_u64,
+                                    .u128 => break :copy &builtins.list.copy_u128,
+                                    .i8 => break :copy &builtins.list.copy_i8,
+                                    .i16 => break :copy &builtins.list.copy_i16,
+                                    .i32 => break :copy &builtins.list.copy_i32,
+                                    .i64 => break :copy &builtins.list.copy_i64,
+                                    .i128 => break :copy &builtins.list.copy_i128,
+                                }
+                            },
+                            else => break :copy &builtins.list.copy_fallback,
+                        }
+                    },
+                    .box => break :copy &builtins.list.copy_box,
+                    .box_of_zst => break :copy &builtins.list.copy_box_zst,
+                    .list => break :copy &builtins.list.copy_list,
+                    .list_of_zst => break :copy &builtins.list.copy_list_zst,
+                    else => break :copy &builtins.list.copy_fallback,
+                };
+
+                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
+
+                // Allocate space for the result list
+                const result_layout = roc_list_arg.layout; // Same layout as input
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
+            // .set_is_empty => {
+            //     // TODO: implement Set.is_empty
+            //     self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);
+            //     return error.Crash;
+            // },
             // Bool operations
             .bool_is_eq => {
                 // Bool.is_eq : Bool, Bool -> Bool
@@ -9575,12 +9660,16 @@ pub const Interpreter = struct {
             .dbg_print => |dp| {
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
-                // Render value for debug output (don't decref - we're returning it)
+                defer value.decref(&self.runtime_layout_store, roc_ops);
                 const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
-                // Return the original value (expression form returns the debugged value)
-                try value_stack.push(value);
+                // Return {} (empty record) - dbg always returns unit like expect
+                const ct_var = can.ModuleEnv.varFrom(dp.expr_idx);
+                const rt_var = try self.translateTypeVar(self.env, ct_var);
+                const layout_val = try self.getRuntimeLayout(rt_var);
+                const result = try self.pushRaw(layout_val, 0);
+                try value_stack.push(result);
                 return true;
             },
             .str_collect => |sc| {

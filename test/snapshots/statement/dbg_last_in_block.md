@@ -57,7 +57,7 @@ main = || {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) => Str")))
+		(patt (type "({}) => {}")))
 	(expressions
-		(expr (type "({}) => Str"))))
+		(expr (type "({}) => {}"))))
 ~~~

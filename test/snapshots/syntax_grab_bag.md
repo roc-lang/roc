@@ -238,7 +238,7 @@ UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
 NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - syntax_grab_bag.md:121:37:121:37
+UNDEFINED VARIABLE - syntax_grab_bag.md:121:37:121:40
 UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:27
 UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:9
 NOT IMPLEMENTED - :0:0:0:0
@@ -529,11 +529,11 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 Nothing is named `add` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**syntax_grab_bag.md:121:37:121:37:**
+**syntax_grab_bag.md:121:37:121:40:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
-		                                  ^
+		                                  ^^^
 
 
 **UNUSED VARIABLE**

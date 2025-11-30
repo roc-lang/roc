@@ -199,7 +199,7 @@ NOT IMPLEMENTED - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - :0:0:0:0
-UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:37
+UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
 NOT IMPLEMENTED - :0:0:0:0
 NOT IMPLEMENTED - :0:0:0:0
@@ -603,11 +603,11 @@ This error doesn't have a proper diagnostic report yet. Let us know if you want 
 Nothing is named `add` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**fuzz_crash_027.md:82:37:82:37:**
+**fuzz_crash_027.md:82:37:82:40:**
 ```roc
 		{ foo: 1, bar: 2, ..rest } => 12->add(34)
 ```
-		                                  ^
+		                                  ^^^
 
 
 **UNUSED VARIABLE**
