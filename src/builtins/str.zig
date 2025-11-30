@@ -30,6 +30,17 @@ const unicode = std.unicode;
 const testing = std.testing;
 const rcNone = @import("utils.zig").rcNone;
 
+/// Decref function for RocStr elements in a list.
+/// Used when decref-ing a List Str - each string element needs to be decreffed.
+/// The context parameter is expected to be a *RocOps.
+fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element) |elem_ptr| {
+        const str_ptr: *RocStr = @ptrCast(@alignCast(elem_ptr));
+        const roc_ops: *RocOps = @ptrCast(@alignCast(context.?));
+        str_ptr.decref(roc_ops);
+    }
+}
+
 const InPlace = enum(u8) {
     InPlace,
     Clone,
@@ -937,7 +948,13 @@ pub fn strJoinWithC(
         .list_capacity_or_alloc_ptr = list.capacity_or_alloc_ptr,
     };
 
-    return @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
+    const result = @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
+
+    // Decref the consumed list. Since elements are strings (refcounted), we pass
+    // elements_refcounted=true and provide strDecref to decref each element.
+    list.decref(@alignOf(RocStr), @sizeOf(RocStr), true, @ptrCast(roc_ops), &strDecref, roc_ops);
+
+    return result;
 }
 
 /// See strJoinWithC for ownership documentation.
