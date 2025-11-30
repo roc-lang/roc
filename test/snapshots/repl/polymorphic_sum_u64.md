@@ -5,12 +5,15 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» sum = |num| 0 + num
-» U64.to_str(sum(2400))
+» sum = |a, b| a + b + 0
+» U64.to_str(sum(240, 20))
+» U64.to_str(sum(240, 0))
 ~~~
 # OUTPUT
 assigned `sum`
 ---
-"2400"
+"260"
+---
+"240"
 # PROBLEMS
 NIL
