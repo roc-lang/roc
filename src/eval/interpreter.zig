@@ -10870,7 +10870,10 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         var args = [1]StackValue{receiver_value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                        // Get return type from the dot access expression for low-level builtins that need it
+                        const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
                         receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -10990,7 +10993,10 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, null);
+                    // Get return type from the dot access expression for low-level builtins that need it
+                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
