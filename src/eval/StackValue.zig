@@ -268,6 +268,62 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
+    if (self.layout.tag == .closure) {
+        // Copy the closure header and captures, then incref captured values.
+        // Closures store captures in a record immediately after the header.
+        std.debug.assert(self.ptr != null);
+        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
+        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+        @memcpy(dst, src);
+
+        // Get the closure header to find the captures layout
+        const closure = self.asClosure();
+        const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
+
+        // Only incref if there are actual captures (record with fields)
+        if (captures_layout.tag == .record) {
+            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (record_data.fields.count > 0) {
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
+                        @intFromPtr(self.ptr),
+                        record_data.fields.count,
+                    });
+                }
+
+                // Calculate the offset to the captures record (after header, with alignment)
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                const rec_ptr: [*]u8 = @ptrCast(base_ptr + aligned_off);
+
+                // Iterate over each field in the captures record and incref refcounted fields.
+                // (Records don't have their own refcount - only their fields do)
+                const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+                var field_index: usize = 0;
+                while (field_index < field_layouts.len) : (field_index += 1) {
+                    const field_info = field_layouts.get(field_index);
+                    const field_layout = layout_cache.getLayout(field_info.layout);
+
+                    if (field_layout.isRefcounted()) {
+                        const field_offset = layout_cache.getRecordFieldOffset(captures_layout.data.record.idx, @intCast(field_index));
+                        const field_ptr = @as(*anyopaque, @ptrCast(rec_ptr + field_offset));
+
+                        const field_value = StackValue{
+                            .layout = field_layout,
+                            .ptr = field_ptr,
+                            .is_initialized = true,
+                        };
+
+                        field_value.incref();
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
