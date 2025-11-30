@@ -1781,3 +1781,778 @@ test "interpreter: crash at end of block in if branch" {
 }
 
 // Boolean/if support intentionally omitted for now
+
+// ============================================================================
+// Comprehensive dbg tests
+// ============================================================================
+
+test "dbg: integer literal" {
+    const roc_src =
+        \\{
+        \\    dbg 42
+        \\    123
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("123", rendered);
+
+    // Verify dbg was called with 42
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "dbg: negative integer" {
+    const roc_src =
+        \\{
+        \\    x = -99
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("-99", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("-99", host.dbg_messages.items[0]);
+}
+
+test "dbg: float value" {
+    const roc_src =
+        \\{
+        \\    x : F64
+        \\    x = 3.14
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Check that the message contains 3.14 (may have trailing digits)
+    try std.testing.expect(std.mem.startsWith(u8, host.dbg_messages.items[0], "3.14"));
+}
+
+test "dbg: boolean True" {
+    const roc_src =
+        \\{
+        \\    dbg True
+        \\    False
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Boolean may render as "True" or "1"
+    try std.testing.expect(std.mem.eql(u8, "True", host.dbg_messages.items[0]) or std.mem.eql(u8, "1", host.dbg_messages.items[0]));
+}
+
+test "dbg: boolean False" {
+    const roc_src =
+        \\{
+        \\    dbg False
+        \\    True
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Boolean may render as "False" or "0"
+    try std.testing.expect(std.mem.eql(u8, "False", host.dbg_messages.items[0]) or std.mem.eql(u8, "0", host.dbg_messages.items[0]));
+}
+
+test "dbg: empty string" {
+    const roc_src =
+        \\{
+        \\    dbg ""
+        \\    "done"
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"\"", host.dbg_messages.items[0]);
+}
+
+test "dbg: list of integers" {
+    // Note: Using list without explicit type annotation since List I64 annotation causes issues
+    const roc_src =
+        \\{
+        \\    xs = [1i64, 2i64, 3i64]
+        \\    dbg xs
+        \\    xs
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("[1, 2, 3]", host.dbg_messages.items[0]);
+}
+
+// TODO: Test "dbg: empty list" skipped because List.empty({}) syntax not working
+// This test should verify dbg works with empty lists
+
+test "dbg: tuple" {
+    const roc_src =
+        \\{
+        \\    t = (1, "two", 3)
+        \\    dbg t
+        \\    t
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Tuple should render as (1, "two", 3)
+    try std.testing.expectEqualStrings("(1, \"two\", 3)", host.dbg_messages.items[0]);
+}
+
+test "dbg: record" {
+    const roc_src =
+        \\{
+        \\    r = { name: "Alice", age: 30 }
+        \\    dbg r
+        \\    r
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Record fields may be in any order
+    const msg = host.dbg_messages.items[0];
+    try std.testing.expect(std.mem.indexOf(u8, msg, "name") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "Alice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "age") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "30") != null);
+}
+
+test "dbg: empty record" {
+    const roc_src =
+        \\{
+        \\    r = {}
+        \\    dbg r
+        \\    r
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("{}", host.dbg_messages.items[0]);
+}
+
+test "dbg: tag without payload" {
+    const roc_src =
+        \\{
+        \\    x : [A, B, C]
+        \\    x = B
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("B", host.dbg_messages.items[0]);
+}
+
+test "dbg: tag with payload" {
+    // Use match to constrain the tag union type instead of explicit type annotation
+    const roc_src =
+        \\{
+        \\    x = Ok(42)
+        \\    dbg x
+        \\    match x { Ok(n) => n, Err(_) => 0 }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("Ok(42)", host.dbg_messages.items[0]);
+}
+
+test "dbg: function prints as unsupported or function marker" {
+    const roc_src =
+        \\{
+        \\    f = |x| x + 1
+        \\    dbg f
+        \\    f(5)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+
+    // Function should print as <function> or <unsupported>
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    const msg = host.dbg_messages.items[0];
+    try std.testing.expect(std.mem.indexOf(u8, msg, "<") != null or std.mem.indexOf(u8, msg, "function") != null or std.mem.indexOf(u8, msg, "unsupported") != null);
+}
+
+test "dbg: expression form returns value" {
+    const roc_src =
+        \\{
+        \\    x = dbg(42)
+        \\    x + 1
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // dbg(42) returns 42, then 42 + 1 = 43
+    try std.testing.expectEqualStrings("43", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "dbg: multiple dbg calls in sequence" {
+    const roc_src =
+        \\{
+        \\    x = 1
+        \\    y = 2
+        \\    z = 3
+        \\    dbg x
+        \\    dbg y
+        \\    dbg z
+        \\    x + y + z
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+}
+
+test "dbg: nested dbg calls" {
+    const roc_src =
+        \\{
+        \\    dbg(dbg(dbg(5)))
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("5", rendered);
+
+    // Three nested dbg calls should produce 3 messages
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("5", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("5", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("5", host.dbg_messages.items[2]);
+}
+
+test "dbg: as function argument" {
+    const roc_src =
+        \\{
+        \\    add = |a, b| a + b
+        \\    add(dbg(10), dbg(20))
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("30", rendered);
+
+    try std.testing.expectEqual(@as(usize, 2), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("10", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("20", host.dbg_messages.items[1]);
+}
+
+test "dbg: in if-then-else branch" {
+    const roc_src =
+        \\{
+        \\    x = 10
+        \\    if x > 5 {
+        \\        dbg "greater"
+        \\        True
+        \\    } else {
+        \\        dbg "less or equal"
+        \\        False
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Only the taken branch should call dbg
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"greater\"", host.dbg_messages.items[0]);
+}
+
+// TODO: Test "dbg: in match pattern" skipped - blocks in match branches have separate issues
+// This should test dbg inside match branches once that's fixed
+
+test "dbg: in for loop" {
+    // Note: Don't use explicit type annotation since it causes issues
+    const roc_src =
+        \\{
+        \\    items = [1, 2, 3]
+        \\    for item in items {
+        \\        dbg item
+        \\    }
+        \\    items
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Each iteration should call dbg
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+}
+
+test "dbg: as final expression returns value" {
+    // When dbg is the final expression in a block (expression form), it returns the value
+    const roc_src =
+        \\{
+        \\    dbg 42
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // Expression form returns the debugged value
+    try std.testing.expectEqualStrings("42", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "dbg: with arithmetic expression" {
+    const roc_src =
+        \\{
+        \\    dbg(2 + 3 * 4)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // 2 + 3 * 4 = 2 + 12 = 14
+    try std.testing.expectEqualStrings("14", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("14", host.dbg_messages.items[0]);
+}
+
+test "dbg: inside function body" {
+    const roc_src =
+        \\{
+        \\    double = |x| {
+        \\        dbg x
+        \\        x * 2
+        \\    }
+        \\    double(21)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("21", host.dbg_messages.items[0]);
+}
+
+test "dbg: function called multiple times" {
+    const roc_src =
+        \\{
+        \\    f = |x| {
+        \\        dbg x
+        \\        x
+        \\    }
+        \\    f(1) + f(2) + f(3)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+}
+
+test "dbg: with string containing special chars" {
+    const roc_src =
+        \\{
+        \\    dbg "hello\nworld"
+        \\    "done"
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // The string should contain the actual newline character, rendered with quotes
+    const msg = host.dbg_messages.items[0];
+    try std.testing.expect(std.mem.startsWith(u8, msg, "\"hello"));
+    try std.testing.expect(std.mem.indexOf(u8, msg, "world") != null);
+}
+
+test "dbg: large integer" {
+    const roc_src =
+        \\{
+        \\    x : I64
+        \\    x = 9223372036854775807
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("9223372036854775807", host.dbg_messages.items[0]);
+}
+
+test "dbg: variable after mutation in binding" {
+    const roc_src =
+        \\{
+        \\    x = 10
+        \\    dbg x
+        \\    y = x + 5
+        \\    dbg y
+        \\    y
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("15", rendered);
+
+    try std.testing.expectEqual(@as(usize, 2), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("10", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("15", host.dbg_messages.items[1]);
+}
+
+test "dbg: list of strings" {
+    const roc_src =
+        \\{
+        \\    xs = ["a", "b", "c"]
+        \\    dbg xs
+        \\    xs
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("[\"a\", \"b\", \"c\"]", host.dbg_messages.items[0]);
+}

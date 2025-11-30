@@ -76,9 +76,9 @@ bar = |f| f(dbg (42))
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({} -> a) => a"))
-		(patt (type "({} -> a) => a")))
+		(patt (type "(a -> b) => b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "(a -> b) => b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "({} -> a) => a"))
-		(expr (type "({} -> a) => a"))))
+		(expr (type "(a -> b) => b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "(a -> b) => b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

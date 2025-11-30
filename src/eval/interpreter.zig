@@ -9575,16 +9575,12 @@ pub const Interpreter = struct {
             .dbg_print => |dp| {
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
-                defer value.decref(&self.runtime_layout_store, roc_ops);
+                // Render value for debug output (don't decref - we're returning it)
                 const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
-                // Return {} (empty record)
-                const ct_var = can.ModuleEnv.varFrom(dp.expr_idx);
-                const rt_var = try self.translateTypeVar(self.env, ct_var);
-                const layout_val = try self.getRuntimeLayout(rt_var);
-                const result = try self.pushRaw(layout_val, 0);
-                try value_stack.push(result);
+                // Return the original value (expression form returns the debugged value)
+                try value_stack.push(value);
                 return true;
             },
             .str_collect => |sc| {

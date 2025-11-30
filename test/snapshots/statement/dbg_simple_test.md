@@ -62,7 +62,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{}")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "{}"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -3574,10 +3574,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
-            // dbg evaluates its inner expression but returns {} (like expect)
-            _ = try self.checkExpr(dbg.expr, env, .no_expectation);
+            // dbg evaluates its inner expression and returns it (unlike expect which returns {})
+            _ = try self.checkExpr(dbg.expr, env, expected);
             does_fx = true;
-            try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+            // Unify dbg's type with the inner expression's type so dbg(x) has same type as x
+            const inner_var = ModuleEnv.varFrom(dbg.expr);
+            _ = try self.unify(expr_var, inner_var, env);
         },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
