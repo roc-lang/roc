@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const trace_eval = build_options.trace_eval;
+const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 const base_pkg = @import("base");
 const types = @import("types");
 const import_mapping_mod = types.import_mapping;
@@ -5106,6 +5107,15 @@ pub const Interpreter = struct {
         var idx = list.items.len;
         while (idx > new_len) {
             idx -= 1;
+            if (comptime trace_refcount and builtin.os.tag != .freestanding) {
+                const stderr_file: std.fs.File = .stderr();
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "[INTERP] trimBindingList decref binding idx={} ptr=0x{x}\n", .{
+                    idx,
+                    @intFromPtr(list.items[idx].value.ptr),
+                }) catch "[INTERP] trimBindingList decref\n";
+                stderr_file.writeAll(msg) catch {};
+            }
             list.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
         }
         list.items.len = new_len;
@@ -8975,7 +8985,25 @@ pub const Interpreter = struct {
             .bind_decl => |bd| {
                 // Pop evaluated value from stack
                 const val = value_stack.pop() orelse return error.Crash;
-                defer val.decref(&self.runtime_layout_store, roc_ops);
+                if (comptime trace_refcount and builtin.os.tag != .freestanding) {
+                    const stderr_file: std.fs.File = .stderr();
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "[INTERP] bind_decl popped val ptr=0x{x} (will defer decref)\n", .{
+                        @intFromPtr(val.ptr),
+                    }) catch "[INTERP] bind_decl popped val\n";
+                    stderr_file.writeAll(msg) catch {};
+                }
+                defer {
+                    if (comptime trace_refcount and builtin.os.tag != .freestanding) {
+                        const stderr_file: std.fs.File = .stderr();
+                        var buf: [256]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[INTERP] bind_decl defer decref val ptr=0x{x}\n", .{
+                            @intFromPtr(val.ptr),
+                        }) catch "[INTERP] bind_decl defer decref\n";
+                        stderr_file.writeAll(msg) catch {};
+                    }
+                    val.decref(&self.runtime_layout_store, roc_ops);
+                }
 
                 // Get the runtime type for pattern matching
                 const expr_ct_var = can.ModuleEnv.varFrom(bd.expr_idx);
@@ -8983,19 +9011,30 @@ pub const Interpreter = struct {
 
                 // Bind the pattern
                 var temp_binds = try std.array_list.AlignedManaged(Binding, null).initCapacity(self.allocator, 4);
-                defer {
-                    self.trimBindingList(&temp_binds, 0, roc_ops);
-                    temp_binds.deinit();
-                }
+                defer temp_binds.deinit();
 
                 if (!try self.patternMatchesBind(bd.pattern, val, expr_rt_var, roc_ops, &temp_binds, bd.expr_idx)) {
+                    // Pattern match failed - decref any bindings that were created
+                    self.trimBindingList(&temp_binds, 0, roc_ops);
                     return error.TypeMismatch;
                 }
 
-                // Add bindings using upsertBinding to handle closure placeholders
+                // Add bindings using upsertBinding to handle closure placeholders.
+                // After upsertBinding, ownership of the binding's value is transferred
+                // to self.bindings, so we must NOT decref temp_binds afterwards.
                 for (temp_binds.items) |binding| {
+                    if (comptime trace_refcount and builtin.os.tag != .freestanding) {
+                        const stderr_file: std.fs.File = .stderr();
+                        var buf: [256]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[INTERP] upsertBinding from temp_binds ptr=0x{x}\n", .{
+                            @intFromPtr(binding.value.ptr),
+                        }) catch "[INTERP] upsertBinding\n";
+                        stderr_file.writeAll(msg) catch {};
+                    }
                     try self.upsertBinding(binding, bd.bindings_start, roc_ops);
                 }
+                // Clear temp_binds without decref - ownership was transferred to self.bindings
+                temp_binds.clearRetainingCapacity();
 
                 // Continue with remaining statements
                 if (bd.remaining_stmts.len == 0) {

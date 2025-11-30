@@ -971,6 +971,16 @@ fn traceRefcount(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+/// Trace helper with source location for debugging where decrefs originate
+pub fn traceRefcountWithSource(comptime src: std.builtin.SourceLocation, comptime fmt: []const u8, args: anytype) void {
+    if (comptime trace_refcount and builtin.os.tag != .freestanding) {
+        const stderr_file: std.fs.File = .stderr();
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "[REFCOUNT @{s}:{d}] " ++ fmt ++ "\n", .{src.file, src.line} ++ args) catch return;
+        stderr_file.writeAll(msg) catch {};
+    }
+}
+
 /// Decrement reference count for refcounted types
 pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
     if (comptime trace_refcount) {
