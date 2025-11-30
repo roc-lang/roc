@@ -1109,6 +1109,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("This pattern contains invalid syntax or uses unsupported features.");
             break :blk report;
         },
+        .pattern_arg_invalid => |_| blk: {
+            var report = Report.init(allocator, "INVALID PATTERN ARGUMENT", .runtime_error);
+            try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
+            break :blk report;
+        },
         .shadowing_warning => |data| blk: {
             const ident_name = self.getIdent(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);
