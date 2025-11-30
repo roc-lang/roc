@@ -4,6 +4,18 @@
 //! operations for string manipulation, Unicode handling, formatting, and
 //! memory management. It defines the RocStr structure and associated functions
 //! that are called from compiled Roc code to handle string operations efficiently.
+//!
+//! ## Ownership Semantics
+//!
+//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
+//! follow these patterns:
+//!
+//! - **Borrow**: Function reads argument, caller retains ownership
+//! - **Consume**: Function takes ownership, caller loses access
+//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
+//! - **Seamless Slice**: Result shares data with arg via incref'd slice
+//!
+//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
 
 const RocList = @import("list.zig").RocList;
@@ -667,7 +679,20 @@ pub fn getCapacity(string: RocStr) callconv(.c) usize {
     return string.getCapacity();
 }
 
-/// TODO: Document substringUnsafeC.
+/// Str.substring - extracts a substring without bounds checking.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string
+///
+/// **IMPORTANT**: This function does NOT call incref. The returned seamless
+/// slice shares the input's allocation, but the caller is responsible for
+/// ensuring the refcount is correct. This is typically used internally where
+/// the caller handles refcount management.
+///
+/// For small strings: creates a new small string (copy).
+/// For heap strings at start=0 with unique refcount: shrinks in place.
+/// Otherwise: creates a seamless slice pointing into the original string.
 pub fn substringUnsafeC(
     string: RocStr,
     start_u64: u64,
@@ -680,7 +705,7 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
-/// TODO
+/// See substringUnsafeC for ownership documentation.
 pub fn substringUnsafe(
     string: RocStr,
     start: usize,
@@ -747,7 +772,15 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
     return true;
 }
 
-/// Str.drop_prefix - Returns string with prefix removed, or original if no match
+/// Str.drop_prefix - Returns string with prefix removed, or original if no match.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - `prefix`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+///
+/// If prefix doesn't match, returns the original string with refcount incremented.
+/// If prefix matches, returns a seamless slice of the remaining portion.
 pub fn strDropPrefix(
     string: RocStr,
     prefix: RocStr,
@@ -765,7 +798,15 @@ pub fn strDropPrefix(
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
-/// Str.drop_suffix - Returns string with suffix removed, or original if no match
+/// Str.drop_suffix - Returns string with suffix removed, or original if no match.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - `suffix`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+///
+/// If suffix doesn't match, returns the original string with refcount incremented.
+/// If suffix matches, returns a seamless slice of the remaining portion.
 pub fn strDropSuffix(
     string: RocStr,
     suffix: RocStr,
@@ -829,7 +870,15 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
     return true;
 }
 
-/// Str.concat
+/// Str.concat - concatenates two strings.
+///
+/// ## Ownership
+/// - `arg1`: **consumes** - may be reallocated if capacity insufficient
+/// - `arg2`: **borrows** - caller retains ownership (not decrefd here)
+/// - Returns: **independent** or **copy-on-write** depending on arg1's capacity
+///
+/// Note: arg1 is owned and may be returned directly if arg2 is empty,
+/// or reallocated to accommodate the combined content.
 pub fn strConcatC(
     arg1: RocStr,
     arg2: RocStr,
@@ -838,7 +887,7 @@ pub fn strConcatC(
     return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO
+/// See strConcatC for ownership documentation.
 pub fn strConcat(
     arg1: RocStr,
     arg2: RocStr,
@@ -871,7 +920,12 @@ pub const RocListStr = extern struct {
     list_capacity_or_alloc_ptr: usize,
 };
 
-/// Str.joinWith
+/// Str.joinWith - joins a list of strings with a separator.
+///
+/// ## Ownership
+/// - `list`: **consumes** - elements are borrowed, list is consumed
+/// - `separator`: **borrows** - caller retains ownership
+/// - Returns: **independent** - new allocation containing joined result
 pub fn strJoinWithC(
     list: RocList,
     separator: RocStr,
@@ -886,7 +940,7 @@ pub fn strJoinWithC(
     return @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
 }
 
-/// TODO
+/// See strJoinWithC for ownership documentation.
 pub fn strJoinWith(
     list: RocListStr,
     separator: RocStr,
@@ -928,7 +982,18 @@ pub fn strJoinWith(
     }
 }
 
-/// Str.toUtf8
+/// Str.toUtf8 - converts a string to a list of UTF-8 bytes.
+///
+/// ## Ownership
+/// - `arg`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares underlying data with input string
+///
+/// For heap strings, the returned list shares the same underlying allocation
+/// as the input string. This function calls `incref` on the allocation to
+/// account for the new reference. Small strings are copied to a new allocation.
+///
+/// The caller must decref the argument after call (we borrowed it but added
+/// a reference to its data via the returned list).
 pub fn strToUtf8C(
     arg: RocStr,
     roc_ops: *RocOps,
@@ -1286,7 +1351,17 @@ pub fn isWhitespace(codepoint: u21) bool {
     };
 }
 
-/// TODO: Document strTrim.
+/// Str.trim - removes leading and trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: shrinks in place (same allocation)
+/// - Otherwise: creates seamless slice pointing to trimmed region
 pub fn strTrim(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1339,7 +1414,17 @@ pub fn strTrim(
     }
 }
 
-/// TODO: Document strTrimStart.
+/// Str.trim_start - removes leading whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: returns same allocation unchanged
+/// - Otherwise: creates seamless slice pointing to trimmed region
 pub fn strTrimStart(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1391,7 +1476,17 @@ pub fn strTrimStart(
     }
 }
 
-/// TODO: Document strTrimEnd.
+/// Str.trim_end - removes trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if unique
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique: shrinks length in place (same allocation)
+/// - Shared: creates seamless slice pointing to trimmed region
 pub fn strTrimEnd(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1476,6 +1571,15 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
 }
 
 /// Str.with_ascii_lowercased
+///
+/// Returns a string with all ASCII letters converted to lowercase.
+///
+/// ## Ownership
+/// - `string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if input was unique
+///
+/// If the input string is unique, modifies in place and returns it.
+/// If shared, decrefs the input and allocates a new string.
 pub fn strWithAsciiLowercased(
     string: RocStr,
     roc_ops: *RocOps,
@@ -1495,6 +1599,15 @@ pub fn strWithAsciiLowercased(
 }
 
 /// Str.with_ascii_uppercased
+///
+/// Returns a string with all ASCII letters converted to uppercase.
+///
+/// ## Ownership
+/// - `string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if input was unique
+///
+/// If the input string is unique, modifies in place and returns it.
+/// If shared, decrefs the input and allocates a new string.
 pub fn strWithAsciiUppercased(
     string: RocStr,
     roc_ops: *RocOps,

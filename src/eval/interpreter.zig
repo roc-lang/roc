@@ -10362,47 +10362,18 @@ pub const Interpreter = struct {
                         // Call the builtin
                         var result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
 
-                        // Decref arguments after the call, UNLESS the result's underlying data
-                        // is the same as an argument's (consuming builtin returned same value).
-                        // This handles three cases:
-                        // 1. Borrowing builtins (like count_utf8_bytes): don't touch refcount, we decref
-                        // 2. Sharing builtins (like str_to_utf8): incref when creating slice, we decref
-                        // 3. Consuming builtins (like strWithAsciiUppercased): may return same data
-                        //    if input was unique - skip decref since result now owns it
-                        const result_is_str = result.layout.tag == .scalar and result.layout.data.scalar.tag == .str;
-                        const result_is_list = result.layout.tag == .list;
-                        const result_data_ptr: ?*anyopaque = if (result.ptr) |rptr| blk: {
-                            // For strings/lists, get the underlying data pointer (bytes field)
-                            if (result_is_str) {
-                                const roc_str: *const RocStr = @ptrCast(@alignCast(rptr));
-                                break :blk @ptrCast(roc_str.bytes);
-                            } else if (result_is_list) {
-                                const roc_list: *const RocList = @ptrCast(@alignCast(rptr));
-                                break :blk @ptrCast(roc_list.bytes);
-                            }
-                            break :blk null;
-                        } else null;
-
-                        for (arg_values) |arg| {
-                            // Check if result's underlying data matches this arg's data AND types match.
-                            // Type matching is critical: str_to_utf8(Str) -> List shares bytes but returns
-                            // a different type (and already incref'd the data), so we must still decref.
-                            // Consuming builtins like strWithAsciiUppercased(Str) -> Str return same type.
-                            const arg_is_str = arg.layout.tag == .scalar and arg.layout.data.scalar.tag == .str;
-                            const arg_is_list = arg.layout.tag == .list;
-                            const types_match = (result_is_str and arg_is_str) or (result_is_list and arg_is_list);
-                            const skip_decref = if (types_match and result_data_ptr != null and arg.ptr != null) blk: {
-                                if (arg_is_str) {
-                                    const arg_str: *const RocStr = @ptrCast(@alignCast(arg.ptr.?));
-                                    break :blk @as(?*anyopaque, @ptrCast(arg_str.bytes)) == result_data_ptr;
-                                } else if (arg_is_list) {
-                                    const arg_list: *const RocList = @ptrCast(@alignCast(arg.ptr.?));
-                                    break :blk @as(?*anyopaque, @ptrCast(arg_list.bytes)) == result_data_ptr;
-                                }
-                                break :blk false;
-                            } else false;
-
-                            if (!skip_decref) {
+                        // Decref arguments based on ownership semantics.
+                        // See src/builtins/OWNERSHIP.md for detailed documentation.
+                        //
+                        // Simple rule:
+                        // - Borrow: decref (we release our copy, builtin didn't take ownership)
+                        // - Consume: don't decref (ownership transferred to builtin)
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        for (arg_values, 0..) |arg, arg_idx| {
+                            // Only decref borrowed arguments. Consumed arguments have ownership
+                            // transferred to the builtin (it handles cleanup or returns the value).
+                            const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
+                            if (ownership == .borrow) {
                                 arg.decref(&self.runtime_layout_store, roc_ops);
                             }
                         }
