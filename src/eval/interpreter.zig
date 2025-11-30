@@ -10359,11 +10359,52 @@ pub const Interpreter = struct {
                             return true;
                         }
 
+                        // Call the builtin
                         var result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
 
-                        // Decref args after builtin completes
+                        // Decref arguments after the call, UNLESS the result's underlying data
+                        // is the same as an argument's (consuming builtin returned same value).
+                        // This handles three cases:
+                        // 1. Borrowing builtins (like count_utf8_bytes): don't touch refcount, we decref
+                        // 2. Sharing builtins (like str_to_utf8): incref when creating slice, we decref
+                        // 3. Consuming builtins (like strWithAsciiUppercased): may return same data
+                        //    if input was unique - skip decref since result now owns it
+                        const result_is_str = result.layout.tag == .scalar and result.layout.data.scalar.tag == .str;
+                        const result_is_list = result.layout.tag == .list;
+                        const result_data_ptr: ?*anyopaque = if (result.ptr) |rptr| blk: {
+                            // For strings/lists, get the underlying data pointer (bytes field)
+                            if (result_is_str) {
+                                const roc_str: *const RocStr = @ptrCast(@alignCast(rptr));
+                                break :blk @ptrCast(roc_str.bytes);
+                            } else if (result_is_list) {
+                                const roc_list: *const RocList = @ptrCast(@alignCast(rptr));
+                                break :blk @ptrCast(roc_list.bytes);
+                            }
+                            break :blk null;
+                        } else null;
+
                         for (arg_values) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
+                            // Check if result's underlying data matches this arg's data AND types match.
+                            // Type matching is critical: str_to_utf8(Str) -> List shares bytes but returns
+                            // a different type (and already incref'd the data), so we must still decref.
+                            // Consuming builtins like strWithAsciiUppercased(Str) -> Str return same type.
+                            const arg_is_str = arg.layout.tag == .scalar and arg.layout.data.scalar.tag == .str;
+                            const arg_is_list = arg.layout.tag == .list;
+                            const types_match = (result_is_str and arg_is_str) or (result_is_list and arg_is_list);
+                            const skip_decref = if (types_match and result_data_ptr != null and arg.ptr != null) blk: {
+                                if (arg_is_str) {
+                                    const arg_str: *const RocStr = @ptrCast(@alignCast(arg.ptr.?));
+                                    break :blk @as(?*anyopaque, @ptrCast(arg_str.bytes)) == result_data_ptr;
+                                } else if (arg_is_list) {
+                                    const arg_list: *const RocList = @ptrCast(@alignCast(arg.ptr.?));
+                                    break :blk @as(?*anyopaque, @ptrCast(arg_list.bytes)) == result_data_ptr;
+                                }
+                                break :blk false;
+                            } else false;
+
+                            if (!skip_decref) {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         }
 
                         // Restore environment and free arg_rt_vars
@@ -10895,8 +10936,8 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         var args = [1]StackValue{receiver_value};
+                        // Builtins take ownership of arguments - no decref needed after
                         const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
-                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
                         try value_stack.push(result);
@@ -11035,10 +11076,8 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
+                    // Builtins take ownership of arguments - no decref needed after
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, null);
-
-                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
                     method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
                     try value_stack.push(result);

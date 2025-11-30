@@ -950,6 +950,9 @@ inline fn strToBytes(
 
         return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = length };
     } else {
+        // The returned list shares the same underlying allocation as the string.
+        // We must incref the allocation since there's now an additional reference to it.
+        arg.incref(1);
         const is_seamless_slice = arg.length & SEAMLESS_SLICE_BIT;
         return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = arg.capacity_or_alloc_ptr | is_seamless_slice };
     }
