@@ -723,6 +723,156 @@ pub const Interpreter = struct {
         return dest;
     }
 
+    /// Result from setupSortWith helper
+    const SortWithResult = union(enum) {
+        /// List has < 2 elements, already sorted. Caller should decref compare_fn and push list_value.
+        already_sorted: StackValue,
+        /// Sorting continuation has been set up. Caller should return true.
+        sorting_started,
+    };
+
+    /// Helper to set up list_sort_with continuation-based evaluation.
+    /// Shared between call_invoke_closure and dot_access_collect_args paths.
+    fn setupSortWith(
+        self: *Interpreter,
+        list_arg: StackValue,
+        compare_fn: StackValue,
+        call_ret_rt_var: ?types.Var,
+        saved_rigid_subst_in: ?std.AutoHashMap(types.Var, types.Var),
+        roc_ops: *RocOps,
+        work_stack: *WorkStack,
+    ) !SortWithResult {
+        var saved_rigid_subst = saved_rigid_subst_in;
+
+        std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+        const list_len = roc_list.len();
+
+        // If list has 0 or 1 elements, it's already sorted
+        if (list_len < 2) {
+            // Free saved_rigid_subst since we won't pass it to continuation
+            if (saved_rigid_subst) |*saved| saved.deinit();
+            return .{ .already_sorted = list_arg };
+        }
+
+        // Get element layout
+        const elem_layout_idx = list_arg.layout.data.list;
+        const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+        const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+        const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+        // Make a unique copy of the list for sorting
+        const elements_refcounted = elem_layout.isRefcounted();
+        var refcount_context = RefcountContext{
+            .layout_store = &self.runtime_layout_store,
+            .elem_layout = elem_layout,
+            .roc_ops = roc_ops,
+        };
+
+        const working_list = roc_list.makeUnique(
+            elem_alignment_u32,
+            elem_size,
+            elements_refcounted,
+            if (elements_refcounted) @ptrCast(&refcount_context) else null,
+            if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+            if (elements_refcounted) @ptrCast(&refcount_context) else null,
+            if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+            roc_ops,
+        );
+
+        // Write the result of makeUnique back into the list arg
+        const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+        list_arg_ptr.* = working_list;
+
+        // Update rt_var if provided
+        var result_list = list_arg;
+        if (call_ret_rt_var) |rt_var| {
+            result_list.rt_var = rt_var;
+        }
+
+        // Start insertion sort at index 1
+        // Get elements at indices 0 and 1 for first comparison
+        const elem0_ptr = working_list.bytes.? + 0 * elem_size;
+        const elem1_ptr = working_list.bytes.? + 1 * elem_size;
+
+        const elem0_value = StackValue{
+            .layout = elem_layout,
+            .ptr = @ptrCast(elem0_ptr),
+            .is_initialized = true,
+        };
+        const elem1_value = StackValue{
+            .layout = elem_layout,
+            .ptr = @ptrCast(elem1_ptr),
+            .is_initialized = true,
+        };
+
+        // Copy elements for comparison (compare_fn will consume them)
+        const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
+        const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
+
+        // Push continuation to handle comparison result
+        try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
+            .list_value = result_list,
+            .compare_fn = compare_fn,
+            .call_ret_rt_var = call_ret_rt_var,
+            .saved_rigid_subst = saved_rigid_subst,
+            .outer_index = 1,
+            .inner_index = 0,
+            .list_len = list_len,
+            .elem_size = elem_size,
+            .elem_layout = elem_layout,
+        } } });
+        saved_rigid_subst = null; // Ownership transferred to continuation
+
+        // Invoke comparison function with (elem_at_outer, elem_at_inner)
+        const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
+        const cmp_saved_env = self.env;
+        self.env = @constCast(cmp_header.source_env);
+
+        const cmp_params = self.env.store.slicePatterns(cmp_header.params);
+        if (cmp_params.len != 2) {
+            self.env = cmp_saved_env;
+            return error.TypeMismatch;
+        }
+
+        try self.active_closures.append(compare_fn);
+
+        // Bind parameters
+        try self.bindings.append(.{
+            .pattern_idx = cmp_params[0],
+            .value = arg0,
+            .expr_idx = @enumFromInt(0),
+            .source_env = self.env,
+        });
+        try self.bindings.append(.{
+            .pattern_idx = cmp_params[1],
+            .value = arg1,
+            .expr_idx = @enumFromInt(0),
+            .source_env = self.env,
+        });
+
+        // Push cleanup and evaluate body
+        const bindings_start = self.bindings.items.len - 2;
+        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+            .saved_env = cmp_saved_env,
+            .saved_bindings_len = bindings_start,
+            .param_count = 2,
+            .has_active_closure = true,
+            .did_instantiate = false,
+            .call_ret_rt_var = null,
+            .saved_rigid_subst = null,
+            .arg_rt_vars_to_free = null,
+        } } });
+        try work_stack.push(.{ .eval_expr = .{
+            .expr_idx = cmp_header.body_idx,
+            .expected_rt_var = null,
+        } });
+
+        return .sorting_started;
+    }
+
     /// Call a hosted function via RocOps.hosted_fns array
     /// This marshals arguments to the host, invokes the function pointer, and marshals the result back
     fn callHostedFunction(
@@ -10189,148 +10339,23 @@ pub const Interpreter = struct {
 
                         // Special handling for list_sort_with which requires continuation-based evaluation
                         if (low_level.op == .list_sort_with) {
-                            // list_sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
                             std.debug.assert(arg_values.len == 2);
-
-                            var list_arg = arg_values[0];
+                            const list_arg = arg_values[0];
                             const compare_fn = arg_values[1];
-                            // Get list info
-                            std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
-                            const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                            const list_len = roc_list.len();
-
-                            // If list has 0 or 1 elements, it's already sorted
-                            if (list_len < 2) {
-                                // Return the list as-is - ownership transfers from arg to return value
-                                compare_fn.decref(&self.runtime_layout_store, roc_ops);
-
-                                self.env = saved_env;
-                                func_val.decref(&self.runtime_layout_store, roc_ops);
-                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                                list_arg.rt_var = ci.call_ret_rt_var;
-                                try value_stack.push(list_arg);
-                                return true;
-                            }
-
-                            // Get element layout
-                            const elem_layout_idx = list_arg.layout.data.list;
-                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                            const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                            const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                            const elem_alignment_u32: u32 = @intCast(elem_alignment);
-
-                            // Make a unique copy of the list for sorting
-                            const elements_refcounted = elem_layout.isRefcounted();
-                            var refcount_context = RefcountContext{
-                                .layout_store = &self.runtime_layout_store,
-                                .elem_layout = elem_layout,
-                                .roc_ops = roc_ops,
-                            };
-
-                            const working_list = roc_list.makeUnique(
-                                elem_alignment_u32,
-                                elem_size,
-                                elements_refcounted,
-                                if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                                if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                                if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                                if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
-                                roc_ops,
-                            );
-
-                            // Reuse list_arg directly - write the result of makeUnique back into it.
-                            // This transfers ownership properly:
-                            // - If the list was unique, makeUnique returns the same RocList (no clone)
-                            // - If the list was shared, makeUnique clones and decrefs the original
-                            // Either way, list_arg now owns the unique working list.
-                            const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                            list_arg_ptr.* = working_list;
-                            list_arg.rt_var = ci.call_ret_rt_var;
-
-                            // Restore environment
+                            // Restore environment before setting up sort (helper saves env for comparison cleanup)
                             self.env = saved_env;
                             func_val.decref(&self.runtime_layout_store, roc_ops);
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
-                            // Start insertion sort at index 1
-                            // Get elements at indices 0 and 1 for first comparison
-                            const elem0_ptr = working_list.bytes.? + 0 * elem_size;
-                            const elem1_ptr = working_list.bytes.? + 1 * elem_size;
-
-                            const elem0_value = StackValue{
-                                .layout = elem_layout,
-                                .ptr = @ptrCast(elem0_ptr),
-                                .is_initialized = true,
-                            };
-                            const elem1_value = StackValue{
-                                .layout = elem_layout,
-                                .ptr = @ptrCast(elem1_ptr),
-                                .is_initialized = true,
-                            };
-
-                            // Copy elements for comparison (compare_fn will consume them)
-                            const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
-                            const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
-
-                            // Push continuation to handle comparison result
-                            try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
-                                .list_value = list_arg,
-                                .compare_fn = compare_fn,
-                                .call_ret_rt_var = ci.call_ret_rt_var,
-                                .saved_rigid_subst = saved_rigid_subst,
-                                .outer_index = 1,
-                                .inner_index = 0,
-                                .list_len = list_len,
-                                .elem_size = elem_size,
-                                .elem_layout = elem_layout,
-                            } } });
-                            saved_rigid_subst = null;
-
-                            // Invoke comparison function with (elem_at_outer, elem_at_inner)
-                            const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
-                            const cmp_saved_env = self.env;
-                            self.env = @constCast(cmp_header.source_env);
-
-                            const cmp_params = self.env.store.slicePatterns(cmp_header.params);
-                            if (cmp_params.len != 2) {
-                                self.env = cmp_saved_env;
-                                return error.TypeMismatch;
+                            switch (try self.setupSortWith(list_arg, compare_fn, ci.call_ret_rt_var, saved_rigid_subst, roc_ops, work_stack)) {
+                                .already_sorted => |result_list| {
+                                    compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                                    try value_stack.push(result_list);
+                                },
+                                .sorting_started => {},
                             }
-
-                            try self.active_closures.append(compare_fn);
-
-                            // Bind parameters
-                            try self.bindings.append(.{
-                                .pattern_idx = cmp_params[0],
-                                .value = arg0,
-                                .expr_idx = @enumFromInt(0),
-                                .source_env = self.env,
-                            });
-                            try self.bindings.append(.{
-                                .pattern_idx = cmp_params[1],
-                                .value = arg1,
-                                .expr_idx = @enumFromInt(0),
-                                .source_env = self.env,
-                            });
-
-                            // Push cleanup and evaluate body
-                            const bindings_start = self.bindings.items.len - 2;
-                            try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
-                                .saved_env = cmp_saved_env,
-                                .saved_bindings_len = bindings_start,
-                                .param_count = 2,
-                                .has_active_closure = true,
-                                .did_instantiate = false,
-                                .call_ret_rt_var = null,
-                                .saved_rigid_subst = null,
-                                .arg_rt_vars_to_free = null,
-                            } } });
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = cmp_header.body_idx,
-                                .expected_rt_var = null,
-                            } });
-
+                            saved_rigid_subst = null; // Ownership transferred to helper
                             return true;
                         }
 
@@ -10981,6 +11006,26 @@ pub const Interpreter = struct {
                 const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
                 if (lambda_expr == .e_low_level_lambda) {
                     const low_level = lambda_expr.e_low_level_lambda;
+
+                    // Special handling for list_sort_with which requires continuation-based evaluation
+                    if (low_level.op == .list_sort_with) {
+                        std.debug.assert(total_args == 1);
+                        const list_arg = receiver_value;
+                        const compare_fn = arg_values[0];
+
+                        // Restore environment before setting up sort (helper saves env for comparison cleanup)
+                        self.env = saved_env;
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                        switch (try self.setupSortWith(list_arg, compare_fn, null, null, roc_ops, work_stack)) {
+                            .already_sorted => |result_list| {
+                                compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                                try value_stack.push(result_list);
+                            },
+                            .sorting_started => {},
+                        }
+                        return true;
+                    }
 
                     // Build args array: receiver + explicit args
                     var all_args = try self.allocator.alloc(StackValue, 1 + total_args);
