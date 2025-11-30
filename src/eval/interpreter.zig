@@ -1984,11 +1984,20 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // If either list is empty, just return a copy of the other (avoid allocation)
+                // Since ownership is consume, we must decref the empty list.
                 if (list_a.len() == 0) {
-                    return try self.pushCopy(list_b_arg, roc_ops);
+                    list_a_arg.decref(&self.runtime_layout_store, roc_ops);
+                    // list_b ownership is transferred to the result (pushCopy increfs)
+                    const result = try self.pushCopy(list_b_arg, roc_ops);
+                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                    return result;
                 }
                 if (list_b.len() == 0) {
-                    return try self.pushCopy(list_a_arg, roc_ops);
+                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                    // list_a ownership is transferred to the result (pushCopy increfs)
+                    const result = try self.pushCopy(list_a_arg, roc_ops);
+                    list_a_arg.decref(&self.runtime_layout_store, roc_ops);
+                    return result;
                 }
 
                 // Determine if elements are refcounted
@@ -2043,6 +2052,13 @@ pub const Interpreter = struct {
                         }
                     }
                 }
+
+                // list_concat has consume ownership, so we must decref the input lists.
+                // The elements were already increffed above, and decref on the lists
+                // will decref their elements (if they're unique), resulting in net-zero
+                // refcount change for shared elements.
+                list_a_arg.decref(&self.runtime_layout_store, roc_ops);
+                list_b_arg.decref(&self.runtime_layout_store, roc_ops);
 
                 return out;
             },
