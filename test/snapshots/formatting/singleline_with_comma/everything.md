@@ -17,6 +17,7 @@ C(a, b,) : (a, b,)
 D(a, b,) : C(a, b,)
 E : { a : Str, b : Str, }
 F : [A, B,]
+G : () -> Str
 
 g : e -> e where [e.A, e.B,]
 
@@ -40,16 +41,16 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:63
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:63
 MODULE NOT FOUND - everything.md:2:1:2:31
 MODULE NOT FOUND - everything.md:3:1:3:47
-EXPECTED NOMINAL TYPE - everything.md:19:7:19:15
-UNUSED VARIABLE - everything.md:24:10:24:11
-UNUSED VARIABLE - everything.md:25:9:25:10
-UNUSED VARIABLE - everything.md:26:11:26:12
-UNUSED VARIABLE - everything.md:27:10:27:11
-UNUSED VARIABLE - everything.md:17:2:17:4
+EXPECTED NOMINAL TYPE - everything.md:20:7:20:15
+UNUSED VARIABLE - everything.md:25:10:25:11
+UNUSED VARIABLE - everything.md:26:9:26:10
+UNUSED VARIABLE - everything.md:27:11:27:12
+UNUSED VARIABLE - everything.md:28:10:28:11
 UNUSED VARIABLE - everything.md:18:2:18:4
 UNUSED VARIABLE - everything.md:19:2:19:4
 UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:21:2:21:4
+UNUSED VARIABLE - everything.md:22:2:22:4
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -99,7 +100,7 @@ import I2 exposing [I21 as Ias1, I22 as Ias2,]
 You are using the type _A_ like a nominal type, but it is an alias.
 
 This type is referenced here:
-**everything.md:19:7:19:15:**
+**everything.md:20:7:20:15:**
 ```roc
 	h3 = A(x, y,)
 ```
@@ -113,7 +114,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:24:10:24:11:**
+**everything.md:25:10:25:11:**
 ```roc
 		Z1((a, b,)) => a
 ```
@@ -125,7 +126,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:25:9:25:10:**
+**everything.md:26:9:26:10:**
 ```roc
 		Z2(a, b,) => a
 ```
@@ -137,7 +138,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:26:11:26:12:**
+**everything.md:27:11:27:12:**
 ```roc
 		Z3({ a, b, }) => a
 ```
@@ -149,7 +150,7 @@ Variable `b` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_b` to suppress this warning.
 The unused variable is declared here:
-**everything.md:27:10:27:11:**
+**everything.md:28:10:28:11:**
 ```roc
 		Z4([a, b,]) => a
 ```
@@ -161,7 +162,7 @@ Variable `h1` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h1` to suppress this warning.
 The unused variable is declared here:
-**everything.md:17:2:17:4:**
+**everything.md:18:2:18:4:**
 ```roc
 	h1 = { h11: x, h12: x, h13: { h131: x, h132: y, }, }
 ```
@@ -173,7 +174,7 @@ Variable `h2` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h2` to suppress this warning.
 The unused variable is declared here:
-**everything.md:18:2:18:4:**
+**everything.md:19:2:19:4:**
 ```roc
 	h2 = h(x, y,)
 ```
@@ -185,7 +186,7 @@ Variable `h3` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h3` to suppress this warning.
 The unused variable is declared here:
-**everything.md:19:2:19:4:**
+**everything.md:20:2:20:4:**
 ```roc
 	h3 = A(x, y,)
 ```
@@ -197,7 +198,7 @@ Variable `h4` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h4` to suppress this warning.
 The unused variable is declared here:
-**everything.md:20:2:20:4:**
+**everything.md:21:2:21:4:**
 ```roc
 	h4 = [x, y,]
 ```
@@ -209,7 +210,7 @@ Variable `h5` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_h5` to suppress this warning.
 The unused variable is declared here:
-**everything.md:21:2:21:4:**
+**everything.md:22:2:22:4:**
 ```roc
 	h5 = (x, y,)
 ```
@@ -226,6 +227,7 @@ UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,CloseRound,OpColon
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,CloseRound,
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,CloseCurly,
 UpperIdent,OpColon,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,CloseSquare,
+UpperIdent,OpColon,OpenRound,CloseRound,OpArrow,UpperIdent,
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotUpperIdent,Comma,LowerIdent,NoSpaceDotUpperIdent,Comma,CloseSquare,
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,Comma,OpBar,OpenCurly,
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpColon,LowerIdent,Comma,CloseCurly,Comma,CloseCurly,
@@ -297,6 +299,11 @@ EndOfFile,
 				(tags
 					(ty (name "A"))
 					(ty (name "B")))))
+		(s-type-decl
+			(header (name "G")
+				(args))
+			(ty-fn
+				(ty (name "Str"))))
 		(s-type-anno (name "g")
 			(ty-fn
 				(ty-var (raw "e"))
@@ -430,6 +437,7 @@ F : [
 	A,
 	B,
 ]
+G : () -> Str
 
 g : e -> e
 	where
@@ -630,6 +638,10 @@ h = |x, y| {
 		(ty-tag-union
 			(ty-tag-name (name "A"))
 			(ty-tag-name (name "B"))))
+	(s-alias-decl
+		(ty-header (name "G"))
+		(ty-fn (effectful false)
+			(ty-lookup (name "Str") (builtin))))
 	(s-import (module "I1")
 		(exposes
 			(exposed (name "I11") (wildcard false))
@@ -667,7 +679,9 @@ h = |x, y| {
 		(alias (type "E")
 			(ty-header (name "E")))
 		(alias (type "F")
-			(ty-header (name "F"))))
+			(ty-header (name "F")))
+		(alias (type "G")
+			(ty-header (name "G"))))
 	(expressions
 		(expr (type "e -> e"))
 		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))

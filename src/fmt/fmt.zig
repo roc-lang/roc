@@ -1961,6 +1961,11 @@ const Formatter = struct {
                         }
                     }
                 }
+
+                if (args.len == 0) {
+                    try fmt.pushAll("()");
+                }
+
                 try fmt.pushAll(if (f.effectful) " =>" else " ->");
                 const ret_region = fmt.nodeRegion(@intFromEnum(f.ret));
                 if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
