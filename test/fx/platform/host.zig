@@ -33,19 +33,6 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 
     // Return pointer to the user data (after the size metadata)
     roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-
-    // Debug output to stderr
-    const stderr: std.fs.File = .stderr();
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "[ALLOC] ptr=0x{x} base=0x{x} size={d} total={d} align={d} size_storage={d}\n", .{
-        @intFromPtr(roc_alloc.answer),
-        @intFromPtr(base_ptr),
-        roc_alloc.length,
-        total_size,
-        roc_alloc.alignment,
-        size_storage_bytes,
-    }) catch return;
-    stderr.writeAll(msg) catch {};
 }
 
 /// Roc deallocation function with size-tracking metadata
@@ -66,23 +53,9 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     // Use same alignment calculation as alloc
     const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(roc_dealloc.alignment)));
 
-    // Debug output to stderr
-    const stderr: std.fs.File = .stderr();
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "[DEALLOC] ptr=0x{x} base=0x{x} align={d} size_storage={d} total_size={d}\n", .{
-        @intFromPtr(roc_dealloc.ptr),
-        @intFromPtr(base_ptr),
-        roc_dealloc.alignment,
-        size_storage_bytes,
-        total_size,
-    }) catch "[DEALLOC] bufPrint failed\n";
-    stderr.writeAll(msg) catch {};
-
     // Free the memory (including the size metadata)
     const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    stderr.writeAll("[DEALLOC] About to rawFree\n") catch {};
     allocator.rawFree(slice, align_enum, @returnAddress());
-    stderr.writeAll("[DEALLOC] rawFree done\n") catch {};
 }
 
 /// Roc reallocation function with size-tracking metadata
@@ -260,22 +233,14 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     _ = ops;
     _ = ret_ptr; // Return value is {} which is zero-sized
 
-    const stderr_file: std.fs.File = .stderr();
-    stderr_file.writeAll("[HOST] hostedStdoutLine called\n") catch {};
-
     // Arguments struct for single Str parameter
     const Args = extern struct { str: RocStr };
     const args: *Args = @ptrCast(@alignCast(args_ptr));
 
     const message = args.str.asSlice();
-    var buf: [64]u8 = undefined;
-    const dbg_msg = std.fmt.bufPrint(&buf, "[HOST] message len={d}\n", .{message.len}) catch "[HOST] bufPrint failed\n";
-    stderr_file.writeAll(dbg_msg) catch {};
-
     const stdout: std.fs.File = .stdout();
     stdout.writeAll(message) catch {};
     stdout.writeAll("\n") catch {};
-    stderr_file.writeAll("[HOST] hostedStdoutLine done\n") catch {};
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
@@ -292,10 +257,7 @@ fn platform_main() !void {
         .gpa = std.heap.GeneralPurposeAllocator(.{}){},
     };
     defer {
-        const stderr_defer: std.fs.File = .stderr();
-        stderr_defer.writeAll("[HOST] In defer, about to deinit GPA\n") catch {};
         const leaked = host_env.gpa.deinit();
-        stderr_defer.writeAll("[HOST] GPA deinit done\n") catch {};
         if (leaked == .leak) {
             std.log.err("\x1b[33mMemory leak detected!\x1b[0m", .{});
         }
@@ -324,8 +286,5 @@ fn platform_main() !void {
     // currently dereference both of these eagerly even though it won't use either,
     // causing a segfault if you pass null. This should be changed! Dereferencing
     // garbage memory is obviously pointless, and there's no reason we should do it.
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll("[HOST] About to call roc__main\n") catch {};
     roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
-    stderr.writeAll("[HOST] Returned from roc__main\n") catch {};
 }
