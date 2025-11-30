@@ -2,8 +2,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
+const DocumentStore = @import("document_store.zig").DocumentStore;
 const initialize_handler_mod = @import("handlers/initialize.zig");
 const shutdown_handler_mod = @import("handlers/shutdown.zig");
+const did_open_handler_mod = @import("handlers/did_open.zig");
+const did_change_handler_mod = @import("handlers/did_change.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -14,19 +17,29 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         const TransportType = makeTransport(ReaderType, WriterType);
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) anyerror!void;
         const HandlerPtr = *const HandlerFn;
+        const NotificationFn = fn (*Self, ?std.json.Value) anyerror!void;
+        const NotificationPtr = *const NotificationFn;
         const InitializeHandler = initialize_handler_mod.handler(Self);
         const ShutdownHandler = shutdown_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
         });
+        const DidOpenHandler = did_open_handler_mod.handler(Self);
+        const DidChangeHandler = did_change_handler_mod.handler(Self);
+        const notification_handlers = std.StaticStringMap(NotificationPtr).initComptime(.{
+            .{ "textDocument/didOpen", &DidOpenHandler.call },
+            .{ "textDocument/didChange", &DidChangeHandler.call },
+        });
 
         allocator: std.mem.Allocator,
         transport: TransportType,
         client: protocol.ClientState = .{},
         state: State = .waiting_for_initialize,
+        doc_store: DocumentStore,
 
         pub const server_name = "roc-lsp";
+        pub const version = "0.1";
 
         pub const State = enum {
             waiting_for_initialize,
@@ -41,12 +54,14 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             return .{
                 .allocator = allocator,
                 .transport = TransportType.init(allocator, reader, writer, log_file),
+                .doc_store = DocumentStore.init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.client.deinit(self.allocator);
             self.transport.deinit();
+            self.doc_store.deinit();
         }
 
         pub fn run(self: *Self) !void {
@@ -112,7 +127,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             try self.sendError(id, .method_not_found, "method not implemented");
         }
 
-        fn handleNotification(self: *Self, method: []const u8, _: ?std.json.Value) !void {
+        fn handleNotification(self: *Self, method: []const u8, params: ?std.json.Value) !void {
             if (std.mem.eql(u8, method, "initialized")) {
                 if (self.state == .waiting_for_initialized) {
                     self.state = .running;
@@ -122,6 +137,13 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 
             if (std.mem.eql(u8, method, "exit")) {
                 self.state = if (self.state == .shutdown) .exit_success else .exit_failure;
+                return;
+            }
+
+            if (notification_handlers.get(method)) |handler| {
+                handler(self, params) catch |err| {
+                    log.err("notification handler {s} failed: {s}", .{ method, @errorName(err) });
+                };
                 return;
             }
 
@@ -165,6 +187,12 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
                 .id = id.*,
                 .result = result,
             });
+        }
+
+        /// Returns the stored document (testing helper; returns null outside tests).
+        pub fn getDocumentForTesting(self: *Self, uri: []const u8) ?DocumentStore.Document {
+            if (!builtin.is_test) return null;
+            return self.doc_store.get(uri);
         }
     };
 }

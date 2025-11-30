@@ -1121,15 +1121,10 @@ pub fn checkPlatformRequirements(
             // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
             const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
 
-            // Create a copy of the export's type for unification.
-            // This prevents unification failure from corrupting the app's actual types
-            // (which would cause the interpreter to fail when trying to get layouts).
-            const export_copy = try self.copyVar(export_var, self.cir, required_type.region);
-            const instantiated_export_copy = try self.instantiateVar(export_copy, &env, .{ .explicit = required_type.region });
-
-            // Unify the platform's required type with the COPY of the app's export type.
-            // The platform type is the "expected" type, app export copy is "actual".
-            _ = try self.unifyFromAnno(instantiated_required_var, instantiated_export_copy, &env);
+            // Unify the platform's required type with the app's export type.
+            // This constrains type variables in the export (e.g., closure params)
+            // to match the platform's expected types.
+            _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }

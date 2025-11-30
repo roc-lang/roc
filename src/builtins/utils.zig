@@ -387,18 +387,21 @@ pub fn decref(
 
 inline fn free_ptr_to_refcount(
     refcount_ptr: [*]isize,
-    alignment: u32,
+    element_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
 ) void {
     if (RC_TYPE == .none) return;
     const ptr_width = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-    const extra_bytes = @max(required_space, alignment);
+    const extra_bytes = @max(required_space, element_alignment);
     const allocation_ptr = @as([*]u8, @ptrCast(refcount_ptr)) - (extra_bytes - @sizeOf(usize));
 
+    // Use the same alignment calculation as allocateWithRefcount
+    const allocation_alignment = @max(ptr_width, element_alignment);
+
     var roc_dealloc_args = RocDealloc{
-        .alignment = alignment,
+        .alignment = allocation_alignment,
         .ptr = allocation_ptr,
     };
 
@@ -598,7 +601,7 @@ pub const CSlice = extern struct {
 /// Returns a pointer to the data portion, not the allocation start
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
-    alignment: u32,
+    element_alignment: u32,
     old_length: usize,
     new_length: usize,
     element_width: usize,
@@ -607,7 +610,7 @@ pub fn unsafeReallocate(
 ) [*]u8 {
     const ptr_width: usize = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-    const extra_bytes = @max(required_space, alignment);
+    const extra_bytes = @max(required_space, element_alignment);
 
     const old_width = extra_bytes + old_length * element_width;
     const new_width = extra_bytes + new_length * element_width;
@@ -618,8 +621,11 @@ pub fn unsafeReallocate(
 
     const old_allocation = source_ptr - extra_bytes;
 
+    // Use the same alignment calculation as allocateWithRefcount
+    const allocation_alignment = @max(ptr_width, element_alignment);
+
     var roc_realloc_args = RocRealloc{
-        .alignment = alignment,
+        .alignment = allocation_alignment,
         .new_length = new_width,
         .answer = old_allocation,
     };

@@ -17,6 +17,6 @@ type=repl
 ---
 "Hello, World!"
 ---
-<list_of_zst>
+[]
 # PROBLEMS
 NIL

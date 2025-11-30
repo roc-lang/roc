@@ -14,9 +14,18 @@ platform ""
 processString : Str -> Str
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - platform_str.md:5:16:5:46
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `processString` is exposed, but it is not defined anywhere in this module.
+
+**platform_str.md:5:16:5:46:**
+```roc
+    provides { processString: "processString" }
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `processString` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

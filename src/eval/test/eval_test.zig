@@ -28,6 +28,7 @@ const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
+const runExpectListI64 = helpers.runExpectListI64;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -399,7 +400,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -757,7 +758,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -832,7 +833,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null);
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
@@ -1250,6 +1251,55 @@ test "List.fold with record accumulator - nested list and record" {
     try runExpectRecord(
         "List.fold([[1, 10, 20], [2, 30, 40], [3, 50, 60]], {head_sum: 0, tail_count: 0}, |acc, [head, .. as tail]| {head_sum: acc.head_sum + head, tail_count: acc.tail_count + List.len(tail)})",
         &expected_fields,
+        .no_trace,
+    );
+}
+
+// ============================================================================
+// Tests for List.map
+// ============================================================================
+
+test "List.map - basic identity" {
+    // Map with identity function
+    try runExpectListI64(
+        "List.map([1i64, 2i64, 3i64], |x| x)",
+        &[_]i64{ 1, 2, 3 },
+        .no_trace,
+    );
+}
+
+test "List.map - single element" {
+    // Map on single element list
+    try runExpectListI64(
+        "List.map([42i64], |x| x)",
+        &[_]i64{42},
+        .no_trace,
+    );
+}
+
+test "List.map - longer list with squaring" {
+    // Check that map on a longer list with squaring works
+    try runExpectListI64(
+        "List.map([1i64, 2i64, 3i64, 4i64, 5i64], |x| x * x)",
+        &[_]i64{ 1, 4, 9, 16, 25 },
+        .no_trace,
+    );
+}
+
+test "List.map - doubling" {
+    // Map with doubling function
+    try runExpectListI64(
+        "List.map([1i64, 2i64, 3i64], |x| x * 2i64)",
+        &[_]i64{ 2, 4, 6 },
+        .no_trace,
+    );
+}
+
+test "List.map - adding" {
+    // Map with adding function
+    try runExpectListI64(
+        "List.map([10i64, 20i64], |x| x + 5i64)",
+        &[_]i64{ 15, 25 },
         .no_trace,
     );
 }

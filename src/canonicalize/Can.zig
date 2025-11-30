@@ -1753,6 +1753,10 @@ pub fn canonicalizeFile(
         .platform => |h| {
             self.env.module_kind = .platform;
             try self.createExposedScope(h.exposes);
+            // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
+            // These need to be in the exposed scope so they become exports
+            // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
+            try self.addPlatformProvidesItems(h.provides);
             // Extract required type signatures for type checking
             // This stores the types in env.requires_types without creating local definitions
             // Pass requires_rigids so R1, R2, etc. are in scope when processing signatures
@@ -2531,6 +2535,17 @@ fn createExposedScope(
     self.exposed_scope.deinit(gpa);
     self.exposed_scope = Scope.init(false);
 
+    try self.addToExposedScope(exposes);
+}
+
+/// Add items to the exposed scope without resetting it.
+/// Used for platforms which have both 'exposes' (for apps) and 'provides' (for the host).
+fn addToExposedScope(
+    self: *Self,
+    exposes: AST.Collection.Idx,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
@@ -2650,6 +2665,42 @@ fn createExposedScope(
                 // Malformed exposed items are already captured as diagnostics during parsing
                 _ = malformed;
             },
+        }
+    }
+}
+
+/// Add platform provides items to the exposed scope.
+/// Platform provides uses curly braces { main_for_host!: "main" } so it's parsed as record fields.
+/// The string value is the FFI symbol name exported to the host (becomes roc__<symbol>).
+fn addPlatformProvidesItems(
+    self: *Self,
+    provides: AST.Collection.Idx,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    const collection = self.parse_ir.store.getCollection(provides);
+    const record_fields = self.parse_ir.store.recordFieldSlice(.{ .span = collection.span });
+
+    for (record_fields) |field_idx| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+
+        // Get the identifier text from the field name token
+        if (self.parse_ir.tokens.resolveIdentifier(field.name)) |ident_idx| {
+            // Add to exposed_items for permanent storage
+            try self.env.addExposedById(ident_idx);
+
+            // Add to exposed_scope so it becomes an export
+            const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
+            try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+
+            // Also track in exposed_ident_texts
+            const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
+            const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+            const region = self.parse_ir.tokenizedRegionToRegion(field.region);
+            _ = try self.exposed_ident_texts.getOrPut(gpa, ident_text);
+            if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
+                ptr.* = region;
+            }
         }
     }
 }
@@ -4843,13 +4894,128 @@ pub fn canonicalizeExpr(
                 .free_vars = null,
             };
         },
-        .local_dispatch => |_| {
-            const feature = try self.env.insertString("canonicalize local_dispatch expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        .local_dispatch => |local_dispatch| {
+            // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
+            // and `arg1->fn` to `fn(arg1)`
+            const region = self.parse_ir.tokenizedRegionToRegion(local_dispatch.region);
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the left expression (first argument)
+            const can_first_arg = try self.canonicalizeExpr(local_dispatch.left) orelse return null;
+
+            // Get the right expression to determine the function and additional args
+            const right_expr = self.parse_ir.store.getExpr(local_dispatch.right);
+
+            switch (right_expr) {
+                .apply => |apply| {
+                    // Case: `arg1->fn(arg2, arg3)` - function call with additional args
+                    // Check if this is a tag application
+                    const ast_fn = self.parse_ir.store.getExpr(apply.@"fn");
+                    if (ast_fn == .tag) {
+                        // Tag application: `arg1->Tag(arg2)` becomes `Tag(arg1, arg2)`
+                        const tag_expr = ast_fn.tag;
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+
+                        // Build args: first_arg followed by apply.args
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_first_arg.idx);
+
+                        const additional_args = self.parse_ir.store.exprSlice(apply.args);
+                        for (additional_args) |arg| {
+                            if (try self.canonicalizeExpr(arg)) |can_arg| {
+                                try self.env.store.addScratchExpr(can_arg.idx);
+                            }
+                        }
+
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                    }
+
+                    // Normal function call
+                    const can_fn_expr = try self.canonicalizeExpr(apply.@"fn") orelse return null;
+
+                    // Build args: first_arg followed by apply.args
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+
+                    const additional_args = self.parse_ir.store.exprSlice(apply.args);
+                    for (additional_args) |arg| {
+                        if (try self.canonicalizeExpr(arg)) |can_arg| {
+                            try self.env.store.addScratchExpr(can_arg.idx);
+                        }
+                    }
+
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                },
+                .ident, .tag => {
+                    // Case: `arg1->fn` or `arg1->Tag` - simple function/tag call with single arg
+                    if (right_expr == .tag) {
+                        const tag_expr = right_expr.tag;
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_first_arg.idx);
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                    }
+
+                    // It's an ident
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                },
+                else => {
+                    // Unexpected expression type on right side of arrow
+                    const feature = try self.env.insertString("arrow with complex expression");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                },
+            }
         },
         .bin_op => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -8123,7 +8289,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             // canonicalize the expr directly without adding it as a statement
             switch (ast_stmt) {
                 .expr => |expr_stmt| {
-                    //
                     last_expr = try self.canonicalizeExprOrMalformed(expr_stmt.expr);
                 },
                 .dbg => |dbg_stmt| {

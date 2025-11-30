@@ -14,9 +14,18 @@ platform ""
 multiplyInts : I64, I64 -> I64
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - platform_int.md:5:16:5:44
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `multiplyInts` is exposed, but it is not defined anywhere in this module.
+
+**platform_int.md:5:16:5:44:**
+```roc
+    provides { multiplyInts: "multiplyInts" }
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `multiplyInts` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

@@ -477,6 +477,10 @@ pub const Expr = union(enum) {
         list_sort_with,
         list_drop_at,
         list_sublist,
+        list_append,
+
+        // Set operations
+        // set_is_empty,
 
         // Bool operations
         bool_is_eq,
