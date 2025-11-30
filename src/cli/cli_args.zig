@@ -130,6 +130,9 @@ pub const DocsArgs = struct {
 /// Arguments for `roc experimental-lsp`
 pub const ExperimentalLspArgs = struct {
     debug_io: bool = false, // log the LSP messages to a temporary log file
+    debug_build: bool = false,
+    debug_syntax: bool = false,
+    debug_server: bool = false,
 };
 
 /// Parse a list of arguments.
@@ -639,6 +642,9 @@ fn parseDocs(args: []const []const u8) CliArgs {
 
 fn parseExperimentalLsp(args: []const []const u8) CliArgs {
     var debug_io = false;
+    var debug_build = false;
+    var debug_syntax = false;
+    var debug_server = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -649,17 +655,31 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
+            \\      --debug-build      Log build environment actions to the debug log
+            \\      --debug-syntax     Log syntax/type checking steps to the debug log
+            \\      --debug-server     Log server lifecycle details to the debug log
             \\  -h, --help            Print help
             \\
         };
         } else if (mem.eql(u8, arg, "--debug-transport")) {
             debug_io = true;
+        } else if (mem.eql(u8, arg, "--debug-build")) {
+            debug_build = true;
+        } else if (mem.eql(u8, arg, "--debug-syntax")) {
+            debug_syntax = true;
+        } else if (mem.eql(u8, arg, "--debug-server")) {
+            debug_server = true;
         } else {
             return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "experimental-lsp", .arg = arg } } };
         }
     }
 
-    return CliArgs{ .experimental_lsp = .{ .debug_io = debug_io } };
+    return CliArgs{ .experimental_lsp = .{
+        .debug_io = debug_io,
+        .debug_build = debug_build,
+        .debug_syntax = debug_syntax,
+        .debug_server = debug_server,
+    } };
 }
 
 fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
