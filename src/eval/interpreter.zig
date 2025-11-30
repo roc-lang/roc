@@ -2047,7 +2047,6 @@ pub const Interpreter = struct {
                 const sublist_len_stack = sublist_config.getFieldByIndex(0) catch unreachable;
                 const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
                 const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
-                std.debug.print("\nConfig Record: {{start: {d}, len: {d} }}\n", .{ sublist_start, sublist_len });
 
                 // Get element layout from the list layout
                 const elem_layout_idx = list_arg.layout.data.list;
