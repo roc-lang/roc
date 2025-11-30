@@ -994,7 +994,7 @@ pub fn traceRefcountWithSource(comptime src: std.builtin.SourceLocation, comptim
     if (comptime trace_refcount and builtin.os.tag != .freestanding) {
         const stderr_file: std.fs.File = .stderr();
         var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[REFCOUNT @{s}:{d}] " ++ fmt ++ "\n", .{src.file, src.line} ++ args) catch return;
+        const msg = std.fmt.bufPrint(&buf, "[REFCOUNT @{s}:{d}] " ++ fmt ++ "\n", .{ src.file, src.line } ++ args) catch return;
         stderr_file.writeAll(msg) catch {};
     }
 }
