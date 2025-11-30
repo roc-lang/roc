@@ -215,7 +215,8 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
 NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - fuzz_crash_027.md:142:10:142:17
+UNDEFINED VARIABLE - fuzz_crash_027.md:142:18:142:22
 DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
@@ -759,10 +760,27 @@ This feature is not yet implemented: unsupported operator
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**fuzz_crash_027.md:142:10:142:17:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	        ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:142:18:142:22:**
+```roc
+	stale = some_fn(arg1)?.statod()?.ned()?.recd?
+```
+	                ^^^^
+
 
 **DOES NOT EXIST**
 `Num.toStr` does not exist.
@@ -1933,15 +1951,15 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-str (text """))))
+									(p-str (text "foo"))))
 							(value
 								(e-num (value "0"))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-str (text """)))
+									(p-str (text "foo")))
 								(pattern (degenerate false)
-									(p-str (text """))))
+									(p-str (text "bar"))))
 							(value
 								(e-num (value "20"))))
 						(branch
@@ -2242,7 +2260,30 @@ expect {
 									(receiver
 										(e-dot-access (field "unknown")
 											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+												(e-match
+													(match
+														(cond
+															(e-call
+																(e-runtime-error (tag "ident_not_in_scope"))
+																(e-runtime-error (tag "ident_not_in_scope"))))
+														(branches
+															(branch
+																(patterns
+																	(pattern (degenerate false)
+																		(p-applied-tag)))
+																(value
+																	(e-lookup-local
+																		(p-assign (ident "#ok")))))
+															(branch
+																(patterns
+																	(pattern (degenerate false)
+																		(p-applied-tag)))
+																(value
+																	(e-return
+																		(e-tag (name "Err")
+																			(args
+																				(e-lookup-local
+																					(p-assign (ident "#err"))))))))))))))))))
 					(e-tag (name "Stdoline!")
 						(args
 							(e-string

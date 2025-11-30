@@ -255,12 +255,12 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
 UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
 NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
+UNDEFINED VARIABLE - syntax_grab_bag.md:190:2:190:14
 UNDEFINED VARIABLE - syntax_grab_bag.md:191:2:191:14
 DOES NOT EXIST - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
 UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
@@ -272,6 +272,7 @@ UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
 UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**

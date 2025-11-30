@@ -31,6 +31,7 @@ UNEXPECTED TOKEN IN EXPRESSION - guards_2.md:3:62:3:63
 UNDEFINED VARIABLE - guards_2.md:1:7:1:12
 INVALID IF BRANCH - :0:0:0:0
 UNUSED VARIABLE - guards_2.md:2:6:2:11
+INVALID PATTERN ARGUMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - guards_2.md:2:92:2:93
 # PROBLEMS
 **PARSE ERROR**
@@ -236,6 +237,9 @@ The unused variable is declared here:
 ```
      ^^^^^
 
+
+**INVALID PATTERN ARGUMENT**
+Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.

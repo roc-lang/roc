@@ -30,6 +30,7 @@ PARSE ERROR - guards_1.md:3:44:3:44
 UNEXPECTED TOKEN IN EXPRESSION - guards_1.md:3:44:3:45
 UNDEFINED VARIABLE - guards_1.md:1:7:1:12
 INVALID IF BRANCH - :0:0:0:0
+INVALID PATTERN ARGUMENT - :0:0:0:0
 UNRECOGNIZED SYNTAX - guards_1.md:2:43:2:44
 # PROBLEMS
 **PARSE ERROR**
@@ -223,6 +224,9 @@ match value {
 The branch in this `if` expression could not be processed.
 
 The branch must contain a valid expression. Check for syntax errors or missing values.
+
+**INVALID PATTERN ARGUMENT**
+Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.
 
 **UNRECOGNIZED SYNTAX**
 I don't recognize this syntax.
