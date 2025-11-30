@@ -162,10 +162,32 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
         const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
         dest_list.* = src_list.*;
-        // Incref the list data if it's not empty
-        if (src_list.bytes) |bytes| {
-            builtins.utils.increfDataPtrC(bytes, 1);
+
+        const elem_layout = layout_cache.getLayout(self.layout.data.list);
+        const elements_refcounted = elem_layout.isRefcounted();
+
+        // Incref the list allocation. For seamless slices, this is the parent allocation,
+        // not the bytes pointer (which points within the parent allocation).
+        // We use getAllocationDataPtr() which correctly handles both regular lists
+        // and seamless slices (where capacity_or_alloc_ptr stores the parent pointer).
+        if (src_list.getAllocationDataPtr()) |alloc_ptr| {
+            if (comptime trace_refcount) {
+                const rc_before: isize = blk: {
+                    if (@intFromPtr(alloc_ptr) % 8 != 0) break :blk -999;
+                    const isizes: [*]isize = @ptrCast(@alignCast(alloc_ptr));
+                    break :blk (isizes - 1)[0];
+                };
+                traceRefcount("INCREF list (copyToPtr) ptr=0x{x} len={} rc={} slice={} elems_rc={}", .{
+                    @intFromPtr(alloc_ptr),
+                    src_list.len(),
+                    rc_before,
+                    @intFromBool(src_list.isSeamlessSlice()),
+                    @intFromBool(elements_refcounted),
+                });
+            }
+            builtins.utils.increfDataPtrC(alloc_ptr, 1);
         }
+        storeListElementCount(dest_list, elements_refcounted);
         return;
     }
 
