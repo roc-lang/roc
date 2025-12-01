@@ -369,6 +369,30 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // Bitwise shift operations (integer types only)
+    const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
+    for (integer_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // shift_left_by
+        const shift_left_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_left_by", .{num_type});
+        if (env.common.findIdent(shift_left_by)) |ident| {
+            try low_level_map.put(ident, .num_shift_left_by);
+        }
+
+        // shift_right_by
+        const shift_right_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_by", .{num_type});
+        if (env.common.findIdent(shift_right_by)) |ident| {
+            try low_level_map.put(ident, .num_shift_right_by);
+        }
+
+        // shift_right_zf_by
+        const shift_right_zf_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_zf_by", .{num_type});
+        if (env.common.findIdent(shift_right_zf_by)) |ident| {
+            try low_level_map.put(ident, .num_shift_right_zf_by);
+        }
+    }
+
     // U8 conversion operations
     if (env.common.findIdent("Builtin.Num.U8.to_i8_wrap")) |ident| {
         try low_level_map.put(ident, .u8_to_i8_wrap);
