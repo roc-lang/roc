@@ -745,3 +745,45 @@ test "string literal pattern matching" {
     try testing.expect(has_alice);
     try testing.expect(has_bob);
 }
+
+test "multiline string split_on" {
+    // Tests splitting a multiline string and iterating over the lines.
+    // This is a regression test to ensure split_on works correctly with
+    // multiline strings and doesn't cause memory issues.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/multiline_split_leak.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify the output contains lines from the multiline string
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "This is a longer line number one") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "This is a longer line number two") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "L68") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "The last line is here") != null);
+}

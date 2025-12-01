@@ -12,6 +12,7 @@ input =
 	\\R60
 	\\L55
 	\\L1
+	\\The last line is here
 
 main! = || {
     for line in input.split_on("\n")
