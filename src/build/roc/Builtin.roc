@@ -276,6 +276,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
+			from_str : Str -> Try(U8, [BadNumStr])
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 			to_i8_wrap : U8 -> I8
@@ -318,6 +319,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
+			from_str : Str -> Try(I8, [BadNumStr])
 
 			# Conversions to signed integers (all safe widening)
 			to_i16 : I8 -> I16
@@ -361,6 +363,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
+			from_str : Str -> Try(U16, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : U16 -> I8
@@ -405,6 +408,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
+			from_str : Str -> Try(I16, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : I16 -> I8
@@ -449,6 +453,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
+			from_str : Str -> Try(U32, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : U32 -> I8
@@ -495,6 +500,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
+			from_str : Str -> Try(I32, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : I32 -> I8
@@ -540,6 +546,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
+			from_str : Str -> Try(U64, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : U64 -> I8
@@ -588,6 +595,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
+			from_str : Str -> Try(I64, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : I64 -> I8
@@ -634,6 +642,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
+			from_str : Str -> Try(U128, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : U128 -> I8
@@ -686,6 +695,7 @@ Builtin :: [].{
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
+			from_str : Str -> Try(I128, [BadNumStr])
 
 			# Conversions to signed integers
 			to_i8_wrap : I128 -> I8
@@ -739,6 +749,7 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
+			from_str : Str -> Try(Dec, [BadNumStr])
 
 			# Conversions to signed integers (all lossy - truncates fractional part)
 			to_i8_wrap : Dec -> I8
@@ -791,6 +802,7 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
+			from_str : Str -> Try(F32, [BadNumStr])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 			to_i8_wrap : F32 -> I8
@@ -841,6 +853,7 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
+			from_str : Str -> Try(F64, [BadNumStr])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 			to_i8_wrap : F64 -> I8
