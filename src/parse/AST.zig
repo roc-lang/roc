@@ -2396,6 +2396,12 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     block: Block,
+    for_expr: struct {
+        patt: Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -2444,6 +2450,7 @@ pub const Expr = union(enum) {
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
+            .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
             .single_quote => |e| e.region,
@@ -2773,6 +2780,23 @@ pub const Expr = union(enum) {
 
                 // Push child expression
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .for_expr => |f| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-for");
+                try ast.appendRegionInfoToSexprTree(env, tree, f.region);
+                const attrs = tree.beginNode();
+
+                // Push pattern
+                try ast.store.getPattern(f.patt).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push list expression
+                try ast.store.getExpr(f.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push body expression
+                try ast.store.getExpr(f.body).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },

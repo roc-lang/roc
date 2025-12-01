@@ -434,6 +434,11 @@ pub const Tag = enum {
     /// * lhs - first statement node
     /// * rhs - number of statements
     block,
+    /// A for expression (for loop used as an expression, evaluates to {})
+    /// * main_token - node index for pattern for loop variable
+    /// * lhs - node index for loop initializing expression
+    /// * rhs - node index for loop body expression
+    for_expr,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

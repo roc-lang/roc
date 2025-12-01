@@ -722,6 +722,32 @@ test "numeric fold" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Sum: 15") != null);
 }
 
+test "List.for_each! with effectful callback" {
+    // Tests List.for_each! which iterates over a list and calls an effectful callback
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/list_for_each.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Verify each item is printed
+    const has_apple = std.mem.indexOf(u8, run_result.stdout, "Item: apple") != null;
+    const has_banana = std.mem.indexOf(u8, run_result.stdout, "Item: banana") != null;
+    const has_cherry = std.mem.indexOf(u8, run_result.stdout, "Item: cherry") != null;
+
+    try testing.expect(has_apple);
+    try testing.expect(has_banana);
+    try testing.expect(has_cherry);
+}
+
 test "string literal pattern matching" {
     // Tests pattern matching on string literals in match expressions.
     const allocator = testing.allocator;

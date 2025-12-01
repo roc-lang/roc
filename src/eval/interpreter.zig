@@ -4811,6 +4811,37 @@ pub const Interpreter = struct {
         roc_ops.crash(source_bytes);
     }
 
+    /// Handle completion of a for loop/expression.
+    /// For statements: continue with remaining statements or final expression.
+    /// For expressions: push empty record {} as result.
+    fn handleForLoopComplete(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        stmt_context: ?Continuation.ForIterate.StatementContext,
+        bindings_start: usize,
+        roc_ops: *RocOps,
+    ) Error!void {
+        if (stmt_context) |ctx| {
+            // For statement: continue with remaining statements
+            if (ctx.remaining_stmts.len == 0) {
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ctx.final_expr,
+                    .expected_rt_var = null,
+                } });
+            } else {
+                const next_stmt = self.env.store.getStatement(ctx.remaining_stmts[0]);
+                try self.scheduleNextStatement(work_stack, next_stmt, ctx.remaining_stmts[1..], ctx.final_expr, bindings_start, null, roc_ops);
+            }
+        } else {
+            // For expression: push empty record {} as result
+            const empty_record_layout_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            const empty_record_layout = self.runtime_layout_store.getLayout(empty_record_layout_idx);
+            const empty_record_value = try self.pushRaw(empty_record_layout, 0);
+            try value_stack.push(empty_record_value);
+        }
+    }
+
     fn getRuntimeU8(value: StackValue) u8 {
         std.debug.assert(value.layout.tag == .scalar);
         std.debug.assert(value.layout.data.scalar.tag == .int);
@@ -7612,11 +7643,11 @@ pub const Interpreter = struct {
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
 
-        /// For loop - iterate over list elements after list is evaluated.
-        for_loop_iterate: ForLoopIterate,
+        /// For loop/expression - iterate over list elements after list is evaluated.
+        for_iterate: ForIterate,
 
-        /// For loop - process body result and continue to next iteration.
-        for_loop_body_done: ForLoopBodyDone,
+        /// For loop/expression - process body result and continue to next iteration.
+        for_body_done: ForBodyDone,
 
         /// While loop - check condition and decide whether to continue.
         while_loop_check: WhileLoopCheck,
@@ -7942,8 +7973,8 @@ pub const Interpreter = struct {
             expr_idx: can.CIR.Expr.Idx,
         };
 
-        /// For loop - iterate over list elements
-        pub const ForLoopIterate = struct {
+        /// For loop/expression - iterate over list elements
+        pub const ForIterate = struct {
             /// The list value being iterated (stored to access elements)
             list_value: StackValue,
             /// Current iteration index
@@ -7960,16 +7991,21 @@ pub const Interpreter = struct {
             patt_rt_var: types.Var,
             /// Body expression to evaluate for each element
             body: can.CIR.Expr.Idx,
-            /// Remaining statements after the for loop
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// Statement context for for-statements (null for for-expressions)
+            stmt_context: ?StatementContext,
+
+            pub const StatementContext = struct {
+                /// Remaining statements after the for loop
+                remaining_stmts: []const can.CIR.Statement.Idx,
+                /// Final expression to evaluate after all statements
+                final_expr: can.CIR.Expr.Idx,
+            };
         };
 
-        /// For loop - cleanup after body evaluation
-        pub const ForLoopBodyDone = struct {
+        /// For loop/expression - cleanup after body evaluation
+        pub const ForBodyDone = struct {
             /// The list value being iterated
             list_value: StackValue,
             /// Current iteration index (just completed)
@@ -7986,14 +8022,12 @@ pub const Interpreter = struct {
             patt_rt_var: types.Var,
             /// Body expression to evaluate for each element
             body: can.CIR.Expr.Idx,
-            /// Remaining statements after the for loop
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
             /// Bindings length at iteration start (for per-iteration cleanup)
             loop_bindings_start: usize,
+            /// Statement context for for-statements (null for for-expressions)
+            stmt_context: ?ForIterate.StatementContext,
         };
 
         /// While loop - check condition
@@ -8198,11 +8232,11 @@ pub const Interpreter = struct {
                                 saved_copy.deinit();
                             }
                         },
-                        .for_loop_iterate => |fl| {
+                        .for_iterate => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
-                        .for_loop_body_done => |fl| {
+                        .for_body_done => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
@@ -9030,6 +9064,41 @@ pub const Interpreter = struct {
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_expr.expr,
                     .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            .e_for => |for_expr| {
+                // For expression: first evaluate the list, then set up iteration
+                const expr_ct_var = can.ModuleEnv.varFrom(for_expr.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Get the element type for binding
+                const patt_ct_var = can.ModuleEnv.varFrom(for_expr.patt);
+                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                // Push for_iterate continuation (will be executed after list is evaluated)
+                // stmt_context is null for for-expressions
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .for_iterate = .{
+                            .list_value = undefined, // Will be set when list is evaluated
+                            .current_index = 0,
+                            .list_len = 0, // Will be set when list is evaluated
+                            .elem_size = 0, // Will be set when list is evaluated
+                            .elem_layout = undefined, // Will be set when list is evaluated
+                            .pattern = for_expr.patt,
+                            .patt_rt_var = patt_rt_var,
+                            .body = for_expr.body,
+                            .bindings_start = self.bindings.items.len,
+                            .stmt_context = null,
+                        },
+                    },
+                });
+
+                // Evaluate the list expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = for_expr.expr,
+                    .expected_rt_var = expr_rt_var,
                 } });
             },
 
@@ -10236,11 +10305,10 @@ pub const Interpreter = struct {
                 const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
                 const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
 
-                // Push for_loop_iterate continuation (will be executed after list is evaluated)
-                // We'll fill in list_value, list_len, etc. in the continuation handler
+                // Push for_iterate continuation (will be executed after list is evaluated)
                 try work_stack.push(.{
                     .apply_continuation = .{
-                        .for_loop_iterate = .{
+                        .for_iterate = .{
                             .list_value = undefined, // Will be set when list is evaluated
                             .current_index = 0,
                             .list_len = 0, // Will be set when list is evaluated
@@ -10249,9 +10317,11 @@ pub const Interpreter = struct {
                             .pattern = for_stmt.patt,
                             .patt_rt_var = patt_rt_var,
                             .body = for_stmt.body,
-                            .remaining_stmts = remaining_stmts,
-                            .final_expr = final_expr,
                             .bindings_start = bindings_start,
+                            .stmt_context = .{
+                                .remaining_stmts = remaining_stmts,
+                                .final_expr = final_expr,
+                            },
                         },
                     },
                 });
@@ -10793,11 +10863,11 @@ pub const Interpreter = struct {
                                     // Free arg_rt_vars if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                 },
-                                .for_loop_iterate => |fl| {
+                                .for_iterate => |fl| {
                                     // Decref the list value when skipping a for loop
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
-                                .for_loop_body_done => |fl| {
+                                .for_body_done => |fl| {
                                     // Decref the list value and clean up bindings
                                     self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
@@ -12343,10 +12413,10 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .for_loop_iterate => |fl_in| {
-                // For loop iteration: list has been evaluated, start iterating
+            .for_iterate => |fl_in| {
+                // For loop/expression iteration: list has been evaluated, start iterating
                 const list_value = value_stack.pop() orelse {
-                    self.triggerCrash("for_loop_iterate: value_stack empty", false, roc_ops);
+                    self.triggerCrash("for_iterate: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
 
@@ -12363,25 +12433,17 @@ pub const Interpreter = struct {
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
                 const list_len = list_header.len();
 
-                // Create the proper for_loop_iterate with list info filled in
+                // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
                 fl.list_value = list_value;
                 fl.list_len = list_len;
                 fl.elem_size = elem_size;
                 fl.elem_layout = elem_layout;
 
-                // If list is empty, skip to remaining statements
+                // If list is empty, handle completion
                 if (list_len == 0) {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (fl.remaining_stmts.len == 0) {
-                        try work_stack.push(.{ .eval_expr = .{
-                            .expr_idx = fl.final_expr,
-                            .expected_rt_var = null,
-                        } });
-                    } else {
-                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, null, roc_ops);
-                    }
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -12407,13 +12469,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                // Decref the element after successful pattern matching.
-                // patternMatchesBind creates copies via pushCopy which increfs, so the original
-                // incref we did above is now an extra reference that needs to be released.
                 elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
-                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
                     .current_index = 0,
                     .list_len = fl.list_len,
@@ -12422,10 +12481,9 @@ pub const Interpreter = struct {
                     .pattern = fl.pattern,
                     .patt_rt_var = fl.patt_rt_var,
                     .body = fl.body,
-                    .remaining_stmts = fl.remaining_stmts,
-                    .final_expr = fl.final_expr,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = loop_bindings_start,
+                    .stmt_context = fl.stmt_context,
                 } } });
 
                 // Evaluate body
@@ -12435,10 +12493,10 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .for_loop_body_done => |fl| {
-                // For loop body completed, clean up and continue to next iteration
+            .for_body_done => |fl| {
+                // For loop/expression body completed, clean up and continue to next iteration
                 const body_result = value_stack.pop() orelse {
-                    self.triggerCrash("for_loop_body_done: value_stack empty", false, roc_ops);
+                    self.triggerCrash("for_body_done: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
                 body_result.decref(&self.runtime_layout_store, roc_ops);
@@ -12449,17 +12507,9 @@ pub const Interpreter = struct {
                 // Move to next element
                 const next_index = fl.current_index + 1;
                 if (next_index >= fl.list_len) {
-                    // Loop complete, decref list and continue with remaining statements
+                    // Loop complete
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (fl.remaining_stmts.len == 0) {
-                        try work_stack.push(.{ .eval_expr = .{
-                            .expr_idx = fl.final_expr,
-                            .expected_rt_var = null,
-                        } });
-                    } else {
-                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, null, roc_ops);
-                    }
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -12486,13 +12536,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                // Decref the element after successful pattern matching.
-                // patternMatchesBind creates copies via pushCopy which increfs, so the original
-                // incref we did above is now an extra reference that needs to be released.
                 elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
-                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
                     .current_index = next_index,
                     .list_len = fl.list_len,
@@ -12501,10 +12548,9 @@ pub const Interpreter = struct {
                     .pattern = fl.pattern,
                     .patt_rt_var = fl.patt_rt_var,
                     .body = fl.body,
-                    .remaining_stmts = fl.remaining_stmts,
-                    .final_expr = fl.final_expr,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = new_loop_bindings_start,
+                    .stmt_context = fl.stmt_context,
                 } } });
 
                 // Evaluate body
