@@ -1235,14 +1235,33 @@ pub const Store = struct {
                         var max_payload_size: u32 = 0;
                         var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
 
-                        // For each tag, compute its payload layout: () => ZST, 1 arg => layout, >1 => tuple of arg layouts
-                        // Store ALL variant layouts (not just the max) for proper refcounting
-                        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+                        // Sort tags alphabetically by name to match interpreter's appendUnionTags ordering.
+                        // This ensures discriminant values are consistent between evaluation and layout.
+                        // TODO: Consider sorting tags in the type store instead for better performance,
+                        // which would eliminate the need for sorting here and in appendUnionTags.
+                        const tags_names = tags_slice.items(.name)[pending_tags_top..];
+                        const tags_args_slice = tags_slice.items(.args)[pending_tags_top..];
 
-                        for (tags_slice.items(.args), 0..) |tag_args, tag_i| {
-                            _ = tag_i;
+                        // Create temporary array of tags for sorting
+                        var sorted_tags = try self.env.gpa.alloc(types.Tag, num_tags);
+                        defer self.env.gpa.free(sorted_tags);
+                        for (tags_names, tags_args_slice, 0..) |name, args, i| {
+                            sorted_tags[i] = .{ .name = name, .args = args };
+                        }
+
+                        // Sort alphabetically by tag name
+                        std.mem.sort(types.Tag, sorted_tags, self.env.getIdentStore(), types.Tag.sortByNameAsc);
+
+                        // Phase 1: Compute all variant layouts first.
+                        // This must happen BEFORE we record variants_start, because computing layouts
+                        // for nested tag unions will recursively append to tag_union_variants.
+                        var variant_layout_indices = try self.env.gpa.alloc(Idx, num_tags);
+                        defer self.env.gpa.free(variant_layout_indices);
+
+                        for (sorted_tags, 0..) |tag, variant_i| {
+                            const tag_args = tag.args;
                             const args_slice = self.types_store.sliceVars(tag_args);
-                            const variant_layout_idx: Idx = if (args_slice.len == 0)
+                            variant_layout_indices[variant_i] = if (args_slice.len == 0)
                                 // No payload - use ZST
                                 try self.ensureZstLayout()
                             else if (args_slice.len == 1)
@@ -1260,8 +1279,13 @@ pub const Store = struct {
                                 }
                                 break :blk try self.putTuple(elem_layouts);
                             };
+                        }
 
-                            // Track max size/alignment for memory layout
+                        // Phase 2: Now that all nested layouts are created, record variants_start
+                        // and append our variant layouts. This ensures our variants are contiguous.
+                        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+                        for (variant_layout_indices, 0..) |variant_layout_idx, variant_i| {
                             const variant_layout = self.getLayout(variant_layout_idx);
                             const variant_size = self.layoutSize(variant_layout);
                             const variant_alignment = variant_layout.alignment(self.targetUsize());
@@ -1274,6 +1298,7 @@ pub const Store = struct {
                             _ = try self.tag_union_variants.append(self.env.gpa, .{
                                 .payload_layout = variant_layout_idx,
                             });
+                            _ = variant_i;
                         }
 
                         // Calculate discriminant info
