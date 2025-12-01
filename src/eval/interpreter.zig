@@ -6051,14 +6051,35 @@ pub const Interpreter = struct {
                 defer tag_list.deinit();
                 try self.appendUnionTags(value_rt_var, &tag_list);
 
-                const tag_data = try self.extractTagValue(value, value_rt_var);
-                if (tag_data.index >= tag_list.items.len) return false;
+                // Build tag list from value's original rt_var if available.
+                // This is critical when a value was created with a narrower type (e.g., [Ok])
+                // and is later matched against a wider type (e.g., Try = [Err, Ok]).
+                // The discriminant stored in the value is based on the original type's ordering,
+                // so we need the original type's tag list to translate it to a tag name.
+                var value_tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer value_tag_list.deinit();
+                if (value.rt_var) |orig_rt_var| {
+                    try self.appendUnionTags(orig_rt_var, &value_tag_list);
+                }
 
-                // Find the expected tag's index in the tag list by matching the name
-                // Pattern tag names are from self.env, tag_list names are in runtime_layout_store.env
+                const tag_data = try self.extractTagValue(value, value_rt_var);
+
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
                 const expected_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(expected_name_str));
+
+                // Get the actual tag name from the value by looking up its discriminant
+                // in the appropriate tag list (value's original type if available, else expected type)
+                const lookup_list = if (value_tag_list.items.len > 0) value_tag_list.items else tag_list.items;
+                if (tag_data.index >= lookup_list.len) return false;
+                const actual_tag_name = lookup_list[tag_data.index].name;
+
+                // Compare tag names directly instead of comparing discriminant indices.
+                // This handles the case where a value's discriminant was set based on a narrower
+                // type and needs to match a pattern from a wider type.
+                if (actual_tag_name != expected_ident) return false;
+
+                // Find the expected tag's index in the expected type's tag list for payload access
                 var expected_index: ?usize = null;
                 for (tag_list.items, 0..) |tag_info, i| {
                     if (tag_info.name == expected_ident) {
@@ -6069,9 +6090,6 @@ pub const Interpreter = struct {
 
                 // If the pattern's tag doesn't exist in the union, the match fails
                 if (expected_index == null) return false;
-
-                // Compare runtime tag discriminant with expected tag discriminant
-                if (tag_data.index != expected_index.?) return false;
 
                 const arg_patterns = self.env.store.slicePatterns(tag_pat.args);
                 const arg_vars_range = tag_list.items[expected_index.?].args;
