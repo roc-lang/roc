@@ -827,9 +827,9 @@ pub const Expr = union(enum) {
                 .str_reserve => &.{ .consume, .borrow },
                 .str_release_excess_capacity => &.{.consume},
                 .str_join_with => &.{ .consume, .borrow }, // list consumed, separator borrowed
-                .str_split_on => &.{ .consume, .borrow },
 
                 // String operations - borrowing with seamless slice result (incref internally)
+                .str_split_on => &.{ .borrow, .borrow },
                 .str_to_utf8 => &.{.borrow},
                 .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
 
