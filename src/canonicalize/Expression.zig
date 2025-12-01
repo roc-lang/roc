@@ -516,6 +516,7 @@ pub const Expr = union(enum) {
         num_div_by, // All numeric types
         num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
+        num_mod_by, // Integer types only: U8, I8, U16, I16, U32, I32, U64, I64, U128, I128
 
         // Numeric parsing operations
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
@@ -826,9 +827,9 @@ pub const Expr = union(enum) {
                 .str_reserve => &.{ .consume, .borrow },
                 .str_release_excess_capacity => &.{.consume},
                 .str_join_with => &.{ .consume, .borrow }, // list consumed, separator borrowed
-                .str_split_on => &.{ .consume, .borrow },
 
                 // String operations - borrowing with seamless slice result (incref internally)
+                .str_split_on => &.{ .borrow, .borrow },
                 .str_to_utf8 => &.{.borrow},
                 .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
 
@@ -852,7 +853,7 @@ pub const Expr = union(enum) {
 
                 // Numeric operations - all value types (no heap allocation)
                 .num_is_zero, .num_is_negative, .num_is_positive, .num_negate => &.{.borrow},
-                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by => &.{ .borrow, .borrow },
+                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by => &.{ .borrow, .borrow },
 
                 // Numeric parsing - list borrowed for digits, string borrowed
                 .num_from_int_digits => &.{.borrow},

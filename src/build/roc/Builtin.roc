@@ -278,6 +278,7 @@ Builtin :: [].{
 			div_by : U8, U8 -> U8
 			div_trunc_by : U8, U8 -> U8
 			rem_by : U8, U8 -> U8
+			mod_by : U8, U8 -> U8
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
@@ -321,6 +322,7 @@ Builtin :: [].{
 			div_by : I8, I8 -> I8
 			div_trunc_by : I8, I8 -> I8
 			rem_by : I8, I8 -> I8
+			mod_by : I8, I8 -> I8
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
@@ -365,6 +367,7 @@ Builtin :: [].{
 			div_by : U16, U16 -> U16
 			div_trunc_by : U16, U16 -> U16
 			rem_by : U16, U16 -> U16
+			mod_by : U16, U16 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
@@ -410,6 +413,7 @@ Builtin :: [].{
 			div_by : I16, I16 -> I16
 			div_trunc_by : I16, I16 -> I16
 			rem_by : I16, I16 -> I16
+			mod_by : I16, I16 -> I16
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
@@ -455,6 +459,7 @@ Builtin :: [].{
 			div_by : U32, U32 -> U32
 			div_trunc_by : U32, U32 -> U32
 			rem_by : U32, U32 -> U32
+			mod_by : U32, U32 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
@@ -502,6 +507,7 @@ Builtin :: [].{
 			div_by : I32, I32 -> I32
 			div_trunc_by : I32, I32 -> I32
 			rem_by : I32, I32 -> I32
+			mod_by : I32, I32 -> I32
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
@@ -548,6 +554,7 @@ Builtin :: [].{
 			div_by : U64, U64 -> U64
 			div_trunc_by : U64, U64 -> U64
 			rem_by : U64, U64 -> U64
+			mod_by : U64, U64 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
@@ -597,6 +604,7 @@ Builtin :: [].{
 			div_by : I64, I64 -> I64
 			div_trunc_by : I64, I64 -> I64
 			rem_by : I64, I64 -> I64
+			mod_by : I64, I64 -> I64
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
@@ -644,6 +652,7 @@ Builtin :: [].{
 			div_by : U128, U128 -> U128
 			div_trunc_by : U128, U128 -> U128
 			rem_by : U128, U128 -> U128
+			mod_by : U128, U128 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
@@ -697,6 +706,7 @@ Builtin :: [].{
 			div_by : I128, I128 -> I128
 			div_trunc_by : I128, I128 -> I128
 			rem_by : I128, I128 -> I128
+			mod_by : I128, I128 -> I128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])

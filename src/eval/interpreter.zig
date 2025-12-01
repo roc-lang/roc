@@ -2766,6 +2766,28 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .num_mod_by => {
+                std.debug.assert(args.len == 2); // low-level .num_mod_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@mod(l, r));
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    else => return error.TypeMismatch,
+                }
+                out.is_initialized = true;
+                return out;
+            },
 
             // Numeric parsing operations
             .num_from_int_digits => {
@@ -8420,7 +8442,7 @@ pub const Interpreter = struct {
             // ================================================================
 
             .e_lookup_local => |lookup| {
-                const value = try self.evalLookupLocal(lookup, roc_ops);
+                const value = try self.evalLookupLocal(lookup, expected_rt_var, roc_ops);
                 try value_stack.push(value);
             },
 
@@ -9415,6 +9437,7 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const layout_val = try self.getRuntimeLayout(rt_var);
+
         var value = try self.pushRaw(layout_val, 0);
         value.is_initialized = false;
         switch (layout_val.tag) {
@@ -9983,6 +10006,7 @@ pub const Interpreter = struct {
     fn evalLookupLocal(
         self: *Interpreter,
         lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_local),
+        expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!StackValue {
         // Search bindings in reverse
@@ -10001,6 +10025,34 @@ pub const Interpreter = struct {
                     if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
                         self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
+                    }
+
+                    // For polymorphic numeric literals: if the expected type is a concrete
+                    // numeric type that differs from the cached value's layout, re-evaluate
+                    // the literal with the expected type. This enables true polymorphism for
+                    // numeric literals like `x = 42; I64.to_str(x)`.
+                    if (expected_rt_var) |exp_var| {
+                        const is_numeric_literal = switch (binding_expr) {
+                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
+                            else => false,
+                        };
+                        if (is_numeric_literal) {
+                            // Check if expected type is a concrete numeric type
+                            const expected_layout = try self.getRuntimeLayout(exp_var);
+                            const is_expected_numeric = expected_layout.tag == .scalar;
+                            if (is_expected_numeric) {
+                                // Check if cached value's layout differs from expected.
+                                // Use Layout.eql instead of std.meta.eql to avoid comparing
+                                // uninitialized union bytes which triggers Valgrind warnings.
+                                const cached_layout = b.value.layout;
+                                const layouts_differ = !cached_layout.eql(expected_layout);
+                                if (layouts_differ) {
+                                    // Re-evaluate the numeric literal with the expected type
+                                    const result = try self.evalWithExpectedType(b.expr_idx, roc_ops, exp_var);
+                                    return result;
+                                }
+                            }
+                        }
                     }
                 }
                 const copy_result = try self.pushCopy(b.value, roc_ops);
