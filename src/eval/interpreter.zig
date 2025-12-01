@@ -11426,21 +11426,10 @@ pub const Interpreter = struct {
                     // Step 3: All segments collected - concatenate them
                     // Fast path for single-segment strings: return directly without copying
                     if (sc.total_count == 1) {
+                        // Single segment - just return it directly, transferring ownership
+                        // No incref/decref needed since we're not copying, just passing through
                         const str_val = value_stack.pop() orelse return error.Crash;
-                        if (str_val.ptr) |ptr| {
-                            const roc_str: *RocStr = @ptrCast(@alignCast(ptr));
-                            // Incref to take ownership since we're sharing the data
-                            roc_str.incref(1);
-                            const result = try self.pushStr();
-                            const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
-                            roc_str_ptr.* = roc_str.*;
-                            try value_stack.push(result);
-                        } else {
-                            const result = try self.pushStr();
-                            const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
-                            roc_str_ptr.* = RocStr.empty();
-                            try value_stack.push(result);
-                        }
+                        try value_stack.push(str_val);
                         return true;
                     }
 
