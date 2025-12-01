@@ -843,7 +843,7 @@ pub const Expr = union(enum) {
 
                 // Numeric operations - all value types (no heap allocation)
                 .num_is_zero, .num_is_negative, .num_is_positive, .num_negate => &.{.borrow},
-                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by => &.{ .borrow, .borrow },
+                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
 
                 // Numeric parsing - list borrowed for digits
                 .num_from_int_digits => &.{.borrow},
