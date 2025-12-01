@@ -674,14 +674,9 @@ pub const Interpreter = struct {
     /// freed wholesale when the interpreter is deinitialized.
     /// Returns a RocStr that can be assigned to a StackValue.
     fn createConstantStr(self: *Interpreter, content: []const u8) !RocStr {
-        const SMALL_STRING_SIZE = 24; // Same as in str.zig
-
-        if (content.len < SMALL_STRING_SIZE) {
-            // Small string - fits inline in the RocStr struct, no heap allocation needed
-            var result = RocStr.empty();
-            @memcpy(result.asU8ptrMut()[0..content.len], content);
-            result.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(content.len)) | 0b1000_0000;
-            return result;
+        // Small strings are stored inline - no heap allocation needed
+        if (RocStr.fitsInSmallStr(content.len)) {
+            return RocStr.fromSliceSmall(content);
         }
 
         // Big string - allocate from arena with space for refcount
