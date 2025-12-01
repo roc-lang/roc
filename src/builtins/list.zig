@@ -2,6 +2,18 @@
 //!
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
+//!
+//! ## Ownership Semantics
+//!
+//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
+//! follow these patterns:
+//!
+//! - **Borrow**: Function reads argument, caller retains ownership
+//! - **Consume**: Function takes ownership, caller loses access
+//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
+//! - **Seamless Slice**: Result shares data with arg via incref'd slice
+//!
+//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
 
 const utils = @import("utils.zig");
@@ -11,10 +23,13 @@ const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
 const increfDataPtrC = utils.increfDataPtrC;
 
-const Opaque = ?[*]u8;
+/// Pointer to the bytes of a list element or similar data
+pub const Opaque = ?[*]u8;
 const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
+/// Function copying data between 2 Opaques with a slot for the element's width
+pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 const IncN = *const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) void;
@@ -531,7 +546,7 @@ pub fn listAppendUnsafe(
     list: RocList,
     element: Opaque,
     element_width: usize,
-    copy: CopyFn,
+    copy: CopyFallbackFn,
 ) callconv(.c) RocList {
     const old_length = list.len();
     var output = list;
@@ -540,22 +555,32 @@ pub fn listAppendUnsafe(
     if (output.bytes) |bytes| {
         if (element) |source| {
             const target = bytes + old_length * element_width;
-            copy(target, source);
+            copy(target, source, element_width);
         }
     }
 
     return output;
 }
 
-fn listAppend(
+/// List.append - adds an element to the end of a list.
+///
+/// ## Ownership
+/// - `list`: **consumes** - caller loses ownership
+/// - `element`: **borrows** - copied into list, caller retains original
+/// - Returns: **copy-on-write** - may be same allocation if unique with capacity
+///
+/// Reserves capacity if needed, then appends element. If the list is unique
+/// with sufficient capacity, modifies in place and returns same pointer.
+pub fn listAppend(
     list: RocList,
     alignment: u32,
     element: Opaque,
     element_width: usize,
     elements_refcounted: bool,
+    inc_context: ?*anyopaque,
     inc: Inc,
     update_mode: UpdateMode,
-    copy: CopyFn,
+    copy_fn: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     const with_capacity = listReserve(
@@ -564,11 +589,12 @@ fn listAppend(
         1,
         element_width,
         elements_refcounted,
+        inc_context,
         inc,
         update_mode,
         roc_ops,
     );
-    return listAppendUnsafe(with_capacity, element, element_width, copy);
+    return listAppendUnsafe(with_capacity, element, element_width, copy_fn);
 }
 
 /// Directly mutate the given list to push an element onto the end, and then return it.
@@ -680,7 +706,16 @@ pub fn shallowClone(
     return new_list;
 }
 
-/// Add element to beginning of list, shifting existing elements.
+/// List.prepend - adds an element to the beginning of a list.
+///
+/// ## Ownership
+/// - `list`: **consumes** - caller loses ownership
+/// - `element`: **borrows** - copied into list, caller retains original
+/// - Returns: **copy-on-write** - may be same allocation if unique with capacity
+///
+/// Reserves capacity if needed, shifts existing elements, then inserts element
+/// at the front. If the list is unique with sufficient capacity, modifies in
+/// place and returns same pointer.
 pub fn listPrepend(
     list: RocList,
     alignment: u32,
@@ -776,7 +811,20 @@ pub fn listSwap(
     return newList;
 }
 
-/// Returns a sublist of the given list
+/// List.sublist - returns a sublist of the given list.
+///
+/// ## Ownership
+/// - `list`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// If list is empty, or sublist range is empty/out-of-bounds:
+/// - If unique: shrinks length to 0, returns same allocation
+/// - Otherwise: decrefs original, returns empty list
+///
+/// If sublist starts at index 0 and list is unique:
+/// - Shrinks length in place, returns same allocation
+///
+/// Otherwise: creates a seamless slice pointing into the original allocation.
 pub fn listSublist(
     list: RocList,
     alignment: u32,
@@ -1080,12 +1128,16 @@ fn swapElements(
     return swap(element_width, element_at_i, element_at_j, copy);
 }
 
-/// Concatenates two lists into a new list containing all elements from both lists.
+/// List.concat - concatenates two lists into one.
 ///
-/// ## Ownership and Memory Management
-/// **IMPORTANT**: This function CONSUMES both input lists (`list_a` and `list_b`).
-/// The caller must NOT call `decref` on either input list after calling this function,
-/// as this function handles their cleanup internally.
+/// ## Ownership
+/// - `list_a`: **consumes** - caller loses ownership
+/// - `list_b`: **consumes** - caller loses ownership
+/// - Returns: **independent** or **copy-on-write** - new allocation or extended list_a
+///
+/// This function handles cleanup of both input lists internally.
+/// If list_a has capacity, may extend it and return (copy-on-write).
+/// Otherwise allocates new list containing elements from both.
 pub fn listConcat(
     list_a: RocList,
     list_b: RocList,
@@ -1098,8 +1150,18 @@ pub fn listConcat(
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
-    if (list_b.isEmpty()) {
+    // Early return for empty lists - avoid unnecessary allocations
+    if (list_a.isEmpty()) {
+        if (list_b.getCapacity() == 0) {
+            // b could be a seamless slice, so we still need to decref.
+            list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+            return list_a;
+        } else {
+            // list_b has capacity, return it and consume list_a
+            list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+            return list_b;
+        }
+    } else if (list_b.isEmpty()) {
         if (list_a.getCapacity() == 0) {
             // a could be a seamless slice, so we still need to decref.
             list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
@@ -1348,6 +1410,117 @@ pub fn listConcatUtf8(
 
         return result;
     }
+}
+
+/// Specialized copy fn which takes pointers as pointers to U8 and copies from src to dest.
+pub fn copy_u8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u8, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to I8 and copies from src to dest.
+pub fn copy_i8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*i8, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i8, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to U16 and copies from src to dest.
+pub fn copy_u16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u16, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to I16 and copies from src to dest.
+pub fn copy_i16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*i16, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i16, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to U32 and copies from src to dest.
+pub fn copy_u32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*u32, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u32, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to I32 and copies from src to dest.
+pub fn copy_i32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i32, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to U64 and copies from src to dest.
+pub fn copy_u64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*u64, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u64, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to I64 and copies from src to dest.
+pub fn copy_i64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*i64, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i64, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to U128 and copies from src to dest.
+pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*u128, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*u128, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to I128 and copies from src to dest.
+pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*i128, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*i128, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to Boxes and copies from src to dest.
+pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest)));
+    const src_ptr = @as(*usize, @ptrCast(@alignCast(src)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to ZST Boxes and copies from src to dest.
+pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest.?)));
+    dest_ptr.* = 0;
+}
+
+/// Specialized copy fn which takes pointers as pointers to Lists and copies from src to dest.
+pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to ZST Lists and copies from src to dest.
+pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to a RocStr and copies from src to dest.
+pub fn copy_str(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_ptr = @as(*RocStr, @ptrCast(@alignCast(dest.?)));
+    const src_ptr = @as(*RocStr, @ptrCast(@alignCast(src.?)));
+    dest_ptr.* = src_ptr.*;
+}
+
+/// Specialized copy fn which takes pointers as pointers to u8 and copies from src to dest.
+pub fn copy_fallback(dest: Opaque, source: Opaque, width: usize) callconv(.c) void {
+    const src: []u8 = source.?[0..width];
+    const dst: []u8 = dest.?[0..width];
+    @memmove(dst, src);
 }
 
 test "listConcat: non-unique with unique overlapping" {
@@ -1693,26 +1866,15 @@ test "listAppendUnsafe basic functionality" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with some capacity
     var list = listWithCapacity(10, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Add some initial elements using listAppendUnsafe
     const element1: u8 = 42;
-    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), copy_fn);
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), &copy_fallback);
 
     const element2: u8 = 84;
-    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), copy_fn);
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), &copy_fallback);
 
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
@@ -1729,22 +1891,11 @@ test "listAppendUnsafe with different types" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for i32 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Test with i32
     var int_list = listWithCapacity(5, @alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     const int_val: i32 = -123;
-    int_list = listAppendUnsafe(int_list, @as(?[*]u8, @ptrCast(@constCast(&int_val))), @sizeOf(i32), copy_fn);
+    int_list = listAppendUnsafe(int_list, @as(?[*]u8, @ptrCast(@constCast(&int_val))), @sizeOf(i32), &copy_fallback);
 
     defer int_list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
@@ -1760,22 +1911,11 @@ test "listAppendUnsafe with pre-allocated capacity" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u16 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with capacity (listAppendUnsafe requires pre-allocated space)
     var list_with_capacity = listWithCapacity(5, @alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     const element: u16 = 9999;
-    list_with_capacity = listAppendUnsafe(list_with_capacity, @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u16), copy_fn);
+    list_with_capacity = listAppendUnsafe(list_with_capacity, @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u16), &copy_fallback);
 
     defer list_with_capacity.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
@@ -2293,29 +2433,18 @@ test "edge case: listAppendUnsafe multiple times" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Create a list with sufficient capacity
     var list = listWithCapacity(5, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Append multiple elements
     const element1: u8 = 10;
-    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), copy_fn);
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), &copy_fallback);
 
     const element2: u8 = 20;
-    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), copy_fn);
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), &copy_fallback);
 
     const element3: u8 = 30;
-    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element3))), @sizeOf(u8), copy_fn);
+    list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&element3))), @sizeOf(u8), &copy_fallback);
 
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
@@ -2871,24 +3000,13 @@ test "stress: many small operations" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    // Copy function for u8 elements
-    const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-            if (dest != null and src != null) {
-                const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
-                const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
-                dest_ptr.* = src_ptr.*;
-            }
-        }
-    }.copy;
-
     // Start with a list with some capacity
     var list = listWithCapacity(50, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Add many elements using listAppendUnsafe
     var i: u8 = 0;
     while (i < 20) : (i += 1) {
-        list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&i))), @sizeOf(u8), copy_fn);
+        list = listAppendUnsafe(list, @as(?[*]u8, @ptrCast(@constCast(&i))), @sizeOf(u8), &copy_fallback);
     }
 
     try std.testing.expectEqual(@as(usize, 20), list.len());

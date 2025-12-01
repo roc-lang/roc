@@ -142,19 +142,24 @@ pub const DirExtractWriter = struct {
 
         const file = self.dir.createFile(path, .{}) catch return error.FileCreateFailed;
 
-        var entry = FileWriterEntry{
+        // Append entry first to get stable memory in the array list.
+        // We must initialize the writer AFTER appending, because the writer
+        // stores a pointer to the buffer, and if we initialized it on a stack
+        // variable before copying into the array, the pointer would be stale.
+        self.open_files.append(.{
             .file = file,
             .buffer = undefined,
             .writer = undefined,
-        };
-        entry.writer = file.writer(&entry.buffer);
-
-        self.open_files.append(entry) catch {
+        }) catch {
             file.close();
             return error.OutOfMemory;
         };
 
-        return &self.open_files.items[self.open_files.items.len - 1].writer.interface;
+        // Now initialize the writer with the buffer in the array (stable memory)
+        const entry = &self.open_files.items[self.open_files.items.len - 1];
+        entry.writer = file.writer(&entry.buffer);
+
+        return &entry.writer.interface;
     }
 
     fn finishFile(ptr: *anyopaque, writer: *std.Io.Writer) void {

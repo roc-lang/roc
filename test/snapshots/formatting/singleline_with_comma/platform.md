@@ -13,9 +13,31 @@ platform "pf"
 	provides { pr1: "not implemented", pr2: "not implemented", }
 ~~~
 # EXPECTED
+EXPOSED BUT NOT DEFINED - platform.md:6:13:6:35
+EXPOSED BUT NOT DEFINED - platform.md:6:37:6:59
 EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
 # PROBLEMS
+**EXPOSED BUT NOT DEFINED**
+The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
+
+**platform.md:6:13:6:35:**
+```roc
+	provides { pr1: "not implemented", pr2: "not implemented", }
+```
+	           ^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `pr1` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `pr2` is exposed, but it is not defined anywhere in this module.
+
+**platform.md:6:37:6:59:**
+```roc
+	provides { pr1: "not implemented", pr2: "not implemented", }
+```
+	                                   ^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `pr2` in this module, or by removing it from the list of exposed values.
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `E1` is exposed, but it is not defined anywhere in this module.
 

@@ -202,6 +202,16 @@ pub const Dec = fn (?[*]u8) callconv(.c) void;
 /// - It makes the "constant" check very efficient
 /// - It's safe since normal refcounts should never reach 0 while still being referenced
 pub const REFCOUNT_STATIC_DATA: isize = 0;
+
+/// Sentinel value written to freed refcount slots to detect use-after-free.
+/// When memory is freed in debug mode, the refcount slot is poisoned with this value.
+/// Any subsequent attempt to incref/decref this memory will trigger a panic.
+/// This value is only used in debug builds and has zero overhead in release.
+/// Uses a recognizable pattern that works on both 32-bit and 64-bit platforms.
+const POISON_VALUE: isize = @bitCast(if (@sizeOf(usize) == 8)
+    @as(usize, 0xDEADBEEFDEADBEEF)
+else
+    @as(usize, 0xDEADBEEF));
 /// No-op reference count decrement function.
 /// Used as a callback when elements don't contain refcounted data or in testing scenarios
 /// where reference counting operations should be skipped. Matches the `Dec` function type
@@ -241,6 +251,17 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.c) void {
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = ptr_to_refcount.*;
+
+    // Debug-only assertions to catch refcount bugs early.
+    if (builtin.mode == .Debug) {
+        if (refcount == POISON_VALUE) {
+            @panic("Use-after-free: incref on already-freed memory");
+        }
+        if (refcount <= 0 and !rcConstant(refcount)) {
+            @panic("Invalid incref: incrementing non-positive refcount");
+        }
+    }
+
     if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
@@ -387,18 +408,28 @@ pub fn decref(
 
 inline fn free_ptr_to_refcount(
     refcount_ptr: [*]isize,
-    alignment: u32,
+    element_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
 ) void {
     if (RC_TYPE == .none) return;
+
+    // Debug-only: Poison the refcount slot before freeing to detect use-after-free.
+    // Any subsequent access to this refcount will see POISON_VALUE and panic.
+    if (builtin.mode == .Debug) {
+        refcount_ptr[0] = POISON_VALUE;
+    }
+
     const ptr_width = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-    const extra_bytes = @max(required_space, alignment);
+    const extra_bytes = @max(required_space, element_alignment);
     const allocation_ptr = @as([*]u8, @ptrCast(refcount_ptr)) - (extra_bytes - @sizeOf(usize));
 
+    // Use the same alignment calculation as allocateWithRefcount
+    const allocation_alignment = @max(ptr_width, element_alignment);
+
     var roc_dealloc_args = RocDealloc{
-        .alignment = alignment,
+        .alignment = allocation_alignment,
         .ptr = allocation_ptr,
     };
 
@@ -420,6 +451,18 @@ inline fn decref_ptr_to_refcount(
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
+
+    // Debug-only assertions to catch refcount bugs early.
+    // These compile out completely in release builds.
+    if (builtin.mode == .Debug) {
+        if (refcount == POISON_VALUE) {
+            @panic("Use-after-free: decref on already-freed memory");
+        }
+        if (refcount <= 0 and !rcConstant(refcount)) {
+            @panic("Refcount underflow: decrementing non-positive refcount");
+        }
+    }
+
     if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
@@ -487,6 +530,26 @@ pub inline fn rcConstant(refcount: isize) bool {
         .none => {
             return true;
         },
+    }
+}
+
+/// Debug-only assertion that a data pointer has a valid refcount.
+/// Panics if the refcount is poisoned (use-after-free) or invalid (underflow).
+/// Compiles to nothing in release builds - zero overhead.
+///
+/// Use this at key points in slice-creating or refcount-manipulating functions
+/// to catch bugs early during development.
+pub inline fn assertValidRefcount(data_ptr: ?[*]u8) void {
+    if (builtin.mode != .Debug) return;
+    if (data_ptr) |ptr| {
+        const rc_ptr: [*]isize = @ptrCast(@alignCast(ptr - @sizeOf(usize)));
+        const rc = rc_ptr[0];
+        if (rc == POISON_VALUE) {
+            @panic("assertValidRefcount: Use-after-free detected");
+        }
+        if (rc <= 0 and !rcConstant(rc)) {
+            @panic("assertValidRefcount: Invalid refcount (underflow or corruption)");
+        }
     }
 }
 
@@ -598,7 +661,7 @@ pub const CSlice = extern struct {
 /// Returns a pointer to the data portion, not the allocation start
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
-    alignment: u32,
+    element_alignment: u32,
     old_length: usize,
     new_length: usize,
     element_width: usize,
@@ -607,7 +670,7 @@ pub fn unsafeReallocate(
 ) [*]u8 {
     const ptr_width: usize = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-    const extra_bytes = @max(required_space, alignment);
+    const extra_bytes = @max(required_space, element_alignment);
 
     const old_width = extra_bytes + old_length * element_width;
     const new_width = extra_bytes + new_length * element_width;
@@ -618,8 +681,11 @@ pub fn unsafeReallocate(
 
     const old_allocation = source_ptr - extra_bytes;
 
+    // Use the same alignment calculation as allocateWithRefcount
+    const allocation_alignment = @max(ptr_width, element_alignment);
+
     var roc_realloc_args = RocRealloc{
-        .alignment = alignment,
+        .alignment = allocation_alignment,
         .new_length = new_width,
         .answer = old_allocation,
     };

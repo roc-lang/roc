@@ -11,12 +11,30 @@ some_fn(arg1)? # Comment 1
 	.record_field?
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - record_access_multiline_formatting_4.md:1:1:1:8
+UNDEFINED VARIABLE - record_access_multiline_formatting_4.md:1:9:1:13
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**record_access_multiline_formatting_4.md:1:1:1:8:**
+```roc
+some_fn(arg1)? # Comment 1
+```
+^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**record_access_multiline_formatting_4.md:1:9:1:13:**
+```roc
+some_fn(arg1)? # Comment 1
+```
+        ^^^^
+
 
 # TOKENS
 ~~~zig
@@ -56,7 +74,30 @@ NO CHANGE
 			(receiver
 				(e-dot-access (field "unknown")
 					(receiver
-						(e-runtime-error (tag "not_implemented"))))))))
+						(e-match
+							(match
+								(cond
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-runtime-error (tag "ident_not_in_scope"))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err")))))))))))))))))
 ~~~
 # TYPES
 ~~~clojure

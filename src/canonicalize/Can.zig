@@ -1753,6 +1753,10 @@ pub fn canonicalizeFile(
         .platform => |h| {
             self.env.module_kind = .platform;
             try self.createExposedScope(h.exposes);
+            // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
+            // These need to be in the exposed scope so they become exports
+            // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
+            try self.addPlatformProvidesItems(h.provides);
             // Extract required type signatures for type checking
             // This stores the types in env.requires_types without creating local definitions
             // Pass requires_rigids so R1, R2, etc. are in scope when processing signatures
@@ -2531,6 +2535,17 @@ fn createExposedScope(
     self.exposed_scope.deinit(gpa);
     self.exposed_scope = Scope.init(false);
 
+    try self.addToExposedScope(exposes);
+}
+
+/// Add items to the exposed scope without resetting it.
+/// Used for platforms which have both 'exposes' (for apps) and 'provides' (for the host).
+fn addToExposedScope(
+    self: *Self,
+    exposes: AST.Collection.Idx,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
     const collection = self.parse_ir.store.getCollection(exposes);
     const exposed_items = self.parse_ir.store.exposedItemSlice(.{ .span = collection.span });
 
@@ -2650,6 +2665,42 @@ fn createExposedScope(
                 // Malformed exposed items are already captured as diagnostics during parsing
                 _ = malformed;
             },
+        }
+    }
+}
+
+/// Add platform provides items to the exposed scope.
+/// Platform provides uses curly braces { main_for_host!: "main" } so it's parsed as record fields.
+/// The string value is the FFI symbol name exported to the host (becomes roc__<symbol>).
+fn addPlatformProvidesItems(
+    self: *Self,
+    provides: AST.Collection.Idx,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    const collection = self.parse_ir.store.getCollection(provides);
+    const record_fields = self.parse_ir.store.recordFieldSlice(.{ .span = collection.span });
+
+    for (record_fields) |field_idx| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+
+        // Get the identifier text from the field name token
+        if (self.parse_ir.tokens.resolveIdentifier(field.name)) |ident_idx| {
+            // Add to exposed_items for permanent storage
+            try self.env.addExposedById(ident_idx);
+
+            // Add to exposed_scope so it becomes an export
+            const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
+            try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+
+            // Also track in exposed_ident_texts
+            const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
+            const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
+            const region = self.parse_ir.tokenizedRegionToRegion(field.region);
+            _ = try self.exposed_ident_texts.getOrPut(gpa, ident_text);
+            if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
+                ptr.* = region;
+            }
         }
     }
 }
@@ -4843,13 +4894,128 @@ pub fn canonicalizeExpr(
                 .free_vars = null,
             };
         },
-        .local_dispatch => |_| {
-            const feature = try self.env.insertString("canonicalize local_dispatch expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        .local_dispatch => |local_dispatch| {
+            // Desugar `arg1->fn(arg2, arg3)` to `fn(arg1, arg2, arg3)`
+            // and `arg1->fn` to `fn(arg1)`
+            const region = self.parse_ir.tokenizedRegionToRegion(local_dispatch.region);
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the left expression (first argument)
+            const can_first_arg = try self.canonicalizeExpr(local_dispatch.left) orelse return null;
+
+            // Get the right expression to determine the function and additional args
+            const right_expr = self.parse_ir.store.getExpr(local_dispatch.right);
+
+            switch (right_expr) {
+                .apply => |apply| {
+                    // Case: `arg1->fn(arg2, arg3)` - function call with additional args
+                    // Check if this is a tag application
+                    const ast_fn = self.parse_ir.store.getExpr(apply.@"fn");
+                    if (ast_fn == .tag) {
+                        // Tag application: `arg1->Tag(arg2)` becomes `Tag(arg1, arg2)`
+                        const tag_expr = ast_fn.tag;
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+
+                        // Build args: first_arg followed by apply.args
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_first_arg.idx);
+
+                        const additional_args = self.parse_ir.store.exprSlice(apply.args);
+                        for (additional_args) |arg| {
+                            if (try self.canonicalizeExpr(arg)) |can_arg| {
+                                try self.env.store.addScratchExpr(can_arg.idx);
+                            }
+                        }
+
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                    }
+
+                    // Normal function call
+                    const can_fn_expr = try self.canonicalizeExpr(apply.@"fn") orelse return null;
+
+                    // Build args: first_arg followed by apply.args
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+
+                    const additional_args = self.parse_ir.store.exprSlice(apply.args);
+                    for (additional_args) |arg| {
+                        if (try self.canonicalizeExpr(arg)) |can_arg| {
+                            try self.env.store.addScratchExpr(can_arg.idx);
+                        }
+                    }
+
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                },
+                .ident, .tag => {
+                    // Case: `arg1->fn` or `arg1->Tag` - simple function/tag call with single arg
+                    if (right_expr == .tag) {
+                        const tag_expr = right_expr.tag;
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_first_arg.idx);
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        const expr_idx = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, region);
+
+                        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                    }
+
+                    // It's an ident
+                    const can_fn_expr = try self.canonicalizeExpr(local_dispatch.right) orelse return null;
+
+                    const scratch_top = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(can_first_arg.idx);
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_call = .{
+                            .func = can_fn_expr.idx,
+                            .args = args_span,
+                            .called_via = CalledVia.apply,
+                        },
+                    }, region);
+
+                    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
+                },
+                else => {
+                    // Unexpected expression type on right side of arrow
+                    const feature = try self.env.insertString("arrow with complex expression");
+                    const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                        .feature = feature,
+                        .region = region,
+                    } });
+                    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+                },
+            }
         },
         .bin_op => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -4904,13 +5070,171 @@ pub fn canonicalizeExpr(
             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
-        .suffix_single_question => |_| {
-            const feature = try self.env.insertString("canonicalize suffix_single_question expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = Region.zero(),
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = null };
+        .suffix_single_question => |unary| {
+            // Desugar `expr?` into:
+            //   match expr {
+            //       Ok(#ok) => #ok,
+            //       Err(#err) => return Err(#err),
+            //   }
+            const region = self.parse_ir.tokenizedRegionToRegion(unary.region);
+
+            const free_vars_start = self.scratch_free_vars.top();
+
+            // Canonicalize the inner expression (the expression before `?`)
+            const can_cond = try self.canonicalizeExpr(unary.expr) orelse return null;
+
+            // Use pre-interned identifiers for the Ok/Err values and tag names
+            const ok_val_ident = self.env.idents.question_ok;
+            const err_val_ident = self.env.idents.question_err;
+            const ok_tag_ident = self.env.idents.ok;
+            const err_tag_ident = self.env.idents.err;
+
+            // Mark the start of scratch match branches
+            const scratch_top = self.env.store.scratchMatchBranchTop();
+
+            // === Branch 1: Ok(#ok) => #ok ===
+            {
+                // Enter a new scope for this branch
+                try self.scopeEnter(self.env.gpa, false);
+                defer self.scopeExit(self.env.gpa) catch {};
+
+                // Create the assign pattern for the Ok value
+                const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
+                    .assign = .{ .ident = ok_val_ident },
+                }, region);
+
+                // Introduce the pattern into scope
+                _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
+
+                // Create pattern span for Ok tag argument
+                const ok_patterns_start = self.env.store.scratchPatternTop();
+                try self.env.store.addScratchPattern(ok_assign_pattern_idx);
+                const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
+
+                // Create the Ok tag pattern: Ok(#ok)
+                const ok_tag_pattern_idx = try self.env.addPattern(Pattern{
+                    .applied_tag = .{
+                        .name = ok_tag_ident,
+                        .args = ok_args_span,
+                    },
+                }, region);
+
+                // Create branch pattern
+                const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+                const ok_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+                    .pattern = ok_tag_pattern_idx,
+                    .degenerate = false,
+                }, region);
+                try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
+                const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+                // Create the branch body: lookup #ok
+                const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                    .pattern_idx = ok_assign_pattern_idx,
+                } }, region);
+                // Mark the pattern as used
+                try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
+
+                // Create the Ok branch
+                const ok_branch_idx = try self.env.addMatchBranch(
+                    Expr.Match.Branch{
+                        .patterns = ok_branch_pat_span,
+                        .value = ok_lookup_idx,
+                        .guard = null,
+                        .redundant = @enumFromInt(0),
+                    },
+                    region,
+                );
+                try self.env.store.addScratchMatchBranch(ok_branch_idx);
+            }
+
+            // === Branch 2: Err(#err) => return Err(#err) ===
+            {
+                // Enter a new scope for this branch
+                try self.scopeEnter(self.env.gpa, false);
+                defer self.scopeExit(self.env.gpa) catch {};
+
+                // Create the assign pattern for the Err value
+                const err_assign_pattern_idx = try self.env.addPattern(Pattern{
+                    .assign = .{ .ident = err_val_ident },
+                }, region);
+
+                // Introduce the pattern into scope
+                _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, err_val_ident, err_assign_pattern_idx, false, true);
+
+                // Create pattern span for Err tag argument
+                const err_patterns_start = self.env.store.scratchPatternTop();
+                try self.env.store.addScratchPattern(err_assign_pattern_idx);
+                const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
+
+                // Create the Err tag pattern: Err(#err)
+                const err_tag_pattern_idx = try self.env.addPattern(Pattern{
+                    .applied_tag = .{
+                        .name = err_tag_ident,
+                        .args = err_args_span,
+                    },
+                }, region);
+
+                // Create branch pattern
+                const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
+                const err_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
+                    .pattern = err_tag_pattern_idx,
+                    .degenerate = false,
+                }, region);
+                try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
+                const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
+
+                // Create the branch body: return Err(#err)
+                // First, create lookup for #err
+                const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                    .pattern_idx = err_assign_pattern_idx,
+                } }, region);
+                // Mark the pattern as used
+                try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+
+                // Create Err(#err) tag expression
+                const err_tag_args_start = self.env.store.scratchExprTop();
+                try self.env.store.addScratchExpr(err_lookup_idx);
+                const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
+
+                const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
+                    .e_tag = .{
+                        .name = err_tag_ident,
+                        .args = err_tag_args_span,
+                    },
+                }, region);
+
+                // Create return Err(#err) expression
+                const return_expr_idx = try self.env.addExpr(CIR.Expr{ .e_return = .{
+                    .expr = err_tag_expr_idx,
+                } }, region);
+
+                // Create the Err branch
+                const err_branch_idx = try self.env.addMatchBranch(
+                    Expr.Match.Branch{
+                        .patterns = err_branch_pat_span,
+                        .value = return_expr_idx,
+                        .guard = null,
+                        .redundant = @enumFromInt(0),
+                    },
+                    region,
+                );
+                try self.env.store.addScratchMatchBranch(err_branch_idx);
+            }
+
+            // Create span from scratch branches
+            const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
+
+            // Create the match expression
+            const match_expr = Expr.Match{
+                .cond = can_cond.idx,
+                .branches = branches_span,
+                .exhaustive = @enumFromInt(0), // Will be set during type checking
+            };
+            const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
+
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
         },
         .unary_op => |unary| {
             const region = self.parse_ir.tokenizedRegionToRegion(unary.region);
@@ -6182,21 +6506,63 @@ fn canonicalizePattern(
         .string => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-            // resolve to a string slice from the source
-            const token_text = self.parse_ir.resolve(e.string_tok);
+            // Get the string expression which contains the actual string parts
+            const str_expr = self.parse_ir.store.getExpr(e.expr);
 
-            // TODO: Handle escape sequences
-            // For now, just intern the raw string
-            const literal = try self.env.insertString(token_text);
+            switch (str_expr) {
+                .string => |se| {
+                    // Get the parts of the string expression
+                    const parts = self.parse_ir.store.exprSlice(se.parts);
 
-            const str_pattern = Pattern{
-                .str_literal = .{
-                    .literal = literal,
+                    // For simple string literals, there should be exactly one string_part
+                    if (parts.len == 1) {
+                        const part = self.parse_ir.store.getExpr(parts[0]);
+                        switch (part) {
+                            .string_part => |sp| {
+                                // Get the actual string content from the string_part token
+                                const part_text = self.parse_ir.resolve(sp.token);
+
+                                // Process escape sequences
+                                const processed_text = try processEscapeSequences(self.env.gpa, part_text);
+                                defer if (processed_text.ptr != part_text.ptr) {
+                                    self.env.gpa.free(processed_text);
+                                };
+
+                                const literal = try self.env.insertString(processed_text);
+
+                                const str_pattern = Pattern{
+                                    .str_literal = .{
+                                        .literal = literal,
+                                    },
+                                };
+                                const pattern_idx = try self.env.addPattern(str_pattern, region);
+
+                                return pattern_idx;
+                            },
+                            else => {},
+                        }
+                    }
+
+                    // For string patterns with interpolation or multiple parts,
+                    // we need more complex handling (not yet supported)
+                    const malformed = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                        .not_implemented = .{
+                            .feature = try self.env.insertString("string patterns with interpolation"),
+                            .region = region,
+                        },
+                    });
+                    return malformed;
                 },
-            };
-            const pattern_idx = try self.env.addPattern(str_pattern, region);
-
-            return pattern_idx;
+                else => {
+                    // Unexpected expression type in string pattern
+                    const malformed = try self.env.pushMalformed(Pattern.Idx, Diagnostic{
+                        .pattern_arg_invalid = .{
+                            .region = region,
+                        },
+                    });
+                    return malformed;
+                },
+            }
         },
         .single_quote => |e| {
             return try self.canonicalizeSingleQuote(e.region, e.token, Pattern.Idx);
@@ -8123,7 +8489,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             // canonicalize the expr directly without adding it as a statement
             switch (ast_stmt) {
                 .expr => |expr_stmt| {
-                    //
                     last_expr = try self.canonicalizeExprOrMalformed(expr_stmt.expr);
                 },
                 .dbg => |dbg_stmt| {

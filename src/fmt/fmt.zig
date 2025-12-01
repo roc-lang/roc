@@ -953,7 +953,19 @@ const Formatter = struct {
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
                     try fmt.pushIndent();
                 }
-                _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
+                const right_expr = fmt.ast.store.getExpr(ld.right);
+                if (right_expr == .apply) {
+                    const apply = right_expr.apply;
+                    if (fmt.ast.store.exprSlice(apply.args).len == 0) {
+                        // Zero-arg apply: just format the function, not the empty parens
+                        _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
+                    } else {
+                        _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    }
+                } else {
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                }
             },
             .int => |i| {
                 try fmt.pushTokenText(i.token);
@@ -1949,6 +1961,11 @@ const Formatter = struct {
                         }
                     }
                 }
+
+                if (args.len == 0) {
+                    try fmt.pushAll("()");
+                }
+
                 try fmt.pushAll(if (f.effectful) " =>" else " ->");
                 const ret_region = fmt.nodeRegion(@intFromEnum(f.ret));
                 if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {

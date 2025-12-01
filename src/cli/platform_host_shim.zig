@@ -1,10 +1,13 @@
 //! Helpers for using Zig's LLVM Builder API to generate a shim library for the
 //! Roc interpreter that translates from the platform host API.
+//!
+//! Note: Symbol names in LLVM IR need platform-specific prefixes for macOS.
+//! MachO format requires underscore prefix on all C symbols.
 
 const std = @import("std");
 const Builder = std.zig.llvm.Builder;
 const WipFunction = Builder.WipFunction;
-const builtin = @import("builtin");
+const RocTarget = @import("target.zig").RocTarget;
 
 /// Represents a single entrypoint that a Roc platform host expects to call.
 /// Each entrypoint corresponds to a specific function the host can invoke,
@@ -27,7 +30,7 @@ pub const EntryPoint = struct {
 /// Roc platform functions will delegate to. The Roc interpreter provides
 /// the actual implementation of this function, which acts as a dispatcher
 /// based on the entry_idx parameter.
-fn addRocEntrypoint(builder: *Builder) !Builder.Function.Index {
+fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
     // Create pointer type for generic pointers (i8* in LLVM)
     const ptr_type = try builder.ptrType(.default);
 
@@ -36,14 +39,14 @@ fn addRocEntrypoint(builder: *Builder) !Builder.Function.Index {
     const entrypoint_params = [_]Builder.Type{ .i32, ptr_type, ptr_type, ptr_type };
     const entrypoint_type = try builder.fnType(.void, &entrypoint_params, .normal);
 
-    // Create function name with platform-specific prefix
+    // Add underscore prefix for macOS (required for MachO symbol names)
     const base_name = "roc_entrypoint";
-    const fn_name_str = if (builtin.target.os.tag == .macos)
+    const full_name = if (target.isMacOS())
         try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
     else
         try builder.gpa.dupe(u8, base_name);
-    defer builder.gpa.free(fn_name_str);
-    const fn_name = try builder.strtabString(fn_name_str);
+    defer builder.gpa.free(full_name);
+    const fn_name = try builder.strtabString(full_name);
 
     // Add the extern function declaration (no body)
     const entrypoint_fn = try builder.addFunction(entrypoint_type, fn_name, .default);
@@ -72,7 +75,7 @@ fn addRocEntrypoint(builder: *Builder) !Builder.Function.Index {
 /// 2. The pre-built Roc interpreter to handle all calls through a single dispatch mechanism
 /// 3. Efficient code generation since each wrapper is just a simple function call
 /// 4. Easy addition/removal of platform functions without changing the pre-built interpreter binary which is embedded in the roc cli executable.
-fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Index, name: []const u8, entry_idx: u32) !Builder.Function.Index {
+fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Index, name: []const u8, entry_idx: u32, target: RocTarget) !Builder.Function.Index {
     // Create pointer type for generic pointers
     const ptr_type = try builder.ptrType(.default);
 
@@ -81,10 +84,11 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
     const roc_fn_params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
     const roc_fn_type = try builder.fnType(.void, &roc_fn_params, .normal);
 
-    // Create function name with roc__ prefix and platform-specific prefix
+    // Create function name with roc__ prefix.
+    // Add underscore prefix for macOS (required for MachO symbol names)
     const base_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
     defer builder.gpa.free(base_name);
-    const full_name = if (builtin.target.os.tag == .macos)
+    const full_name = if (target.isMacOS())
         try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
     else
         try builder.gpa.dupe(u8, base_name);
@@ -153,12 +157,12 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
 ///
 /// The generated library is then compiled using LLVM to an object file and linked with
 /// both the host and the Roc interpreter to create a dev build executable.
-pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint) !void {
+pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget) !void {
     // Add the extern roc_entrypoint declaration
-    const entrypoint_fn = try addRocEntrypoint(builder);
+    const entrypoint_fn = try addRocEntrypoint(builder, target);
 
     // Add each exported entrypoint function
     for (entrypoints) |entry| {
-        _ = try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx);
+        _ = try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx, target);
     }
 }

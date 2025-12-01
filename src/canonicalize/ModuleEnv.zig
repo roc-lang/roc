@@ -163,6 +163,9 @@ pub const CommonIdents = extern struct {
     // from_utf8 error payload fields (BadUtf8 record)
     problem: Ident.Idx,
     index: Ident.Idx,
+    // Synthetic identifiers for ? operator desugaring
+    question_ok: Ident.Idx,
+    question_err: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -228,6 +231,9 @@ pub const CommonIdents = extern struct {
             // from_utf8 error payload fields (BadUtf8 record)
             .problem = try common.insertIdent(gpa, Ident.for_text("problem")),
             .index = try common.insertIdent(gpa, Ident.for_text("index")),
+            // Synthetic identifiers for ? operator desugaring
+            .question_ok = try common.insertIdent(gpa, Ident.for_text("#ok")),
+            .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
         };
     }
 
@@ -296,6 +302,9 @@ pub const CommonIdents = extern struct {
             // from_utf8 error payload fields (BadUtf8 record)
             .problem = common.findIdent("problem") orelse unreachable,
             .index = common.findIdent("index") orelse unreachable,
+            // Synthetic identifiers for ? operator desugaring
+            .question_ok = common.findIdent("#ok") orelse unreachable,
+            .question_err = common.findIdent("#err") orelse unreachable,
         };
     }
 };
@@ -440,7 +449,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = undefined, // Will be set later during canonicalization
-        .module_name_idx = undefined, // Will be set later during canonicalization
+        .module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
         .evaluation_order = null, // Will be set after canonicalization completes
@@ -1098,6 +1107,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .pattern_not_canonicalized => |_| blk: {
             var report = Report.init(allocator, "INVALID PATTERN", .runtime_error);
             try report.document.addReflowingText("This pattern contains invalid syntax or uses unsupported features.");
+            break :blk report;
+        },
+        .pattern_arg_invalid => |_| blk: {
+            var report = Report.init(allocator, "INVALID PATTERN ARGUMENT", .runtime_error);
+            try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
             break :blk report;
         },
         .shadowing_warning => |data| blk: {
@@ -1952,7 +1966,7 @@ pub const Serialized = extern struct {
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = (try self.imports.deserialize(offset, gpa)).*,
             .module_name = module_name,
-            .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
+            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(offset, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
@@ -2624,12 +2638,19 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
             const qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
             return self.getIdentStoreConst().findByString(qualified);
         } else {
-            // Need to add module prefix
+            // Try module-qualified name first (e.g., "Builtin.Num.U64.from_numeral")
             const qualified = std.fmt.bufPrint(&buf, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
-            return self.getIdentStoreConst().findByString(qualified);
+            if (self.getIdentStoreConst().findByString(qualified)) |idx| {
+                return idx;
+            }
+            // Fallback: try without module prefix (e.g., "Color.as_str" for app-defined types)
+            // This handles the case where methods are registered with just the type-qualified name
+            const simple_qualified = std.fmt.bufPrint(&buf, "{s}.{s}", .{ type_name, method_name }) catch return null;
+            return self.getIdentStoreConst().findByString(simple_qualified);
         }
     } else {
         // Use heap allocation for large identifiers (rare case)
+        // Try module-qualified name first
         const qualified = if (type_name.len > self.module_name.len and
             std.mem.startsWith(u8, type_name, self.module_name) and
             type_name[self.module_name.len] == '.')
@@ -2639,7 +2660,19 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
         else
             std.fmt.allocPrint(self.gpa, "{s}.{s}.{s}", .{ self.module_name, type_name, method_name }) catch return null;
         defer self.gpa.free(qualified);
-        return self.getIdentStoreConst().findByString(qualified);
+        if (self.getIdentStoreConst().findByString(qualified)) |idx| {
+            return idx;
+        }
+        // Fallback for the module-qualified case
+        if (type_name.len <= self.module_name.len or
+            !std.mem.startsWith(u8, type_name, self.module_name) or
+            type_name[self.module_name.len] != '.')
+        {
+            const simple_qualified = std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ type_name, method_name }) catch return null;
+            defer self.gpa.free(simple_qualified);
+            return self.getIdentStoreConst().findByString(simple_qualified);
+        }
+        return null;
     }
 }
 

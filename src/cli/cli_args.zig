@@ -184,6 +184,7 @@ const main_help =
     \\Options:
     \\      --opt=<size|speed|dev> Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
     \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+    \\      --no-cache             Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\
 ;
 

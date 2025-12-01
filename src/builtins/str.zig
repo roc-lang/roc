@@ -4,6 +4,18 @@
 //! operations for string manipulation, Unicode handling, formatting, and
 //! memory management. It defines the RocStr structure and associated functions
 //! that are called from compiled Roc code to handle string operations efficiently.
+//!
+//! ## Ownership Semantics
+//!
+//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
+//! follow these patterns:
+//!
+//! - **Borrow**: Function reads argument, caller retains ownership
+//! - **Consume**: Function takes ownership, caller loses access
+//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
+//! - **Seamless Slice**: Result shares data with arg via incref'd slice
+//!
+//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
 
 const RocList = @import("list.zig").RocList;
@@ -17,6 +29,17 @@ const mem = std.mem;
 const unicode = std.unicode;
 const testing = std.testing;
 const rcNone = @import("utils.zig").rcNone;
+
+/// Decref function for RocStr elements in a list.
+/// Used when decref-ing a List Str - each string element needs to be decreffed.
+/// The context parameter is expected to be a *RocOps.
+fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element) |elem_ptr| {
+        const str_ptr: *RocStr = @ptrCast(@alignCast(elem_ptr));
+        const roc_ops: *RocOps = @ptrCast(@alignCast(context.?));
+        str_ptr.decref(roc_ops);
+    }
+}
 
 const InPlace = enum(u8) {
     InPlace,
@@ -271,12 +294,15 @@ pub const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            const new_str = RocStr.allocateBig(str.length, str.length, roc_ops);
+            // Use len() instead of .length to handle seamless slices correctly.
+            // For seamless slices, .length has the SEAMLESS_SLICE_BIT set.
+            const length = str.len();
+            const new_str = RocStr.allocateBig(length, length, roc_ops);
 
-            var old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
-            var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
+            const old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
+            const new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
 
-            @memcpy(new_bytes[0..str.length], old_bytes[0..str.length]);
+            @memcpy(new_bytes[0..length], old_bytes[0..length]);
 
             return new_str;
         }
@@ -664,7 +690,20 @@ pub fn getCapacity(string: RocStr) callconv(.c) usize {
     return string.getCapacity();
 }
 
-/// TODO: Document substringUnsafeC.
+/// Str.substring - extracts a substring without bounds checking.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string
+///
+/// **IMPORTANT**: This function does NOT call incref. The returned seamless
+/// slice shares the input's allocation, but the caller is responsible for
+/// ensuring the refcount is correct. This is typically used internally where
+/// the caller handles refcount management.
+///
+/// For small strings: creates a new small string (copy).
+/// For heap strings at start=0 with unique refcount: shrinks in place.
+/// Otherwise: creates a seamless slice pointing into the original string.
 pub fn substringUnsafeC(
     string: RocStr,
     start_u64: u64,
@@ -677,7 +716,7 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
-/// TODO
+/// See substringUnsafeC for ownership documentation.
 pub fn substringUnsafe(
     string: RocStr,
     start: usize,
@@ -744,7 +783,15 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
     return true;
 }
 
-/// Str.drop_prefix - Returns string with prefix removed, or original if no match
+/// Str.drop_prefix - Returns string with prefix removed, or original if no match.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - `prefix`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+///
+/// If prefix doesn't match, returns the original string with refcount incremented.
+/// If prefix matches, returns a seamless slice of the remaining portion.
 pub fn strDropPrefix(
     string: RocStr,
     prefix: RocStr,
@@ -762,7 +809,15 @@ pub fn strDropPrefix(
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
-/// Str.drop_suffix - Returns string with suffix removed, or original if no match
+/// Str.drop_suffix - Returns string with suffix removed, or original if no match.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - `suffix`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+///
+/// If suffix doesn't match, returns the original string with refcount incremented.
+/// If suffix matches, returns a seamless slice of the remaining portion.
 pub fn strDropSuffix(
     string: RocStr,
     suffix: RocStr,
@@ -826,7 +881,15 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
     return true;
 }
 
-/// Str.concat
+/// Str.concat - concatenates two strings.
+///
+/// ## Ownership
+/// - `arg1`: **consumes** - may be reallocated if capacity insufficient
+/// - `arg2`: **borrows** - caller retains ownership (not decrefd here)
+/// - Returns: **independent** or **copy-on-write** depending on arg1's capacity
+///
+/// Note: arg1 is owned and may be returned directly if arg2 is empty,
+/// or reallocated to accommodate the combined content.
 pub fn strConcatC(
     arg1: RocStr,
     arg2: RocStr,
@@ -835,7 +898,7 @@ pub fn strConcatC(
     return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO
+/// See strConcatC for ownership documentation.
 pub fn strConcat(
     arg1: RocStr,
     arg2: RocStr,
@@ -868,7 +931,12 @@ pub const RocListStr = extern struct {
     list_capacity_or_alloc_ptr: usize,
 };
 
-/// Str.joinWith
+/// Str.joinWith - joins a list of strings with a separator.
+///
+/// ## Ownership
+/// - `list`: **consumes** - elements are borrowed, list is consumed
+/// - `separator`: **borrows** - caller retains ownership
+/// - Returns: **independent** - new allocation containing joined result
 pub fn strJoinWithC(
     list: RocList,
     separator: RocStr,
@@ -880,10 +948,16 @@ pub fn strJoinWithC(
         .list_capacity_or_alloc_ptr = list.capacity_or_alloc_ptr,
     };
 
-    return @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
+    const result = @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
+
+    // Decref the consumed list. Since elements are strings (refcounted), we pass
+    // elements_refcounted=true and provide strDecref to decref each element.
+    list.decref(@alignOf(RocStr), @sizeOf(RocStr), true, @ptrCast(roc_ops), &strDecref, roc_ops);
+
+    return result;
 }
 
-/// TODO
+/// See strJoinWithC for ownership documentation.
 pub fn strJoinWith(
     list: RocListStr,
     separator: RocStr,
@@ -925,7 +999,18 @@ pub fn strJoinWith(
     }
 }
 
-/// Str.toUtf8
+/// Str.toUtf8 - converts a string to a list of UTF-8 bytes.
+///
+/// ## Ownership
+/// - `arg`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares underlying data with input string
+///
+/// For heap strings, the returned list shares the same underlying allocation
+/// as the input string. This function calls `incref` on the allocation to
+/// account for the new reference. Small strings are copied to a new allocation.
+///
+/// The caller must decref the argument after call (we borrowed it but added
+/// a reference to its data via the returned list).
 pub fn strToUtf8C(
     arg: RocStr,
     roc_ops: *RocOps,
@@ -947,6 +1032,9 @@ inline fn strToBytes(
 
         return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = length };
     } else {
+        // The returned list shares the same underlying allocation as the string.
+        // We must incref the allocation since there's now an additional reference to it.
+        arg.incref(1);
         const is_seamless_slice = arg.length & SEAMLESS_SLICE_BIT;
         return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = arg.capacity_or_alloc_ptr | is_seamless_slice };
     }
@@ -1047,6 +1135,8 @@ pub fn fromUtf8Lossy(
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (list.len() == 0) {
+        // Free the empty list since we consume ownership
+        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
         return RocStr.empty();
     }
 
@@ -1067,6 +1157,10 @@ pub fn fromUtf8Lossy(
         end_index += utf8EncodeLossy(c, ptr[end_index..]);
     }
     str.setLen(end_index);
+
+    // Free the input list since we consume ownership
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
+
     return str;
 }
 
@@ -1280,7 +1374,17 @@ pub fn isWhitespace(codepoint: u21) bool {
     };
 }
 
-/// TODO: Document strTrim.
+/// Str.trim - removes leading and trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: shrinks in place (same allocation)
+/// - Otherwise: creates seamless slice pointing to trimmed region
 pub fn strTrim(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1333,7 +1437,17 @@ pub fn strTrim(
     }
 }
 
-/// TODO: Document strTrimStart.
+/// Str.trim_start - removes leading whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: returns same allocation unchanged
+/// - Otherwise: creates seamless slice pointing to trimmed region
 pub fn strTrimStart(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1385,7 +1499,17 @@ pub fn strTrimStart(
     }
 }
 
-/// TODO: Document strTrimEnd.
+/// Str.trim_end - removes trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if unique
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique: shrinks length in place (same allocation)
+/// - Shared: creates seamless slice pointing to trimmed region
 pub fn strTrimEnd(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1470,6 +1594,15 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
 }
 
 /// Str.with_ascii_lowercased
+///
+/// Returns a string with all ASCII letters converted to lowercase.
+///
+/// ## Ownership
+/// - `string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if input was unique
+///
+/// If the input string is unique, modifies in place and returns it.
+/// If shared, decrefs the input and allocates a new string.
 pub fn strWithAsciiLowercased(
     string: RocStr,
     roc_ops: *RocOps,
@@ -1489,6 +1622,15 @@ pub fn strWithAsciiLowercased(
 }
 
 /// Str.with_ascii_uppercased
+///
+/// Returns a string with all ASCII letters converted to uppercase.
+///
+/// ## Ownership
+/// - `string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if input was unique
+///
+/// If the input string is unique, modifies in place and returns it.
+/// If shared, decrefs the input and allocates a new string.
 pub fn strWithAsciiUppercased(
     string: RocStr,
     roc_ops: *RocOps,
@@ -2547,8 +2689,8 @@ test "fromUtf8Lossy: ascii, emoji" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2758,8 +2900,8 @@ test "fromUtf8Lossy: invalid start byte" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2772,8 +2914,8 @@ test "fromUtf8Lossy: overlong encoding" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2786,8 +2928,8 @@ test "fromUtf8Lossy: expected continuation" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2800,8 +2942,8 @@ test "fromUtf8Lossy: unexpected end" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
@@ -2819,8 +2961,8 @@ test "fromUtf8Lossy: encodes surrogate" {
     // becomes 0b1110_1101 0b10_1000_00 0b10_11_1101
     //           1110_wwww   10_xxxx_yy   10_yy_zzzz
     //         0xED        0x90         0xBD
-    var list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());

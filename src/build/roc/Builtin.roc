@@ -66,21 +66,39 @@ Builtin :: [].{
 			True
 		}
 
-		first : List(item) -> Try(item, [ListWasEmpty])
-		first = |list| List.get(list, 0)
+		append : List(a), a -> List(a)
 
-		get : List(item), U64 -> Try(item, [ListWasEmpty])
+		first : List(item) -> Try(item, [ListWasEmpty])
+		first = |list| if List.is_empty(list) {
+			Try.Err(ListWasEmpty)
+		} else {
+			Try.Ok(list_get_unsafe(list, 0))
+		}
+
+		get : List(item), U64 -> Try(item, [OutOfBounds])
 		get = |list, index| if index < List.len(list) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
-			Try.Err(ListWasEmpty)
+			Try.Err(OutOfBounds)
 		}
 
 		map : List(a), (a -> b) -> List(b)
-		map = |_, _| []
+		map = |list, transform|
+			# Implement using fold + concat for now
+			# TODO: Optimize with in-place update when list is unique and element sizes match
+			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
 
 		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |_, _| []
+		keep_if = |list, predicate|
+			List.fold(list, [], |acc, elem|
+				if predicate(elem) { List.concat(acc, [elem]) } else { acc }
+			)
+
+		drop_if : List(a), (a -> Bool) -> List(a)
+		drop_if = |list, predicate|
+			List.fold(list, [], |acc, elem|
+				if predicate(elem) { acc } else { List.concat(acc, [elem]) }
+			)
 
 		fold : List(item), state, (state, item -> state) -> state
 		fold = |list, init, step| {
@@ -106,6 +124,42 @@ Builtin :: [].{
 
 			$state
 		}
+
+		any : List(a), (a -> Bool) -> Bool
+		any = |list, predicate| {
+			for item in list {
+				if predicate(item) {
+					return True
+				}
+			}
+			False
+		}
+
+		contains : List(a), a -> Bool where [a.is_eq: a, a -> Bool]
+		contains = |list, elt| {
+			List.any(list, |x| x == elt)
+		}
+
+		all : List(a), (a -> Bool) -> Bool
+		all = |list, predicate| {
+			for item in list {
+				if Bool.not(predicate(item)) {
+					return False
+				}
+			}
+			True
+		}
+
+		last : List(item) -> Try(item, [ListWasEmpty])
+		last = |list| if List.is_empty(list) {
+			Try.Err(ListWasEmpty)
+		} else {
+			Try.Ok(list_get_unsafe(list, List.len(list) - 1))
+		}
+
+		single : item -> List(item)
+		single = |x| [x]
+
 	}
 
 	Bool := [False, True].{

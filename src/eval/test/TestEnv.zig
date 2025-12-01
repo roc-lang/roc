@@ -118,18 +118,30 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     // Calculate new total size needed
     const new_total_size = realloc_args.new_length + size_storage_bytes;
 
-    // Perform reallocation
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = test_env.allocator.realloc(old_slice, new_total_size) catch {
+    // Get the alignment enum from the passed alignment
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(realloc_args.alignment)));
+
+    // Perform reallocation using rawFree + rawAlloc to handle alignment correctly
+    // (Zig's realloc doesn't let us specify alignment for the old slice)
+    const new_result = test_env.allocator.rawAlloc(new_total_size, align_enum, @returnAddress());
+    const new_base_ptr = new_result orelse {
         std.debug.panic("Out of memory during testRocRealloc", .{});
     };
 
+    // Copy the old data to the new allocation
+    const copy_size = @min(old_total_size, new_total_size);
+    @memcpy(new_base_ptr[0..copy_size], old_base_ptr[0..copy_size]);
+
+    // Free the old allocation
+    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
+    test_env.allocator.rawFree(old_slice, align_enum, @returnAddress());
+
     // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
+    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
     // Return pointer to the user data (after the size metadata)
-    realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    realloc_args.answer = @ptrFromInt(@intFromPtr(new_base_ptr) + size_storage_bytes);
 }
 
 fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {

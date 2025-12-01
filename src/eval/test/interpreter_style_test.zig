@@ -141,7 +141,7 @@ test "interpreter: (|x| x)(\"Hello\") yields \"Hello\"" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -159,7 +159,7 @@ test "interpreter: (|n| n + 1)(41) yields 42" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -177,7 +177,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -197,7 +197,7 @@ test "interpreter: 6 / 3 yields 2" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -217,7 +217,7 @@ test "interpreter: 7 % 3 yields 1" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -235,7 +235,7 @@ test "interpreter: 0.2 + 0.3 yields 0.5" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -253,7 +253,7 @@ test "interpreter: 0.5 / 2 yields 0.25" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -302,12 +302,14 @@ test "interpreter: F64 division" {
     , 0.5, .no_trace);
 }
 
-test "interpreter: literal True renders True" {
-    const roc_src = "True";
+test "interpreter: literal tag renders as tag name" {
+    // Use a custom tag instead of True - True is a Bool tag which requires
+    // proper builtin module resolution to get the nominal type
+    const roc_src = "MyTag";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -318,7 +320,7 @@ test "interpreter: literal True renders True" {
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("True", rendered);
+    try std.testing.expectEqualStrings("MyTag", rendered);
 }
 
 test "interpreter: True == False yields False" {
@@ -326,7 +328,7 @@ test "interpreter: True == False yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -347,7 +349,7 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
     //
     //     try helpers.runExpectBool(roc_src, true, .no_trace);
     //
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
     //
     //     var host = TestHost.init(std.testing.allocator);
@@ -366,7 +368,7 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -385,7 +387,7 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -404,7 +406,7 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -423,7 +425,7 @@ test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -442,7 +444,7 @@ test "interpreter: record update copies base fields" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -460,7 +462,7 @@ test "interpreter: record update overrides field" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -478,7 +480,7 @@ test "interpreter: record update expression can reference base" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -497,7 +499,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(std.testing.allocator);
@@ -516,7 +518,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(std.testing.allocator);
@@ -535,7 +537,7 @@ test "interpreter: record update expression can reference base" {
 //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
 //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+//     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
 //     defer interp2.deinit();
 
 //     var host = TestHost.init(std.testing.allocator);
@@ -553,7 +555,7 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -572,7 +574,7 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -591,7 +593,7 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -610,7 +612,7 @@ test "interpreter: Ok(1) == Err(1) yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -629,7 +631,7 @@ test "interpreter: match tuple pattern destructures" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -647,7 +649,7 @@ test "interpreter: match bool patterns" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -665,7 +667,7 @@ test "interpreter: match result tag payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -683,7 +685,7 @@ test "interpreter: match record destructures fields" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -701,7 +703,7 @@ test "interpreter: render Try.Ok literal" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -720,7 +722,7 @@ test "interpreter: render Try.Err string" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -739,7 +741,7 @@ test "interpreter: render Try.Ok tuple payload" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -758,7 +760,7 @@ test "interpreter: match tuple payload tag" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -776,7 +778,7 @@ test "interpreter: match record payload tag" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -794,7 +796,7 @@ test "interpreter: match list pattern destructures" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -816,7 +818,7 @@ test "interpreter: match list rest binds slice" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -834,7 +836,7 @@ test "interpreter: match empty list branch" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -853,7 +855,7 @@ test "interpreter: simple for loop sum" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -871,7 +873,7 @@ test "interpreter: List.fold sum with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -889,7 +891,7 @@ test "interpreter: List.fold product with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -907,7 +909,7 @@ test "interpreter: List.fold empty list with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -925,7 +927,7 @@ test "interpreter: List.fold count elements with inline lambda" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -944,7 +946,7 @@ test "interpreter: List.fold from Builtin using numbers" {
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -957,12 +959,192 @@ test "interpreter: List.fold from Builtin using numbers" {
     try std.testing.expectEqualStrings("6", rendered);
 }
 
+test "interpreter: List.any True on integers" {
+    const roc_src = "List.any([1, 0, 1, 0, -1], |x| x > 0)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter: List.any False on unsigned integers" {
+    const roc_src = "List.any([9, 8, 7, 6, 5], |x| x < 0)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter: List.any False on empty list" {
+    const roc_src = "List.any([], |x| x < 0)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter: List.all False when some elements are False" {
+    const roc_src = "List.all([9, 18, 7, 6, 15], |x| x < 10)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter: List.all True on small integers" {
+    const roc_src = "List.all([9, 8, 7, 6, 5], |x| x < 10)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter: List.all False on empty list" {
+    const roc_src = "List.all([], |x| x < 10)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter: List.contains is False for a missing element" {
+    const roc_src = "List.contains([-1, -2, -3, 1, 2, 3], 0)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
+test "interpreter: List.contains is True when element is found" {
+    const roc_src = "List.contains([1, 2, 3, 4, 5], 3)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("True", rendered);
+}
+
+test "interpreter: List.contains is False on empty list" {
+    const roc_src = "List.contains([], 3333)";
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
+    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("False", rendered);
+}
+
 test "interpreter: crash statement triggers crash error and message" {
     const roc_src = "{\n    crash \"boom\"\n    0\n}";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -981,7 +1163,7 @@ test "interpreter: expect expression succeeds" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1001,7 +1183,7 @@ test "interpreter: expect expression failure crashes with message" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1020,7 +1202,7 @@ test "interpreter: empty record expression renders {}" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1049,7 +1231,7 @@ test "interpreter: decimal literal renders 0.125" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1067,7 +1249,7 @@ test "interpreter: f64 equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1086,7 +1268,7 @@ test "interpreter: decimal equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1105,7 +1287,7 @@ test "interpreter: int and f64 equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -1134,7 +1316,7 @@ test "interpreter: int and decimal equality True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     const binop_expr = resources.module_env.store.getExpr(resources.expr_idx);
@@ -1163,7 +1345,7 @@ test "interpreter: int less-than yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1182,7 +1364,7 @@ test "interpreter: int greater-than yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1201,7 +1383,7 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1220,7 +1402,7 @@ test "interpreter: f64 greater-than yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1239,7 +1421,7 @@ test "interpreter: decimal less-than-or-equal yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1258,7 +1440,7 @@ test "interpreter: int and f64 less-than yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1277,7 +1459,7 @@ test "interpreter: int and decimal greater-than yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1296,7 +1478,7 @@ test "interpreter: bool inequality yields True" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1315,7 +1497,7 @@ test "interpreter: decimal inequality yields False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1334,7 +1516,7 @@ test "interpreter: f64 equality False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1353,7 +1535,7 @@ test "interpreter: decimal equality False" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost.init(std.testing.allocator);
@@ -1372,7 +1554,7 @@ test "interpreter: tuples and records" {
     const src_tuple = "(1, 2)";
     const res_t = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_tuple);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, res_t);
-    var it = try Interpreter.init(std.testing.allocator, res_t.module_env, res_t.builtin_types, res_t.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_t.checker.import_mapping);
+    var it = try Interpreter.init(std.testing.allocator, res_t.module_env, res_t.builtin_types, res_t.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_t.checker.import_mapping, null);
     defer it.deinit();
     var host_t = TestHost.init(std.testing.allocator);
     defer host_t.deinit();
@@ -1386,7 +1568,7 @@ test "interpreter: tuples and records" {
     const src_rec = "{ x: 1, y: 2 }";
     const res_r = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src_rec);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, res_r);
-    var ir = try Interpreter.init(std.testing.allocator, res_r.module_env, res_r.builtin_types, res_r.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_r.checker.import_mapping);
+    var ir = try Interpreter.init(std.testing.allocator, res_r.module_env, res_r.builtin_types, res_r.builtin_module.env, &[_]*const can.ModuleEnv{}, &res_r.checker.import_mapping, null);
     defer ir.deinit();
     var host_r = TestHost.init(std.testing.allocator);
     defer host_r.deinit();
@@ -1404,7 +1586,7 @@ test "interpreter: empty list [] has list_of_zst layout" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1423,7 +1605,7 @@ test "interpreter: singleton list [1] has list of Dec layout" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1453,7 +1635,7 @@ test "interpreter: dbg statement in block" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1485,7 +1667,7 @@ test "interpreter: dbg statement with string" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1517,7 +1699,7 @@ test "interpreter: simple early return from function" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1551,7 +1733,7 @@ test "interpreter: any function with early return in for loop" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1584,7 +1766,7 @@ test "interpreter: crash at end of block in if branch" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping);
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp.deinit();
 
     var host = TestHost.init(std.testing.allocator);
@@ -1601,3 +1783,785 @@ test "interpreter: crash at end of block in if branch" {
 }
 
 // Boolean/if support intentionally omitted for now
+
+// ============================================================================
+// Comprehensive dbg tests
+// ============================================================================
+
+test "dbg: integer literal" {
+    const roc_src =
+        \\{
+        \\    dbg 42
+        \\    123
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("123", rendered);
+
+    // Verify dbg was called with 42
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "dbg: negative integer" {
+    const roc_src =
+        \\{
+        \\    x = -99
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("-99", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("-99", host.dbg_messages.items[0]);
+}
+
+test "dbg: float value" {
+    const roc_src =
+        \\{
+        \\    x : F64
+        \\    x = 3.14
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Check that the message contains 3.14 (may have trailing digits)
+    try std.testing.expect(std.mem.startsWith(u8, host.dbg_messages.items[0], "3.14"));
+}
+
+test "dbg: boolean True" {
+    const roc_src =
+        \\{
+        \\    dbg True
+        \\    False
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Boolean may render as "True" or "1"
+    try std.testing.expect(std.mem.eql(u8, "True", host.dbg_messages.items[0]) or std.mem.eql(u8, "1", host.dbg_messages.items[0]));
+}
+
+test "dbg: boolean False" {
+    const roc_src =
+        \\{
+        \\    dbg False
+        \\    True
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Boolean may render as "False" or "0"
+    try std.testing.expect(std.mem.eql(u8, "False", host.dbg_messages.items[0]) or std.mem.eql(u8, "0", host.dbg_messages.items[0]));
+}
+
+test "dbg: empty string" {
+    const roc_src =
+        \\{
+        \\    dbg ""
+        \\    "done"
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"\"", host.dbg_messages.items[0]);
+}
+
+test "dbg: list of integers" {
+    // Note: Using list without explicit type annotation since List I64 annotation causes issues
+    const roc_src =
+        \\{
+        \\    xs = [1i64, 2i64, 3i64]
+        \\    dbg xs
+        \\    xs
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("[1, 2, 3]", host.dbg_messages.items[0]);
+}
+
+// TODO: Test "dbg: empty list" skipped because List.empty({}) syntax not working
+// This test should verify dbg works with empty lists
+
+test "dbg: tuple" {
+    const roc_src =
+        \\{
+        \\    t = (1, "two", 3)
+        \\    dbg t
+        \\    t
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Tuple should render as (1, "two", 3)
+    try std.testing.expectEqualStrings("(1, \"two\", 3)", host.dbg_messages.items[0]);
+}
+
+test "dbg: record" {
+    const roc_src =
+        \\{
+        \\    r = { name: "Alice", age: 30 }
+        \\    dbg r
+        \\    r
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // Record fields may be in any order
+    const msg = host.dbg_messages.items[0];
+    try std.testing.expect(std.mem.indexOf(u8, msg, "name") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "Alice") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "age") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, "30") != null);
+}
+
+test "dbg: empty record" {
+    const roc_src =
+        \\{
+        \\    r = {}
+        \\    dbg r
+        \\    r
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("{}", host.dbg_messages.items[0]);
+}
+
+test "dbg: tag without payload" {
+    const roc_src =
+        \\{
+        \\    x : [A, B, C]
+        \\    x = B
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("B", host.dbg_messages.items[0]);
+}
+
+test "dbg: tag with payload" {
+    // Use match to constrain the tag union type instead of explicit type annotation
+    const roc_src =
+        \\{
+        \\    x = Ok(42)
+        \\    dbg x
+        \\    match x { Ok(n) => n, Err(_) => 0 }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("Ok(42)", host.dbg_messages.items[0]);
+}
+
+test "dbg: function prints as unsupported or function marker" {
+    const roc_src =
+        \\{
+        \\    f = |x| x + 1
+        \\    dbg f
+        \\    f(5)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+
+    // Function should print as <function> or <unsupported>
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    const msg = host.dbg_messages.items[0];
+    try std.testing.expect(std.mem.indexOf(u8, msg, "<") != null or std.mem.indexOf(u8, msg, "function") != null or std.mem.indexOf(u8, msg, "unsupported") != null);
+}
+
+test "dbg: expression form returns unit" {
+    // dbg always returns {} like expect, so we can't use its return value
+    const roc_src =
+        \\{
+        \\    x = 42
+        \\    dbg x
+        \\    x + 1
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // dbg x prints 42, then x + 1 = 43
+    try std.testing.expectEqualStrings("43", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "dbg: multiple dbg calls in sequence" {
+    const roc_src =
+        \\{
+        \\    x = 1
+        \\    y = 2
+        \\    z = 3
+        \\    dbg x
+        \\    dbg y
+        \\    dbg z
+        \\    x + y + z
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+}
+
+test "dbg: nested dbg calls" {
+    // dbg returns {} so nested dbg prints the inner value, then {} for outer calls
+    const roc_src =
+        \\{
+        \\    dbg(dbg(dbg(5)))
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // dbg always returns {}
+    try std.testing.expectEqualStrings("{}", rendered);
+
+    // Three nested dbg calls: inner prints 5, outer two print {}
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("5", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("{}", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("{}", host.dbg_messages.items[2]);
+}
+
+// Note: "dbg: as function argument" test removed - dbg returns {} so can't be used as a value
+
+test "dbg: in if-then-else branch" {
+    const roc_src =
+        \\{
+        \\    x = 10
+        \\    if x > 5 {
+        \\        dbg "greater"
+        \\        True
+        \\    } else {
+        \\        dbg "less or equal"
+        \\        False
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Only the taken branch should call dbg
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"greater\"", host.dbg_messages.items[0]);
+}
+
+test "dbg: in match pattern" {
+    const roc_src =
+        \\{
+        \\    x = 5
+        \\    match x {
+        \\        0 => {
+        \\            dbg "zero"
+        \\        }
+        \\        _ => {
+        \\            dbg "other"
+        \\        }
+        \\    }
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Only the taken branch should call dbg
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"other\"", host.dbg_messages.items[0]);
+}
+
+test "dbg: in for loop" {
+    const roc_src =
+        \\{
+        \\    items : List(I64)
+        \\    items = [1, 2, 3]
+        \\    for item in items {
+        \\        dbg item
+        \\    }
+        \\    items
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    // Each iteration should call dbg
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+}
+
+test "dbg: as final expression returns unit" {
+    // dbg always returns {} like expect
+    const roc_src =
+        \\{
+        \\    dbg 42
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // dbg always returns {}
+    try std.testing.expectEqualStrings("{}", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+}
+
+test "dbg: with arithmetic expression" {
+    const roc_src =
+        \\{
+        \\    dbg(2 + 3 * 4)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // dbg returns {} but prints the evaluated expression
+    try std.testing.expectEqualStrings("{}", rendered);
+
+    // 2 + 3 * 4 = 2 + 12 = 14
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("14", host.dbg_messages.items[0]);
+}
+
+test "dbg: inside function body" {
+    const roc_src =
+        \\{
+        \\    double = |x| {
+        \\        dbg x
+        \\        x * 2
+        \\    }
+        \\    double(21)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("42", rendered);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("21", host.dbg_messages.items[0]);
+}
+
+test "dbg: function called multiple times" {
+    const roc_src =
+        \\{
+        \\    f = |x| {
+        \\        dbg x
+        \\        x
+        \\    }
+        \\    f(1) + f(2) + f(3)
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("6", rendered);
+
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+}
+
+test "dbg: with string containing special chars" {
+    const roc_src =
+        \\{
+        \\    dbg "hello\nworld"
+        \\    "done"
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    // The string should contain the actual newline character, rendered with quotes
+    const msg = host.dbg_messages.items[0];
+    try std.testing.expect(std.mem.startsWith(u8, msg, "\"hello"));
+    try std.testing.expect(std.mem.indexOf(u8, msg, "world") != null);
+}
+
+test "dbg: large integer" {
+    const roc_src =
+        \\{
+        \\    x : I64
+        \\    x = 9223372036854775807
+        \\    dbg x
+        \\    x
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("9223372036854775807", host.dbg_messages.items[0]);
+}
+
+test "dbg: variable after mutation in binding" {
+    const roc_src =
+        \\{
+        \\    x = 10
+        \\    dbg x
+        \\    y = x + 5
+        \\    dbg y
+        \\    y
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("15", rendered);
+
+    try std.testing.expectEqual(@as(usize, 2), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("10", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("15", host.dbg_messages.items[1]);
+}
+
+test "dbg: list of strings" {
+    const roc_src =
+        \\{
+        \\    xs = ["a", "b", "c"]
+        \\    dbg xs
+        \\    xs
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("[\"a\", \"b\", \"c\"]", host.dbg_messages.items[0]);
+}

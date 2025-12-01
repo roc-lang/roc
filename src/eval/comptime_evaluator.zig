@@ -184,7 +184,7 @@ pub const ComptimeEvaluator = struct {
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null);
 
         return ComptimeEvaluator{
             .allocator = allocator,
@@ -1376,6 +1376,12 @@ pub const ComptimeEvaluator = struct {
                 return true; // Ok
             }
             return true; // Unknown format, optimistically allow
+        } else if (result.layout.tag == .tag_union) {
+            // Tag union layout: payload at offset 0, discriminant at discriminant_offset
+            // For Try types from num.from_numeral, the interpreter should have stored
+            // the error message in last_error_message, which was already checked above.
+            // If we reach here without a last_error_message, assume it's Ok.
+            return true;
         }
 
         return true; // Unknown format, optimistically allow

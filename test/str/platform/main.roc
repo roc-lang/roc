@@ -1,7 +1,8 @@
 platform ""
-    requires {} { processString : Str -> Str }
+    requires {} { process_string : Str -> Str }
     exposes []
     packages {}
-    provides { processString: "processString" }
+    provides { process_string_for_host: "process_string" }
 
-processString : Str -> Str
+process_string_for_host : Str -> Str
+process_string_for_host = process_string
