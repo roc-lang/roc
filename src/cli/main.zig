@@ -177,6 +177,7 @@ const posix = if (!is_windows) struct {
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
     // fcntl constants
+    const F_DUPFD = 0;
     const F_GETFD = 1;
     const F_SETFD = 2;
     const FD_CLOEXEC = 1;
@@ -448,7 +449,6 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, shm_han
 
         // Write shared memory info to file (POSIX only - Windows uses command line args)
         const fd_str = try std.fmt.allocPrint(allocs.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
-
         try fd_file.writeAll(fd_str);
 
         // IMPORTANT: Flush and close the file explicitly before spawning child process
@@ -1144,8 +1144,30 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     };
     std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
 
-    // Configure fd inheritance
-    var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
+    // Configure fd inheritance - dup to a high fd number to avoid conflicts
+    // with fds that may be closed by the OS for newly-linked executables.
+    // See: macOS security features around newly created executables.
+    const new_fd = posix.fcntl(shm_handle.fd, posix.F_DUPFD, 100); // dup to fd >= 100
+    if (new_fd < 0) {
+        std.log.err("Failed to dup fd: {}", .{c._errno().*});
+        return error.FdConfigFailed;
+    }
+
+    // Close the original fd
+    _ = c.close(shm_handle.fd);
+
+    // Update the coordination file with the new fd
+    // The temp dir path is the same as temp_exe_path minus the exe basename
+    const temp_dir_path = std.fs.path.dirname(temp_exe_path).?;
+    const fd_file_path = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{temp_dir_path});
+    const fd_file = try std.fs.cwd().createFile(fd_file_path, .{});
+    defer fd_file.close();
+    const fd_str = try std.fmt.allocPrint(allocs.arena, "{}\n{}", .{ new_fd, shm_handle.size });
+    try fd_file.writeAll(fd_str);
+    try fd_file.sync();
+
+    // Clear FD_CLOEXEC so the fd is inherited by the child process
+    var flags = posix.fcntl(new_fd, posix.F_GETFD, 0);
     if (flags < 0) {
         std.log.err("Failed to get fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
@@ -1153,7 +1175,7 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
 
     flags &= ~@as(c_int, posix.FD_CLOEXEC);
 
-    if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
+    if (posix.fcntl(new_fd, posix.F_SETFD, flags) < 0) {
         std.log.err("Failed to set fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }

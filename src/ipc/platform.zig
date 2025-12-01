@@ -303,6 +303,7 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
             return ptr.?;
         },
         .linux, .macos, .freebsd, .openbsd, .netbsd => {
+            const MAP_FAILED = @as(*anyopaque, @ptrFromInt(std.math.maxInt(usize)));
             const ptr = posix.mmap(
                 base_addr,
                 size,
@@ -310,11 +311,14 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
                 posix.MAP_SHARED,
                 handle,
                 0,
-            ) orelse {
-                std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
+            );
+            // mmap returns MAP_FAILED (-1) on error, not null
+            if (ptr == null or ptr == MAP_FAILED) {
+                const errno = std.c._errno().*;
+                std.log.err("POSIX: Failed to map shared memory (size: {}, fd: {}, errno: {})", .{ size, handle, errno });
                 return error.MmapFailed;
-            };
-            return ptr;
+            }
+            return ptr.?;
         },
         else => return error.UnsupportedPlatform,
     }
