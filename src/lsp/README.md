@@ -74,6 +74,10 @@ tail -f /tmp/roc-lsp-debug.log
 ---
 ```
 
+Additional debug channels can be enabled with `--debug-build`, `--debug-syntax`, and `--debug-server`
+which log build environment activity, syntax/type checking, and server lifecycle details respectively
+to the same temporary log file.
+
 ## Editor examples
 
 ### Neovim (lua + nvim-lspconfig)
