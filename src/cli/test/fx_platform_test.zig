@@ -772,6 +772,97 @@ test "string literal pattern matching" {
     try testing.expect(has_bob);
 }
 
+test "drop_prefix segfault regression" {
+    // Regression test: Calling drop_prefix on a string literal and assigning
+    // the result to an unused variable causes a segfault.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/drop_prefix_segfault.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+}
+
+test "drop_prefix match use-after-free regression" {
+    // Regression test: Calling drop_prefix on a string literal and using the
+    // result in a match expression causes a use-after-free panic.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/drop_prefix_match_uaf.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.UseAfterFree;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Also check for panic messages in stderr that indicate use-after-free
+    if (std.mem.indexOf(u8, run_result.stderr, "panic") != null or
+        std.mem.indexOf(u8, run_result.stderr, "use-after-free") != null or
+        std.mem.indexOf(u8, run_result.stderr, "Invalid pointer") != null)
+    {
+        std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
+        return error.UseAfterFree;
+    }
+}
+
 test "multiline string split_on" {
     // Tests splitting a multiline string and iterating over the lines.
     // This is a regression test to ensure split_on works correctly with
@@ -812,4 +903,56 @@ test "multiline string split_on" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "This is a longer line number two") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "L68") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "The last line is here") != null);
+}
+
+test "big string equality regression" {
+    // Regression test: String literals of length >= 24 (big strings) must work
+    // correctly in expect expressions. This tests the single-segment string
+    // fast path in str_collect which previously caused use-after-free.
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test",
+            "test/fx/big_string_equality.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Check for panic messages in stderr that indicate use-after-free
+    if (std.mem.indexOf(u8, run_result.stderr, "panic") != null or
+        std.mem.indexOf(u8, run_result.stderr, "use-after-free") != null or
+        std.mem.indexOf(u8, run_result.stderr, "Use-after-free") != null)
+    {
+        std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
+        return error.UseAfterFree;
+    }
 }

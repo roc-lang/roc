@@ -262,6 +262,11 @@ pub const Interpreter = struct {
     /// Value being returned early from a function (set by s_return, consumed at function boundaries)
     early_return_value: ?StackValue,
 
+    /// Arena allocator for constant/static strings. These are allocated once and never freed
+    /// individually - the entire arena is freed when the interpreter is deinitialized.
+    /// This avoids leak detection false positives for intentionally-immortal string literals.
+    constant_strings_arena: std.heap.ArenaAllocator,
+
     pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping, app_env: ?*can.ModuleEnv) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
@@ -406,6 +411,7 @@ pub const Interpreter = struct {
             .num_literal_target_type = null,
             .last_error_message = null,
             .early_return_value = null,
+            .constant_strings_arena = std.heap.ArenaAllocator.init(allocator),
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
@@ -661,6 +667,41 @@ pub const Interpreter = struct {
         const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true };
+    }
+
+    /// Create a constant/static string using the arena allocator.
+    /// The string data is allocated from the constant_strings_arena and will be
+    /// freed wholesale when the interpreter is deinitialized.
+    /// Returns a RocStr that can be assigned to a StackValue.
+    fn createConstantStr(self: *Interpreter, content: []const u8) !RocStr {
+        // Small strings are stored inline - no heap allocation needed
+        if (RocStr.fitsInSmallStr(content.len)) {
+            return RocStr.fromSliceSmall(content);
+        }
+
+        // Big string - allocate from arena with space for refcount
+        const ptr_width = @sizeOf(usize);
+        const extra_bytes = ptr_width; // Space for refcount
+        const total_size = extra_bytes + content.len;
+
+        const arena_alloc = self.constant_strings_arena.allocator();
+        // Alignment must match usize for refcount storage (portable across 32/64-bit and wasm)
+        const alignment = comptime std.mem.Alignment.fromByteUnits(@alignOf(usize));
+        const buffer = try arena_alloc.alignedAlloc(u8, alignment, total_size);
+
+        // Set refcount to REFCOUNT_STATIC_DATA (0) - this string is immortal
+        const refcount_ptr: *usize = @ptrCast(@alignCast(buffer.ptr));
+        refcount_ptr.* = 0; // REFCOUNT_STATIC_DATA
+
+        // Copy string content after refcount
+        const data_ptr = buffer.ptr + extra_bytes;
+        @memcpy(data_ptr[0..content.len], content);
+
+        return RocStr{
+            .bytes = data_ptr,
+            .length = content.len,
+            .capacity_or_alloc_ptr = content.len,
+        };
     }
 
     fn stackValueToRocStr(
@@ -6445,6 +6486,8 @@ pub const Interpreter = struct {
         self.active_closures.deinit();
         self.def_stack.deinit();
         self.scratch_tags.deinit();
+        // Free all constant/static strings at once - they were never freed individually
+        self.constant_strings_arena.deinit();
     }
 
     /// Get the module environment for a given origin module identifier.
@@ -9520,12 +9563,13 @@ pub const Interpreter = struct {
     fn evalStrSegment(
         self: *Interpreter,
         seg: @TypeOf(@as(can.CIR.Expr, undefined).e_str_segment),
-        roc_ops: *RocOps,
+        _: *RocOps,
     ) Error!StackValue {
         const content = self.env.getString(seg.literal);
         const value = try self.pushStr();
         const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
-        roc_str.* = RocStr.fromSlice(content, roc_ops);
+        // Use arena allocator for string literals - freed wholesale at interpreter deinit
+        roc_str.* = try self.createConstantStr(content);
         return value;
     }
 
@@ -11380,6 +11424,15 @@ pub const Interpreter = struct {
                 // Step 2: Process remaining segments
                 if (remaining.len == 0) {
                     // Step 3: All segments collected - concatenate them
+                    // Fast path for single-segment strings: return directly without copying
+                    if (sc.total_count == 1) {
+                        // Single segment - just return it directly, transferring ownership
+                        // No incref/decref needed since we're not copying, just passing through
+                        const str_val = value_stack.pop() orelse return error.Crash;
+                        try value_stack.push(str_val);
+                        return true;
+                    }
+
                     var segment_strings = try std.array_list.AlignedManaged(RocStr, null).initCapacity(self.allocator, sc.total_count);
                     defer {
                         for (segment_strings.items) |s| {
@@ -11438,8 +11491,9 @@ pub const Interpreter = struct {
 
                 if (next_seg_expr == .e_str_segment) {
                     // Literal segment - push directly as string value
+                    // Use arena allocator for string literals - freed wholesale at interpreter deinit
                     const content = self.env.getString(next_seg_expr.e_str_segment.literal);
-                    const seg_str = RocStr.fromSlice(content, roc_ops);
+                    const seg_str = try self.createConstantStr(content);
                     const seg_value = try self.pushStr();
                     const roc_str_ptr: *RocStr = @ptrCast(@alignCast(seg_value.ptr.?));
                     roc_str_ptr.* = seg_str;
