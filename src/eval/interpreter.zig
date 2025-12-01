@@ -3561,6 +3561,35 @@ pub const Interpreter = struct {
                         }
                     }
 
+                    // Store error message for Err case (same as tuple branch)
+                    if (!in_range) {
+                        var num_str_buf: [128]u8 = undefined;
+                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
+
+                        const error_msg = switch (rejection_reason) {
+                            .negative_unsigned => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .fractional_integer => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .out_of_range, .overflow => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                                .{ num_str, type_name, type_name, min_value_str, max_value_str },
+                            ) catch null,
+                            .none => null,
+                        };
+
+                        if (error_msg) |msg| {
+                            self.last_error_message = msg;
+                        }
+                    }
+
                     dest.is_initialized = true;
                     return dest;
                 }
@@ -4095,6 +4124,38 @@ pub const Interpreter = struct {
                 if (payload_field.ptr) |payload_ptr| {
                     @as(*To, @ptrCast(@alignCast(payload_ptr))).* = to_value;
                 }
+            }
+            // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
+
+            return dest;
+        } else if (result_layout.tag == .tag_union) {
+            // Tag union layout: payload at offset 0, discriminant at discriminant_offset
+            const dest = try self.pushRaw(result_layout, 0);
+            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+            // Write tag discriminant at discriminant_offset
+            const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            switch (tu_data.discriminant_size) {
+                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
+                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                else => {},
+            }
+
+            // Clear payload area (at offset 0)
+            const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+            if (payload_size > 0) {
+                @memset(base_ptr[0..payload_size], 0);
+            }
+
+            // Write payload for Ok case
+            if (in_range) {
+                const to_value: To = @intCast(from_value);
+                const payload_ptr: *To = @ptrCast(@alignCast(base_ptr));
+                payload_ptr.* = to_value;
             }
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
 
