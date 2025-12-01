@@ -93,9 +93,7 @@ if not configs.roc_lsp then
       name = 'roc_lsp',
       cmd = { '/path/to/roc', 'experimental-lsp', '--debug-transport' },
       filetypes = { 'roc' },
-      root_dir = function(fname)
-        return util.path.dirname(fname)
-      end,
+			root_markers = { 'main.roc', 'app.roc' },
       single_file_support = true,
     },
   }
