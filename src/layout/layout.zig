@@ -464,6 +464,32 @@ pub const Layout = packed struct {
             else => false,
         };
     }
+
+    /// Compare two layouts for equality.
+    /// This compares only the active variant based on the tag, avoiding
+    /// comparison of uninitialized union bytes that would trigger Valgrind warnings.
+    pub fn eql(self: Layout, other: Layout) bool {
+        if (self.tag != other.tag) return false;
+        return switch (self.tag) {
+            .scalar => self.data.scalar.tag == other.data.scalar.tag and switch (self.data.scalar.tag) {
+                .opaque_ptr, .str => true, // No additional data to compare
+                .int => self.data.scalar.data.int == other.data.scalar.data.int,
+                .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
+            },
+            .box => self.data.box == other.data.box,
+            .box_of_zst => true, // No additional data
+            .list => self.data.list == other.data.list,
+            .list_of_zst => true, // No additional data
+            .record => self.data.record.alignment == other.data.record.alignment and
+                self.data.record.idx.int_idx == other.data.record.idx.int_idx,
+            .tuple => self.data.tuple.alignment == other.data.tuple.alignment and
+                self.data.tuple.idx.int_idx == other.data.tuple.idx.int_idx,
+            .closure => self.data.closure.captures_layout_idx == other.data.closure.captures_layout_idx,
+            .zst => true, // No additional data
+            .tag_union => self.data.tag_union.alignment == other.data.tag_union.alignment and
+                self.data.tag_union.idx.int_idx == other.data.tag_union.idx.int_idx,
+        };
+    }
 };
 
 test "Size of Layout type" {

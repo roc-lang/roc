@@ -5,7 +5,7 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» Try.is_ok(Ok(42))
+» Try.is_err(Err(42))
 ~~~
 # OUTPUT
 True
