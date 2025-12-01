@@ -6323,34 +6323,7 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
-                .nominal_type => |nt| blk: {
-                    // For nominal types with rigid type_args, look up the concrete types
-                    // from empty_scope/rigid_subst and add them to the scope
-                    const rt_type_args = self.runtime_types.sliceNominalArgs(nt);
-
-                    if (rt_type_args.len > 0) {
-                        // For each type_arg that is a rigid, look up its concrete type
-                        // and add the mapping to empty_scope so layout can use it
-                        if (self.empty_scope.scopes.items.len == 0) {
-                            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
-                        }
-                        const scope = &self.empty_scope.scopes.items[0];
-
-                        for (rt_type_args) |type_arg| {
-                            const type_arg_resolved = self.runtime_types.resolveVar(type_arg);
-                            if (type_arg_resolved.desc.content == .rigid) {
-                                // This type_arg is a rigid - look for a concrete substitution
-                                // Use the resolved var for both lookup and storage
-                                if (self.rigid_subst.get(type_arg_resolved.var_)) |concrete| {
-                                    // Add to scope so layout can find it
-                                    try scope.put(type_arg_resolved.var_, concrete);
-                                }
-                            }
-                        }
-                    }
-
-                    break :blk try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope);
-                },
+                .nominal_type => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
                 else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
             },
             else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
@@ -7039,8 +7012,7 @@ pub const Interpreter = struct {
                         // Also process the extension
                         _ = try self.instantiateType(tu.ext, subst_map);
 
-                        // Return original - we discovered rigids but don't create new types
-                        // The nominal_type handler will create a new nominal with instantiated backing
+                        // Return original - substitution handled via rigid_subst during layout
                         break :blk_tag_union type_var;
                     },
                     // For other structures (str, num, empty_record, etc.), return as-is
@@ -10664,8 +10636,61 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     } else if (tc.layout_type == 2) {
                         // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-                        var dest = try self.pushRaw(layout_val, 0);
                         const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+
+                        // Check for layout mismatch - if the expected payload is smaller than actual
+                        // we need to use a properly-sized tuple layout to avoid corruption.
+                        // This happens with polymorphic types like Result where the type param
+                        // is a disconnected flex var that defaults to ZST layout.
+                        if (total_count == 1) {
+                            const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                            const expected_payload_size = tu_data.discriminant_offset; // payload is before discriminant
+                            // Apply fix when expected payload is very small but actual is larger
+                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
+                            if (needs_fix) {
+                                // Layout mismatch - create a tuple layout [payload, discriminant]
+                                // This is the same approach as layout_type == 1
+                                const disc_precision: types.Int.Precision = switch (tu_data.discriminant_size) {
+                                    1 => .u8,
+                                    2 => .u16,
+                                    4 => .u32,
+                                    8 => .u64,
+                                    else => .u8,
+                                };
+                                const disc_layout = Layout{
+                                    .tag = .scalar,
+                                    .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
+                                };
+                                var elem_layouts_fixed = [2]Layout{ values[0].layout, disc_layout };
+                                const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
+                                const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
+                                var proper_dest = try self.pushRaw(proper_tuple_layout, 0);
+                                var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                                // Write tag discriminant (element 1)
+                                const proper_tag_field = try proper_acc.getElement(1);
+                                if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = proper_tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
+                                }
+
+                                // Write payload (element 0)
+                                const proper_payload_field = try proper_acc.getElement(0);
+                                if (proper_payload_field.ptr) |proper_ptr| {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                }
+
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                proper_dest.rt_var = tc.rt_var;
+                                try value_stack.push(proper_dest);
+                                return true;
+                            }
+                        }
+
+                        var dest = try self.pushRaw(layout_val, 0);
 
                         // Write discriminant
                         const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
