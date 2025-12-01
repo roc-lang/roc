@@ -9685,9 +9685,11 @@ pub const Interpreter = struct {
                             const expected_layout = try self.getRuntimeLayout(exp_var);
                             const is_expected_numeric = expected_layout.tag == .scalar;
                             if (is_expected_numeric) {
-                                // Check if cached value's layout differs from expected
+                                // Check if cached value's layout differs from expected.
+                                // Use Layout.eql instead of std.meta.eql to avoid comparing
+                                // uninitialized union bytes which triggers Valgrind warnings.
                                 const cached_layout = b.value.layout;
-                                const layouts_differ = !std.meta.eql(cached_layout, expected_layout);
+                                const layouts_differ = !cached_layout.eql(expected_layout);
                                 if (layouts_differ) {
                                     // Re-evaluate the numeric literal with the expected type
                                     const result = try self.evalWithExpectedType(b.expr_idx, roc_ops, exp_var);
