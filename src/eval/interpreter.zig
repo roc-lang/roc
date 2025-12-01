@@ -8632,8 +8632,23 @@ pub const Interpreter = struct {
             // ================================================================
 
             .e_tag => |tag| {
-                // Determine runtime type and tag index
-                var rt_var = expected_rt_var orelse blk: {
+                // Determine runtime type and tag index.
+                // Use expected_rt_var if it's resolved to something concrete (structure or alias).
+                // If expected_rt_var is flex (unresolved), fall back to ct_var translation.
+                // This handles the case where the app's main! return type hasn't been fully
+                // unified with the platform's expected type - the expected_rt_var may be
+                // passed but still be flex, while ct_var correctly resolves to the concrete type.
+                var rt_var = blk: {
+                    if (expected_rt_var) |expected| {
+                        const expected_resolved = self.runtime_types.resolveVar(expected);
+                        // Use expected only if it's concrete (not flex)
+                        if (expected_resolved.desc.content == .structure or
+                            expected_resolved.desc.content == .alias)
+                        {
+                            break :blk expected;
+                        }
+                    }
+                    // Fall back to translating from compile-time type
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
@@ -8647,8 +8662,28 @@ pub const Interpreter = struct {
                     rt_var = try self.getCanonicalBoolRuntimeVar();
                     resolved = self.resolveBaseVar(rt_var);
                 }
+                // Unwrap nominal types (like Try) to get to the underlying tag_union
+                if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                    const nom = resolved.desc.content.structure.nominal_type;
+                    const backing = self.runtime_types.getNominalBackingVar(nom);
+                    resolved = self.runtime_types.resolveVar(backing);
+                }
+                // Also handle aliases that wrap tag unions
+                if (resolved.desc.content == .alias) {
+                    const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                    resolved = self.runtime_types.resolveVar(backing);
+                }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    self.triggerCrash("e_tag: expected tag_union structure type", false, roc_ops);
+                    const content_tag = @tagName(resolved.desc.content);
+                    const struct_tag = if (resolved.desc.content == .structure) @tagName(resolved.desc.content.structure) else "n/a";
+                    const tag_name_str = self.env.getIdent(tag.name);
+                    // Also show what the ct_var resolves to for debugging
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_resolved = self.env.types.resolveVar(ct_var);
+                    const ct_content_tag = @tagName(ct_resolved.desc.content);
+                    const has_expected = expected_rt_var != null;
+                    const msg = std.fmt.allocPrint(self.allocator, "e_tag: expected tag_union but got rt={s}:{s} ct={s} has_expected={} for tag `{s}`", .{ content_tag, struct_tag, ct_content_tag, has_expected, tag_name_str }) catch "e_tag: expected tag_union structure type";
+                    self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 }
 
