@@ -1,4 +1,3 @@
-
 # Use this flake with `nix develop ./src`
 
 {
@@ -11,22 +10,28 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }@inputs:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+
+      ...
+    }@inputs:
     let
-      supportedSystems =
-        [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
-    in flake-utils.lib.eachSystem supportedSystems (system:
+      supportedSystems = [
+        "x86_64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+        "aarch64-linux"
+      ];
+
+    in
+    flake-utils.lib.eachSystem supportedSystems (
+      system:
       let
         pkgs = import nixpkgs { inherit system; };
-
-        zig=pkgs.zig_0_15;
-
-        dependencies =  [
-          zig
-          pkgs.zls
-          pkgs.git # for use in ci/zig_lints.sh
-        ];
-
+        zig = pkgs.zig_0_15;
         shellFunctions = ''
           buildcmd() {
             zig build roc
@@ -49,25 +54,32 @@
           export -f cicmd
         '';
 
-      in {
+      in
+      {
         packages = {
           default = self.packages.${system}.roc;
-          roc = pkgs.stdenv.mkDerivation {
-            name = "roc";
-            src = ../.;
-            nativeBuildInputs = [ zig.hook pkgs.pkg-config ];
-            zigBuildFlags = [ "-Doptimize=ReleaseFast" ];
+          roc = pkgs.stdenv.mkDerivation (finalAttrs: {
+            pname = "roc";
+            version = "0.0.0";
+            src = ./..;
+            deps = pkgs.callPackage ../build.zig.zon.nix {};
+            nativeBuildInputs = [ zig.hook ];
+            buildInputs = [ ];
+            dontConfigure = true;
+            zigBuildFlags = [
+              "--system"
+              "${finalAttrs.deps}"
+            ];
 
-            # NIX_CFLAGS_COMPILE="";
-            # NIX_LDFLAGS="";
-          };
+            meta.mainProgram = "roc";
+          });
         };
 
         apps = {
           default = self.apps.${system}.roc;
           roc = {
             type = "app";
-            program = "${self.packages.${system}.roc}/bin/roc";
+            program = pkgs.lib.getExe self.packages.${system}.roc;
             meta = {
               description = "Roc CLI";
               mainProgram = "roc";
@@ -76,7 +88,13 @@
         };
 
         devShell = pkgs.mkShell {
-          buildInputs = dependencies;
+          buildInputs = [
+            zig
+            pkgs.zls
+            pkgs.git # for use in ci/zig_lints.sh
+            (pkgs.writeShellScriptBin "zon2lock" "nix run github:Cloudef/zig2nix -- zon2lock build.zig.zon")
+            (pkgs.writeShellScriptBin "zon2nix" "nix run github:Cloudef/zig2nix -- zon2nix build.zig.zon2json-lock")
+          ];
 
           shellHook = ''
             ${shellFunctions}
@@ -86,11 +104,15 @@
               body=$(echo "${shellFunctions}" | sed -n "/''${func}()/,/^[[:space:]]*}/p" | sed '1d;$d' | tr '\n' ';' | sed 's/;$//' | sed 's/[[:space:]]*$//')
               echo "  $func = $body"
             done
+            echo "  zon2lock = nix run github:Cloudef/zig2nix -- zon2lock build.zig.zon"
+            echo "  zon2nix = nix run github:Cloudef/zig2nix -- zon2nix build.zig.zon2json-lock"
             echo ""
 
             unset NIX_CFLAGS_COMPILE
             unset NIX_LDFLAGS
           ''; # unset to fix: Unrecognized C flag from NIX_CFLAGS_COMPILE: -fmacro-prefix-map
         };
-      });
+        formatter = pkgs.nixfmt-rfc-style;
+      }
+    );
 }
