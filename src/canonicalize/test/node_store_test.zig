@@ -403,6 +403,13 @@ test "NodeStore round trip - Expressions" {
             .expr = rand_idx(CIR.Expr.Idx),
         },
     });
+    try expressions.append(gpa, CIR.Expr{
+        .e_for = .{
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
 
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));

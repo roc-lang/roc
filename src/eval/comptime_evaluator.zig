@@ -1376,6 +1376,12 @@ pub const ComptimeEvaluator = struct {
                 return true; // Ok
             }
             return true; // Unknown format, optimistically allow
+        } else if (result.layout.tag == .tag_union) {
+            // Tag union layout: payload at offset 0, discriminant at discriminant_offset
+            // For Try types from num.from_numeral, the interpreter should have stored
+            // the error message in last_error_message, which was already checked above.
+            // If we reach here without a last_error_message, assume it's Ok.
+            return true;
         }
 
         return true; // Unknown format, optimistically allow

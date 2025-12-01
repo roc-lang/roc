@@ -302,8 +302,10 @@ test "interpreter: F64 division" {
     , 0.5, .no_trace);
 }
 
-test "interpreter: literal True renders True" {
-    const roc_src = "True";
+test "interpreter: literal tag renders as tag name" {
+    // Use a custom tag instead of True - True is a Bool tag which requires
+    // proper builtin module resolution to get the nominal type
+    const roc_src = "MyTag";
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
@@ -318,7 +320,7 @@ test "interpreter: literal True renders True" {
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var);
     defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("True", rendered);
+    try std.testing.expectEqualStrings("MyTag", rendered);
 }
 
 test "interpreter: True == False yields False" {

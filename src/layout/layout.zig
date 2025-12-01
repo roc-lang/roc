@@ -26,6 +26,7 @@ pub const LayoutTag = enum(u4) {
     tuple,
     closure,
     zst, // Zero-sized type (empty records, empty tuples, phantom types, etc.)
+    tag_union, // Tag union with variant-specific layouts for proper refcounting
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -137,6 +138,7 @@ pub const LayoutUnion = packed union {
     tuple: TupleLayout,
     closure: ClosureLayout,
     zst: void,
+    tag_union: TagUnionLayout,
 };
 
 /// Record field layout
@@ -236,6 +238,51 @@ pub const TupleData = struct {
     }
 };
 
+/// Tag union layout - stores alignment and index to full data in Store
+/// This preserves variant information needed for correct reference counting.
+pub const TagUnionLayout = packed struct {
+    /// Alignment of the tag union
+    alignment: std.mem.Alignment,
+    /// Index into the Store's tag union data
+    idx: TagUnionIdx,
+};
+
+/// Index into the Store's tag union data
+pub const TagUnionIdx = packed struct {
+    int_idx: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            // Same bit budget as RecordIdx/TupleIdx
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
+        },
+    }),
+};
+
+/// Tag union data stored in the layout Store
+pub const TagUnionData = struct {
+    /// Size of the tag union, in bytes (max payload + discriminant, aligned)
+    size: u32,
+    /// Offset of the discriminant within the union (usually after payload)
+    discriminant_offset: u16,
+    /// Size of the discriminant in bytes (1, 2, or 4)
+    discriminant_size: u8,
+    /// Range of variants in the tag_union_variants list
+    variants: collections.NonEmptyRange,
+
+    pub fn getVariants(self: TagUnionData) TagUnionVariant.SafeMultiList.Range {
+        return self.variants.toRange(TagUnionVariant.SafeMultiList.Idx);
+    }
+};
+
+/// Per-variant information for tag unions
+pub const TagUnionVariant = struct {
+    /// The layout of this variant's payload
+    payload_layout: Idx,
+
+    /// A SafeMultiList for storing tag union variants
+    pub const SafeMultiList = collections.SafeMultiList(TagUnionVariant);
+};
+
 /// Roc's version of alignment that is limited to a max alignment of 16B to save bits.
 pub const RocAlignment = enum(u3) {
     @"1" = 0,
@@ -317,6 +364,7 @@ pub const Layout = packed struct {
             .list, .list_of_zst => target_usize.alignment(),
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
+            .tag_union => self.data.tag_union.alignment,
             .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
         };
@@ -399,6 +447,11 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .zst = {} }, .tag = .zst };
     }
 
+    /// tag union layout with the given alignment and tag union metadata
+    pub fn tagUnion(tu_alignment: std.mem.Alignment, tu_idx: TagUnionIdx) Layout {
+        return Layout{ .data = .{ .tag_union = .{ .alignment = tu_alignment, .idx = tu_idx } }, .tag = .tag_union };
+    }
+
     /// Check if a layout represents a heap-allocated type that needs refcounting
     pub fn isRefcounted(self: Layout) bool {
         return switch (self.tag) {
@@ -409,6 +462,32 @@ pub const Layout = packed struct {
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
             else => false,
+        };
+    }
+
+    /// Compare two layouts for equality.
+    /// This compares only the active variant based on the tag, avoiding
+    /// comparison of uninitialized union bytes that would trigger Valgrind warnings.
+    pub fn eql(self: Layout, other: Layout) bool {
+        if (self.tag != other.tag) return false;
+        return switch (self.tag) {
+            .scalar => self.data.scalar.tag == other.data.scalar.tag and switch (self.data.scalar.tag) {
+                .opaque_ptr, .str => true, // No additional data to compare
+                .int => self.data.scalar.data.int == other.data.scalar.data.int,
+                .frac => self.data.scalar.data.frac == other.data.scalar.data.frac,
+            },
+            .box => self.data.box == other.data.box,
+            .box_of_zst => true, // No additional data
+            .list => self.data.list == other.data.list,
+            .list_of_zst => true, // No additional data
+            .record => self.data.record.alignment == other.data.record.alignment and
+                self.data.record.idx.int_idx == other.data.record.idx.int_idx,
+            .tuple => self.data.tuple.alignment == other.data.tuple.alignment and
+                self.data.tuple.idx.int_idx == other.data.tuple.idx.int_idx,
+            .closure => self.data.closure.captures_layout_idx == other.data.closure.captures_layout_idx,
+            .zst => true, // No additional data
+            .tag_union => self.data.tag_union.alignment == other.data.tag_union.alignment and
+                self.data.tag_union.idx.int_idx == other.data.tag_union.idx.int_idx,
         };
     }
 };

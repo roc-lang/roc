@@ -3583,6 +3583,32 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
+        .e_for => |for_expr| {
+            // Check the pattern
+            try self.checkPattern(for_expr.patt, env, .no_expectation);
+            const for_ptrn_var: Var = ModuleEnv.varFrom(for_expr.patt);
+
+            // Check the list expression
+            does_fx = try self.checkExpr(for_expr.expr, env, .no_expectation) or does_fx;
+            const for_expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(for_expr.expr));
+            const for_expr_var: Var = ModuleEnv.varFrom(for_expr.expr);
+
+            // Check that the expr is list of the ptrn
+            const list_content = try self.mkListContent(for_ptrn_var, env);
+            const list_var = try self.freshFromContent(list_content, env, for_expr_region);
+            _ = try self.unify(list_var, for_expr_var, env);
+
+            // Check the body
+            does_fx = try self.checkExpr(for_expr.body, env, .no_expectation) or does_fx;
+            const for_body_var: Var = ModuleEnv.varFrom(for_expr.body);
+
+            // Check that the for body evaluates to {}
+            const body_ret = try self.freshFromContent(.{ .structure = .empty_record }, env, for_expr_region);
+            _ = try self.unify(body_ret, for_body_var, env);
+
+            // The for expression itself evaluates to {}
+            try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
+        },
         .e_ellipsis => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
@@ -3967,6 +3993,11 @@ fn unifyEarlyReturns(self: *Self, expr_idx: CIR.Expr.Idx, return_var: Var, env: 
                 const branch = self.cir.store.getMatchBranch(branch_idx);
                 try self.unifyEarlyReturns(branch.value, return_var, env);
             }
+        },
+        .e_for => |for_expr| {
+            // Check the list expression and body for returns
+            try self.unifyEarlyReturns(for_expr.expr, return_var, env);
+            try self.unifyEarlyReturns(for_expr.body, return_var, env);
         },
         // Lambdas create a new scope for returns - don't recurse into them
         .e_lambda, .e_closure => {},

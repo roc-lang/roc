@@ -48,7 +48,7 @@ fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
         .ptr = @ptrCast(elem_ptr),
         .is_initialized = true,
     };
-    elem_value.incref();
+    elem_value.incref(context.layout_store);
 }
 
 /// Decrement callback for list operations - decrements refcount of element via StackValue
@@ -76,6 +76,7 @@ fn layoutsEqual(a: Layout, b: Layout) bool {
         .record => std.meta.eql(a.data.record, b.data.record),
         .tuple => std.meta.eql(a.data.tuple, b.data.tuple),
         .closure => std.meta.eql(a.data.closure, b.data.closure),
+        .tag_union => std.meta.eql(a.data.tag_union, b.data.tag_union),
         .zst => true,
     };
 }
@@ -118,6 +119,13 @@ pub const Interpreter = struct {
         TypeMismatch,
         ZeroSizedType,
     } || std.mem.Allocator.Error || layout.LayoutError;
+
+    /// Key for caching type translations, combining module identity with type variable.
+    const ModuleVarKey = struct {
+        module: *can.ModuleEnv,
+        var_: types.Var,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -189,11 +197,19 @@ pub const Interpreter = struct {
     var_to_layout_slot: std.array_list.Managed(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
-    // Translation cache: (env_ptr, compile_var) -> runtime_var
-    translate_cache: std.AutoHashMap(u64, types.Var),
+    // Translation cache: (module, resolved_var) -> runtime_var
+    translate_cache: std.AutoHashMap(ModuleVarKey, types.Var),
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
+    // Compile-time rigid substitution for nominal type backing translation
+    // Maps CT rigid vars in backing type to CT type arg vars
+    translate_rigid_subst: std.AutoHashMap(types.Var, types.Var),
+
+    // Flex type context for polymorphic parameter type propagation.
+    // This allows numeric literals inside polymorphic functions to get the correct
+    // concrete type when the function is called with a specific type context.
+    flex_type_context: std.AutoHashMap(ModuleVarKey, types.Var),
 
     // Polymorphic instantiation cache
 
@@ -357,8 +373,10 @@ pub const Interpreter = struct {
             .runtime_layout_store = undefined, // set below to point at result.runtime_types
             .var_to_layout_slot = slots,
             .empty_scope = scope,
-            .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
+            .translate_cache = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .translate_rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
@@ -721,6 +739,157 @@ pub const Interpreter = struct {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
+    }
+
+    /// Result from setupSortWith helper
+    const SortWithResult = union(enum) {
+        /// List has < 2 elements, already sorted. Caller should decref compare_fn and push list_value.
+        already_sorted: StackValue,
+        /// Sorting continuation has been set up. Caller should return true.
+        sorting_started,
+    };
+
+    /// Helper to set up list_sort_with continuation-based evaluation.
+    /// Shared between call_invoke_closure and dot_access_collect_args paths.
+    fn setupSortWith(
+        self: *Interpreter,
+        list_arg: StackValue,
+        compare_fn: StackValue,
+        call_ret_rt_var: ?types.Var,
+        saved_rigid_subst_in: ?std.AutoHashMap(types.Var, types.Var),
+        roc_ops: *RocOps,
+        work_stack: *WorkStack,
+    ) !SortWithResult {
+        var saved_rigid_subst = saved_rigid_subst_in;
+
+        std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+        const list_len = roc_list.len();
+
+        // If list has 0 or 1 elements, it's already sorted
+        if (list_len < 2) {
+            // Free saved_rigid_subst since we won't pass it to continuation
+            if (saved_rigid_subst) |*saved| saved.deinit();
+            return .{ .already_sorted = list_arg };
+        }
+
+        // Get element layout
+        const elem_layout_idx = list_arg.layout.data.list;
+        const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+        const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+        const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+        // Make a unique copy of the list for sorting
+        const elements_refcounted = elem_layout.isRefcounted();
+        var refcount_context = RefcountContext{
+            .layout_store = &self.runtime_layout_store,
+            .elem_layout = elem_layout,
+            .roc_ops = roc_ops,
+        };
+
+        const working_list = roc_list.makeUnique(
+            elem_alignment_u32,
+            elem_size,
+            elements_refcounted,
+            if (elements_refcounted) @ptrCast(&refcount_context) else null,
+            if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+            if (elements_refcounted) @ptrCast(&refcount_context) else null,
+            if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+            roc_ops,
+        );
+
+        // Write the result of makeUnique back into the list arg
+        const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+        list_arg_ptr.* = working_list;
+
+        // Update rt_var if provided
+        var result_list = list_arg;
+        if (call_ret_rt_var) |rt_var| {
+            result_list.rt_var = rt_var;
+        }
+
+        // Start insertion sort at index 1
+        // Get elements at indices 0 and 1 for first comparison
+        const elem0_ptr = working_list.bytes.? + 0 * elem_size;
+        const elem1_ptr = working_list.bytes.? + 1 * elem_size;
+
+        const elem0_value = StackValue{
+            .layout = elem_layout,
+            .ptr = @ptrCast(elem0_ptr),
+            .is_initialized = true,
+        };
+        const elem1_value = StackValue{
+            .layout = elem_layout,
+            .ptr = @ptrCast(elem1_ptr),
+            .is_initialized = true,
+        };
+
+        // Copy elements for comparison (compare_fn will consume them)
+        const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
+        const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
+
+        // Push continuation to handle comparison result
+        try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
+            .list_value = result_list,
+            .compare_fn = compare_fn,
+            .call_ret_rt_var = call_ret_rt_var,
+            .saved_rigid_subst = saved_rigid_subst,
+            .outer_index = 1,
+            .inner_index = 0,
+            .list_len = list_len,
+            .elem_size = elem_size,
+            .elem_layout = elem_layout,
+        } } });
+        saved_rigid_subst = null; // Ownership transferred to continuation
+
+        // Invoke comparison function with (elem_at_outer, elem_at_inner)
+        const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
+        const cmp_saved_env = self.env;
+        self.env = @constCast(cmp_header.source_env);
+
+        const cmp_params = self.env.store.slicePatterns(cmp_header.params);
+        if (cmp_params.len != 2) {
+            self.env = cmp_saved_env;
+            return error.TypeMismatch;
+        }
+
+        try self.active_closures.append(compare_fn);
+
+        // Bind parameters
+        try self.bindings.append(.{
+            .pattern_idx = cmp_params[0],
+            .value = arg0,
+            .expr_idx = @enumFromInt(0),
+            .source_env = self.env,
+        });
+        try self.bindings.append(.{
+            .pattern_idx = cmp_params[1],
+            .value = arg1,
+            .expr_idx = @enumFromInt(0),
+            .source_env = self.env,
+        });
+
+        // Push cleanup and evaluate body
+        const bindings_start = self.bindings.items.len - 2;
+        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+            .saved_env = cmp_saved_env,
+            .saved_bindings_len = bindings_start,
+            .param_count = 2,
+            .has_active_closure = true,
+            .did_instantiate = false,
+            .call_ret_rt_var = null,
+            .saved_rigid_subst = null,
+            .saved_flex_type_context = null,
+            .arg_rt_vars_to_free = null,
+        } } });
+        try work_stack.push(.{ .eval_expr = .{
+            .expr_idx = cmp_header.body_idx,
+            .expected_rt_var = null,
+        } });
+
+        return .sorting_started;
     }
 
     /// Call a hosted function via RocOps.hosted_fns array
@@ -1392,6 +1561,37 @@ pub const Interpreter = struct {
 
                         dest.is_initialized = true;
                         return dest;
+                    } else if (result_layout.tag == .tag_union) {
+                        // Tag union layout with proper variant info
+                        var dest = try self.pushRaw(result_layout, 0);
+                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+                        if (dest.ptr) |base_ptr| {
+                            const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
+
+                            // Clear the entire payload area first
+                            const total_size = self.runtime_layout_store.layoutSize(result_layout);
+                            if (total_size > 0) {
+                                @memset(ptr_u8[0..total_size], 0);
+                            }
+
+                            // Write discriminant at discriminant_offset
+                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
+                            const disc_value: u32 = @intCast(ok_index orelse 0);
+                            switch (tu_data.discriminant_size) {
+                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
+                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
+                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
+                                else => {},
+                            }
+
+                            // Write Str payload at offset 0
+                            const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
+                            str_ptr.* = result.string;
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
                     } else {
                         self.triggerCrash("str_from_utf8: unexpected result layout", false, roc_ops);
                         return error.Crash;
@@ -1556,6 +1756,75 @@ pub const Interpreter = struct {
                                             const typed_ptr: *u64 = @ptrCast(@alignCast(ptr));
                                             typed_ptr.* = result.byte_index;
                                         }
+                                    }
+                                }
+                            }
+                        }
+
+                        dest.is_initialized = true;
+                        return dest;
+                    } else if (result_layout.tag == .tag_union) {
+                        // Tag union layout with proper variant info for Err case
+                        var dest = try self.pushRaw(result_layout, 0);
+                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+                        if (dest.ptr) |base_ptr| {
+                            const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
+
+                            // Clear the entire area first
+                            const total_size = self.runtime_layout_store.layoutSize(result_layout);
+                            if (total_size > 0) {
+                                @memset(ptr_u8[0..total_size], 0);
+                            }
+
+                            // Write outer discriminant (Err) at discriminant_offset
+                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
+                            const disc_value: u32 = @intCast(err_index orelse 1);
+                            switch (tu_data.discriminant_size) {
+                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
+                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
+                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
+                                else => {},
+                            }
+
+                            // Get Err variant's payload layout (BadUtf8 - also a tag_union)
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const err_variant_layout = self.runtime_layout_store.getLayout(variants.get(@intCast(err_index orelse 1)).payload_layout);
+
+                            // BadUtf8 is a tag_union with record { problem, index } as its payload
+                            if (err_variant_layout.tag == .tag_union) {
+                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(err_variant_layout.data.tag_union.idx);
+
+                                // Write inner discriminant (BadUtf8 is index 0)
+                                const inner_disc_ptr = ptr_u8 + inner_tu_data.discriminant_offset;
+                                switch (inner_tu_data.discriminant_size) {
+                                    1 => @as(*u8, @ptrCast(inner_disc_ptr)).* = 0,
+                                    2 => @as(*u16, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
+                                    4 => @as(*u32, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
+                                    else => {},
+                                }
+
+                                // Get BadUtf8's payload layout (should be record { problem, index })
+                                const inner_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
+                                const record_layout = self.runtime_layout_store.getLayout(inner_variants.get(0).payload_layout);
+
+                                if (record_layout.tag == .record) {
+                                    // Write problem field
+                                    if (self.runtime_layout_store.getRecordFieldOffsetByName(
+                                        record_layout.data.record.idx,
+                                        self.env.idents.problem,
+                                    )) |problem_offset| {
+                                        const problem_ptr: *u8 = @ptrCast(@alignCast(ptr_u8 + problem_offset));
+                                        problem_ptr.* = @intFromEnum(result.problem_code);
+                                    }
+
+                                    // Write index field
+                                    if (self.runtime_layout_store.getRecordFieldOffsetByName(
+                                        record_layout.data.record.idx,
+                                        self.env.idents.index,
+                                    )) |index_offset| {
+                                        const index_ptr: *u64 = @ptrCast(@alignCast(ptr_u8 + index_offset));
+                                        index_ptr.* = result.byte_index;
                                     }
                                 }
                             }
@@ -1834,11 +2103,20 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // If either list is empty, just return a copy of the other (avoid allocation)
+                // Since ownership is consume, we must decref the empty list.
                 if (list_a.len() == 0) {
-                    return try self.pushCopy(list_b_arg, roc_ops);
+                    list_a_arg.decref(&self.runtime_layout_store, roc_ops);
+                    // list_b ownership is transferred to the result (pushCopy increfs)
+                    const result = try self.pushCopy(list_b_arg, roc_ops);
+                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                    return result;
                 }
                 if (list_b.len() == 0) {
-                    return try self.pushCopy(list_a_arg, roc_ops);
+                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                    // list_a ownership is transferred to the result (pushCopy increfs)
+                    const result = try self.pushCopy(list_a_arg, roc_ops);
+                    list_a_arg.decref(&self.runtime_layout_store, roc_ops);
+                    return result;
                 }
 
                 // Determine if elements are refcounted
@@ -1893,6 +2171,13 @@ pub const Interpreter = struct {
                         }
                     }
                 }
+
+                // list_concat has consume ownership, so we must decref the input lists.
+                // The elements were already increffed above, and decref on the lists
+                // will decref their elements (if they're unique), resulting in net-zero
+                // refcount change for shared elements.
+                list_a_arg.decref(&self.runtime_layout_store, roc_ops);
+                list_b_arg.decref(&self.runtime_layout_store, roc_ops);
 
                 return out;
             },
@@ -2545,6 +2830,28 @@ pub const Interpreter = struct {
                         },
                         else => return error.TypeMismatch,
                     },
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_mod_by => {
+                std.debug.assert(args.len == 2); // low-level .num_mod_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@mod(l, r));
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    else => return error.TypeMismatch,
                 }
                 out.is_initialized = true;
                 return out;
@@ -3291,9 +3598,177 @@ pub const Interpreter = struct {
                     }
 
                     return dest;
+                } else if (result_layout.tag == .tag_union) {
+                    // Tag union layout: payload at offset 0, discriminant at discriminant_offset
+                    var dest = try self.pushRaw(result_layout, 0);
+                    const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+                    // Write tag discriminant at discriminant_offset
+                    const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+                    switch (tu_data.discriminant_size) {
+                        1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
+                        2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                        4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                        8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                        else => {},
+                    }
+
+                    // Clear payload area (at offset 0)
+                    const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+                    if (payload_size > 0) {
+                        @memset(base_ptr[0..payload_size], 0);
+                    }
+
+                    // Write payload for Ok case
+                    if (in_range and ok_payload_var != null) {
+                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
+                        const payload_ptr: *anyopaque = @ptrCast(base_ptr);
+                        if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
+                            const int_type = num_layout.data.scalar.data.int;
+                            if (is_negative) {
+                                switch (int_type) {
+                                    .i8 => {
+                                        const neg_value: i128 = -@as(i128, @intCast(value));
+                                        @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                    },
+                                    .i16 => {
+                                        const neg_value: i128 = -@as(i128, @intCast(value));
+                                        @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                    },
+                                    .i32 => {
+                                        const neg_value: i128 = -@as(i128, @intCast(value));
+                                        @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                    },
+                                    .i64 => {
+                                        const neg_value: i128 = -@as(i128, @intCast(value));
+                                        @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(neg_value);
+                                    },
+                                    .i128 => {
+                                        const as_signed: i128 = @bitCast(value);
+                                        const neg_value: i128 = -%as_signed;
+                                        @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = neg_value;
+                                    },
+                                    else => {},
+                                }
+                            } else {
+                                switch (int_type) {
+                                    .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                    .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
+                                    .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
+                                }
+                            }
+                        } else if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .frac) {
+                            const frac_precision = num_layout.data.scalar.data.frac;
+                            const float_value: f64 = if (is_negative)
+                                -@as(f64, @floatFromInt(value))
+                            else
+                                @as(f64, @floatFromInt(value));
+
+                            var frac_part: f64 = 0;
+                            if (digits_after.len > 0) {
+                                var mult: f64 = 1.0 / 256.0;
+                                for (digits_after) |digit| {
+                                    frac_part += @as(f64, @floatFromInt(digit)) * mult;
+                                    mult /= 256.0;
+                                }
+                            }
+                            const full_value = if (is_negative) float_value - frac_part else float_value + frac_part;
+
+                            switch (frac_precision) {
+                                .f32 => @as(*f32, @ptrCast(@alignCast(payload_ptr))).* = @floatCast(full_value),
+                                .f64 => @as(*f64, @ptrCast(@alignCast(payload_ptr))).* = full_value,
+                                .dec => {
+                                    const dec_value: i128 = if (is_negative)
+                                        -@as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128
+                                    else
+                                        @as(i128, @intCast(value)) * builtins.dec.RocDec.one_point_zero_i128;
+                                    @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = dec_value;
+                                },
+                            }
+                        }
+                    }
+
+                    // Store error message for Err case (same as tuple branch)
+                    if (!in_range) {
+                        var num_str_buf: [128]u8 = undefined;
+                        const num_str = can.CIR.formatBase256ToDecimal(is_negative, digits_before, digits_after, &num_str_buf);
+
+                        const error_msg = switch (rejection_reason) {
+                            .negative_unsigned => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values cannot be negative.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .fractional_integer => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. {s} values must be whole numbers, not fractions.",
+                                .{ num_str, type_name, type_name },
+                            ) catch null,
+                            .out_of_range, .overflow => std.fmt.allocPrint(
+                                self.allocator,
+                                "The number {s} is not a valid {s}. Valid {s} values are integers between {s} and {s}.",
+                                .{ num_str, type_name, type_name, min_value_str, max_value_str },
+                            ) catch null,
+                            .none => null,
+                        };
+
+                        if (error_msg) |msg| {
+                            self.last_error_message = msg;
+                        }
+                    }
+
+                    dest.is_initialized = true;
+                    return dest;
                 }
 
                 // Unsupported result layout is a compiler bug
+                unreachable;
+            },
+            .num_from_str => {
+                // num.from_str : Str -> Try(num, [BadNumStr])
+                // Dispatch to type-specific parsing using comptime generics
+                std.debug.assert(args.len == 1);
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_rt_var = return_rt_var orelse unreachable;
+                const ok_payload_var = try self.getTryOkPayloadVar(result_rt_var);
+
+                if (ok_payload_var) |payload_var| {
+                    const num_layout = try self.getRuntimeLayout(payload_var);
+                    if (num_layout.tag == .scalar) {
+                        if (num_layout.data.scalar.tag == .int) {
+                            return switch (num_layout.data.scalar.data.int) {
+                                .u8 => self.numFromStrInt(u8, roc_str, result_rt_var),
+                                .i8 => self.numFromStrInt(i8, roc_str, result_rt_var),
+                                .u16 => self.numFromStrInt(u16, roc_str, result_rt_var),
+                                .i16 => self.numFromStrInt(i16, roc_str, result_rt_var),
+                                .u32 => self.numFromStrInt(u32, roc_str, result_rt_var),
+                                .i32 => self.numFromStrInt(i32, roc_str, result_rt_var),
+                                .u64 => self.numFromStrInt(u64, roc_str, result_rt_var),
+                                .i64 => self.numFromStrInt(i64, roc_str, result_rt_var),
+                                .u128 => self.numFromStrInt(u128, roc_str, result_rt_var),
+                                .i128 => self.numFromStrInt(i128, roc_str, result_rt_var),
+                            };
+                        } else if (num_layout.data.scalar.tag == .frac) {
+                            return switch (num_layout.data.scalar.data.frac) {
+                                .f32 => self.numFromStrFloat(f32, roc_str, result_rt_var),
+                                .f64 => self.numFromStrFloat(f64, roc_str, result_rt_var),
+                                .dec => self.numFromStrDec(roc_str, result_rt_var),
+                            };
+                        }
+                    }
+                }
                 unreachable;
             },
             .dec_to_str => {
@@ -3827,6 +4302,38 @@ pub const Interpreter = struct {
             // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
 
             return dest;
+        } else if (result_layout.tag == .tag_union) {
+            // Tag union layout: payload at offset 0, discriminant at discriminant_offset
+            const dest = try self.pushRaw(result_layout, 0);
+            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+            // Write tag discriminant at discriminant_offset
+            const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
+            switch (tu_data.discriminant_size) {
+                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
+                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                else => {},
+            }
+
+            // Clear payload area (at offset 0)
+            const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+            if (payload_size > 0) {
+                @memset(base_ptr[0..payload_size], 0);
+            }
+
+            // Write payload for Ok case
+            if (in_range) {
+                const to_value: To = @intCast(from_value);
+                const payload_ptr: *To = @ptrCast(@alignCast(base_ptr));
+                payload_ptr.* = to_value;
+            }
+            // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
+
+            return dest;
         }
 
         // Unsupported result layout is a compiler bug
@@ -4242,6 +4749,184 @@ pub const Interpreter = struct {
         };
     }
 
+    /// Get the Ok payload type variable from a Try type
+    fn getTryOkPayloadVar(self: *Interpreter, result_rt_var: types.Var) !?types.Var {
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        const ok_ident = self.env.idents.ok;
+        for (tag_list.items) |tag_info| {
+            if (tag_info.name == ok_ident) {
+                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                if (arg_vars.len >= 1) {
+                    return arg_vars[0];
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Get Ok and Err tag indices from a Try type
+    fn getTryTagIndices(self: *Interpreter, result_rt_var: types.Var) !struct { ok: ?usize, err: ?usize } {
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        var ok_index: ?usize = null;
+        var err_index: ?usize = null;
+        const ok_ident = self.env.idents.ok;
+        const err_ident = self.env.idents.err;
+
+        for (tag_list.items, 0..) |tag_info, i| {
+            if (tag_info.name == ok_ident) {
+                ok_index = i;
+            } else if (tag_info.name == err_ident) {
+                err_index = i;
+            }
+        }
+        return .{ .ok = ok_index, .err = err_index };
+    }
+
+    /// Helper for parsing integer from string (Str -> Try(T, [BadNumStr]))
+    fn numFromStrInt(self: *Interpreter, comptime T: type, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        const str_slice = roc_str.asSlice();
+
+        // Parse integer using base-10 radix only
+        const parsed: ?T = std.fmt.parseInt(T, str_slice, 10) catch null;
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        return self.buildTryResultWithValue(T, result_layout, tag_indices.ok, tag_indices.err, success, parsed orelse 0);
+    }
+
+    /// Helper for parsing float from string (Str -> Try(T, [BadNumStr]))
+    fn numFromStrFloat(self: *Interpreter, comptime T: type, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        const str_slice = roc_str.asSlice();
+
+        // Parse float
+        const parsed: ?T = std.fmt.parseFloat(T, str_slice) catch null;
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        return self.buildTryResultWithValue(T, result_layout, tag_indices.ok, tag_indices.err, success, parsed orelse 0);
+    }
+
+    /// Helper for parsing Dec from string (Str -> Try(Dec, [BadNumStr]))
+    fn numFromStrDec(self: *Interpreter, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        // Use RocDec's fromStr implementation
+        const parsed = builtins.dec.RocDec.fromStr(roc_str.*);
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        // Dec is stored as i128 internally
+        const dec_val: i128 = if (parsed) |dec| dec.num else 0;
+        return self.buildTryResultWithValue(i128, result_layout, tag_indices.ok, tag_indices.err, success, dec_val);
+    }
+
+    /// Build a Try result with a value payload
+    fn buildTryResultWithValue(
+        self: *Interpreter,
+        comptime T: type,
+        result_layout: Layout,
+        ok_index: ?usize,
+        err_index: ?usize,
+        success: bool,
+        value: T,
+    ) !StackValue {
+        const tag_idx: usize = if (success) ok_index orelse 0 else err_index orelse 1;
+
+        if (result_layout.tag == .record) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asRecord(&self.runtime_layout_store);
+            const layout_env = self.runtime_layout_store.env;
+            const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse unreachable;
+            const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse unreachable;
+
+            // Write tag discriminant
+            const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            try tmp.setInt(@intCast(tag_idx));
+
+            // Clear and write payload
+            const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
+                }
+                if (success) {
+                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tuple) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+            // Write tag discriminant (element 1)
+            const tag_field = try result_acc.getElement(1);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            try tmp.setInt(@intCast(tag_idx));
+
+            // Clear and write payload (element 0)
+            const payload_field = try result_acc.getElement(0);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
+                }
+                if (success) {
+                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tag_union) {
+            var dest = try self.pushRaw(result_layout, 0);
+            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+            const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+
+            // Write discriminant
+            switch (tu_data.discriminant_size) {
+                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
+                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                else => {},
+            }
+
+            // Clear and write payload
+            const payload_size = tu_data.discriminant_offset;
+            if (payload_size > 0) {
+                @memset(base_ptr[0..payload_size], 0);
+            }
+            if (success) {
+                @as(*T, @ptrCast(@alignCast(base_ptr))).* = value;
+            }
+
+            dest.is_initialized = true;
+            return dest;
+        }
+
+        unreachable;
+    }
+
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
         defer if (owned) self.allocator.free(@constCast(message));
         roc_ops.crash(message);
@@ -4262,6 +4947,37 @@ pub const Interpreter = struct {
         roc_ops.crash(source_bytes);
     }
 
+    /// Handle completion of a for loop/expression.
+    /// For statements: continue with remaining statements or final expression.
+    /// For expressions: push empty record {} as result.
+    fn handleForLoopComplete(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        stmt_context: ?Continuation.ForIterate.StatementContext,
+        bindings_start: usize,
+        roc_ops: *RocOps,
+    ) Error!void {
+        if (stmt_context) |ctx| {
+            // For statement: continue with remaining statements
+            if (ctx.remaining_stmts.len == 0) {
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ctx.final_expr,
+                    .expected_rt_var = null,
+                } });
+            } else {
+                const next_stmt = self.env.store.getStatement(ctx.remaining_stmts[0]);
+                try self.scheduleNextStatement(work_stack, next_stmt, ctx.remaining_stmts[1..], ctx.final_expr, bindings_start, null, roc_ops);
+            }
+        } else {
+            // For expression: push empty record {} as result
+            const empty_record_layout_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            const empty_record_layout = self.runtime_layout_store.getLayout(empty_record_layout_idx);
+            const empty_record_value = try self.pushRaw(empty_record_layout, 0);
+            try value_stack.push(empty_record_value);
+        }
+    }
+
     fn getRuntimeU8(value: StackValue) u8 {
         std.debug.assert(value.layout.tag == .scalar);
         std.debug.assert(value.layout.data.scalar.tag == .int);
@@ -4273,14 +4989,29 @@ pub const Interpreter = struct {
         return b.*;
     }
 
-    fn boolValueEquals(equals: bool, value: StackValue) bool {
-        // Bools are u8 scalars
-        std.debug.assert(value.layout.tag == .scalar);
-        std.debug.assert(value.layout.data.scalar.tag == .int);
-        std.debug.assert(value.layout.data.scalar.data.int == .u8);
+    fn boolValueEquals(self: *Interpreter, equals: bool, value: StackValue) bool {
         const ptr = value.ptr orelse unreachable;
-        const bool_byte = @as(*const u8, @ptrCast(@alignCast(ptr))).*;
-        return (bool_byte != 0) == equals;
+
+        // Bool can be either a scalar (u8) or a tag_union layout
+        // For tag_union: False=0, True=1 (alphabetically sorted)
+        if (value.layout.tag == .scalar) {
+            std.debug.assert(value.layout.data.scalar.tag == .int);
+            std.debug.assert(value.layout.data.scalar.data.int == .u8);
+            const bool_byte = @as(*const u8, @ptrCast(@alignCast(ptr))).*;
+            // Debug removed
+            return (bool_byte != 0) == equals;
+        } else if (value.layout.tag == .tag_union) {
+            // Tag union Bool: read discriminant at the correct offset
+            const tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+            const base_ptr: [*]u8 = @ptrCast(ptr);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const bool_byte = disc_ptr[0];
+            // Debug removed
+            // discriminant 1 = True, discriminant 0 = False
+            return (bool_byte == 1) == equals;
+        } else {
+            std.debug.panic("boolValueEquals: unexpected layout tag {s}", .{@tagName(value.layout.tag)});
+        }
     }
 
     const NumericKind = enum { int, dec, f32, f64 };
@@ -4967,7 +5698,7 @@ pub const Interpreter = struct {
             return error.NotImplemented;
         };
         defer result.decref(&self.runtime_layout_store, roc_ops);
-        return boolValueEquals(true, result);
+        return self.boolValueEquals(true, result);
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
@@ -5258,6 +5989,50 @@ pub const Interpreter = struct {
                             .is_initialized = field_value.is_initialized,
                         };
                     }
+                }
+
+                return .{ .index = tag_index, .payload = payload_value };
+            },
+            .tag_union => {
+                // New proper tag_union layout: payload at offset 0, discriminant at discriminant_offset
+                var acc = try value.asTagUnion(&self.runtime_layout_store);
+                const tag_index = acc.getDiscriminant();
+
+                var payload_value: ?StackValue = null;
+                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer tag_list.deinit();
+                try self.appendUnionTags(union_rt_var, &tag_list);
+                if (tag_index >= tag_list.items.len) return error.TypeMismatch;
+                const tag_info = tag_list.items[tag_index];
+                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+
+                if (arg_vars.len == 0) {
+                    payload_value = null;
+                } else if (arg_vars.len == 1) {
+                    // Get the payload layout from the variant
+                    const variant_layout = acc.getVariantLayout(tag_index);
+                    const arg_var = arg_vars[0];
+                    const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                    const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
+                        if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                            break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                        }
+                        break :blk variant_layout;
+                    } else variant_layout;
+
+                    payload_value = StackValue{
+                        .layout = effective_layout,
+                        .ptr = value.ptr, // Payload is at offset 0
+                        .is_initialized = true,
+                    };
+                } else {
+                    // Multiple args: the payload is a tuple at offset 0
+                    const variant_layout = acc.getVariantLayout(tag_index);
+                    payload_value = StackValue{
+                        .layout = variant_layout,
+                        .ptr = value.ptr,
+                        .is_initialized = true,
+                    };
                 }
 
                 return .{ .index = tag_index, .payload = payload_value };
@@ -5659,14 +6434,35 @@ pub const Interpreter = struct {
                 defer tag_list.deinit();
                 try self.appendUnionTags(value_rt_var, &tag_list);
 
-                const tag_data = try self.extractTagValue(value, value_rt_var);
-                if (tag_data.index >= tag_list.items.len) return false;
+                // Build tag list from value's original rt_var if available.
+                // This is critical when a value was created with a narrower type (e.g., [Ok])
+                // and is later matched against a wider type (e.g., Try = [Err, Ok]).
+                // The discriminant stored in the value is based on the original type's ordering,
+                // so we need the original type's tag list to translate it to a tag name.
+                var value_tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                defer value_tag_list.deinit();
+                if (value.rt_var) |orig_rt_var| {
+                    try self.appendUnionTags(orig_rt_var, &value_tag_list);
+                }
 
-                // Find the expected tag's index in the tag list by matching the name
-                // Pattern tag names are from self.env, tag_list names are in runtime_layout_store.env
+                const tag_data = try self.extractTagValue(value, value_rt_var);
+
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
                 const expected_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(expected_name_str));
+
+                // Get the actual tag name from the value by looking up its discriminant
+                // in the appropriate tag list (value's original type if available, else expected type)
+                const lookup_list = if (value_tag_list.items.len > 0) value_tag_list.items else tag_list.items;
+                if (tag_data.index >= lookup_list.len) return false;
+                const actual_tag_name = lookup_list[tag_data.index].name;
+
+                // Compare tag names directly instead of comparing discriminant indices.
+                // This handles the case where a value's discriminant was set based on a narrower
+                // type and needs to match a pattern from a wider type.
+                if (actual_tag_name != expected_ident) return false;
+
+                // Find the expected tag's index in the expected type's tag list for payload access
                 var expected_index: ?usize = null;
                 for (tag_list.items, 0..) |tag_info, i| {
                     if (tag_info.name == expected_ident) {
@@ -5677,9 +6473,6 @@ pub const Interpreter = struct {
 
                 // If the pattern's tag doesn't exist in the union, the match fails
                 if (expected_index == null) return false;
-
-                // Compare runtime tag discriminant with expected tag discriminant
-                if (tag_data.index != expected_index.?) return false;
 
                 const arg_patterns = self.env.store.slicePatterns(tag_pat.args);
                 const arg_vars_range = tag_list.items[expected_index.?].args;
@@ -5740,6 +6533,8 @@ pub const Interpreter = struct {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
         self.rigid_subst.deinit();
+        self.translate_rigid_subst.deinit();
+        self.flex_type_context.deinit();
         var it = self.poly_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.args.len > 0) {
@@ -5991,6 +6786,7 @@ pub const Interpreter = struct {
         const layout_idx = switch (resolved.desc.content) {
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
+                .nominal_type => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
                 else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
             },
             else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
@@ -6071,13 +6867,188 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Collect all rigid vars from a type, traversing the structure recursively.
+    /// Used to map rigids in nominal type backings to their corresponding type args.
+    fn collectRigidsFromType(
+        allocator: std.mem.Allocator,
+        module: *can.ModuleEnv,
+        var_: types.Var,
+        rigids: *std.ArrayList(types.Var),
+        visited: *std.AutoHashMap(types.Var, void),
+    ) error{OutOfMemory}!void {
+        const resolved = module.types.resolveVar(var_);
+        if (visited.contains(resolved.var_)) return;
+        try visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .rigid => {
+                // Found a rigid - add if not already present
+                for (rigids.items) |r| {
+                    if (@intFromEnum(r) == @intFromEnum(resolved.var_)) return;
+                }
+                try rigids.append(allocator, resolved.var_);
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tu| {
+                    const tags = module.types.getTagsSlice(tu.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        for (module.types.sliceVars(tag_args)) |arg| {
+                            try collectRigidsFromType(allocator, module, arg, rigids, visited);
+                        }
+                    }
+                    // Also traverse extension
+                    try collectRigidsFromType(allocator, module, tu.ext, rigids, visited);
+                },
+                .tuple => |t| {
+                    for (module.types.sliceVars(t.elems)) |elem| {
+                        try collectRigidsFromType(allocator, module, elem, rigids, visited);
+                    }
+                },
+                .record => |rec| {
+                    const fields = module.types.getRecordFieldsSlice(rec.fields);
+                    for (fields.items(.var_)) |field_var| {
+                        try collectRigidsFromType(allocator, module, field_var, rigids, visited);
+                    }
+                    // Also traverse extension
+                    try collectRigidsFromType(allocator, module, rec.ext, rigids, visited);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |f| {
+                    for (module.types.sliceVars(f.args)) |arg| {
+                        try collectRigidsFromType(allocator, module, arg, rigids, visited);
+                    }
+                    try collectRigidsFromType(allocator, module, f.ret, rigids, visited);
+                },
+                else => {},
+            },
+            .alias => |alias| {
+                try collectRigidsFromType(allocator, module, module.types.getAliasBackingVar(alias), rigids, visited);
+            },
+            .flex => {},
+            .err => {},
+            .recursion_var => {},
+        }
+    }
+
+    /// Collect all rigid vars from a RUNTIME type, traversing the structure.
+    /// Similar to collectRigidsFromType but works on the runtime type store.
+    fn collectRigidsFromRuntimeType(
+        self: *Interpreter,
+        allocator: std.mem.Allocator,
+        var_: types.Var,
+        rigids: *std.ArrayListUnmanaged(types.Var),
+        visited: *std.AutoHashMap(types.Var, void),
+    ) error{OutOfMemory}!void {
+        const resolved = self.runtime_types.resolveVar(var_);
+        if (visited.contains(resolved.var_)) return;
+        try visited.put(resolved.var_, {});
+
+        switch (resolved.desc.content) {
+            .rigid => {
+                // Found a rigid - add if not already present
+                for (rigids.items) |r| {
+                    if (@intFromEnum(r) == @intFromEnum(resolved.var_)) return;
+                }
+                try rigids.append(allocator, resolved.var_);
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tu| {
+                    const tags = self.runtime_types.getTagsSlice(tu.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        for (self.runtime_types.sliceVars(tag_args)) |arg| {
+                            try self.collectRigidsFromRuntimeType(allocator, arg, rigids, visited);
+                        }
+                    }
+                    // Also traverse extension
+                    try self.collectRigidsFromRuntimeType(allocator, tu.ext, rigids, visited);
+                },
+                .tuple => |t| {
+                    for (self.runtime_types.sliceVars(t.elems)) |elem| {
+                        try self.collectRigidsFromRuntimeType(allocator, elem, rigids, visited);
+                    }
+                },
+                .record => |rec| {
+                    const fields = self.runtime_types.getRecordFieldsSlice(rec.fields);
+                    for (fields.items(.var_)) |field_var| {
+                        try self.collectRigidsFromRuntimeType(allocator, field_var, rigids, visited);
+                    }
+                    // Also traverse extension
+                    try self.collectRigidsFromRuntimeType(allocator, rec.ext, rigids, visited);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |f| {
+                    for (self.runtime_types.sliceVars(f.args)) |arg| {
+                        try self.collectRigidsFromRuntimeType(allocator, arg, rigids, visited);
+                    }
+                    try self.collectRigidsFromRuntimeType(allocator, f.ret, rigids, visited);
+                },
+                else => {},
+            },
+            .alias => |alias| {
+                try self.collectRigidsFromRuntimeType(allocator, self.runtime_types.getAliasBackingVar(alias), rigids, visited);
+            },
+            .flex => {},
+            .err => {},
+            .recursion_var => {},
+        }
+    }
+
+    /// Add rigid -> type_arg mappings to empty_scope for layout computation.
+    /// The layout store uses TypeScope.lookup() when it encounters rigids,
+    /// so this ensures nested rigids in nominal types get properly substituted.
+    fn addRigidMappingsToScope(
+        self: *Interpreter,
+        rigids: []const types.Var,
+        type_args: []const types.Var,
+    ) !void {
+        // Ensure we have at least one scope level
+        if (self.empty_scope.scopes.items.len == 0) {
+            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+        }
+
+        // Add mappings to the first scope
+        const scope = &self.empty_scope.scopes.items[0];
+        const num_mappings = @min(rigids.len, type_args.len);
+        for (0..num_mappings) |i| {
+            // Resolve the type_arg - if it's a rigid that we already have a mapping for,
+            // follow the chain to get the concrete type
+            var resolved_type_arg = type_args[i];
+            const type_arg_resolved = self.runtime_types.resolveVar(type_args[i]);
+            if (type_arg_resolved.desc.content == .rigid) {
+                // Type arg is itself a rigid - look it up in empty_scope or rigid_subst
+                if (self.empty_scope.lookup(type_args[i])) |mapped| {
+                    resolved_type_arg = mapped;
+                } else if (self.rigid_subst.get(type_args[i])) |mapped| {
+                    resolved_type_arg = mapped;
+                }
+            }
+
+            // Skip if we'd be mapping rigid -> same rigid (useless)
+            if (rigids[i] == resolved_type_arg) {
+                continue;
+            }
+
+            try scope.put(rigids[i], resolved_type_arg);
+        }
+    }
+
     /// Translate a compile-time type variable from a module's type store to the runtime type store.
     /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
     /// Uses caching to handle recursive types and avoid duplicate work.
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
-        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
+        const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
+
+        // Check flex_type_context BEFORE translate_cache for flex types.
+        // This is critical for polymorphic functions: the same compile-time flex var
+        // may need to translate to different runtime types depending on calling context.
+        // For example, `sum = |num| 0 + num` called as U64.to_str(sum(2400)) needs
+        // the literal 0 to become U64, not the cached Dec default.
+        if (resolved.desc.content == .flex) {
+            if (self.flex_type_context.get(key)) |context_rt_var| {
+                return context_rt_var;
+            }
+        }
+
         if (self.translate_cache.get(key)) |found| {
             return found;
         }
@@ -6215,8 +7186,39 @@ pub const Interpreter = struct {
                         },
                         .nominal_type => |nom| {
                             const ct_backing = module.types.getNominalBackingVar(nom);
-                            const rt_backing = try self.translateTypeVar(module, ct_backing);
                             const ct_args = module.types.sliceNominalArgs(nom);
+
+                            // Build rigid → type arg substitution map before translating backing
+                            if (ct_args.len > 0) {
+                                // Collect rigids from backing type
+                                var rigids = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
+                                defer rigids.deinit(self.allocator);
+                                var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                                defer visited.deinit();
+
+                                collectRigidsFromType(self.allocator, module, ct_backing, &rigids, &visited) catch |e| switch (e) {
+                                    error.OutOfMemory => return error.OutOfMemory,
+                                };
+
+                                // Sort by var ID for positional correspondence with type args
+                                std.mem.sort(types.Var, rigids.items, {}, struct {
+                                    fn lessThan(_: void, a: types.Var, b: types.Var) bool {
+                                        return @intFromEnum(a) < @intFromEnum(b);
+                                    }
+                                }.lessThan);
+
+                                // Map rigids to type args positionally
+                                const num_mappings = @min(rigids.items.len, ct_args.len);
+                                for (0..num_mappings) |i| {
+                                    try self.translate_rigid_subst.put(rigids.items[i], ct_args[i]);
+                                }
+                            }
+
+                            // Translate backing (rigids will be substituted via translate_rigid_subst)
+                            const rt_backing = try self.translateTypeVar(module, ct_backing);
+
+                            // Clear substitution map for next nominal type
+                            self.translate_rigid_subst.clearRetainingCapacity();
                             var buf = try self.allocator.alloc(types.Var, ct_args.len);
                             defer self.allocator.free(buf);
                             for (ct_args, 0..) |ct_arg, i| {
@@ -6265,6 +7267,10 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
+                    // Note: flex_type_context is checked at the top of translateTypeVar,
+                    // before the translate_cache lookup. If we reach here, there was no
+                    // contextual override, so we create a fresh flex var.
+
                     // Translate static dispatch constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
@@ -6289,6 +7295,12 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .rigid => |rigid| {
+                    // Check if this rigid should be substituted (during nominal type backing translation)
+                    if (self.translate_rigid_subst.get(resolved.var_)) |substitute_var| {
+                        // Translate the substitute type instead of the rigid
+                        break :blk try self.translateTypeVar(module, substitute_var);
+                    }
+
                     // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
@@ -6429,6 +7441,42 @@ pub const Interpreter = struct {
                         const new_ext = try self.instantiateType(record.ext, subst_map);
                         const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = new_ext } } };
                         break :blk_record try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    },
+                    .nominal_type => |nt| blk_nominal: {
+                        // Add placeholder to prevent infinite recursion on recursive types
+                        try subst_map.put(resolved.var_, type_var);
+
+                        // Recursively process type args to find and map any rigids
+                        const type_args = self.runtime_types.sliceNominalArgs(nt);
+                        for (type_args) |arg_var| {
+                            _ = try self.instantiateType(arg_var, subst_map);
+                        }
+
+                        // Also process the backing type to find any rigids there
+                        const backing = self.runtime_types.getNominalBackingVar(nt);
+                        _ = try self.instantiateType(backing, subst_map);
+
+                        // Return original - substitution handled via rigid_subst during layout
+                        break :blk_nominal type_var;
+                    },
+                    .tag_union => |tu| blk_tag_union: {
+                        // Add placeholder to prevent infinite recursion
+                        try subst_map.put(resolved.var_, type_var);
+
+                        // Recursively process each tag's argument types to find rigids
+                        const tags_slice = self.runtime_types.getTagsSlice(tu.tags);
+                        for (tags_slice.items(.args)) |args_range| {
+                            const arg_vars = self.runtime_types.sliceVars(args_range);
+                            for (arg_vars) |arg_var| {
+                                _ = try self.instantiateType(arg_var, subst_map);
+                            }
+                        }
+
+                        // Also process the extension
+                        _ = try self.instantiateType(tu.ext, subst_map);
+
+                        // Return original - substitution handled via rigid_subst during layout
+                        break :blk_tag_union type_var;
                     },
                     // For other structures (str, num, empty_record, etc.), return as-is
                     else => type_var,
@@ -6731,11 +7779,11 @@ pub const Interpreter = struct {
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
 
-        /// For loop - iterate over list elements after list is evaluated.
-        for_loop_iterate: ForLoopIterate,
+        /// For loop/expression - iterate over list elements after list is evaluated.
+        for_iterate: ForIterate,
 
-        /// For loop - process body result and continue to next iteration.
-        for_loop_body_done: ForLoopBodyDone,
+        /// For loop/expression - process body result and continue to next iteration.
+        for_body_done: ForBodyDone,
 
         /// While loop - check condition and decide whether to continue.
         while_loop_check: WhileLoopCheck,
@@ -6801,6 +7849,8 @@ pub const Interpreter = struct {
             remaining_branches: []const can.CIR.Expr.IfBranch.Idx,
             /// The final else expression
             final_else: can.CIR.Expr.Idx,
+            /// Expected runtime type for the result (propagated from caller)
+            expected_rt_var: ?types.Var = null,
         };
 
         pub const BlockContinue = struct {
@@ -6813,6 +7863,8 @@ pub const Interpreter = struct {
             /// True if this block_continue was scheduled after an s_expr statement,
             /// meaning we should pop and discard the expression's result value
             should_discard_value: bool = false,
+            /// Expected runtime type for the final expression (propagated from caller)
+            expected_rt_var: ?types.Var = null,
         };
 
         pub const BindDecl = struct {
@@ -6826,6 +7878,8 @@ pub const Interpreter = struct {
             final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// Expected runtime type for the final expression (propagated from caller)
+            expected_rt_var: ?types.Var = null,
         };
 
         pub const TupleCollect = struct {
@@ -6989,6 +8043,8 @@ pub const Interpreter = struct {
             call_ret_rt_var: ?types.Var,
             /// Saved rigid_subst to restore after method call (for polymorphic dispatch)
             saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
+            /// Saved flex_type_context to restore after call (for polymorphic parameter types)
+            saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -7053,8 +8109,8 @@ pub const Interpreter = struct {
             expr_idx: can.CIR.Expr.Idx,
         };
 
-        /// For loop - iterate over list elements
-        pub const ForLoopIterate = struct {
+        /// For loop/expression - iterate over list elements
+        pub const ForIterate = struct {
             /// The list value being iterated (stored to access elements)
             list_value: StackValue,
             /// Current iteration index
@@ -7071,16 +8127,21 @@ pub const Interpreter = struct {
             patt_rt_var: types.Var,
             /// Body expression to evaluate for each element
             body: can.CIR.Expr.Idx,
-            /// Remaining statements after the for loop
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// Statement context for for-statements (null for for-expressions)
+            stmt_context: ?StatementContext,
+
+            pub const StatementContext = struct {
+                /// Remaining statements after the for loop
+                remaining_stmts: []const can.CIR.Statement.Idx,
+                /// Final expression to evaluate after all statements
+                final_expr: can.CIR.Expr.Idx,
+            };
         };
 
-        /// For loop - cleanup after body evaluation
-        pub const ForLoopBodyDone = struct {
+        /// For loop/expression - cleanup after body evaluation
+        pub const ForBodyDone = struct {
             /// The list value being iterated
             list_value: StackValue,
             /// Current iteration index (just completed)
@@ -7097,14 +8158,12 @@ pub const Interpreter = struct {
             patt_rt_var: types.Var,
             /// Body expression to evaluate for each element
             body: can.CIR.Expr.Idx,
-            /// Remaining statements after the for loop
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
             /// Bindings length at iteration start (for per-iteration cleanup)
             loop_bindings_start: usize,
+            /// Statement context for for-statements (null for for-expressions)
+            stmt_context: ?ForIterate.StatementContext,
         };
 
         /// While loop - check condition
@@ -7304,12 +8363,16 @@ pub const Interpreter = struct {
                                 var saved_copy = saved;
                                 saved_copy.deinit();
                             }
+                            if (cc.saved_flex_type_context) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
                         },
-                        .for_loop_iterate => |fl| {
+                        .for_iterate => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
-                        .for_loop_body_done => |fl| {
+                        .for_body_done => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
@@ -7445,7 +8508,7 @@ pub const Interpreter = struct {
             // ================================================================
 
             .e_lookup_local => |lookup| {
-                const value = try self.evalLookupLocal(lookup, roc_ops);
+                const value = try self.evalLookupLocal(lookup, expected_rt_var, roc_ops);
                 try value_stack.push(value);
             },
 
@@ -7675,6 +8738,7 @@ pub const Interpreter = struct {
                         .body = first_branch.body,
                         .remaining_branches = branches[1..],
                         .final_else = if_expr.final_else,
+                        .expected_rt_var = expected_rt_var,
                     } } });
                     // Push condition evaluation (to be executed first)
                     try work_stack.push(.{ .eval_expr = .{
@@ -7722,6 +8786,7 @@ pub const Interpreter = struct {
                         .remaining_stmts = stmts,
                         .final_expr = blk.final_expr,
                         .bindings_start = bindings_start,
+                        .expected_rt_var = expected_rt_var,
                     } } });
                 }
             },
@@ -7835,18 +8900,75 @@ pub const Interpreter = struct {
             // ================================================================
 
             .e_nominal => |nom| {
-                // Compute the backing type variable for the nominal
-                const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
-                const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                // Compute the backing type variable for the nominal.
+                // Use expected_rt_var if available - this carries the correctly instantiated type
+                // from the call site (with concrete type args), avoiding re-translation from
+                // the builtins module which would have rigid type args.
                 const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
                     try self.getCanonicalBoolRuntimeVar()
-                else switch (nominal_resolved.desc.content) {
-                    .structure => |st| switch (st) {
-                        .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                else if (expected_rt_var) |expected| blk: {
+                    // Use the expected type's backing - but we need to set up rigid substitution
+                    // because the backing may still have rigids that need to map to concrete type args
+                    const expected_resolved = self.runtime_types.resolveVar(expected);
+                    switch (expected_resolved.desc.content) {
+                        .structure => |st| switch (st) {
+                            .nominal_type => |nt| {
+                                const backing = self.runtime_types.getNominalBackingVar(nt);
+                                const rt_type_args = self.runtime_types.sliceNominalArgs(nt);
+
+                                // Set up rigid_subst: map rigids in backing to concrete type args
+                                if (rt_type_args.len > 0) {
+                                    // Collect rigids from the backing type
+                                    var rigids: std.ArrayListUnmanaged(types.Var) = .empty;
+                                    defer rigids.deinit(self.allocator);
+                                    var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
+                                    defer visited.deinit();
+                                    try self.collectRigidsFromRuntimeType(self.allocator, backing, &rigids, &visited);
+
+                                    // Sort by var ID for positional correspondence
+                                    std.mem.sort(types.Var, rigids.items, {}, struct {
+                                        fn lessThan(_: void, a: types.Var, b: types.Var) bool {
+                                            return @intFromEnum(a) < @intFromEnum(b);
+                                        }
+                                    }.lessThan);
+
+                                    // Add mappings to empty_scope so layout store finds them via TypeScope.lookup()
+                                    try self.addRigidMappingsToScope(rigids.items, rt_type_args);
+
+                                    // Also add to rigid_subst for backwards compatibility
+                                    const num_mappings = @min(rigids.items.len, rt_type_args.len);
+                                    for (0..num_mappings) |i| {
+                                        const arg_resolved = self.runtime_types.resolveVar(rt_type_args[i]);
+                                        // If the type arg is itself a rigid, look it up in rigid_subst
+                                        // to get the concrete type from an outer context
+                                        const concrete_type = switch (arg_resolved.desc.content) {
+                                            .rigid => if (self.rigid_subst.get(arg_resolved.var_)) |outer_concrete|
+                                                outer_concrete
+                                            else
+                                                rt_type_args[i],
+                                            else => rt_type_args[i],
+                                        };
+                                        try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                    }
+                                }
+                                break :blk backing;
+                            },
+                            else => break :blk expected,
+                        },
+                        else => break :blk expected,
+                    }
+                } else blk: {
+                    // Fall back to translating from current env
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    break :blk switch (nominal_resolved.desc.content) {
+                        .structure => |st| switch (st) {
+                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
+                            else => nominal_rt_var,
+                        },
                         else => nominal_rt_var,
-                    },
-                    else => nominal_rt_var,
+                    };
                 };
                 // Schedule evaluation of the backing expression
                 try work_stack.push(.{ .eval_expr = .{
@@ -7914,21 +9036,58 @@ pub const Interpreter = struct {
             // ================================================================
 
             .e_tag => |tag| {
-                // Determine runtime type and tag index
-                var rt_var = expected_rt_var orelse blk: {
+                // Determine runtime type and tag index.
+                // Use expected_rt_var if it's resolved to something concrete (structure or alias).
+                // If expected_rt_var is flex (unresolved), fall back to ct_var translation.
+                // This handles the case where the app's main! return type hasn't been fully
+                // unified with the platform's expected type - the expected_rt_var may be
+                // passed but still be flex, while ct_var correctly resolves to the concrete type.
+                var rt_var = blk: {
+                    if (expected_rt_var) |expected| {
+                        const expected_resolved = self.runtime_types.resolveVar(expected);
+                        // Use expected only if it's concrete (not flex)
+                        if (expected_resolved.desc.content == .structure or
+                            expected_resolved.desc.content == .alias)
+                        {
+                            break :blk expected;
+                        }
+                    }
+                    // Fall back to translating from compile-time type
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
                 var resolved = self.resolveBaseVar(rt_var);
                 // Handle flex types for True/False
-                if (resolved.desc.content == .flex) {
-                    if (tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag) {
-                        rt_var = try self.getCanonicalBoolRuntimeVar();
-                        resolved = self.resolveBaseVar(rt_var);
-                    }
+                // Note: We also need to handle non-flex Bool types that might come from
+                // type inference (e.g., in `if True then ...` the condition has Bool type)
+                const is_bool_tag = tag.name == self.env.idents.true_tag or tag.name == self.env.idents.false_tag;
+                if (is_bool_tag) {
+                    // Always use canonical Bool for True/False to ensure consistent layout
+                    rt_var = try self.getCanonicalBoolRuntimeVar();
+                    resolved = self.resolveBaseVar(rt_var);
+                }
+                // Unwrap nominal types (like Try) to get to the underlying tag_union
+                if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                    const nom = resolved.desc.content.structure.nominal_type;
+                    const backing = self.runtime_types.getNominalBackingVar(nom);
+                    resolved = self.runtime_types.resolveVar(backing);
+                }
+                // Also handle aliases that wrap tag unions
+                if (resolved.desc.content == .alias) {
+                    const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                    resolved = self.runtime_types.resolveVar(backing);
                 }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
-                    self.triggerCrash("e_tag: expected tag_union structure type", false, roc_ops);
+                    const content_tag = @tagName(resolved.desc.content);
+                    const struct_tag = if (resolved.desc.content == .structure) @tagName(resolved.desc.content.structure) else "n/a";
+                    const tag_name_str = self.env.getIdent(tag.name);
+                    // Also show what the ct_var resolves to for debugging
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_resolved = self.env.types.resolveVar(ct_var);
+                    const ct_content_tag = @tagName(ct_resolved.desc.content);
+                    const has_expected = expected_rt_var != null;
+                    const msg = std.fmt.allocPrint(self.allocator, "e_tag: expected tag_union but got rt={s}:{s} ct={s} has_expected={} for tag `{s}`", .{ content_tag, struct_tag, ct_content_tag, has_expected, tag_name_str }) catch "e_tag: expected tag_union structure type";
+                    self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 }
 
@@ -7942,7 +9101,6 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-
                 const layout_val = try self.getRuntimeLayout(rt_var);
 
                 if (layout_val.tag == .scalar) {
@@ -7958,7 +9116,7 @@ pub const Interpreter = struct {
                         self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
                         return error.Crash;
                     }
-                } else if (layout_val.tag == .record or layout_val.tag == .tuple) {
+                } else if (layout_val.tag == .record or layout_val.tag == .tuple or layout_val.tag == .tag_union) {
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
                     const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
@@ -7969,6 +9127,8 @@ pub const Interpreter = struct {
                         try value_stack.push(value);
                     } else {
                         // Has payload args - schedule collection
+                        // layout_type: 0=record, 1=tuple, 2=tag_union
+                        const layout_type: u8 = if (layout_val.tag == .record) 0 else if (layout_val.tag == .tuple) 1 else 2;
                         try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
                             .collected_count = 0,
                             .remaining_args = args_exprs,
@@ -7976,7 +9136,7 @@ pub const Interpreter = struct {
                             .expr_idx = expr_idx,
                             .rt_var = rt_var,
                             .tag_index = tag_index,
-                            .layout_type = if (layout_val.tag == .record) 0 else 1,
+                            .layout_type = layout_type,
                         } } });
                     }
                 } else {
@@ -8043,6 +9203,41 @@ pub const Interpreter = struct {
                 } });
             },
 
+            .e_for => |for_expr| {
+                // For expression: first evaluate the list, then set up iteration
+                const expr_ct_var = can.ModuleEnv.varFrom(for_expr.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Get the element type for binding
+                const patt_ct_var = can.ModuleEnv.varFrom(for_expr.patt);
+                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                // Push for_iterate continuation (will be executed after list is evaluated)
+                // stmt_context is null for for-expressions
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .for_iterate = .{
+                            .list_value = undefined, // Will be set when list is evaluated
+                            .current_index = 0,
+                            .list_len = 0, // Will be set when list is evaluated
+                            .elem_size = 0, // Will be set when list is evaluated
+                            .elem_layout = undefined, // Will be set when list is evaluated
+                            .pattern = for_expr.patt,
+                            .patt_rt_var = patt_rt_var,
+                            .body = for_expr.body,
+                            .bindings_start = self.bindings.items.len,
+                            .stmt_context = null,
+                        },
+                    },
+                });
+
+                // Evaluate the list expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = for_expr.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+
             // ================================================================
             // Function calls
             // ================================================================
@@ -8099,11 +9294,19 @@ pub const Interpreter = struct {
                 else
                     func_rt_var_orig;
 
-                // If we instantiated, update rigid_subst (will be restored in cleanup)
+                // If we instantiated, update rigid_subst and empty_scope (will be restored in cleanup)
                 if (should_instantiate) {
+                    // Ensure we have at least one scope level
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
                     var subst_iter = subst_map.iterator();
                     while (subst_iter.next()) |entry| {
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                        // Also add to empty_scope so layout store finds the mapping
+                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     // Clear the layout cache so layouts are recomputed with substitutions
                     @memset(self.var_to_layout_slot.items, 0);
@@ -8145,7 +9348,10 @@ pub const Interpreter = struct {
                 };
 
                 // Unify call return type with function's return type
-                if (poly_entry) |entry| {
+                // Use the function's return var (from instantiated function) instead of
+                // call_ret_rt_var (fresh translation) because the function's return var
+                // has concrete type args while call_ret_rt_var may have rigid type args.
+                const effective_ret_var = if (poly_entry) |entry| blk: {
                     _ = try unify.unifyWithConf(
                         self.env,
                         self.runtime_types,
@@ -8161,13 +9367,15 @@ pub const Interpreter = struct {
                         entry.return_var,
                         unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                     );
-                }
+                    // Use the function's return type - it has properly instantiated type args
+                    break :blk entry.return_var;
+                } else call_ret_rt_var;
 
                 // Schedule: first evaluate function, then collect args, then invoke
                 // Push invoke continuation (to be executed after all args collected)
                 try work_stack.push(.{ .apply_continuation = .{ .call_invoke_closure = .{
                     .arg_count = arg_indices.len,
-                    .call_ret_rt_var = call_ret_rt_var,
+                    .call_ret_rt_var = effective_ret_var,
                     .did_instantiate = should_instantiate,
                     .saved_rigid_subst = saved_rigid_subst,
                     .arg_rt_vars_to_free = arg_rt_vars,
@@ -8179,7 +9387,7 @@ pub const Interpreter = struct {
                     .collected_count = 0,
                     .remaining_args = arg_indices,
                     .arg_rt_vars = arg_rt_vars,
-                    .call_ret_rt_var = call_ret_rt_var,
+                    .call_ret_rt_var = effective_ret_var,
                     .did_instantiate = should_instantiate,
                 } } });
 
@@ -8295,6 +9503,7 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const layout_val = try self.getRuntimeLayout(rt_var);
+
         var value = try self.pushRaw(layout_val, 0);
         value.is_initialized = false;
         switch (layout_val.tag) {
@@ -8404,6 +9613,13 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const layout_val = try self.getRuntimeLayout(rt_var);
+
+        // Dec literals require Dec-compatible layout. If we reach here with a different layout
+        // (e.g., U8 integer), it means validation should have caught this and skipped evaluation.
+        std.debug.assert(layout_val.tag == .scalar and
+            layout_val.data.scalar.tag == .frac and
+            layout_val.data.scalar.data.frac == .dec);
+
         const value = try self.pushRaw(layout_val, 0);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
@@ -8586,6 +9802,22 @@ pub const Interpreter = struct {
                 tmp.is_initialized = false;
                 try tmp.setInt(@intCast(tag_index));
             }
+            dest.rt_var = rt_var;
+            return dest;
+        } else if (layout_val.tag == .tag_union) {
+            var dest = try self.pushRaw(layout_val, 0);
+            // Write discriminant at discriminant_offset
+            const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+            const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            switch (tu_data.discriminant_size) {
+                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_index),
+                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
+                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
+                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
+                else => {},
+            }
+            dest.is_initialized = true;
             dest.rt_var = rt_var;
             return dest;
         }
@@ -8839,6 +10071,7 @@ pub const Interpreter = struct {
     fn evalLookupLocal(
         self: *Interpreter,
         lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_local),
+        expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!StackValue {
         // Search bindings in reverse
@@ -8857,6 +10090,34 @@ pub const Interpreter = struct {
                     if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
                         self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
+                    }
+
+                    // For polymorphic numeric literals: if the expected type is a concrete
+                    // numeric type that differs from the cached value's layout, re-evaluate
+                    // the literal with the expected type. This enables true polymorphism for
+                    // numeric literals like `x = 42; I64.to_str(x)`.
+                    if (expected_rt_var) |exp_var| {
+                        const is_numeric_literal = switch (binding_expr) {
+                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
+                            else => false,
+                        };
+                        if (is_numeric_literal) {
+                            // Check if expected type is a concrete numeric type
+                            const expected_layout = try self.getRuntimeLayout(exp_var);
+                            const is_expected_numeric = expected_layout.tag == .scalar;
+                            if (is_expected_numeric) {
+                                // Check if cached value's layout differs from expected.
+                                // Use Layout.eql instead of std.meta.eql to avoid comparing
+                                // uninitialized union bytes which triggers Valgrind warnings.
+                                const cached_layout = b.value.layout;
+                                const layouts_differ = !cached_layout.eql(expected_layout);
+                                if (layouts_differ) {
+                                    // Re-evaluate the numeric literal with the expected type
+                                    const result = try self.evalWithExpectedType(b.expr_idx, roc_ops, exp_var);
+                                    return result;
+                                }
+                            }
+                        }
                     }
                 }
                 const copy_result = try self.pushCopy(b.value, roc_ops);
@@ -9052,6 +10313,7 @@ pub const Interpreter = struct {
         remaining_stmts: []const can.CIR.Statement.Idx,
         final_expr: can.CIR.Expr.Idx,
         bindings_start: usize,
+        expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!void {
         switch (stmt) {
@@ -9063,6 +10325,7 @@ pub const Interpreter = struct {
                     .remaining_stmts = remaining_stmts,
                     .final_expr = final_expr,
                     .bindings_start = bindings_start,
+                    .expected_rt_var = expected_rt_var,
                 } } });
                 // Push expression evaluation
                 const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
@@ -9080,6 +10343,7 @@ pub const Interpreter = struct {
                     .remaining_stmts = remaining_stmts,
                     .final_expr = final_expr,
                     .bindings_start = bindings_start,
+                    .expected_rt_var = expected_rt_var,
                 } } });
                 const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
@@ -9096,6 +10360,7 @@ pub const Interpreter = struct {
                     .remaining_stmts = remaining_stmts,
                     .final_expr = final_expr,
                     .bindings_start = bindings_start,
+                    .expected_rt_var = expected_rt_var,
                 } } });
                 const expr_ct_var = can.ModuleEnv.varFrom(v.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
@@ -9114,6 +10379,7 @@ pub const Interpreter = struct {
                             .final_expr = final_expr,
                             .bindings_start = bindings_start,
                             .should_discard_value = true, // s_expr result should be discarded
+                            .expected_rt_var = expected_rt_var,
                         },
                     },
                 });
@@ -9205,11 +10471,10 @@ pub const Interpreter = struct {
                 const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
                 const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
 
-                // Push for_loop_iterate continuation (will be executed after list is evaluated)
-                // We'll fill in list_value, list_len, etc. in the continuation handler
+                // Push for_iterate continuation (will be executed after list is evaluated)
                 try work_stack.push(.{
                     .apply_continuation = .{
-                        .for_loop_iterate = .{
+                        .for_iterate = .{
                             .list_value = undefined, // Will be set when list is evaluated
                             .current_index = 0,
                             .list_len = 0, // Will be set when list is evaluated
@@ -9218,9 +10483,11 @@ pub const Interpreter = struct {
                             .pattern = for_stmt.patt,
                             .patt_rt_var = patt_rt_var,
                             .body = for_stmt.body,
-                            .remaining_stmts = remaining_stmts,
-                            .final_expr = final_expr,
                             .bindings_start = bindings_start,
+                            .stmt_context = .{
+                                .remaining_stmts = remaining_stmts,
+                                .final_expr = final_expr,
+                            },
                         },
                     },
                 });
@@ -9285,7 +10552,7 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-                if (boolValueEquals(false, lhs)) {
+                if (self.boolValueEquals(false, lhs)) {
                     // Short-circuit: LHS is false, so result is false
                     const result = try self.makeBoolValue(false);
                     try value_stack.push(result);
@@ -9303,7 +10570,7 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-                if (boolValueEquals(true, lhs)) {
+                if (self.boolValueEquals(true, lhs)) {
                     // Short-circuit: LHS is true, so result is true
                     const result = try self.makeBoolValue(true);
                     try value_stack.push(result);
@@ -9321,11 +10588,13 @@ pub const Interpreter = struct {
                 const cond = value_stack.pop() orelse return error.Crash;
                 defer cond.decref(&self.runtime_layout_store, roc_ops);
 
-                if (boolValueEquals(true, cond)) {
+                const is_true = self.boolValueEquals(true, cond);
+
+                if (is_true) {
                     // Condition is true, evaluate the body
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = ib.body,
-                        .expected_rt_var = null,
+                        .expected_rt_var = ib.expected_rt_var,
                     } });
                 } else if (ib.remaining_branches.len > 0) {
                     // Try next branch
@@ -9335,6 +10604,7 @@ pub const Interpreter = struct {
                         .body = next_branch.body,
                         .remaining_branches = ib.remaining_branches[1..],
                         .final_else = ib.final_else,
+                        .expected_rt_var = ib.expected_rt_var,
                     } } });
                     // Push condition evaluation
                     try work_stack.push(.{ .eval_expr = .{
@@ -9345,7 +10615,7 @@ pub const Interpreter = struct {
                     // No more branches, evaluate final else
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = ib.final_else,
-                        .expected_rt_var = null,
+                        .expected_rt_var = ib.expected_rt_var,
                     } });
                 }
                 return true;
@@ -9362,12 +10632,12 @@ pub const Interpreter = struct {
                     // No more statements, evaluate final expression
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = bc.final_expr,
-                        .expected_rt_var = null,
+                        .expected_rt_var = bc.expected_rt_var,
                     } });
                 } else {
                     // Process next statement
                     const next_stmt = self.env.store.getStatement(bc.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, bc.remaining_stmts[1..], bc.final_expr, bc.bindings_start, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bc.remaining_stmts[1..], bc.final_expr, bc.bindings_start, bc.expected_rt_var, roc_ops);
                 }
                 return true;
             },
@@ -9430,12 +10700,12 @@ pub const Interpreter = struct {
                     // No more statements, evaluate final expression
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = bd.final_expr,
-                        .expected_rt_var = null,
+                        .expected_rt_var = bd.expected_rt_var,
                     } });
                 } else {
                     // Process next statement
                     const next_stmt = self.env.store.getStatement(bd.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, bd.remaining_stmts[1..], bd.final_expr, bd.bindings_start, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, bd.remaining_stmts[1..], bd.final_expr, bd.bindings_start, bd.expected_rt_var, roc_ops);
                 }
                 return true;
             },
@@ -9759,11 +11029,11 @@ pub const Interpreter = struct {
                                     // Free arg_rt_vars if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                 },
-                                .for_loop_iterate => |fl| {
+                                .for_iterate => |fl| {
                                     // Decref the list value when skipping a for loop
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
-                                .for_loop_body_done => |fl| {
+                                .for_body_done => |fl| {
                                     // Decref the list value and clean up bindings
                                     self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
@@ -9863,7 +11133,7 @@ pub const Interpreter = struct {
                         }
                         dest.rt_var = tc.rt_var;
                         try value_stack.push(dest);
-                    } else {
+                    } else if (tc.layout_type == 1) {
                         // Tuple layout (payload, tag)
                         var dest = try self.pushRaw(layout_val, 0);
                         var acc = try dest.asTuple(&self.runtime_layout_store);
@@ -9936,6 +11206,101 @@ pub const Interpreter = struct {
                         for (values) |val| {
                             val.decref(&self.runtime_layout_store, roc_ops);
                         }
+                        dest.rt_var = tc.rt_var;
+                        try value_stack.push(dest);
+                    } else if (tc.layout_type == 2) {
+                        // Tag union layout: payload at offset 0, discriminant at discriminant_offset
+                        const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+
+                        // Check for layout mismatch - if the expected payload is smaller than actual
+                        // we need to use a properly-sized tuple layout to avoid corruption.
+                        // This happens with polymorphic types like Result where the type param
+                        // is a disconnected flex var that defaults to ZST layout.
+                        if (total_count == 1) {
+                            const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                            const expected_payload_size = tu_data.discriminant_offset; // payload is before discriminant
+                            // Apply fix when expected payload is very small but actual is larger
+                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
+                            if (needs_fix) {
+                                // Layout mismatch - create a tuple layout [payload, discriminant]
+                                // This is the same approach as layout_type == 1
+                                const disc_precision: types.Int.Precision = switch (tu_data.discriminant_size) {
+                                    1 => .u8,
+                                    2 => .u16,
+                                    4 => .u32,
+                                    8 => .u64,
+                                    else => .u8,
+                                };
+                                const disc_layout = Layout{
+                                    .tag = .scalar,
+                                    .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
+                                };
+                                var elem_layouts_fixed = [2]Layout{ values[0].layout, disc_layout };
+                                const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
+                                const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
+                                var proper_dest = try self.pushRaw(proper_tuple_layout, 0);
+                                var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                                // Write tag discriminant (element 1)
+                                const proper_tag_field = try proper_acc.getElement(1);
+                                if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = proper_tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
+                                }
+
+                                // Write payload (element 0)
+                                const proper_payload_field = try proper_acc.getElement(0);
+                                if (proper_payload_field.ptr) |proper_ptr| {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                }
+
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                proper_dest.rt_var = tc.rt_var;
+                                try value_stack.push(proper_dest);
+                                return true;
+                            }
+                        }
+
+                        var dest = try self.pushRaw(layout_val, 0);
+
+                        // Write discriminant
+                        const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                        switch (tu_data.discriminant_size) {
+                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
+                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            else => {},
+                        }
+
+                        // Write payload at offset 0
+                        const payload_ptr: *anyopaque = @ptrCast(base_ptr);
+                        if (total_count == 1) {
+                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                        } else {
+                            // Multiple args - create tuple payload at offset 0
+                            var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                            defer self.allocator.free(elem_layouts);
+                            for (values, 0..) |val, idx| {
+                                elem_layouts[idx] = val.layout;
+                            }
+                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
+                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                            for (values, 0..) |val, idx| {
+                                try tup_acc.setElement(idx, val, roc_ops);
+                            }
+                        }
+
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        dest.is_initialized = true;
                         dest.rt_var = tc.rt_var;
                         try value_stack.push(dest);
                     }
@@ -10025,7 +11390,7 @@ pub const Interpreter = struct {
                 const guard_val = value_stack.pop() orelse return error.Crash;
                 defer guard_val.decref(&self.runtime_layout_store, roc_ops);
 
-                const guard_pass = boolValueEquals(true, guard_val);
+                const guard_pass = self.boolValueEquals(true, guard_val);
 
                 if (guard_pass) {
                     // Guard passed - evaluate body
@@ -10071,7 +11436,7 @@ pub const Interpreter = struct {
             .expect_check => |ec| {
                 // Pop condition value from stack
                 const cond_val = value_stack.pop() orelse return error.Crash;
-                const succeeded = boolValueEquals(true, cond_val);
+                const succeeded = self.boolValueEquals(true, cond_val);
                 if (succeeded) {
                     // Return {} (empty record)
                     const ct_var = can.ModuleEnv.varFrom(ec.expr_idx);
@@ -10303,156 +11668,43 @@ pub const Interpreter = struct {
 
                         // Special handling for list_sort_with which requires continuation-based evaluation
                         if (low_level.op == .list_sort_with) {
-                            // list_sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
                             std.debug.assert(arg_values.len == 2);
-
-                            var list_arg = arg_values[0];
+                            const list_arg = arg_values[0];
                             const compare_fn = arg_values[1];
-                            // Get list info
-                            std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
-                            const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                            const list_len = roc_list.len();
-
-                            // If list has 0 or 1 elements, it's already sorted
-                            if (list_len < 2) {
-                                // Return the list as-is - ownership transfers from arg to return value
-                                compare_fn.decref(&self.runtime_layout_store, roc_ops);
-
-                                self.env = saved_env;
-                                func_val.decref(&self.runtime_layout_store, roc_ops);
-                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                                list_arg.rt_var = ci.call_ret_rt_var;
-                                try value_stack.push(list_arg);
-                                return true;
-                            }
-
-                            // Get element layout
-                            const elem_layout_idx = list_arg.layout.data.list;
-                            const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
-                            const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                            const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                            const elem_alignment_u32: u32 = @intCast(elem_alignment);
-
-                            // Make a unique copy of the list for sorting
-                            const elements_refcounted = elem_layout.isRefcounted();
-                            var refcount_context = RefcountContext{
-                                .layout_store = &self.runtime_layout_store,
-                                .elem_layout = elem_layout,
-                                .roc_ops = roc_ops,
-                            };
-
-                            const working_list = roc_list.makeUnique(
-                                elem_alignment_u32,
-                                elem_size,
-                                elements_refcounted,
-                                if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                                if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
-                                if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                                if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
-                                roc_ops,
-                            );
-
-                            // Reuse list_arg directly - write the result of makeUnique back into it.
-                            // This transfers ownership properly:
-                            // - If the list was unique, makeUnique returns the same RocList (no clone)
-                            // - If the list was shared, makeUnique clones and decrefs the original
-                            // Either way, list_arg now owns the unique working list.
-                            const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                            list_arg_ptr.* = working_list;
-                            list_arg.rt_var = ci.call_ret_rt_var;
-
-                            // Restore environment
+                            // Restore environment before setting up sort (helper saves env for comparison cleanup)
                             self.env = saved_env;
                             func_val.decref(&self.runtime_layout_store, roc_ops);
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
-                            // Start insertion sort at index 1
-                            // Get elements at indices 0 and 1 for first comparison
-                            const elem0_ptr = working_list.bytes.? + 0 * elem_size;
-                            const elem1_ptr = working_list.bytes.? + 1 * elem_size;
-
-                            const elem0_value = StackValue{
-                                .layout = elem_layout,
-                                .ptr = @ptrCast(elem0_ptr),
-                                .is_initialized = true,
-                            };
-                            const elem1_value = StackValue{
-                                .layout = elem_layout,
-                                .ptr = @ptrCast(elem1_ptr),
-                                .is_initialized = true,
-                            };
-
-                            // Copy elements for comparison (compare_fn will consume them)
-                            const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
-                            const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
-
-                            // Push continuation to handle comparison result
-                            try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
-                                .list_value = list_arg,
-                                .compare_fn = compare_fn,
-                                .call_ret_rt_var = ci.call_ret_rt_var,
-                                .saved_rigid_subst = saved_rigid_subst,
-                                .outer_index = 1,
-                                .inner_index = 0,
-                                .list_len = list_len,
-                                .elem_size = elem_size,
-                                .elem_layout = elem_layout,
-                            } } });
-                            saved_rigid_subst = null;
-
-                            // Invoke comparison function with (elem_at_outer, elem_at_inner)
-                            const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
-                            const cmp_saved_env = self.env;
-                            self.env = @constCast(cmp_header.source_env);
-
-                            const cmp_params = self.env.store.slicePatterns(cmp_header.params);
-                            if (cmp_params.len != 2) {
-                                self.env = cmp_saved_env;
-                                return error.TypeMismatch;
+                            switch (try self.setupSortWith(list_arg, compare_fn, ci.call_ret_rt_var, saved_rigid_subst, roc_ops, work_stack)) {
+                                .already_sorted => |result_list| {
+                                    compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                                    try value_stack.push(result_list);
+                                },
+                                .sorting_started => {},
                             }
-
-                            try self.active_closures.append(compare_fn);
-
-                            // Bind parameters
-                            try self.bindings.append(.{
-                                .pattern_idx = cmp_params[0],
-                                .value = arg0,
-                                .expr_idx = @enumFromInt(0),
-                                .source_env = self.env,
-                            });
-                            try self.bindings.append(.{
-                                .pattern_idx = cmp_params[1],
-                                .value = arg1,
-                                .expr_idx = @enumFromInt(0),
-                                .source_env = self.env,
-                            });
-
-                            // Push cleanup and evaluate body
-                            const bindings_start = self.bindings.items.len - 2;
-                            try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
-                                .saved_env = cmp_saved_env,
-                                .saved_bindings_len = bindings_start,
-                                .param_count = 2,
-                                .has_active_closure = true,
-                                .did_instantiate = false,
-                                .call_ret_rt_var = null,
-                                .saved_rigid_subst = null,
-                                .arg_rt_vars_to_free = null,
-                            } } });
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = cmp_header.body_idx,
-                                .expected_rt_var = null,
-                            } });
-
+                            saved_rigid_subst = null; // Ownership transferred to helper
                             return true;
                         }
 
+                        // Call the builtin
                         var result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
 
-                        // Decref args after builtin completes
-                        for (arg_values) |arg| {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        // Decref arguments based on ownership semantics.
+                        // See src/builtins/OWNERSHIP.md for detailed documentation.
+                        //
+                        // Simple rule:
+                        // - Borrow: decref (we release our copy, builtin didn't take ownership)
+                        // - Consume: don't decref (ownership transferred to builtin)
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        for (arg_values, 0..) |arg, arg_idx| {
+                            // Only decref borrowed arguments. Consumed arguments have ownership
+                            // transferred to the builtin (it handles cleanup or returns the value).
+                            const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
+                            if (ownership == .borrow) {
+                                arg.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         }
 
                         // Restore environment and free arg_rt_vars
@@ -10501,6 +11753,11 @@ pub const Interpreter = struct {
                     // Provide closure context for capture lookup
                     try self.active_closures.append(func_val);
 
+                    // Save the current flex_type_context before adding parameter mappings
+                    // This will be restored in call_cleanup
+                    var saved_flex_type_context = try self.flex_type_context.clone();
+                    errdefer saved_flex_type_context.deinit();
+
                     // Bind parameters using pattern matching to handle destructuring
                     for (params, 0..) |param, idx| {
                         // Get the runtime type for this parameter
@@ -10508,6 +11765,24 @@ pub const Interpreter = struct {
                             (if (idx < vars.len) vars[idx] else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param)))
                         else
                             try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+
+                        // Add the parameter's CT type to RT type mapping for polymorphic type propagation.
+                        // This allows numeric literals inside the function body that were unified with
+                        // this parameter's type at compile time to get the correct concrete type.
+                        // IMPORTANT: Only add mappings for concrete (structure) types, not flex/rigid types.
+                        // If the arg type is still flex/rigid, the default Dec fallback should apply.
+                        if (ci.arg_rt_vars_to_free) |vars| {
+                            if (idx < vars.len) {
+                                const arg_rt_resolved = self.runtime_types.resolveVar(vars[idx]);
+                                // Only add mapping if the argument has a concrete type (structure)
+                                if (arg_rt_resolved.desc.content == .structure) {
+                                    const param_ct_var = can.ModuleEnv.varFrom(param);
+                                    const param_resolved = self.env.types.resolveVar(param_ct_var);
+                                    const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
+                                    try self.flex_type_context.put(flex_key, vars[idx]);
+                                }
+                            }
+                        }
 
                         // Use patternMatchesBind to properly handle complex patterns (e.g., list destructuring)
                         // patternMatchesBind borrows the value and creates copies for bindings, so we need to
@@ -10519,6 +11794,9 @@ pub const Interpreter = struct {
                             func_val.decref(&self.runtime_layout_store, roc_ops);
                             for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            // Restore flex_type_context on error
+                            self.flex_type_context.deinit();
+                            self.flex_type_context = saved_flex_type_context;
                             return error.TypeMismatch;
                         }
                         // Decref the original argument value since patternMatchesBind made copies
@@ -10536,6 +11814,7 @@ pub const Interpreter = struct {
                         .did_instantiate = ci.did_instantiate,
                         .call_ret_rt_var = ci.call_ret_rt_var,
                         .saved_rigid_subst = cleanup_saved_rigid_subst,
+                        .saved_flex_type_context = saved_flex_type_context,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -10577,6 +11856,12 @@ pub const Interpreter = struct {
                         self.rigid_subst = saved;
                     }
 
+                    // Restore flex_type_context if we added parameter type mappings
+                    if (cleanup.saved_flex_type_context) |saved| {
+                        self.flex_type_context.deinit();
+                        self.flex_type_context = saved;
+                    }
+
                     // Restore environment and cleanup bindings
                     // Use trimBindingList to properly decref all bindings created by pattern matching
                     // (which may be more than param_count due to destructuring)
@@ -10602,6 +11887,12 @@ pub const Interpreter = struct {
                 if (cleanup.saved_rigid_subst) |saved| {
                     self.rigid_subst.deinit();
                     self.rigid_subst = saved;
+                }
+
+                // Restore flex_type_context if we added parameter type mappings
+                if (cleanup.saved_flex_type_context) |saved| {
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved;
                 }
 
                 // Restore environment and cleanup bindings
@@ -10668,6 +11959,13 @@ pub const Interpreter = struct {
                     const low_level = lambda_expr.e_low_level_lambda;
                     var args = [1]StackValue{operand};
                     const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                    // Decref operand based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                        operand.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
                     self.env = saved_env;
                     try value_stack.push(result);
                     return true;
@@ -10700,6 +11998,7 @@ pub const Interpreter = struct {
                     .did_instantiate = false,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
+                    .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -10825,11 +12124,21 @@ pub const Interpreter = struct {
                     const low_level = lambda_expr.e_low_level_lambda;
                     var args = [2]StackValue{ lhs, rhs };
                     var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                    // Decref arguments based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    for (args, 0..) |arg, arg_idx| {
+                        const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
+                        if (ownership == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
                     self.env = saved_env;
 
                     // For != operator, negate boolean result
                     if (ba.negate_result) {
-                        const is_eq_result = boolValueEquals(true, result);
+                        const is_eq_result = self.boolValueEquals(true, result);
                         result.decref(&self.runtime_layout_store, roc_ops);
                         result = try self.makeBoolValue(!is_eq_result);
                     }
@@ -10871,6 +12180,7 @@ pub const Interpreter = struct {
                     .did_instantiate = false,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
+                    .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -10988,7 +12298,13 @@ pub const Interpreter = struct {
                         const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
                         const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
                         const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
-                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                        // Decref based on ownership semantics
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
                         try value_stack.push(result);
@@ -11019,6 +12335,7 @@ pub const Interpreter = struct {
                         .did_instantiate = false,
                         .call_ret_rt_var = null,
                         .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -11099,6 +12416,26 @@ pub const Interpreter = struct {
                 if (lambda_expr == .e_low_level_lambda) {
                     const low_level = lambda_expr.e_low_level_lambda;
 
+                    // Special handling for list_sort_with which requires continuation-based evaluation
+                    if (low_level.op == .list_sort_with) {
+                        std.debug.assert(total_args == 1);
+                        const list_arg = receiver_value;
+                        const compare_fn = arg_values[0];
+
+                        // Restore environment before setting up sort (helper saves env for comparison cleanup)
+                        self.env = saved_env;
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                        switch (try self.setupSortWith(list_arg, compare_fn, null, null, roc_ops, work_stack)) {
+                            .already_sorted => |result_list| {
+                                compare_fn.decref(&self.runtime_layout_store, roc_ops);
+                                try value_stack.push(result_list);
+                            },
+                            .sorting_started => {},
+                        }
+                        return true;
+                    }
+
                     // Build args array: receiver + explicit args
                     var all_args = try self.allocator.alloc(StackValue, 1 + total_args);
                     defer self.allocator.free(all_args);
@@ -11112,8 +12449,15 @@ pub const Interpreter = struct {
                     const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
-                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    // Decref arguments based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    for (all_args, 0..) |arg, arg_idx| {
+                        const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
+                        if (ownership == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
                     method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
                     try value_stack.push(result);
@@ -11226,6 +12570,7 @@ pub const Interpreter = struct {
                     .did_instantiate = did_instantiate,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = saved_rigid_subst,
+                    .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -11234,10 +12579,10 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .for_loop_iterate => |fl_in| {
-                // For loop iteration: list has been evaluated, start iterating
+            .for_iterate => |fl_in| {
+                // For loop/expression iteration: list has been evaluated, start iterating
                 const list_value = value_stack.pop() orelse {
-                    self.triggerCrash("for_loop_iterate: value_stack empty", false, roc_ops);
+                    self.triggerCrash("for_iterate: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
 
@@ -11254,25 +12599,17 @@ pub const Interpreter = struct {
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
                 const list_len = list_header.len();
 
-                // Create the proper for_loop_iterate with list info filled in
+                // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
                 fl.list_value = list_value;
                 fl.list_len = list_len;
                 fl.elem_size = elem_size;
                 fl.elem_layout = elem_layout;
 
-                // If list is empty, skip to remaining statements
+                // If list is empty, handle completion
                 if (list_len == 0) {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (fl.remaining_stmts.len == 0) {
-                        try work_stack.push(.{ .eval_expr = .{
-                            .expr_idx = fl.final_expr,
-                            .expected_rt_var = null,
-                        } });
-                    } else {
-                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, roc_ops);
-                    }
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -11289,7 +12626,7 @@ pub const Interpreter = struct {
                     .layout = elem_layout,
                     .is_initialized = true,
                 };
-                elem_value.incref();
+                elem_value.incref(&self.runtime_layout_store);
 
                 // Bind the pattern
                 const loop_bindings_start = self.bindings.items.len;
@@ -11298,13 +12635,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                // Decref the element after successful pattern matching.
-                // patternMatchesBind creates copies via pushCopy which increfs, so the original
-                // incref we did above is now an extra reference that needs to be released.
                 elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
-                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
                     .current_index = 0,
                     .list_len = fl.list_len,
@@ -11313,10 +12647,9 @@ pub const Interpreter = struct {
                     .pattern = fl.pattern,
                     .patt_rt_var = fl.patt_rt_var,
                     .body = fl.body,
-                    .remaining_stmts = fl.remaining_stmts,
-                    .final_expr = fl.final_expr,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = loop_bindings_start,
+                    .stmt_context = fl.stmt_context,
                 } } });
 
                 // Evaluate body
@@ -11326,10 +12659,10 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .for_loop_body_done => |fl| {
-                // For loop body completed, clean up and continue to next iteration
+            .for_body_done => |fl| {
+                // For loop/expression body completed, clean up and continue to next iteration
                 const body_result = value_stack.pop() orelse {
-                    self.triggerCrash("for_loop_body_done: value_stack empty", false, roc_ops);
+                    self.triggerCrash("for_body_done: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
                 body_result.decref(&self.runtime_layout_store, roc_ops);
@@ -11340,17 +12673,9 @@ pub const Interpreter = struct {
                 // Move to next element
                 const next_index = fl.current_index + 1;
                 if (next_index >= fl.list_len) {
-                    // Loop complete, decref list and continue with remaining statements
+                    // Loop complete
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (fl.remaining_stmts.len == 0) {
-                        try work_stack.push(.{ .eval_expr = .{
-                            .expr_idx = fl.final_expr,
-                            .expected_rt_var = null,
-                        } });
-                    } else {
-                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, roc_ops);
-                    }
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -11368,7 +12693,7 @@ pub const Interpreter = struct {
                     .layout = fl.elem_layout,
                     .is_initialized = true,
                 };
-                elem_value.incref();
+                elem_value.incref(&self.runtime_layout_store);
 
                 // Bind the pattern
                 const new_loop_bindings_start = self.bindings.items.len;
@@ -11377,13 +12702,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                // Decref the element after successful pattern matching.
-                // patternMatchesBind creates copies via pushCopy which increfs, so the original
-                // incref we did above is now an extra reference that needs to be released.
                 elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
-                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
                     .current_index = next_index,
                     .list_len = fl.list_len,
@@ -11392,10 +12714,9 @@ pub const Interpreter = struct {
                     .pattern = fl.pattern,
                     .patt_rt_var = fl.patt_rt_var,
                     .body = fl.body,
-                    .remaining_stmts = fl.remaining_stmts,
-                    .final_expr = fl.final_expr,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = new_loop_bindings_start,
+                    .stmt_context = fl.stmt_context,
                 } } });
 
                 // Evaluate body
@@ -11408,7 +12729,7 @@ pub const Interpreter = struct {
             .while_loop_check => |wl| {
                 // While loop: condition has been evaluated
                 const cond_value = value_stack.pop() orelse return error.Crash;
-                const cond_is_true = boolValueEquals(true, cond_value);
+                const cond_is_true = self.boolValueEquals(true, cond_value);
 
                 if (!cond_is_true) {
                     // Loop complete, continue with remaining statements
@@ -11419,7 +12740,7 @@ pub const Interpreter = struct {
                         } });
                     } else {
                         const next_stmt = self.env.store.getStatement(wl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, wl.remaining_stmts[1..], wl.final_expr, wl.bindings_start, roc_ops);
+                        try self.scheduleNextStatement(work_stack, next_stmt, wl.remaining_stmts[1..], wl.final_expr, wl.bindings_start, null, roc_ops);
                     }
                     return true;
                 }
@@ -11466,7 +12787,7 @@ pub const Interpreter = struct {
             .expect_check_stmt => |ec| {
                 // Expect statement: check condition result
                 const cond_val = value_stack.pop() orelse return error.Crash;
-                const is_true = boolValueEquals(true, cond_val);
+                const is_true = self.boolValueEquals(true, cond_val);
                 if (!is_true) {
                     self.handleExpectFailure(ec.body_expr, roc_ops);
                     return error.Crash;
@@ -11479,7 +12800,7 @@ pub const Interpreter = struct {
                     } });
                 } else {
                     const next_stmt = self.env.store.getStatement(ec.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, ec.remaining_stmts[1..], ec.final_expr, ec.bindings_start, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, ec.remaining_stmts[1..], ec.final_expr, ec.bindings_start, null, roc_ops);
                 }
                 return true;
             },
@@ -11507,7 +12828,7 @@ pub const Interpreter = struct {
                     } });
                 } else {
                     const next_stmt = self.env.store.getStatement(rv.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, rv.remaining_stmts[1..], rv.final_expr, rv.bindings_start, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, rv.remaining_stmts[1..], rv.final_expr, rv.bindings_start, null, roc_ops);
                 }
                 return true;
             },
@@ -11526,7 +12847,7 @@ pub const Interpreter = struct {
                     } });
                 } else {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, null, roc_ops);
                 }
                 return true;
             },
@@ -11552,14 +12873,20 @@ pub const Interpreter = struct {
                         const discriminant = cmp_result.asI128();
                         // Tag order is alphabetical: EQ=0, GT=1, LT=2
                         break :blk discriminant == 2; // LT
-                    } else {
-                        // Try to get discriminant from tag union
+                    } else if (cmp_result.layout.tag == .tag_union) {
+                        // Get discriminant from tag_union layout
+                        const tu_data = self.runtime_layout_store.getTagUnionData(cmp_result.layout.data.tag_union.idx);
                         if (cmp_result.ptr) |ptr| {
-                            const discriminant: u8 = @as(*const u8, @ptrCast(ptr)).*;
+                            const base_ptr: [*]u8 = @ptrCast(ptr);
+                            const discriminant_ptr = base_ptr + tu_data.discriminant_offset;
+                            const discriminant: u8 = discriminant_ptr[0];
                             // Tag order is alphabetical: EQ=0, GT=1, LT=2
                             break :blk discriminant == 2; // LT
                         }
                         break :blk false;
+                    } else {
+                        // Comparison result should always be .scalar or .tag_union
+                        std.debug.panic("sort_compare_result: unexpected layout tag {s} for comparison result", .{@tagName(cmp_result.layout.tag)});
                     }
                 };
 
@@ -11653,6 +12980,7 @@ pub const Interpreter = struct {
                             .did_instantiate = false,
                             .call_ret_rt_var = null,
                             .saved_rigid_subst = null,
+                            .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
                         } } });
                         try work_stack.push(.{ .eval_expr = .{
@@ -11731,6 +13059,7 @@ pub const Interpreter = struct {
                         .did_instantiate = false,
                         .call_ret_rt_var = null,
                         .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{

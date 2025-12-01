@@ -2077,6 +2077,117 @@ test "e_low_level_lambda - U8.plus method call syntax" {
 }
 
 // =============================================================================
+// mod_by tests for integer types
+// =============================================================================
+
+test "e_low_level_lambda - U8.mod_by basic" {
+    const src =
+        \\a : U8
+        \\a = 10
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = U8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+test "e_low_level_lambda - U8.mod_by zero remainder" {
+    const src =
+        \\a : U8
+        \\a = 10
+        \\b : U8
+        \\b = 5
+        \\x : U8
+        \\x = U8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+test "e_low_level_lambda - I8.mod_by positive positive" {
+    const src =
+        \\a : I8
+        \\a = 10
+        \\b : I8
+        \\b = 3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+test "e_low_level_lambda - I8.mod_by negative positive" {
+    const src =
+        \\a : I8
+        \\a = -10
+        \\b : I8
+        \\b = 3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    // -10 mod 3 = 2 (Euclidean modulo: result has sign of divisor)
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "e_low_level_lambda - I8.mod_by positive negative" {
+    const src =
+        \\a : I8
+        \\a = 10
+        \\b : I8
+        \\b = -3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    // 10 mod -3 = -2 (Euclidean modulo: result has sign of divisor)
+    try testing.expectEqual(@as(i128, -2), value);
+}
+
+test "e_low_level_lambda - I8.mod_by negative negative" {
+    const src =
+        \\a : I8
+        \\a = -10
+        \\b : I8
+        \\b = -3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    // -10 mod -3 = -1 (Euclidean modulo: result has sign of divisor)
+    try testing.expectEqual(@as(i128, -1), value);
+}
+
+test "e_low_level_lambda - U64.mod_by large numbers" {
+    const src =
+        \\a : U64
+        \\a = 1000000
+        \\b : U64
+        \\b = 7
+        \\x : U64
+        \\x = U64.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+test "e_low_level_lambda - I64.mod_by with zero result" {
+    const src =
+        \\a : I64
+        \\a = 100
+        \\b : I64
+        \\b = 10
+        \\x : I64
+        \\x = I64.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+// =============================================================================
 // List.sort_with tests
 // =============================================================================
 
