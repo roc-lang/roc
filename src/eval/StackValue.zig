@@ -332,6 +332,49 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         return;
     }
 
+    if (self.layout.tag == .tag_union) {
+        // Copy raw bytes first, then incref only the active variant's payload
+        std.debug.assert(self.ptr != null);
+        const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
+        const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
+        @memcpy(dst, src);
+
+        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
+        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+        // Read discriminant to determine active variant
+        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+        const discriminant: u32 = switch (tu_data.discriminant_size) {
+            1 => @as(*const u8, @ptrCast(disc_ptr)).*,
+            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
+            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            else => unreachable,
+        };
+
+        // Get the active variant's payload layout
+        const variants = layout_cache.getTagUnionVariants(tu_data);
+        if (discriminant >= variants.len) return; // Invalid discriminant, skip
+
+        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+
+        if (comptime trace_refcount) {
+            traceRefcount("INCREF tag_union (copyToPtr) disc={} variant_layout.tag={}", .{
+                discriminant,
+                @intFromEnum(variant_layout.tag),
+            });
+        }
+
+        // Incref only the active variant's payload (at offset 0)
+        const payload_value = StackValue{
+            .layout = variant_layout,
+            .ptr = @as(*anyopaque, @ptrCast(base_ptr)),
+            .is_initialized = true,
+        };
+
+        payload_value.incref(layout_cache);
+        return;
+    }
+
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
@@ -735,6 +778,68 @@ pub const TupleAccessor = struct {
         }
         const element_layout_info = self.element_layouts.get(index);
         return self.layout_cache.getLayout(element_layout_info.layout);
+    }
+};
+
+/// Create a TagUnionAccessor for safe tag union access
+pub fn asTagUnion(self: StackValue, layout_cache: *LayoutStore) !TagUnionAccessor {
+    std.debug.assert(self.is_initialized);
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .tag_union);
+
+    const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
+
+    return TagUnionAccessor{
+        .base_value = self,
+        .layout_cache = layout_cache,
+        .tu_data = tu_data.*,
+    };
+}
+
+/// Safe accessor for tag union values
+pub const TagUnionAccessor = struct {
+    base_value: StackValue,
+    layout_cache: *LayoutStore,
+    tu_data: layout_mod.TagUnionData,
+
+    /// Read the discriminant (tag index) from the tag union
+    pub fn getDiscriminant(self: TagUnionAccessor) usize {
+        const base_ptr: [*]u8 = @ptrCast(self.base_value.ptr.?);
+        const disc_ptr = base_ptr + self.tu_data.discriminant_offset;
+        return switch (self.tu_data.discriminant_size) {
+            1 => @as(*const u8, @ptrCast(disc_ptr)).*,
+            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
+            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
+            else => 0,
+        };
+    }
+
+    /// Get the layout for a specific variant by discriminant
+    pub fn getVariantLayout(self: *const TagUnionAccessor, discriminant: usize) Layout {
+        const variants = self.layout_cache.getTagUnionVariants(&self.tu_data);
+        if (discriminant >= variants.len) {
+            return Layout.zst();
+        }
+        const variant = variants.get(discriminant);
+        return self.layout_cache.getLayout(variant.payload_layout);
+    }
+
+    /// Get a StackValue for the payload at offset 0
+    pub fn getPayload(self: TagUnionAccessor, payload_layout: Layout) StackValue {
+        // Payload is always at offset 0 in our tag union layout
+        return StackValue{
+            .layout = payload_layout,
+            .ptr = self.base_value.ptr,
+            .is_initialized = true,
+        };
+    }
+
+    /// Get discriminant and payload layout together
+    pub fn getVariant(self: *const TagUnionAccessor) struct { discriminant: usize, payload_layout: Layout } {
+        const discriminant = self.getDiscriminant();
+        const payload_layout = self.getVariantLayout(discriminant);
+        return .{ .discriminant = discriminant, .payload_layout = payload_layout };
     }
 };
 
@@ -1216,6 +1321,40 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
         }
         return;
     }
+    // Handle tag unions by reading discriminant and incref'ing only the active variant's payload
+    if (self.layout.tag == .tag_union) {
+        if (self.ptr == null) return;
+        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
+        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+        // Read discriminant to determine active variant
+        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+        const discriminant: u32 = switch (tu_data.discriminant_size) {
+            1 => @as(*const u8, @ptrCast(disc_ptr)).*,
+            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
+            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            else => unreachable,
+        };
+
+        // Get the active variant's payload layout
+        const variants = layout_cache.getTagUnionVariants(tu_data);
+        if (discriminant >= variants.len) return; // Invalid discriminant, skip
+        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+
+        // Incref only the active variant's payload (at offset 0)
+        const payload_value = StackValue{
+            .layout = variant_layout,
+            .ptr = @as(*anyopaque, @ptrCast(base_ptr)),
+            .is_initialized = true,
+        };
+
+        if (comptime trace_refcount) {
+            traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
+        }
+
+        payload_value.incref(layout_cache);
+        return;
+    }
 }
 
 /// Trace helper for refcount operations. Only active when built with -Dtrace-refcount=true.
@@ -1482,6 +1621,44 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                     captures_value.decref(layout_cache, ops);
                 }
             }
+            return;
+        },
+        .tag_union => {
+            if (self.ptr == null) return;
+            const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
+            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+            // Read discriminant to determine active variant
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const discriminant: u32 = switch (tu_data.discriminant_size) {
+                1 => @as(*const u8, @ptrCast(disc_ptr)).*,
+                2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
+                4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+                else => unreachable,
+            };
+
+            // Get the active variant's payload layout
+            const variants = layout_cache.getTagUnionVariants(tu_data);
+            if (discriminant >= variants.len) return; // Invalid discriminant, skip
+
+            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF tag_union ptr=0x{x} disc={} variant_layout.tag={}", .{
+                    @intFromPtr(self.ptr),
+                    discriminant,
+                    @intFromEnum(variant_layout.tag),
+                });
+            }
+
+            // Decref only the active variant's payload (at offset 0)
+            const payload_value = StackValue{
+                .layout = variant_layout,
+                .ptr = @as(*anyopaque, @ptrCast(base_ptr)),
+                .is_initialized = true,
+            };
+
+            payload_value.decref(layout_cache, ops);
             return;
         },
         else => {},
