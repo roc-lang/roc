@@ -119,6 +119,13 @@ pub const Interpreter = struct {
         TypeMismatch,
         ZeroSizedType,
     } || std.mem.Allocator.Error || layout.LayoutError;
+
+    /// Key for caching type translations, combining module identity with type variable.
+    const ModuleVarKey = struct {
+        module: *can.ModuleEnv,
+        var_: types.Var,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -190,14 +197,19 @@ pub const Interpreter = struct {
     var_to_layout_slot: std.array_list.Managed(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
-    // Translation cache: (env_ptr, compile_var) -> runtime_var
-    translate_cache: std.AutoHashMap(u64, types.Var),
+    // Translation cache: (module, resolved_var) -> runtime_var
+    translate_cache: std.AutoHashMap(ModuleVarKey, types.Var),
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
     // Compile-time rigid substitution for nominal type backing translation
     // Maps CT rigid vars in backing type to CT type arg vars
     translate_rigid_subst: std.AutoHashMap(types.Var, types.Var),
+
+    // Flex type context for polymorphic parameter type propagation.
+    // This allows numeric literals inside polymorphic functions to get the correct
+    // concrete type when the function is called with a specific type context.
+    flex_type_context: std.AutoHashMap(ModuleVarKey, types.Var),
 
     // Polymorphic instantiation cache
 
@@ -361,9 +373,10 @@ pub const Interpreter = struct {
             .runtime_layout_store = undefined, // set below to point at result.runtime_types
             .var_to_layout_slot = slots,
             .empty_scope = scope,
-            .translate_cache = std.AutoHashMap(u64, types.Var).init(allocator),
+            .translate_cache = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .translate_rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
@@ -6057,6 +6070,7 @@ pub const Interpreter = struct {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
         self.rigid_subst.deinit();
+        self.flex_type_context.deinit();
         var it = self.poly_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.args.len > 0) {
@@ -6585,7 +6599,19 @@ pub const Interpreter = struct {
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
-        const key: u64 = (@as(u64, @intFromPtr(module)) << 32) | @as(u64, @intFromEnum(resolved.var_));
+        const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
+
+        // Check flex_type_context BEFORE translate_cache for flex types.
+        // This is critical for polymorphic functions: the same compile-time flex var
+        // may need to translate to different runtime types depending on calling context.
+        // For example, `sum = |num| 0 + num` called as U64.to_str(sum(2400)) needs
+        // the literal 0 to become U64, not the cached Dec default.
+        if (resolved.desc.content == .flex) {
+            if (self.flex_type_context.get(key)) |context_rt_var| {
+                return context_rt_var;
+            }
+        }
+
         if (self.translate_cache.get(key)) |found| {
             return found;
         }
@@ -6804,6 +6830,10 @@ pub const Interpreter = struct {
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
+                    // Note: flex_type_context is checked at the top of translateTypeVar,
+                    // before the translate_cache lookup. If we reach here, there was no
+                    // contextual override, so we create a fresh flex var.
+
                     // Translate static dispatch constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(flex.constraints);
@@ -7577,6 +7607,8 @@ pub const Interpreter = struct {
             call_ret_rt_var: ?types.Var,
             /// Saved rigid_subst to restore after method call (for polymorphic dispatch)
             saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var),
+            /// Saved flex_type_context to restore after call (for polymorphic parameter types)
+            saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
         };
@@ -7889,6 +7921,10 @@ pub const Interpreter = struct {
                         .call_cleanup => |cc| {
                             if (cc.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                             if (cc.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
+                            if (cc.saved_flex_type_context) |saved| {
                                 var saved_copy = saved;
                                 saved_copy.deinit();
                             }
@@ -11117,6 +11153,11 @@ pub const Interpreter = struct {
                     // Provide closure context for capture lookup
                     try self.active_closures.append(func_val);
 
+                    // Save the current flex_type_context before adding parameter mappings
+                    // This will be restored in call_cleanup
+                    var saved_flex_type_context = try self.flex_type_context.clone();
+                    errdefer saved_flex_type_context.deinit();
+
                     // Bind parameters using pattern matching to handle destructuring
                     for (params, 0..) |param, idx| {
                         // Get the runtime type for this parameter
@@ -11124,6 +11165,24 @@ pub const Interpreter = struct {
                             (if (idx < vars.len) vars[idx] else try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param)))
                         else
                             try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+
+                        // Add the parameter's CT type to RT type mapping for polymorphic type propagation.
+                        // This allows numeric literals inside the function body that were unified with
+                        // this parameter's type at compile time to get the correct concrete type.
+                        // IMPORTANT: Only add mappings for concrete (structure) types, not flex/rigid types.
+                        // If the arg type is still flex/rigid, the default Dec fallback should apply.
+                        if (ci.arg_rt_vars_to_free) |vars| {
+                            if (idx < vars.len) {
+                                const arg_rt_resolved = self.runtime_types.resolveVar(vars[idx]);
+                                // Only add mapping if the argument has a concrete type (structure)
+                                if (arg_rt_resolved.desc.content == .structure) {
+                                    const param_ct_var = can.ModuleEnv.varFrom(param);
+                                    const param_resolved = self.env.types.resolveVar(param_ct_var);
+                                    const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
+                                    try self.flex_type_context.put(flex_key, vars[idx]);
+                                }
+                            }
+                        }
 
                         // Use patternMatchesBind to properly handle complex patterns (e.g., list destructuring)
                         // patternMatchesBind borrows the value and creates copies for bindings, so we need to
@@ -11135,6 +11194,9 @@ pub const Interpreter = struct {
                             func_val.decref(&self.runtime_layout_store, roc_ops);
                             for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            // Restore flex_type_context on error
+                            self.flex_type_context.deinit();
+                            self.flex_type_context = saved_flex_type_context;
                             return error.TypeMismatch;
                         }
                         // Decref the original argument value since patternMatchesBind made copies
@@ -11152,6 +11214,7 @@ pub const Interpreter = struct {
                         .did_instantiate = ci.did_instantiate,
                         .call_ret_rt_var = ci.call_ret_rt_var,
                         .saved_rigid_subst = cleanup_saved_rigid_subst,
+                        .saved_flex_type_context = saved_flex_type_context,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -11193,6 +11256,12 @@ pub const Interpreter = struct {
                         self.rigid_subst = saved;
                     }
 
+                    // Restore flex_type_context if we added parameter type mappings
+                    if (cleanup.saved_flex_type_context) |saved| {
+                        self.flex_type_context.deinit();
+                        self.flex_type_context = saved;
+                    }
+
                     // Restore environment and cleanup bindings
                     // Use trimBindingList to properly decref all bindings created by pattern matching
                     // (which may be more than param_count due to destructuring)
@@ -11218,6 +11287,12 @@ pub const Interpreter = struct {
                 if (cleanup.saved_rigid_subst) |saved| {
                     self.rigid_subst.deinit();
                     self.rigid_subst = saved;
+                }
+
+                // Restore flex_type_context if we added parameter type mappings
+                if (cleanup.saved_flex_type_context) |saved| {
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved;
                 }
 
                 // Restore environment and cleanup bindings
@@ -11323,6 +11398,7 @@ pub const Interpreter = struct {
                     .did_instantiate = false,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
+                    .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -11504,6 +11580,7 @@ pub const Interpreter = struct {
                     .did_instantiate = false,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
+                    .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -11617,7 +11694,10 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         var args = [1]StackValue{receiver_value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+                        // Get return type from the dot access expression for low-level builtins that need it
+                        const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
 
                         // Decref based on ownership semantics
                         const arg_ownership = low_level.op.getArgOwnership();
@@ -11655,6 +11735,7 @@ pub const Interpreter = struct {
                         .did_instantiate = false,
                         .call_ret_rt_var = null,
                         .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
@@ -11763,7 +11844,10 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, null);
+                    // Get return type from the dot access expression for low-level builtins that need it
+                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                    const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
                     const arg_ownership = low_level.op.getArgOwnership();
@@ -11886,6 +11970,7 @@ pub const Interpreter = struct {
                     .did_instantiate = did_instantiate,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = saved_rigid_subst,
+                    .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -12319,6 +12404,7 @@ pub const Interpreter = struct {
                             .did_instantiate = false,
                             .call_ret_rt_var = null,
                             .saved_rigid_subst = null,
+                            .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
                         } } });
                         try work_stack.push(.{ .eval_expr = .{
@@ -12397,6 +12483,7 @@ pub const Interpreter = struct {
                         .did_instantiate = false,
                         .call_ret_rt_var = null,
                         .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
