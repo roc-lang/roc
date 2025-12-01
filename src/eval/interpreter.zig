@@ -6071,6 +6071,7 @@ pub const Interpreter = struct {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
         self.rigid_subst.deinit();
+        self.translate_rigid_subst.deinit();
         self.flex_type_context.deinit();
         var it = self.poly_cache.iterator();
         while (it.next()) |entry| {
@@ -9076,6 +9077,13 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const layout_val = try self.getRuntimeLayout(rt_var);
+
+        // Dec literals require Dec-compatible layout. If we reach here with a different layout
+        // (e.g., U8 integer), it means validation should have caught this and skipped evaluation.
+        std.debug.assert(layout_val.tag == .scalar and
+            layout_val.data.scalar.tag == .frac and
+            layout_val.data.scalar.data.frac == .dec);
+
         const value = try self.pushRaw(layout_val, 0);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
