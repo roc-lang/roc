@@ -43,9 +43,10 @@
           zig
         ]
         ++ (with pkgs; [
-
           zls
           git # for use in ci/zig_lints.sh
+          (pkgs.writeShellScriptBin "zon2lock" "nix run github:Cloudef/zig2nix -- zon2lock build.zig.zon")
+          (pkgs.writeShellScriptBin "zon2nix" "nix run github:Cloudef/zig2nix -- zon2nix build.zig.zon2json-lock")
           typos # used in CI, helpful to run before committing to catch typos
           jq # see ci/benchmarks_zig.sh
         ])
@@ -82,22 +83,31 @@
       {
         packages = {
           default = self.packages.${system}.roc;
-          roc = pkgs.stdenv.mkDerivation {
-            name = "roc";
-            src = ../.;
-            nativeBuildInputs = [ zig.hook pkgs.pkg-config ];
-            zigBuildFlags = [ "-Doptimize=ReleaseFast" ];
+          roc = pkgs.stdenv.mkDerivation (finalAttrs: {
+            pname = "roc";
+            version = "0.0.0";
+            src = pkgs.lib.cleanSource ./..;
+            deps = pkgs.callPackage ../build.zig.zon.nix { };
+            nativeBuildInputs = [
+              zig.hook
+              pkgs.pkg-config
+            ];
+            buildInputs = [ ];
+            dontConfigure = true;
+            zigBuildFlags = [
+              "--system"
+              "${finalAttrs.deps}"
+            ];
 
-            # NIX_CFLAGS_COMPILE="";
-            # NIX_LDFLAGS="";
-          };
+            meta.mainProgram = "roc";
+          });
         };
 
         apps = {
           default = self.apps.${system}.roc;
           roc = {
             type = "app";
-            program = "${self.packages.${system}.roc}/bin/roc";
+            program = pkgs.lib.getExe self.packages.${system}.roc;
             meta = {
               description = "Roc CLI";
               mainProgram = "roc";
@@ -116,12 +126,15 @@
               body=$(echo "${shellFunctions}" | sed -n "/''${func}()/,/^[[:space:]]*}/p" | sed '1d;$d' | tr '\n' ';' | sed 's/;$//' | sed 's/[[:space:]]*$//')
               echo "  $func = $body"
             done
+            echo "  zon2lock = nix run github:Cloudef/zig2nix -- zon2lock build.zig.zon"
+            echo "  zon2nix = nix run github:Cloudef/zig2nix -- zon2nix build.zig.zon2json-lock"
             echo ""
 
             unset NIX_CFLAGS_COMPILE
             unset NIX_LDFLAGS
           ''; # unset to fix: Unrecognized C flag from NIX_CFLAGS_COMPILE: -fmacro-prefix-map
         };
+        formatter = pkgs.nixfmt-rfc-style;
       }
     );
 }

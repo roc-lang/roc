@@ -276,7 +276,7 @@ jobs:
         uses: ./.github/actions/flaky-retry                       
         with:
           command: |                                                                                                          
-            nix build ./src#roc                                                                                          
+            nix build ./src#roc
             result/bin/roc check src/PROFILING/bench_repeated_check.roc          
           error_string_contains: TemporaryNameServerFailure
           retry_count: 3     
