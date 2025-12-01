@@ -246,11 +246,14 @@ pub const Instantiator = struct {
     }
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
-        const elems_slice = self.store.sliceVars(tuple.elems);
+        // Use index-based iteration to avoid iterator invalidation
+        // (see comment in instantiateFunc for details)
         var fresh_elems = std.ArrayList(Var).empty;
         defer fresh_elems.deinit(self.store.gpa);
 
-        for (elems_slice) |elem_var| {
+        const elems_start: usize = @intFromEnum(tuple.elems.start);
+        for (0..tuple.elems.count) |i| {
+            const elem_var = self.store.vars.items.items[elems_start + i];
             const fresh_elem = try self.instantiateVar(elem_var);
             try fresh_elems.append(self.store.gpa, fresh_elem);
         }
@@ -259,11 +262,17 @@ pub const Instantiator = struct {
         return Tuple{ .elems = fresh_elems_range };
     }
     fn instantiateFunc(self: *Self, func: Func) std.mem.Allocator.Error!Func {
-        const args_slice = self.store.sliceVars(func.args);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing ArrayList, but instantiateVar
+        // can recursively call appendVars which may reallocate the array,
+        // invalidating the slice pointer.
         var fresh_args = std.ArrayList(Var).empty;
         defer fresh_args.deinit(self.store.gpa);
 
-        for (args_slice) |arg_var| {
+        const args_start: usize = @intFromEnum(func.args.start);
+        for (0..func.args.count) |i| {
+            // Re-fetch the var on each iteration since the backing array may have moved
+            const arg_var = self.store.vars.items.items[args_start + i];
             const fresh_arg = try self.instantiateVar(arg_var);
             try fresh_args.append(self.store.gpa, fresh_arg);
         }
@@ -325,8 +334,11 @@ pub const Instantiator = struct {
             var fresh_args = std.ArrayList(Var).empty;
             defer fresh_args.deinit(self.store.gpa);
 
-            const args_slice = self.store.sliceVars(tag_args);
-            for (args_slice) |arg_var| {
+            // Use index-based iteration to avoid iterator invalidation
+            // (see comment in instantiateFunc for details)
+            const args_start: usize = @intFromEnum(tag_args.start);
+            for (0..tag_args.count) |i| {
+                const arg_var = self.store.vars.items.items[args_start + i];
                 const fresh_arg = try self.instantiateVar(arg_var);
                 try fresh_args.append(self.store.gpa, fresh_arg);
             }
@@ -358,7 +370,11 @@ pub const Instantiator = struct {
             var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit(self.store.gpa);
 
-            for (self.store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            // Use index-based iteration to avoid iterator invalidation
+            // (see comment in instantiateFunc for details)
+            const constraints_start: usize = @intFromEnum(constraints.start);
+            for (0..constraints_len) |i| {
+                const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
                 const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
                 try fresh_constraints.append(self.store.gpa, fresh_constraint);
             }

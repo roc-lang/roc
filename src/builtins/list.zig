@@ -2,6 +2,18 @@
 //!
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
+//!
+//! ## Ownership Semantics
+//!
+//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
+//! follow these patterns:
+//!
+//! - **Borrow**: Function reads argument, caller retains ownership
+//! - **Consume**: Function takes ownership, caller loses access
+//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
+//! - **Seamless Slice**: Result shares data with arg via incref'd slice
+//!
+//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
 
 const utils = @import("utils.zig");
@@ -550,7 +562,15 @@ pub fn listAppendUnsafe(
     return output;
 }
 
-/// Add element to end of list. Will reserve additional space or reallocate if necessary beforehand.
+/// List.append - adds an element to the end of a list.
+///
+/// ## Ownership
+/// - `list`: **consumes** - caller loses ownership
+/// - `element`: **borrows** - copied into list, caller retains original
+/// - Returns: **copy-on-write** - may be same allocation if unique with capacity
+///
+/// Reserves capacity if needed, then appends element. If the list is unique
+/// with sufficient capacity, modifies in place and returns same pointer.
 pub fn listAppend(
     list: RocList,
     alignment: u32,
@@ -686,7 +706,16 @@ pub fn shallowClone(
     return new_list;
 }
 
-/// Add element to beginning of list, shifting existing elements.
+/// List.prepend - adds an element to the beginning of a list.
+///
+/// ## Ownership
+/// - `list`: **consumes** - caller loses ownership
+/// - `element`: **borrows** - copied into list, caller retains original
+/// - Returns: **copy-on-write** - may be same allocation if unique with capacity
+///
+/// Reserves capacity if needed, shifts existing elements, then inserts element
+/// at the front. If the list is unique with sufficient capacity, modifies in
+/// place and returns same pointer.
 pub fn listPrepend(
     list: RocList,
     alignment: u32,
@@ -782,7 +811,20 @@ pub fn listSwap(
     return newList;
 }
 
-/// Returns a sublist of the given list
+/// List.sublist - returns a sublist of the given list.
+///
+/// ## Ownership
+/// - `list`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// If list is empty, or sublist range is empty/out-of-bounds:
+/// - If unique: shrinks length to 0, returns same allocation
+/// - Otherwise: decrefs original, returns empty list
+///
+/// If sublist starts at index 0 and list is unique:
+/// - Shrinks length in place, returns same allocation
+///
+/// Otherwise: creates a seamless slice pointing into the original allocation.
 pub fn listSublist(
     list: RocList,
     alignment: u32,
@@ -1086,12 +1128,16 @@ fn swapElements(
     return swap(element_width, element_at_i, element_at_j, copy);
 }
 
-/// Concatenates two lists into a new list containing all elements from both lists.
+/// List.concat - concatenates two lists into one.
 ///
-/// ## Ownership and Memory Management
-/// **IMPORTANT**: This function CONSUMES both input lists (`list_a` and `list_b`).
-/// The caller must NOT call `decref` on either input list after calling this function,
-/// as this function handles their cleanup internally.
+/// ## Ownership
+/// - `list_a`: **consumes** - caller loses ownership
+/// - `list_b`: **consumes** - caller loses ownership
+/// - Returns: **independent** or **copy-on-write** - new allocation or extended list_a
+///
+/// This function handles cleanup of both input lists internally.
+/// If list_a has capacity, may extend it and return (copy-on-write).
+/// Otherwise allocates new list containing elements from both.
 pub fn listConcat(
     list_a: RocList,
     list_b: RocList,

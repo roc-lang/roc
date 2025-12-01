@@ -522,6 +522,50 @@ Another approach, manual memory management, would allow you to produce the faste
 Reference counting implementation:
 - Old compiler: [Mono folder](crates/compiler/mono/src) (search ref)
 
+## Borrow
+
+A **borrowing** function reads its argument without affecting its reference count.
+The caller retains ownership and can continue using the value after the call.
+
+Example builtins that borrow: `strEqual`, `listLen`, `strContains`
+
+See [src/builtins/OWNERSHIP.md](src/builtins/OWNERSHIP.md) for detailed ownership semantics.
+
+## Consume
+
+A **consuming** function takes ownership of its argument. The caller transfers
+ownership to the callee and must not use the argument after the call. The function
+is responsible for cleanup (decref when done).
+
+Example builtins that consume: `strConcat`, `listConcat`, `strJoinWith`
+
+See [src/builtins/OWNERSHIP.md](src/builtins/OWNERSHIP.md) for detailed ownership semantics.
+
+## Copy-on-Write
+
+A variant of consuming where the function may return the same allocation if the
+input is unique (reference count == 1). If the input is shared, the function
+decrefs the original and allocates a new copy.
+
+Example builtins: `strWithAsciiUppercased`, `strTrim`, `listAppend`
+
+## Seamless Slice
+
+A memory optimization where the result shares underlying data with the input
+via a slice that holds a reference to the original allocation.
+
+There are two variants:
+
+1. **Borrowing seamless slice**: The builtin borrows the input and calls `incref`
+   to share the allocation. The interpreter should decref the input after the call.
+   Example: `strToUtf8`
+
+2. **Consuming seamless slice**: The builtin consumes the input and the slice
+   inherits the reference (no incref). The interpreter should NOT decref.
+   Example: `strTrim` (when it creates an offset slice)
+
+See [src/builtins/OWNERSHIP.md](src/builtins/OWNERSHIP.md) for detailed ownership semantics.
+
 ## Mutate in place
 
 TODO

@@ -210,6 +210,8 @@ pub const Store = struct {
     pub fn setVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
+        // Self-redirects cause infinite loops in resolveVar
+        std.debug.assert(target_var != redirect_to);
         const slot_idx = Self.varToSlotIdx(target_var);
         self.slots.set(slot_idx, .{ .redirect = redirect_to });
     }
