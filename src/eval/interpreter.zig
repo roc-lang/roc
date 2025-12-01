@@ -2720,6 +2720,28 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .num_mod_by => {
+                std.debug.assert(args.len == 2); // low-level .num_mod_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@mod(l, r));
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    else => return error.TypeMismatch,
+                }
+                out.is_initialized = true;
+                return out;
+            },
 
             // Numeric parsing operations
             .num_from_int_digits => {
@@ -3595,6 +3617,44 @@ pub const Interpreter = struct {
                 }
 
                 // Unsupported result layout is a compiler bug
+                unreachable;
+            },
+            .num_from_str => {
+                // num.from_str : Str -> Try(num, [BadNumStr])
+                // Dispatch to type-specific parsing using comptime generics
+                std.debug.assert(args.len == 1);
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_rt_var = return_rt_var orelse unreachable;
+                const ok_payload_var = try self.getTryOkPayloadVar(result_rt_var);
+
+                if (ok_payload_var) |payload_var| {
+                    const num_layout = try self.getRuntimeLayout(payload_var);
+                    if (num_layout.tag == .scalar) {
+                        if (num_layout.data.scalar.tag == .int) {
+                            return switch (num_layout.data.scalar.data.int) {
+                                .u8 => self.numFromStrInt(u8, roc_str, result_rt_var),
+                                .i8 => self.numFromStrInt(i8, roc_str, result_rt_var),
+                                .u16 => self.numFromStrInt(u16, roc_str, result_rt_var),
+                                .i16 => self.numFromStrInt(i16, roc_str, result_rt_var),
+                                .u32 => self.numFromStrInt(u32, roc_str, result_rt_var),
+                                .i32 => self.numFromStrInt(i32, roc_str, result_rt_var),
+                                .u64 => self.numFromStrInt(u64, roc_str, result_rt_var),
+                                .i64 => self.numFromStrInt(i64, roc_str, result_rt_var),
+                                .u128 => self.numFromStrInt(u128, roc_str, result_rt_var),
+                                .i128 => self.numFromStrInt(i128, roc_str, result_rt_var),
+                            };
+                        } else if (num_layout.data.scalar.tag == .frac) {
+                            return switch (num_layout.data.scalar.data.frac) {
+                                .f32 => self.numFromStrFloat(f32, roc_str, result_rt_var),
+                                .f64 => self.numFromStrFloat(f64, roc_str, result_rt_var),
+                                .dec => self.numFromStrDec(roc_str, result_rt_var),
+                            };
+                        }
+                    }
+                }
                 unreachable;
             },
             .dec_to_str => {
@@ -4575,6 +4635,184 @@ pub const Interpreter = struct {
         };
     }
 
+    /// Get the Ok payload type variable from a Try type
+    fn getTryOkPayloadVar(self: *Interpreter, result_rt_var: types.Var) !?types.Var {
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        const ok_ident = self.env.idents.ok;
+        for (tag_list.items) |tag_info| {
+            if (tag_info.name == ok_ident) {
+                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                if (arg_vars.len >= 1) {
+                    return arg_vars[0];
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Get Ok and Err tag indices from a Try type
+    fn getTryTagIndices(self: *Interpreter, result_rt_var: types.Var) !struct { ok: ?usize, err: ?usize } {
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        var ok_index: ?usize = null;
+        var err_index: ?usize = null;
+        const ok_ident = self.env.idents.ok;
+        const err_ident = self.env.idents.err;
+
+        for (tag_list.items, 0..) |tag_info, i| {
+            if (tag_info.name == ok_ident) {
+                ok_index = i;
+            } else if (tag_info.name == err_ident) {
+                err_index = i;
+            }
+        }
+        return .{ .ok = ok_index, .err = err_index };
+    }
+
+    /// Helper for parsing integer from string (Str -> Try(T, [BadNumStr]))
+    fn numFromStrInt(self: *Interpreter, comptime T: type, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        const str_slice = roc_str.asSlice();
+
+        // Parse integer using base-10 radix only
+        const parsed: ?T = std.fmt.parseInt(T, str_slice, 10) catch null;
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        return self.buildTryResultWithValue(T, result_layout, tag_indices.ok, tag_indices.err, success, parsed orelse 0);
+    }
+
+    /// Helper for parsing float from string (Str -> Try(T, [BadNumStr]))
+    fn numFromStrFloat(self: *Interpreter, comptime T: type, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        const str_slice = roc_str.asSlice();
+
+        // Parse float
+        const parsed: ?T = std.fmt.parseFloat(T, str_slice) catch null;
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        return self.buildTryResultWithValue(T, result_layout, tag_indices.ok, tag_indices.err, success, parsed orelse 0);
+    }
+
+    /// Helper for parsing Dec from string (Str -> Try(Dec, [BadNumStr]))
+    fn numFromStrDec(self: *Interpreter, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        // Use RocDec's fromStr implementation
+        const parsed = builtins.dec.RocDec.fromStr(roc_str.*);
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        // Dec is stored as i128 internally
+        const dec_val: i128 = if (parsed) |dec| dec.num else 0;
+        return self.buildTryResultWithValue(i128, result_layout, tag_indices.ok, tag_indices.err, success, dec_val);
+    }
+
+    /// Build a Try result with a value payload
+    fn buildTryResultWithValue(
+        self: *Interpreter,
+        comptime T: type,
+        result_layout: Layout,
+        ok_index: ?usize,
+        err_index: ?usize,
+        success: bool,
+        value: T,
+    ) !StackValue {
+        const tag_idx: usize = if (success) ok_index orelse 0 else err_index orelse 1;
+
+        if (result_layout.tag == .record) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asRecord(&self.runtime_layout_store);
+            const layout_env = self.runtime_layout_store.env;
+            const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse unreachable;
+            const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse unreachable;
+
+            // Write tag discriminant
+            const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            try tmp.setInt(@intCast(tag_idx));
+
+            // Clear and write payload
+            const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
+                }
+                if (success) {
+                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tuple) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+            // Write tag discriminant (element 1)
+            const tag_field = try result_acc.getElement(1);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            try tmp.setInt(@intCast(tag_idx));
+
+            // Clear and write payload (element 0)
+            const payload_field = try result_acc.getElement(0);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
+                }
+                if (success) {
+                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tag_union) {
+            var dest = try self.pushRaw(result_layout, 0);
+            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+            const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+
+            // Write discriminant
+            switch (tu_data.discriminant_size) {
+                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
+                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                else => {},
+            }
+
+            // Clear and write payload
+            const payload_size = tu_data.discriminant_offset;
+            if (payload_size > 0) {
+                @memset(base_ptr[0..payload_size], 0);
+            }
+            if (success) {
+                @as(*T, @ptrCast(@alignCast(base_ptr))).* = value;
+            }
+
+            dest.is_initialized = true;
+            return dest;
+        }
+
+        unreachable;
+    }
+
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
         defer if (owned) self.allocator.free(@constCast(message));
         roc_ops.crash(message);
@@ -4593,6 +4831,37 @@ pub const Interpreter = struct {
 
         // Also pass raw source bytes to crash - host handles formatting
         roc_ops.crash(source_bytes);
+    }
+
+    /// Handle completion of a for loop/expression.
+    /// For statements: continue with remaining statements or final expression.
+    /// For expressions: push empty record {} as result.
+    fn handleForLoopComplete(
+        self: *Interpreter,
+        work_stack: *WorkStack,
+        value_stack: *ValueStack,
+        stmt_context: ?Continuation.ForIterate.StatementContext,
+        bindings_start: usize,
+        roc_ops: *RocOps,
+    ) Error!void {
+        if (stmt_context) |ctx| {
+            // For statement: continue with remaining statements
+            if (ctx.remaining_stmts.len == 0) {
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = ctx.final_expr,
+                    .expected_rt_var = null,
+                } });
+            } else {
+                const next_stmt = self.env.store.getStatement(ctx.remaining_stmts[0]);
+                try self.scheduleNextStatement(work_stack, next_stmt, ctx.remaining_stmts[1..], ctx.final_expr, bindings_start, null, roc_ops);
+            }
+        } else {
+            // For expression: push empty record {} as result
+            const empty_record_layout_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            const empty_record_layout = self.runtime_layout_store.getLayout(empty_record_layout_idx);
+            const empty_record_value = try self.pushRaw(empty_record_layout, 0);
+            try value_stack.push(empty_record_value);
+        }
     }
 
     fn getRuntimeU8(value: StackValue) u8 {
@@ -7396,11 +7665,11 @@ pub const Interpreter = struct {
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
 
-        /// For loop - iterate over list elements after list is evaluated.
-        for_loop_iterate: ForLoopIterate,
+        /// For loop/expression - iterate over list elements after list is evaluated.
+        for_iterate: ForIterate,
 
-        /// For loop - process body result and continue to next iteration.
-        for_loop_body_done: ForLoopBodyDone,
+        /// For loop/expression - process body result and continue to next iteration.
+        for_body_done: ForBodyDone,
 
         /// While loop - check condition and decide whether to continue.
         while_loop_check: WhileLoopCheck,
@@ -7726,8 +7995,8 @@ pub const Interpreter = struct {
             expr_idx: can.CIR.Expr.Idx,
         };
 
-        /// For loop - iterate over list elements
-        pub const ForLoopIterate = struct {
+        /// For loop/expression - iterate over list elements
+        pub const ForIterate = struct {
             /// The list value being iterated (stored to access elements)
             list_value: StackValue,
             /// Current iteration index
@@ -7744,16 +8013,21 @@ pub const Interpreter = struct {
             patt_rt_var: types.Var,
             /// Body expression to evaluate for each element
             body: can.CIR.Expr.Idx,
-            /// Remaining statements after the for loop
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// Statement context for for-statements (null for for-expressions)
+            stmt_context: ?StatementContext,
+
+            pub const StatementContext = struct {
+                /// Remaining statements after the for loop
+                remaining_stmts: []const can.CIR.Statement.Idx,
+                /// Final expression to evaluate after all statements
+                final_expr: can.CIR.Expr.Idx,
+            };
         };
 
-        /// For loop - cleanup after body evaluation
-        pub const ForLoopBodyDone = struct {
+        /// For loop/expression - cleanup after body evaluation
+        pub const ForBodyDone = struct {
             /// The list value being iterated
             list_value: StackValue,
             /// Current iteration index (just completed)
@@ -7770,14 +8044,12 @@ pub const Interpreter = struct {
             patt_rt_var: types.Var,
             /// Body expression to evaluate for each element
             body: can.CIR.Expr.Idx,
-            /// Remaining statements after the for loop
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
             /// Bindings length at iteration start (for per-iteration cleanup)
             loop_bindings_start: usize,
+            /// Statement context for for-statements (null for for-expressions)
+            stmt_context: ?ForIterate.StatementContext,
         };
 
         /// While loop - check condition
@@ -7982,11 +8254,11 @@ pub const Interpreter = struct {
                                 saved_copy.deinit();
                             }
                         },
-                        .for_loop_iterate => |fl| {
+                        .for_iterate => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
-                        .for_loop_body_done => |fl| {
+                        .for_body_done => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
@@ -8122,7 +8394,7 @@ pub const Interpreter = struct {
             // ================================================================
 
             .e_lookup_local => |lookup| {
-                const value = try self.evalLookupLocal(lookup, roc_ops);
+                const value = try self.evalLookupLocal(lookup, expected_rt_var, roc_ops);
                 try value_stack.push(value);
             },
 
@@ -8817,6 +9089,41 @@ pub const Interpreter = struct {
                 } });
             },
 
+            .e_for => |for_expr| {
+                // For expression: first evaluate the list, then set up iteration
+                const expr_ct_var = can.ModuleEnv.varFrom(for_expr.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Get the element type for binding
+                const patt_ct_var = can.ModuleEnv.varFrom(for_expr.patt);
+                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                // Push for_iterate continuation (will be executed after list is evaluated)
+                // stmt_context is null for for-expressions
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .for_iterate = .{
+                            .list_value = undefined, // Will be set when list is evaluated
+                            .current_index = 0,
+                            .list_len = 0, // Will be set when list is evaluated
+                            .elem_size = 0, // Will be set when list is evaluated
+                            .elem_layout = undefined, // Will be set when list is evaluated
+                            .pattern = for_expr.patt,
+                            .patt_rt_var = patt_rt_var,
+                            .body = for_expr.body,
+                            .bindings_start = self.bindings.items.len,
+                            .stmt_context = null,
+                        },
+                    },
+                });
+
+                // Evaluate the list expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = for_expr.expr,
+                    .expected_rt_var = expr_rt_var,
+                } });
+            },
+
             // ================================================================
             // Function calls
             // ================================================================
@@ -9082,6 +9389,7 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const layout_val = try self.getRuntimeLayout(rt_var);
+
         var value = try self.pushRaw(layout_val, 0);
         value.is_initialized = false;
         switch (layout_val.tag) {
@@ -9649,6 +9957,7 @@ pub const Interpreter = struct {
     fn evalLookupLocal(
         self: *Interpreter,
         lookup: @TypeOf(@as(can.CIR.Expr, undefined).e_lookup_local),
+        expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!StackValue {
         // Search bindings in reverse
@@ -9667,6 +9976,34 @@ pub const Interpreter = struct {
                     if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
                         self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
+                    }
+
+                    // For polymorphic numeric literals: if the expected type is a concrete
+                    // numeric type that differs from the cached value's layout, re-evaluate
+                    // the literal with the expected type. This enables true polymorphism for
+                    // numeric literals like `x = 42; I64.to_str(x)`.
+                    if (expected_rt_var) |exp_var| {
+                        const is_numeric_literal = switch (binding_expr) {
+                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
+                            else => false,
+                        };
+                        if (is_numeric_literal) {
+                            // Check if expected type is a concrete numeric type
+                            const expected_layout = try self.getRuntimeLayout(exp_var);
+                            const is_expected_numeric = expected_layout.tag == .scalar;
+                            if (is_expected_numeric) {
+                                // Check if cached value's layout differs from expected.
+                                // Use Layout.eql instead of std.meta.eql to avoid comparing
+                                // uninitialized union bytes which triggers Valgrind warnings.
+                                const cached_layout = b.value.layout;
+                                const layouts_differ = !cached_layout.eql(expected_layout);
+                                if (layouts_differ) {
+                                    // Re-evaluate the numeric literal with the expected type
+                                    const result = try self.evalWithExpectedType(b.expr_idx, roc_ops, exp_var);
+                                    return result;
+                                }
+                            }
+                        }
                     }
                 }
                 const copy_result = try self.pushCopy(b.value, roc_ops);
@@ -10020,11 +10357,10 @@ pub const Interpreter = struct {
                 const patt_ct_var = can.ModuleEnv.varFrom(for_stmt.patt);
                 const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
 
-                // Push for_loop_iterate continuation (will be executed after list is evaluated)
-                // We'll fill in list_value, list_len, etc. in the continuation handler
+                // Push for_iterate continuation (will be executed after list is evaluated)
                 try work_stack.push(.{
                     .apply_continuation = .{
-                        .for_loop_iterate = .{
+                        .for_iterate = .{
                             .list_value = undefined, // Will be set when list is evaluated
                             .current_index = 0,
                             .list_len = 0, // Will be set when list is evaluated
@@ -10033,9 +10369,11 @@ pub const Interpreter = struct {
                             .pattern = for_stmt.patt,
                             .patt_rt_var = patt_rt_var,
                             .body = for_stmt.body,
-                            .remaining_stmts = remaining_stmts,
-                            .final_expr = final_expr,
                             .bindings_start = bindings_start,
+                            .stmt_context = .{
+                                .remaining_stmts = remaining_stmts,
+                                .final_expr = final_expr,
+                            },
                         },
                     },
                 });
@@ -10577,11 +10915,11 @@ pub const Interpreter = struct {
                                     // Free arg_rt_vars if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                 },
-                                .for_loop_iterate => |fl| {
+                                .for_iterate => |fl| {
                                     // Decref the list value when skipping a for loop
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
-                                .for_loop_body_done => |fl| {
+                                .for_body_done => |fl| {
                                     // Decref the list value and clean up bindings
                                     self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
@@ -12127,10 +12465,10 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .for_loop_iterate => |fl_in| {
-                // For loop iteration: list has been evaluated, start iterating
+            .for_iterate => |fl_in| {
+                // For loop/expression iteration: list has been evaluated, start iterating
                 const list_value = value_stack.pop() orelse {
-                    self.triggerCrash("for_loop_iterate: value_stack empty", false, roc_ops);
+                    self.triggerCrash("for_iterate: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
 
@@ -12147,25 +12485,17 @@ pub const Interpreter = struct {
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
                 const list_len = list_header.len();
 
-                // Create the proper for_loop_iterate with list info filled in
+                // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
                 fl.list_value = list_value;
                 fl.list_len = list_len;
                 fl.elem_size = elem_size;
                 fl.elem_layout = elem_layout;
 
-                // If list is empty, skip to remaining statements
+                // If list is empty, handle completion
                 if (list_len == 0) {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (fl.remaining_stmts.len == 0) {
-                        try work_stack.push(.{ .eval_expr = .{
-                            .expr_idx = fl.final_expr,
-                            .expected_rt_var = null,
-                        } });
-                    } else {
-                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, null, roc_ops);
-                    }
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -12191,13 +12521,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                // Decref the element after successful pattern matching.
-                // patternMatchesBind creates copies via pushCopy which increfs, so the original
-                // incref we did above is now an extra reference that needs to be released.
                 elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation
-                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
                     .current_index = 0,
                     .list_len = fl.list_len,
@@ -12206,10 +12533,9 @@ pub const Interpreter = struct {
                     .pattern = fl.pattern,
                     .patt_rt_var = fl.patt_rt_var,
                     .body = fl.body,
-                    .remaining_stmts = fl.remaining_stmts,
-                    .final_expr = fl.final_expr,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = loop_bindings_start,
+                    .stmt_context = fl.stmt_context,
                 } } });
 
                 // Evaluate body
@@ -12219,10 +12545,10 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .for_loop_body_done => |fl| {
-                // For loop body completed, clean up and continue to next iteration
+            .for_body_done => |fl| {
+                // For loop/expression body completed, clean up and continue to next iteration
                 const body_result = value_stack.pop() orelse {
-                    self.triggerCrash("for_loop_body_done: value_stack empty", false, roc_ops);
+                    self.triggerCrash("for_body_done: value_stack empty", false, roc_ops);
                     return error.Crash;
                 };
                 body_result.decref(&self.runtime_layout_store, roc_ops);
@@ -12233,17 +12559,9 @@ pub const Interpreter = struct {
                 // Move to next element
                 const next_index = fl.current_index + 1;
                 if (next_index >= fl.list_len) {
-                    // Loop complete, decref list and continue with remaining statements
+                    // Loop complete
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (fl.remaining_stmts.len == 0) {
-                        try work_stack.push(.{ .eval_expr = .{
-                            .expr_idx = fl.final_expr,
-                            .expected_rt_var = null,
-                        } });
-                    } else {
-                        const next_stmt = self.env.store.getStatement(fl.remaining_stmts[0]);
-                        try self.scheduleNextStatement(work_stack, next_stmt, fl.remaining_stmts[1..], fl.final_expr, fl.bindings_start, null, roc_ops);
-                    }
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -12270,13 +12588,10 @@ pub const Interpreter = struct {
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                // Decref the element after successful pattern matching.
-                // patternMatchesBind creates copies via pushCopy which increfs, so the original
-                // incref we did above is now an extra reference that needs to be released.
                 elem_value.decref(&self.runtime_layout_store, roc_ops);
 
                 // Push body_done continuation for next iteration
-                try work_stack.push(.{ .apply_continuation = .{ .for_loop_body_done = .{
+                try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
                     .current_index = next_index,
                     .list_len = fl.list_len,
@@ -12285,10 +12600,9 @@ pub const Interpreter = struct {
                     .pattern = fl.pattern,
                     .patt_rt_var = fl.patt_rt_var,
                     .body = fl.body,
-                    .remaining_stmts = fl.remaining_stmts,
-                    .final_expr = fl.final_expr,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = new_loop_bindings_start,
+                    .stmt_context = fl.stmt_context,
                 } } });
 
                 // Evaluate body

@@ -317,6 +317,16 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // from_str (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const from_str = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_str", .{num_type});
+        if (env.common.findIdent(from_str)) |ident| {
+            try low_level_map.put(ident, .num_from_str);
+        }
+    }
+
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -355,6 +365,18 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const rem_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.rem_by", .{num_type});
         if (env.common.findIdent(rem_by)) |ident| {
             try low_level_map.put(ident, .num_rem_by);
+        }
+    }
+
+    // Numeric modulo operation (integer types only)
+    const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
+    for (integer_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // mod_by
+        const mod_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.mod_by", .{num_type});
+        if (env.common.findIdent(mod_by)) |ident| {
+            try low_level_map.put(ident, .num_mod_by);
         }
     }
 

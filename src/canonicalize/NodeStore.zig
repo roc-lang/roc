@@ -144,7 +144,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 38;
+pub const MODULEENV_EXPR_NODE_COUNT = 39;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -714,6 +714,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_expect => {
             return CIR.Expr{ .e_expect = .{
                 .body = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_for => {
+            return CIR.Expr{ .e_for = .{
+                .patt = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .body = @enumFromInt(node.data_3),
             } };
         },
         .expr_if_then_else => {
@@ -1794,6 +1801,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_expect => |e| {
             node.tag = .expr_expect;
             node.data_1 = @intFromEnum(e.body);
+        },
+        .e_for => |e| {
+            node.tag = .expr_for;
+            node.data_1 = @intFromEnum(e.patt);
+            node.data_2 = @intFromEnum(e.expr);
+            node.data_3 = @intFromEnum(e.body);
         },
     }
 

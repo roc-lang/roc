@@ -277,6 +277,11 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, ret.expr, dependencies, allocator);
         },
 
+        .e_for => |for_expr| {
+            try collectExprDependencies(cir, for_expr.expr, dependencies, allocator);
+            try collectExprDependencies(cir, for_expr.body, dependencies, allocator);
+        },
+
         .e_runtime_error => {},
     }
 }
