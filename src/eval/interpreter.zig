@@ -3597,6 +3597,44 @@ pub const Interpreter = struct {
                 // Unsupported result layout is a compiler bug
                 unreachable;
             },
+            .num_from_str => {
+                // num.from_str : Str -> Try(num, [BadNumStr])
+                // Dispatch to type-specific parsing using comptime generics
+                std.debug.assert(args.len == 1);
+                const str_arg = args[0];
+                std.debug.assert(str_arg.ptr != null);
+                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+
+                const result_rt_var = return_rt_var orelse unreachable;
+                const ok_payload_var = try self.getTryOkPayloadVar(result_rt_var);
+
+                if (ok_payload_var) |payload_var| {
+                    const num_layout = try self.getRuntimeLayout(payload_var);
+                    if (num_layout.tag == .scalar) {
+                        if (num_layout.data.scalar.tag == .int) {
+                            return switch (num_layout.data.scalar.data.int) {
+                                .u8 => self.numFromStrInt(u8, roc_str, result_rt_var),
+                                .i8 => self.numFromStrInt(i8, roc_str, result_rt_var),
+                                .u16 => self.numFromStrInt(u16, roc_str, result_rt_var),
+                                .i16 => self.numFromStrInt(i16, roc_str, result_rt_var),
+                                .u32 => self.numFromStrInt(u32, roc_str, result_rt_var),
+                                .i32 => self.numFromStrInt(i32, roc_str, result_rt_var),
+                                .u64 => self.numFromStrInt(u64, roc_str, result_rt_var),
+                                .i64 => self.numFromStrInt(i64, roc_str, result_rt_var),
+                                .u128 => self.numFromStrInt(u128, roc_str, result_rt_var),
+                                .i128 => self.numFromStrInt(i128, roc_str, result_rt_var),
+                            };
+                        } else if (num_layout.data.scalar.tag == .frac) {
+                            return switch (num_layout.data.scalar.data.frac) {
+                                .f32 => self.numFromStrFloat(f32, roc_str, result_rt_var),
+                                .f64 => self.numFromStrFloat(f64, roc_str, result_rt_var),
+                                .dec => self.numFromStrDec(roc_str, result_rt_var),
+                            };
+                        }
+                    }
+                }
+                unreachable;
+            },
             .dec_to_str => {
                 // Dec.to_str : Dec -> Str
                 std.debug.assert(args.len == 1); // expects 1 argument: Dec
@@ -4573,6 +4611,184 @@ pub const Interpreter = struct {
             f64 => .f64,
             else => @compileError("Unsupported float type"),
         };
+    }
+
+    /// Get the Ok payload type variable from a Try type
+    fn getTryOkPayloadVar(self: *Interpreter, result_rt_var: types.Var) !?types.Var {
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        const ok_ident = self.env.idents.ok;
+        for (tag_list.items) |tag_info| {
+            if (tag_info.name == ok_ident) {
+                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+                if (arg_vars.len >= 1) {
+                    return arg_vars[0];
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Get Ok and Err tag indices from a Try type
+    fn getTryTagIndices(self: *Interpreter, result_rt_var: types.Var) !struct { ok: ?usize, err: ?usize } {
+        const resolved = self.resolveBaseVar(result_rt_var);
+        std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
+
+        var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.appendUnionTags(result_rt_var, &tag_list);
+
+        var ok_index: ?usize = null;
+        var err_index: ?usize = null;
+        const ok_ident = self.env.idents.ok;
+        const err_ident = self.env.idents.err;
+
+        for (tag_list.items, 0..) |tag_info, i| {
+            if (tag_info.name == ok_ident) {
+                ok_index = i;
+            } else if (tag_info.name == err_ident) {
+                err_index = i;
+            }
+        }
+        return .{ .ok = ok_index, .err = err_index };
+    }
+
+    /// Helper for parsing integer from string (Str -> Try(T, [BadNumStr]))
+    fn numFromStrInt(self: *Interpreter, comptime T: type, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        const str_slice = roc_str.asSlice();
+
+        // Parse integer using base-10 radix only
+        const parsed: ?T = std.fmt.parseInt(T, str_slice, 10) catch null;
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        return self.buildTryResultWithValue(T, result_layout, tag_indices.ok, tag_indices.err, success, parsed orelse 0);
+    }
+
+    /// Helper for parsing float from string (Str -> Try(T, [BadNumStr]))
+    fn numFromStrFloat(self: *Interpreter, comptime T: type, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        const str_slice = roc_str.asSlice();
+
+        // Parse float
+        const parsed: ?T = std.fmt.parseFloat(T, str_slice) catch null;
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        return self.buildTryResultWithValue(T, result_layout, tag_indices.ok, tag_indices.err, success, parsed orelse 0);
+    }
+
+    /// Helper for parsing Dec from string (Str -> Try(Dec, [BadNumStr]))
+    fn numFromStrDec(self: *Interpreter, roc_str: *const RocStr, result_rt_var: types.Var) !StackValue {
+        // Use RocDec's fromStr implementation
+        const parsed = builtins.dec.RocDec.fromStr(roc_str.*);
+        const success = parsed != null;
+
+        const result_layout = try self.getRuntimeLayout(result_rt_var);
+        const tag_indices = try self.getTryTagIndices(result_rt_var);
+
+        // Dec is stored as i128 internally
+        const dec_val: i128 = if (parsed) |dec| dec.num else 0;
+        return self.buildTryResultWithValue(i128, result_layout, tag_indices.ok, tag_indices.err, success, dec_val);
+    }
+
+    /// Build a Try result with a value payload
+    fn buildTryResultWithValue(
+        self: *Interpreter,
+        comptime T: type,
+        result_layout: Layout,
+        ok_index: ?usize,
+        err_index: ?usize,
+        success: bool,
+        value: T,
+    ) !StackValue {
+        const tag_idx: usize = if (success) ok_index orelse 0 else err_index orelse 1;
+
+        if (result_layout.tag == .record) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asRecord(&self.runtime_layout_store);
+            const layout_env = self.runtime_layout_store.env;
+            const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse unreachable;
+            const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse unreachable;
+
+            // Write tag discriminant
+            const tag_field = try result_acc.getFieldByIndex(tag_field_idx);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            try tmp.setInt(@intCast(tag_idx));
+
+            // Clear and write payload
+            const payload_field = try result_acc.getFieldByIndex(payload_field_idx);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
+                }
+                if (success) {
+                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tuple) {
+            var dest = try self.pushRaw(result_layout, 0);
+            var result_acc = try dest.asTuple(&self.runtime_layout_store);
+
+            // Write tag discriminant (element 1)
+            const tag_field = try result_acc.getElement(1);
+            var tmp = tag_field;
+            tmp.is_initialized = false;
+            try tmp.setInt(@intCast(tag_idx));
+
+            // Clear and write payload (element 0)
+            const payload_field = try result_acc.getElement(0);
+            if (payload_field.ptr) |payload_ptr| {
+                const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
+                if (payload_bytes_len > 0) {
+                    @memset(@as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len], 0);
+                }
+                if (success) {
+                    @as(*T, @ptrCast(@alignCast(payload_ptr))).* = value;
+                }
+            }
+            return dest;
+        } else if (result_layout.tag == .tag_union) {
+            var dest = try self.pushRaw(result_layout, 0);
+            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+
+            const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
+            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+
+            // Write discriminant
+            switch (tu_data.discriminant_size) {
+                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
+                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
+                else => {},
+            }
+
+            // Clear and write payload
+            const payload_size = tu_data.discriminant_offset;
+            if (payload_size > 0) {
+                @memset(base_ptr[0..payload_size], 0);
+            }
+            if (success) {
+                @as(*T, @ptrCast(@alignCast(base_ptr))).* = value;
+            }
+
+            dest.is_initialized = true;
+            return dest;
+        }
+
+        unreachable;
     }
 
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {

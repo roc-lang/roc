@@ -317,6 +317,16 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // from_str (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const from_str = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_str", .{num_type});
+        if (env.common.findIdent(from_str)) |ident| {
+            try low_level_map.put(ident, .num_from_str);
+        }
+    }
+
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
     for (numeric_types) |num_type| {
         var buf: [256]u8 = undefined;
