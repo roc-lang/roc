@@ -2720,6 +2720,28 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .num_mod_by => {
+                std.debug.assert(args.len == 2); // low-level .num_mod_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            if (r == 0) return error.DivisionByZero;
+                            try out.setInt(@mod(l, r));
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    else => return error.TypeMismatch,
+                }
+                out.is_initialized = true;
+                return out;
+            },
 
             // Numeric parsing operations
             .num_from_int_digits => {
