@@ -806,6 +806,9 @@ pub fn strDropPrefix(
     const prefix_len = prefix.len();
     const new_len = string.len() - prefix_len;
 
+    // Increment refcount for the seamless slice we're about to create.
+    // This is safe even for small strings (incref is a no-op for them).
+    string.incref(1);
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
@@ -832,6 +835,9 @@ pub fn strDropSuffix(
     const suffix_len = suffix.len();
     const new_len = string.len() - suffix_len;
 
+    // Increment refcount for the seamless slice we're about to create.
+    // This is safe even for small strings (incref is a no-op for them).
+    string.incref(1);
     return substringUnsafe(string, 0, new_len, roc_ops);
 }
 
