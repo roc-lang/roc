@@ -32,6 +32,7 @@ const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
 const ImportResolver = @import("compile_package.zig").ImportResolver;
 const ScheduleHook = @import("compile_package.zig").ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
+const FileProvider = @import("compile_package.zig").FileProvider;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -246,7 +247,7 @@ const GlobalQueue = struct {
                                 const module_state = sched.getModuleState(task.module_name).?;
                                 if (module_state.phase == .Done and module_state.env != null) {
                                     // Read the source file again to generate the cache key
-                                    const source = std.fs.cwd().readFileAlloc(be.gpa, module_state.path, 10 * 1024 * 1024) catch {
+                                    const source = be.readFile(module_state.path, 10 * 1024 * 1024) catch {
                                         // If we can't read the file, skip caching
                                         freeSlice(self.gpa, task.pkg);
                                         freeSlice(self.gpa, task.module_name);
@@ -365,6 +366,8 @@ pub const BuildEnv = struct {
 
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
+    // Optional virtual file provider
+    file_provider: ?FileProvider = null,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -459,6 +462,11 @@ pub const BuildEnv = struct {
     /// Set the cache manager for this build environment
     pub fn setCacheManager(self: *BuildEnv, cache_manager: *CacheManager) void {
         self.cache_manager = cache_manager;
+    }
+
+    /// Set a virtual file provider for this BuildEnv.
+    pub fn setFileProvider(self: *BuildEnv, provider: ?FileProvider) void {
+        self.file_provider = provider;
     }
 
     /// Build an app file specifically (validates it's an app)
@@ -864,7 +872,7 @@ pub const BuildEnv = struct {
         // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const src = std.fs.cwd().readFileAlloc(self.gpa, file_abs, std.math.maxInt(usize)) catch |err| {
+        const src = self.readFile(file_abs, std.math.maxInt(usize)) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
                     var report = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
@@ -1149,6 +1157,16 @@ pub const BuildEnv = struct {
         return try std.fs.path.resolve(self.gpa, &.{ cwd_tmp, path });
     }
 
+
+    fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
+        if (self.file_provider) |fp| {
+            if (try fp.read(fp.ctx, path, self.gpa)) |data| {
+                return data;
+            }
+        }
+        return std.fs.cwd().readFileAlloc(self.gpa, path, max_bytes);
+    }
+
     /// Check if a path is a URL (http:// or https://)
     fn isUrl(path: []const u8) bool {
         return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
@@ -1373,6 +1391,7 @@ pub const BuildEnv = struct {
                 schedule_hook,
                 self.compiler_version,
                 self.builtin_modules,
+                self.file_provider,
             );
 
             const key = try self.gpa.dupe(u8, name);
@@ -1389,7 +1408,6 @@ pub const BuildEnv = struct {
 
             const p_path = info.platform_path.?;
 
-            // Check if this is a URL - if so, download and resolve to cache path
             const abs = if (isUrl(p_path))
                 try self.resolveUrlPackage(p_path)
             else
@@ -1428,7 +1446,6 @@ pub const BuildEnv = struct {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
 
-            // Check if this is a URL - if so, download and resolve to cache path
             const abs = if (isUrl(path))
                 try self.resolveUrlPackage(path)
             else
