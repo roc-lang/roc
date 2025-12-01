@@ -1,15 +1,18 @@
 const std = @import("std");
 
+/// The position of the diagnostic
 pub const Position = struct {
     line: u32,
     character: u32,
 };
 
+/// The range of characters that the diagnostic applies to
 pub const Range = struct {
     start: Position,
     end: Position,
 };
 
+/// Diagnostic expected by LSP specifications
 pub const Diagnostic = struct {
     range: Range,
     severity: ?u32 = null,
