@@ -881,6 +881,7 @@ pub const Interpreter = struct {
             .did_instantiate = false,
             .call_ret_rt_var = null,
             .saved_rigid_subst = null,
+            .saved_flex_type_context = null,
             .arg_rt_vars_to_free = null,
         } } });
         try work_stack.push(.{ .eval_expr = .{
