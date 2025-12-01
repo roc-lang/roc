@@ -5592,6 +5592,86 @@ pub fn canonicalizeExpr(
         .block => |e| {
             return try self.canonicalizeBlock(e);
         },
+        .for_expr => |for_expr| {
+            // Tmp state to capture free vars from both expr & body
+            //
+            // This is stored as a map, so we can avoid adding duplicate captures
+            // if both the expr and the body reference the same var
+            var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+            defer captures.deinit(self.env.gpa);
+
+            // Canonicalize the list expr
+            // for item in [1,2,3] { ... }
+            //             ^^^^^^^
+            const list_expr = blk: {
+                const body_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                const czerd_expr = try self.canonicalizeExprOrMalformed(for_expr.expr);
+
+                // Copy free vars into scratch array
+                const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_expr.free_vars orelse DataSpan.empty());
+                for (free_vars_slice) |fv| {
+                    try captures.put(self.env.gpa, fv, {});
+                }
+
+                break :blk czerd_expr;
+            };
+
+            // Canonicalize the pattern
+            // for item in [1,2,3] { ... }
+            //     ^^^^
+            const ptrn = try self.canonicalizePatternOrMalformed(for_expr.patt);
+
+            // Collect bound vars from pattern
+            var for_bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
+            defer for_bound_vars.deinit(self.env.gpa);
+            try self.collectBoundVars(ptrn, &for_bound_vars);
+
+            // Canonicalize the body
+            // for item in [1,2,3] {
+            //     print!(item.toStr())  <<<<
+            // }
+            const body = blk: {
+                const body_free_vars_start = self.scratch_free_vars.top();
+                defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                const body_expr = try self.canonicalizeExprOrMalformed(for_expr.body);
+
+                // Copy free vars into scratch array
+                const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars orelse DataSpan.empty());
+                for (body_free_vars_slice) |fv| {
+                    if (!for_bound_vars.contains(fv)) {
+                        try captures.put(self.env.gpa, fv, {});
+                    }
+                }
+
+                break :blk body_expr;
+            };
+
+            // Get captures and copy to free_vars for parent
+            const free_vars_start = self.scratch_free_vars.top();
+            var captures_iter = captures.keyIterator();
+            while (captures_iter.next()) |capture| {
+                try self.scratch_free_vars.append(capture.*);
+            }
+            const free_vars = if (self.scratch_free_vars.top() > free_vars_start)
+                self.scratch_free_vars.spanFrom(free_vars_start)
+            else
+                null;
+
+            // Create the for expression
+            const region = self.parse_ir.tokenizedRegionToRegion(for_expr.region);
+            const for_expr_idx = try self.env.addExpr(Expr{
+                .e_for = .{
+                    .patt = ptrn,
+                    .expr = list_expr.idx,
+                    .body = body.idx,
+                },
+            }, region);
+
+            return CanonicalizedExpr{ .idx = for_expr_idx, .free_vars = free_vars };
+        },
         .malformed => |malformed| {
             // We won't touch this since it's already a parse error.
             _ = malformed;

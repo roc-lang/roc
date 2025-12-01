@@ -393,6 +393,19 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
     },
 
+    /// For expression that iterates over a list and executes a body for each element.
+    /// The for expression evaluates to the empty record `{}`.
+    /// This is the expression form of a for loop, allowing it to be used in expression contexts.
+    ///
+    /// ```roc
+    /// for_each! = |items, cb!| for item in items { cb!(item) }
+    /// ```
+    e_for: struct {
+        patt: CIR.Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+    },
+
     /// A hosted function that will be provided by the platform at runtime.
     /// This represents a lambda/function whose implementation is provided by the host application
     /// via the RocOps.hosted_fns array.
@@ -1839,6 +1852,24 @@ pub const Expr = union(enum) {
 
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_for => |for_expr| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-for");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add pattern
+                try ir.store.getPattern(for_expr.patt).pushToSExprTree(ir, tree, for_expr.patt);
+
+                // Add list expression
+                try ir.store.getExpr(for_expr.expr).pushToSExprTree(ir, tree, for_expr.expr);
+
+                // Add body expression
+                try ir.store.getExpr(for_expr.body).pushToSExprTree(ir, tree, for_expr.body);
 
                 try tree.endNode(begin, attrs);
             },

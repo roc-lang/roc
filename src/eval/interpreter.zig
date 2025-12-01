@@ -7618,6 +7618,12 @@ pub const Interpreter = struct {
         /// For loop - process body result and continue to next iteration.
         for_loop_body_done: ForLoopBodyDone,
 
+        /// For expression - iterate over list elements after list is evaluated.
+        for_expr_iterate: ForExprIterate,
+
+        /// For expression - process body result and continue to next iteration.
+        for_expr_body_done: ForExprBodyDone,
+
         /// While loop - check condition and decide whether to continue.
         while_loop_check: WhileLoopCheck,
 
@@ -7996,6 +8002,52 @@ pub const Interpreter = struct {
             loop_bindings_start: usize,
         };
 
+        /// For expression - iterate over list elements (simpler than statement version)
+        pub const ForExprIterate = struct {
+            /// The list value being iterated (stored to access elements)
+            list_value: StackValue,
+            /// Current iteration index
+            current_index: usize,
+            /// Total number of elements in the list
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
+            /// Pattern to bind each element to
+            pattern: can.CIR.Pattern.Idx,
+            /// Pattern runtime type variable
+            patt_rt_var: types.Var,
+            /// Body expression to evaluate for each element
+            body: can.CIR.Expr.Idx,
+            /// Bindings length at for-expr start (for cleanup after completion)
+            bindings_start: usize,
+        };
+
+        /// For expression - cleanup after body evaluation (simpler than statement version)
+        pub const ForExprBodyDone = struct {
+            /// The list value being iterated
+            list_value: StackValue,
+            /// Current iteration index (just completed)
+            current_index: usize,
+            /// Total number of elements in the list
+            list_len: usize,
+            /// Element size in bytes
+            elem_size: usize,
+            /// Element layout
+            elem_layout: layout.Layout,
+            /// Pattern to bind each element to
+            pattern: can.CIR.Pattern.Idx,
+            /// Pattern runtime type variable
+            patt_rt_var: types.Var,
+            /// Body expression to evaluate for each element
+            body: can.CIR.Expr.Idx,
+            /// Bindings length at for-expr start (for cleanup after completion)
+            bindings_start: usize,
+            /// Bindings length at iteration start (for per-iteration cleanup)
+            loop_bindings_start: usize,
+        };
+
         /// While loop - check condition
         pub const WhileLoopCheck = struct {
             /// Condition expression
@@ -8203,6 +8255,14 @@ pub const Interpreter = struct {
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
                         .for_loop_body_done => |fl| {
+                            // Decref the list value
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .for_expr_iterate => |fl| {
+                            // Decref the list value
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .for_expr_body_done => |fl| {
                             // Decref the list value
                             fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                         },
@@ -9030,6 +9090,39 @@ pub const Interpreter = struct {
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_expr.expr,
                     .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            .e_for => |for_expr| {
+                // For expression: first evaluate the list, then set up iteration
+                const expr_ct_var = can.ModuleEnv.varFrom(for_expr.expr);
+                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
+
+                // Get the element type for binding
+                const patt_ct_var = can.ModuleEnv.varFrom(for_expr.patt);
+                const patt_rt_var = try self.translateTypeVar(self.env, patt_ct_var);
+
+                // Push for_expr_iterate continuation (will be executed after list is evaluated)
+                try work_stack.push(.{
+                    .apply_continuation = .{
+                        .for_expr_iterate = .{
+                            .list_value = undefined, // Will be set when list is evaluated
+                            .current_index = 0,
+                            .list_len = 0, // Will be set when list is evaluated
+                            .elem_size = 0, // Will be set when list is evaluated
+                            .elem_layout = undefined, // Will be set when list is evaluated
+                            .pattern = for_expr.patt,
+                            .patt_rt_var = patt_rt_var,
+                            .body = for_expr.body,
+                            .bindings_start = self.bindings.items.len,
+                        },
+                    },
+                });
+
+                // Evaluate the list expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = for_expr.expr,
+                    .expected_rt_var = expr_rt_var,
                 } });
             },
 
@@ -12503,6 +12596,159 @@ pub const Interpreter = struct {
                     .body = fl.body,
                     .remaining_stmts = fl.remaining_stmts,
                     .final_expr = fl.final_expr,
+                    .bindings_start = fl.bindings_start,
+                    .loop_bindings_start = new_loop_bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = fl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .for_expr_iterate => |fl_in| {
+                // For expression iteration: list has been evaluated, start iterating
+                const list_value = value_stack.pop() orelse {
+                    self.triggerCrash("for_expr_iterate: value_stack empty", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Get the list layout
+                if (list_value.layout.tag != .list) {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+                const elem_layout_idx = list_value.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
+
+                // Get the RocList header
+                const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                const list_len = list_header.len();
+
+                // Create the proper for_expr_iterate with list info filled in
+                var fl = fl_in;
+                fl.list_value = list_value;
+                fl.list_len = list_len;
+                fl.elem_size = elem_size;
+                fl.elem_layout = elem_layout;
+
+                // If list is empty, push empty record result and we're done
+                if (list_len == 0) {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    // Push empty record {} as result
+                    const empty_record_layout_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+                    const empty_record_layout = self.runtime_layout_store.getLayout(empty_record_layout_idx);
+                    const empty_record_value = try self.pushRaw(empty_record_layout, 0);
+                    try value_stack.push(empty_record_value);
+                    return true;
+                }
+
+                // Process first element
+                const elem_ptr = if (list_header.bytes) |buffer|
+                    buffer
+                else {
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                };
+
+                var elem_value = StackValue{
+                    .ptr = elem_ptr,
+                    .layout = elem_layout,
+                    .is_initialized = true,
+                };
+                elem_value.incref(&self.runtime_layout_store);
+
+                // Bind the pattern
+                const loop_bindings_start = self.bindings.items.len;
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                    list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Push body_done continuation
+                try work_stack.push(.{ .apply_continuation = .{ .for_expr_body_done = .{
+                    .list_value = fl.list_value,
+                    .current_index = 0,
+                    .list_len = fl.list_len,
+                    .elem_size = fl.elem_size,
+                    .elem_layout = fl.elem_layout,
+                    .pattern = fl.pattern,
+                    .patt_rt_var = fl.patt_rt_var,
+                    .body = fl.body,
+                    .bindings_start = fl.bindings_start,
+                    .loop_bindings_start = loop_bindings_start,
+                } } });
+
+                // Evaluate body
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = fl.body,
+                    .expected_rt_var = null,
+                } });
+                return true;
+            },
+            .for_expr_body_done => |fl| {
+                // For expression body completed, clean up and continue to next iteration
+                const body_result = value_stack.pop() orelse {
+                    self.triggerCrash("for_expr_body_done: value_stack empty", false, roc_ops);
+                    return error.Crash;
+                };
+                body_result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Clean up bindings for this iteration
+                self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
+
+                // Move to next element
+                const next_index = fl.current_index + 1;
+                if (next_index >= fl.list_len) {
+                    // Loop complete, decref list and push empty record result
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    // Push empty record {} as result
+                    const empty_record_layout_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+                    const empty_record_layout = self.runtime_layout_store.getLayout(empty_record_layout_idx);
+                    const empty_record_value = try self.pushRaw(empty_record_layout, 0);
+                    try value_stack.push(empty_record_value);
+                    return true;
+                }
+
+                // Get next element
+                const list_header: *const RocList = @ptrCast(@alignCast(fl.list_value.ptr.?));
+                const elem_ptr = if (list_header.bytes) |buffer|
+                    buffer + next_index * fl.elem_size
+                else {
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                };
+
+                var elem_value = StackValue{
+                    .ptr = elem_ptr,
+                    .layout = fl.elem_layout,
+                    .is_initialized = true,
+                };
+                elem_value.incref(&self.runtime_layout_store);
+
+                // Bind the pattern
+                const new_loop_bindings_start = self.bindings.items.len;
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    elem_value.decref(&self.runtime_layout_store, roc_ops);
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+                elem_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Push body_done continuation for next iteration
+                try work_stack.push(.{ .apply_continuation = .{ .for_expr_body_done = .{
+                    .list_value = fl.list_value,
+                    .current_index = next_index,
+                    .list_len = fl.list_len,
+                    .elem_size = fl.elem_size,
+                    .elem_layout = fl.elem_layout,
+                    .pattern = fl.pattern,
+                    .patt_rt_var = fl.patt_rt_var,
+                    .body = fl.body,
                     .bindings_start = fl.bindings_start,
                     .loop_bindings_start = new_loop_bindings_start,
                 } } });

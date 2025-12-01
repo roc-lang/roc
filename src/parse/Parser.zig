@@ -2153,6 +2153,21 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .expr = e,
             } });
         },
+        .KwFor => {
+            self.advance();
+            const patt = try self.parsePattern(.alternatives_forbidden);
+            self.expect(.KwIn) catch {
+                return try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
+            };
+            const list_expr = try self.parseExpr();
+            const body = try self.parseExpr();
+            expr = try self.store.addExpr(.{ .for_expr = .{
+                .region = .{ .start = start, .end = self.pos },
+                .patt = patt,
+                .expr = list_expr,
+                .body = body,
+            } });
+        },
         .TripleDot => {
             expr = try self.store.addExpr(.{ .ellipsis = .{
                 .region = .{ .start = start, .end = self.pos },

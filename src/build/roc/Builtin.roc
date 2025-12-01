@@ -82,6 +82,11 @@ Builtin :: [].{
 			Try.Err(OutOfBounds)
 		}
 
+		for_each! : List(item), (item => {}) => {}
+		for_each! = |items, cb!| for item in items {
+            cb!(item)
+		}
+
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform|
 			# Implement using fold + concat for now
