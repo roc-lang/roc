@@ -8328,6 +8328,100 @@ pub const Interpreter = struct {
         return error.Crash;
     }
 
+    /// Find a re-evaluable numeric expression that a variable or expression ultimately points to.
+    /// This follows lookup chains to find numeric literals or numeric operations (like binop),
+    /// enabling polymorphic re-evaluation for cases like `sum = 5 + 10; I64.to_str(sum)`.
+    fn findRootNumericLiteral(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        source_env: *const can.ModuleEnv,
+    ) ?can.CIR.Expr.Idx {
+        const expr = source_env.store.getExpr(expr_idx);
+
+        // If this is a numeric literal or numeric operation, return it
+        switch (expr) {
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => return expr_idx,
+            .e_binop => |binop| {
+                // Binary operations on numbers can be re-evaluated with expected type
+                // Only return binop if it's a numeric operation (not boolean and/or)
+                switch (binop.op) {
+                    .add, .sub, .mul, .div, .div_trunc, .rem => return expr_idx,
+                    else => return null,
+                }
+            },
+            .e_lookup_local => |lookup| {
+                // Follow the lookup to see what it points to
+                // Search bindings from most recent to oldest
+                var i: usize = self.bindings.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    const b = self.bindings.items[i];
+                    if (b.pattern_idx == lookup.pattern_idx) {
+                        // Found the binding - recursively check what it points to
+                        const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
+                        if (expr_idx_int != 0) {
+                            return self.findRootNumericLiteral(b.expr_idx, b.source_env);
+                        }
+                        return null;
+                    }
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+
+    /// Set up flex_type_context entries for flex vars in a numeric expression.
+    /// This enables re-evaluation with a specific expected type by ensuring
+    /// translateTypeVar returns the expected type for any flex vars.
+    fn setupFlexContextForNumericExpr(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        source_env: *const can.ModuleEnv,
+        target_rt_var: types.Var,
+    ) Error!void {
+        const expr = source_env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => {
+                // For numeric literals, map the expression's type var to target
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const resolved = source_env.types.resolveVar(ct_var);
+                if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                    const key = ModuleVarKey{ .module = @constCast(source_env), .var_ = resolved.var_ };
+                    try self.flex_type_context.put(key, target_rt_var);
+                }
+            },
+            .e_binop => |binop| {
+                // For binops, recursively set up context for operands
+                try self.setupFlexContextForNumericExpr(binop.lhs, source_env, target_rt_var);
+                try self.setupFlexContextForNumericExpr(binop.rhs, source_env, target_rt_var);
+            },
+            .e_lookup_local => |lookup| {
+                // Also map the lookup expression's type var itself
+                const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                const resolved = source_env.types.resolveVar(ct_var);
+                if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                    const key = ModuleVarKey{ .module = @constCast(source_env), .var_ = resolved.var_ };
+                    try self.flex_type_context.put(key, target_rt_var);
+                }
+                // For lookups, find the binding and recursively set up context
+                var i: usize = self.bindings.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    const b = self.bindings.items[i];
+                    if (b.pattern_idx == lookup.pattern_idx) {
+                        const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
+                        if (expr_idx_int != 0) {
+                            try self.setupFlexContextForNumericExpr(b.expr_idx, b.source_env, target_rt_var);
+                        }
+                        return;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
     /// Clean up any pending allocations in the work stack when an error occurs.
     /// This prevents memory leaks when evaluation fails partway through.
     fn cleanupPendingWorkStack(self: *Interpreter, work_stack: *WorkStack, roc_ops: *RocOps) void {
@@ -8624,9 +8718,28 @@ pub const Interpreter = struct {
                         const rhs_is_flex = rhs_resolved.desc.content == .flex or rhs_resolved.desc.content == .rigid;
 
                         if (lhs_is_flex and rhs_is_flex) {
-                            // Both unresolved - default both to Dec
-                            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                            const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                            // Both unresolved - for arithmetic ops, use expected type if available and concrete,
+                            // otherwise default to Dec. For comparison ops, always default to Dec since
+                            // expected_rt_var would be Bool (the result type), not the operand type.
+                            const is_arithmetic = switch (binop.op) {
+                                .add, .sub, .mul, .div, .div_trunc, .rem => true,
+                                else => false,
+                            };
+                            const target_var = blk: {
+                                if (is_arithmetic) {
+                                    if (expected_rt_var) |exp_var| {
+                                        const exp_resolved = self.runtime_types.resolveVar(exp_var);
+                                        const exp_is_concrete = exp_resolved.desc.content != .flex and exp_resolved.desc.content != .rigid;
+                                        if (exp_is_concrete) {
+                                            break :blk exp_var;
+                                        }
+                                    }
+                                }
+                                // No expected type, expected is flex, or comparison op - default to Dec
+                                const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                                break :blk try self.runtime_types.freshFromContent(dec_content);
+                            };
+                            const dec_var = target_var;
                             _ = try unify.unify(
                                 self.env,
                                 self.runtime_types,
@@ -10083,23 +10196,30 @@ pub const Interpreter = struct {
                     // the literal with the expected type. This enables true polymorphism for
                     // numeric literals like `x = 42; I64.to_str(x)`.
                     if (expected_rt_var) |exp_var| {
-                        const is_numeric_literal = switch (binding_expr) {
-                            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
-                            else => false,
-                        };
-                        if (is_numeric_literal) {
-                            // Check if expected type is a concrete numeric type
-                            const expected_layout = try self.getRuntimeLayout(exp_var);
-                            const is_expected_numeric = expected_layout.tag == .scalar;
-                            if (is_expected_numeric) {
-                                // Check if cached value's layout differs from expected.
-                                // Use Layout.eql instead of std.meta.eql to avoid comparing
-                                // uninitialized union bytes which triggers Valgrind warnings.
-                                const cached_layout = b.value.layout;
-                                const layouts_differ = !cached_layout.eql(expected_layout);
-                                if (layouts_differ) {
-                                    // Re-evaluate the numeric literal with the expected type
-                                    const result = try self.evalWithExpectedType(b.expr_idx, roc_ops, exp_var);
+                        // Check if expected type is a concrete numeric type
+                        const expected_layout = try self.getRuntimeLayout(exp_var);
+                        const is_expected_numeric = expected_layout.tag == .scalar;
+                        if (is_expected_numeric) {
+                            // Check if cached value's layout differs from expected.
+                            // Use Layout.eql instead of std.meta.eql to avoid comparing
+                            // uninitialized union bytes which triggers Valgrind warnings.
+                            const cached_layout = b.value.layout;
+                            const layouts_differ = !cached_layout.eql(expected_layout);
+                            if (layouts_differ) {
+                                // Check if the binding expression is a numeric literal (direct or via lookup)
+                                const root_numeric_expr = self.findRootNumericLiteral(b.expr_idx, b.source_env);
+                                if (root_numeric_expr) |root_expr_idx| {
+                                    // Re-evaluate the numeric expression with the expected type.
+                                    // Set up flex_type_context so flex vars in the expression
+                                    // translate to the expected type instead of defaulting to Dec.
+                                    const saved_flex_ctx = try self.flex_type_context.clone();
+                                    defer {
+                                        self.flex_type_context.deinit();
+                                        self.flex_type_context = saved_flex_ctx;
+                                    }
+                                    try self.setupFlexContextForNumericExpr(root_expr_idx, b.source_env, exp_var);
+
+                                    const result = try self.evalWithExpectedType(root_expr_idx, roc_ops, exp_var);
                                     return result;
                                 }
                             }
@@ -12355,6 +12475,12 @@ pub const Interpreter = struct {
                 } } });
 
                 // Start evaluating first arg
+                // For static dispatch methods like I64.to_str(x), use the receiver type
+                // as the expected type for the first argument. This enables proper type
+                // inference for polymorphic numeric literals.
+                // Note: This assumes methods take their receiver type as first arg, which
+                // is true for common patterns like I64.to_str. For multi-arg methods,
+                // only the first arg gets this treatment.
                 const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
                 const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
                 try work_stack.push(.{ .eval_expr = .{
@@ -12376,6 +12502,7 @@ pub const Interpreter = struct {
                         .expr_idx = dac.expr_idx,
                     } } });
 
+                    // Translate argument type
                     const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
                     const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
                     try work_stack.push(.{ .eval_expr = .{
