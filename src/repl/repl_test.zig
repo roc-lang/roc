@@ -727,3 +727,27 @@ test "Repl - full str_to_utf8 snapshot test" {
         try testing.expectEqualStrings("False", result);
     }
 }
+
+test "Repl - lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x| x + 1");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
+}
+
+test "Repl - multi-arg lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x, y| x + y");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
+}

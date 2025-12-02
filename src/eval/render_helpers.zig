@@ -475,6 +475,9 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             }
             // Fall through to renderValueRoc which can use layout info
         },
+        .fn_pure, .fn_effectful, .fn_unbound => {
+            return try gpa.dupe(u8, "<function>");
+        },
         else => {},
     };
     return try renderValueRoc(ctx, value);
