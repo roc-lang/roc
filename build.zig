@@ -573,54 +573,25 @@ fn setupTestPlatforms(
     b.getInstallStep().dependOn(clear_cache_step);
     test_platforms_step.dependOn(clear_cache_step);
 
-    // Create test platform host static library (int) - native target
-    const test_platform_int_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_int_host",
-        "test/int/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
+    // Create test platform host static libraries for int, fx, and fx-open - native target
+    const test_platform_dirs = [_][]const u8{ "int", "fx", "fx-open" };
 
-    // Copy the int test platform host library to the source directory
-    const copy_test_int_host = b.addUpdateSourceFiles();
-    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
-    clear_cache_step.dependOn(&copy_test_int_host.step);
+    for (test_platform_dirs) |platform_dir| {
+        const host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_{s}_host", .{platform_dir}),
+            b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+            target,
+            optimize,
+            roc_modules,
+        );
 
-    // Create test platform host static library (fx) - native target
-    const test_platform_fx_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_fx_host",
-        "test/fx/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
+        const copy_host = b.addUpdateSourceFiles();
+        copy_host.addCopyFileToSource(host_lib.getEmittedBin(), b.pathJoin(&.{ "test", platform_dir, "platform", test_host_filename }));
+        clear_cache_step.dependOn(&copy_host.step);
+    }
 
-    // Copy the fx test platform host library to the source directory
-    const copy_test_fx_host = b.addUpdateSourceFiles();
-    const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
-    clear_cache_step.dependOn(&copy_test_fx_host.step);
-
-    // Create test platform host static library (fx-open) - native target
-    const test_platform_fx_open_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_fx_open_host",
-        "test/fx-open/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
-
-    // Copy the fx-open test platform host library to the source directory
-    const copy_test_fx_open_host = b.addUpdateSourceFiles();
-    copy_test_fx_open_host.addCopyFileToSource(test_platform_fx_open_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx-open/platform", test_fx_host_filename }));
-    clear_cache_step.dependOn(&copy_test_fx_open_host.step);
-
-    // Cross-compile int and fx platform host libraries for musl and glibc targets
+    // Cross-compile test platform host libraries for musl and glibc targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
         .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
@@ -631,50 +602,21 @@ fn setupTestPlatforms(
     for (cross_compile_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Create cross-compiled int host library
-        const cross_int_host_lib = createTestPlatformHostLib(
-            b,
-            b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
-            "test/int/platform/host.zig",
-            cross_resolved_target,
-            optimize,
-            roc_modules,
-        );
+        // Create cross-compiled host libraries for all test platforms
+        for (test_platform_dirs) |platform_dir| {
+            const cross_host_lib = createTestPlatformHostLib(
+                b,
+                b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, cross_target.name }),
+                b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+                cross_resolved_target,
+                optimize,
+                roc_modules,
+            );
 
-        // Copy to target-specific directory
-        const copy_cross_int_host = b.addUpdateSourceFiles();
-        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
-        clear_cache_step.dependOn(&copy_cross_int_host.step);
-
-        // Create cross-compiled fx host library
-        const cross_fx_host_lib = createTestPlatformHostLib(
-            b,
-            b.fmt("test_platform_fx_host_{s}", .{cross_target.name}),
-            "test/fx/platform/host.zig",
-            cross_resolved_target,
-            optimize,
-            roc_modules,
-        );
-
-        // Copy to target-specific directory
-        const copy_cross_fx_host = b.addUpdateSourceFiles();
-        copy_cross_fx_host.addCopyFileToSource(cross_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libhost.a" }));
-        clear_cache_step.dependOn(&copy_cross_fx_host.step);
-
-        // Create cross-compiled fx-open host library
-        const cross_fx_open_host_lib = createTestPlatformHostLib(
-            b,
-            b.fmt("test_platform_fx_open_host_{s}", .{cross_target.name}),
-            "test/fx-open/platform/host.zig",
-            cross_resolved_target,
-            optimize,
-            roc_modules,
-        );
-
-        // Copy to target-specific directory
-        const copy_cross_fx_open_host = b.addUpdateSourceFiles();
-        copy_cross_fx_open_host.addCopyFileToSource(cross_fx_open_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx-open/platform/targets", cross_target.name, "libhost.a" }));
-        clear_cache_step.dependOn(&copy_cross_fx_open_host.step);
+            const copy_cross_host = b.addUpdateSourceFiles();
+            copy_cross_host.addCopyFileToSource(cross_host_lib.getEmittedBin(), b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "libhost.a" }));
+            clear_cache_step.dependOn(&copy_cross_host.step);
+        }
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
