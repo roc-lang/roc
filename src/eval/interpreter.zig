@@ -2305,6 +2305,120 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .list_drop_at => {
+                // List.drop_at : List(a), U64 -> List(a)
+                std.debug.assert(args.len == 2); // low-level .list_drop_at expects 2 argument
+
+                const list_arg = args[0];
+                const drop_index_arg = args[1];
+                const drop_index: u64 = @intCast(drop_index_arg.asI128());
+
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+
+                // Get element layout from the list layout
+                const elem_layout_idx = list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Return list with element at index dropped
+                const result_list = builtins.list.listDropAt(
+                    roc_list.*,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    drop_index,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                const result_layout = list_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
+            .list_sublist => {
+                // List.sublist : List(a), {start : U64, len : U64} -> List(a)
+                std.debug.assert(args.len == 2); // low-level .list_sublist expects 2 argument
+
+                // Check and extract first element as a typed RocList
+                const list_arg = args[0];
+                std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
+                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+
+                // Access second argument as a record and extract its specific fields
+                const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch unreachable;
+                // When fields are alphabetically sorted, 0 will be `len` and 1 will be `start`
+                const sublist_start_stack = sublist_config.getFieldByIndex(1) catch unreachable;
+                const sublist_len_stack = sublist_config.getFieldByIndex(0) catch unreachable;
+                const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
+                const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
+
+                // Get element layout from the list layout
+                const elem_layout_idx = list_arg.layout.data.list;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                // Determine if elements are refcounted
+                const elements_refcounted = elem_layout.isRefcounted();
+
+                // Set up context for refcount callbacks
+                var refcount_context = RefcountContext{
+                    .layout_store = &self.runtime_layout_store,
+                    .elem_layout = elem_layout,
+                    .roc_ops = roc_ops,
+                };
+
+                // Return list with element at index dropped
+                const result_list = builtins.list.listSublist(
+                    roc_list.*,
+                    elem_alignment_u32,
+                    elem_size,
+                    elements_refcounted,
+                    sublist_start,
+                    sublist_len,
+                    if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                    if (elements_refcounted) &listElementDec else &builtins.list.rcNone,
+                    roc_ops,
+                );
+
+                // Allocate space for the result list
+                const result_layout = list_arg.layout;
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                // Copy the result list structure to the output
+                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                result_ptr.* = result_list;
+
+                out.is_initialized = true;
+                return out;
+            },
             // .set_is_empty => {
             //     // TODO: implement Set.is_empty
             //     self.triggerCrash("Set.is_empty not yet implemented", false, roc_ops);

@@ -488,6 +488,8 @@ pub const Expr = union(enum) {
         list_concat,
         list_with_capacity,
         list_sort_with,
+        list_drop_at,
+        list_sublist,
         list_append,
 
         // Set operations
@@ -849,6 +851,8 @@ pub const Expr = union(enum) {
                 .list_with_capacity => &.{.borrow}, // capacity is value type
                 .list_sort_with => &.{.consume},
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
+                .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
+                .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
 
                 // Bool operations - value types
                 .bool_is_eq => &.{ .borrow, .borrow },

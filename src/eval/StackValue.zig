@@ -1441,10 +1441,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             // Decref for non-refcounted types (like plain integers) is a no-op.
             if (list_value.isUnique()) {
                 if (list_value.getAllocationDataPtr()) |source| {
-                    const count: usize = if (list_value.isSeamlessSlice()) blk: {
-                        const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
-                        break :blk ptr[0];
-                    } else list_value.len();
+                    const count = list_value.getAllocationElementCount(elements_refcounted);
 
                     if (comptime trace_refcount) {
                         traceRefcount("DECREF list decref-ing {} elements", .{count});

@@ -165,6 +165,34 @@ Builtin :: [].{
 		single : item -> List(item)
 		single = |x| [x]
 
+		drop_at : List(a), U64 -> List(a)
+
+		sublist : List(a), {start : U64, len : U64} -> List(a)
+
+		take_first : List(a), U64 -> List(a)
+		take_first = |list, n| {
+			List.sublist(list, {len: n, start: 0})
+		}
+
+		take_last : List(a), U64 -> List(a)
+		take_last = |list, n| {
+			len = List.len(list)
+			start = if (len <= n) 0 else len - n
+			List.sublist(list, {start: start, len: len})
+		}
+
+		drop_first : List(a), U64 -> List(a)
+		drop_first = |list, n| {
+			len = List.len(list)
+			List.sublist(list, {start: n, len: len})
+		}
+
+		drop_last : List(a), U64 -> List(a)
+		drop_last = |list, n| {
+			len = List.len(list)
+			take_len = if (len  <= n) 0 else len - n
+			List.sublist(list, {start: 0, len: take_len})
+		}
 	}
 
 	Bool := [False, True].{
