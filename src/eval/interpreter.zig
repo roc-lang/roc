@@ -1921,6 +1921,9 @@ pub const Interpreter = struct {
                 result_ptr.* = result_list;
 
                 out.is_initialized = true;
+                // Set rt_var to the proper List(Str) type so method dispatch works correctly
+                // We create the type ourselves because return_rt_var might be a flex var
+                out.rt_var = try self.mkListStrTypeRuntime();
                 return out;
             },
             .str_join_with => {
@@ -6696,6 +6699,47 @@ pub const Interpreter = struct {
         // Set new length and zero-fill
         self.var_to_layout_slot.items.len = min_len;
         @memset(self.var_to_layout_slot.items[old_len..], 0);
+    }
+
+    /// Create List(Str) type for runtime type propagation
+    fn mkListStrTypeRuntime(self: *Interpreter) !types.Var {
+        const origin_module_id = self.root_env.idents.builtin_module;
+
+        // Create Builtin.Str type for the element
+        const str_type_name = "Builtin.Str";
+        const str_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(str_type_name));
+        const str_type_ident = types.TypeIdent{ .ident_idx = str_type_name_ident };
+
+        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+        const empty_tag_union = types.TagUnion{
+            .tags = types.Tag.SafeMultiList.Range.empty(),
+            .ext = ext_var,
+        };
+        const str_backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+        const str_backing_var = try self.runtime_types.freshFromContent(str_backing_content);
+        const no_type_args: []const types.Var = &.{};
+        const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id);
+        const str_var = try self.runtime_types.freshFromContent(str_content);
+
+        // Create Builtin.List type with Str as element type
+        const list_type_name = "Builtin.List";
+        const list_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(list_type_name));
+        const list_type_ident = types.TypeIdent{ .ident_idx = list_type_name_ident };
+
+        const ext_var2 = try self.runtime_types.freshFromContent(empty_tag_union_content);
+        const empty_tag_union2 = types.TagUnion{
+            .tags = types.Tag.SafeMultiList.Range.empty(),
+            .ext = ext_var2,
+        };
+        const list_backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union2 } };
+        const list_backing_var = try self.runtime_types.freshFromContent(list_backing_content);
+
+        // List has one type argument (element type)
+        // Use stack-allocated array - mkNominal copies via appendVars so no heap allocation needed
+        const type_args: [1]types.Var = .{str_var};
+        const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id);
+        return try self.runtime_types.freshFromContent(list_content);
     }
 
     /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
@@ -12331,13 +12375,21 @@ pub const Interpreter = struct {
                 }
 
                 // Method call - resolve receiver type for dispatch
-                // First check if the type is still a flex/rigid var, default to Dec
+                // Always prefer the runtime type from the evaluated value if available,
+                // as it's more accurate than the compile-time type (which may be incorrectly inferred)
                 var effective_receiver_rt_var = da.receiver_rt_var;
-                const receiver_resolved_check = self.runtime_types.resolveVar(da.receiver_rt_var);
-                if (receiver_resolved_check.desc.content == .flex or receiver_resolved_check.desc.content == .rigid) {
-                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    effective_receiver_rt_var = dec_var;
+                if (receiver_value.rt_var) |val_rt_var| {
+                    // Use the runtime type from evaluation (e.g., split_on returns List Str)
+                    effective_receiver_rt_var = val_rt_var;
+                } else {
+                    // Fall back to compile-time type, with Dec default for unresolved types
+                    const receiver_resolved_check = self.runtime_types.resolveVar(da.receiver_rt_var);
+                    if (receiver_resolved_check.desc.content == .flex or receiver_resolved_check.desc.content == .rigid) {
+                        // No type info available, default to Dec for numeric operations
+                        const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                        const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                        effective_receiver_rt_var = dec_var;
+                    }
                 }
 
                 // Don't use resolveBaseVar here - we need to keep the nominal type
