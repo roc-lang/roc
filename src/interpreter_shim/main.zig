@@ -122,7 +122,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
         };
 
         // Validate memory layout - we need at least space for the header
-        const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(ipc.ModuleEnvHeader);
+        const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
         if (shm.total_size < min_required_size) {
             const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
             roc_ops.crash(msg);
@@ -175,7 +175,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
 
     // Read the header structure from shared memory
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
-    const header_ptr: *const ipc.ModuleEnvHeader = @ptrFromInt(header_addr);
+    const header_ptr: *const Header = @ptrFromInt(header_addr);
     if (entry_idx >= header_ptr.entry_count) {
         const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
         roc_ops.crash(err_msg);

@@ -597,7 +597,9 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, shm_handle: SharedMemoryHandle) !?[]const u8 {
+/// If serialized_module is provided, it will be embedded in the binary (for roc build).
+/// If serialized_module is null, the binary will use IPC to get module data (for roc run).
+fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -626,8 +628,8 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
 
     // Create the complete platform shim
     // Note: Symbol names include platform-specific prefixes (underscore for macOS)
-    // Pass null for serialized_module since roc run uses IPC mode
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target, null) catch |err| {
+    // serialized_module is null for roc run (IPC mode) or contains data for roc build (embedded mode)
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target, serialized_module) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
@@ -818,8 +820,8 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         }
 
         // Generate platform host shim using the detected entrypoints
-
-        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target, shm_handle) catch |err| {
+        // Pass null for serialized_module since roc run uses IPC mode
+        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target, null) catch |err| {
             std.log.err("Failed to generate platform host shim: {}", .{err});
             return err;
         };
@@ -953,14 +955,6 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
             },
         };
     }
-
-    // Set up shared memory with ModuleEnv
-    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
-        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
-        return err;
-    };
-    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
 
     // Ensure we clean up shared memory resources on all exit paths
     defer {
@@ -2762,6 +2756,181 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return;
     }
 
+    // Use embedded interpreter build approach
+    // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
+    try rocBuildEmbedded(allocs, args);
+}
+
+/// Build a standalone executable with the interpreter and embedded module data.
+/// This is the primary build path that creates executables without requiring IPC.
+fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
+    const target_mod = @import("target.zig");
+
+    std.log.info("Building {s} with embedded interpreter", .{args.path});
+
+    // Parse target if provided, otherwise use native
+    const target = if (args.target) |target_str| blk: {
+        break :blk target_mod.RocTarget.fromString(target_str) orelse {
+            std.log.err("Invalid target: {s}", .{target_str});
+            return error.InvalidTarget;
+        };
+    } else target_mod.RocTarget.detectNative();
+
+    std.log.debug("Target: {} ({s})", .{ target, target.toTriple() });
+
+    // Set up shared memory with ModuleEnv (same as roc run)
+    std.log.debug("Compiling Roc file: {s}", .{args.path});
+    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+        std.log.err("Failed to compile Roc file: {}", .{err});
+        return err;
+    };
+    std.log.debug("Compilation complete, serialized size: {} bytes", .{shm_handle.size});
+
+    // Clean up shared memory when done (we'll copy the data)
+    defer {
+        if (comptime is_windows) {
+            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = c.close(shm_handle.fd);
+        }
+    }
+
+    // Extract serialized module data for embedding
+    const serialized_module = @as([*]u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+
+    // Determine output path
+    const output_path = if (args.output) |output|
+        try allocs.arena.dupe(u8, output)
+    else blk: {
+        const basename = std.fs.path.basename(args.path);
+        const name_without_ext = if (std.mem.endsWith(u8, basename, ".roc"))
+            basename[0 .. basename.len - 4]
+        else
+            basename;
+        break :blk try allocs.arena.dupe(u8, name_without_ext);
+    };
+
+    // Set up cache directory for build artifacts
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(allocs.gpa, cache_config, Filesystem.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(allocs.arena);
+    const build_cache_dir = try std.fs.path.join(allocs.arena, &.{ cache_dir, "roc_build" });
+
+    std.fs.cwd().makePath(build_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Get platform directory and host library (do this first to get platform source)
+    const app_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_spec = extractPlatformSpecFromApp(allocs, args.path) catch |err| {
+        std.log.err("Failed to extract platform spec: {}", .{err});
+        return err;
+    };
+    std.log.debug("Platform spec: {s}", .{platform_spec});
+
+    // Resolve platform path
+    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
+        resolvePlatformSpecToPaths(allocs, platform_spec, app_dir) catch |err| blk: {
+            std.log.err("Failed to resolve platform paths: {}", .{err});
+            break :blk null;
+        }
+    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://"))
+        resolveUrlPlatform(allocs, platform_spec) catch null
+    else
+        null;
+
+    const host_lib_path = if (platform_paths) |pp| pp.host_lib_path else {
+        std.log.err("Could not find host library for platform: {s}", .{platform_spec});
+        return error.PlatformHostLibraryNotFound;
+    };
+    std.log.debug("Host library: {s}", .{host_lib_path});
+
+    // Extract entrypoints from the platform source file
+    std.log.debug("Extracting entrypoints from platform...", .{});
+    var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch {
+        std.log.err("Failed to allocate entrypoints list", .{});
+        return error.OutOfMemory;
+    };
+
+    if (platform_paths) |pp| {
+        if (pp.platform_source_path) |platform_source| {
+            extractEntrypointsFromPlatform(allocs, platform_source, &entrypoints) catch |err| {
+                std.log.err("Failed to extract entrypoints: {}", .{err});
+                return err;
+            };
+        } else {
+            std.log.err("No platform source file found for entrypoint extraction", .{});
+            return error.NoPlatformSource;
+        }
+    } else {
+        std.log.err("No platform paths available", .{});
+        return error.PlatformHostLibraryNotFound;
+    }
+    std.log.debug("Found {} entrypoints", .{entrypoints.items.len});
+
+    // Extract shim library (interpreter shim)
+    const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
+    const shim_path = try std.fs.path.join(allocs.arena, &.{ build_cache_dir, shim_filename });
+
+    std.fs.cwd().access(shim_path, .{}) catch {
+        // Shim not found, extract it
+        std.log.debug("Extracting shim library to {s}...", .{shim_path});
+        extractReadRocFilePathShimLibrary(allocs, shim_path) catch |err| {
+            std.log.err("Failed to extract shim library: {}", .{err});
+            return err;
+        };
+    };
+
+    // Generate platform host shim with embedded module data
+    std.log.debug("Generating platform host shim with {} bytes of embedded data...", .{serialized_module.len});
+    const platform_shim_path = generatePlatformHostShim(allocs, build_cache_dir, entrypoints.items, target, serialized_module) catch |err| {
+        std.log.err("Failed to generate platform host shim: {}", .{err});
+        return err;
+    };
+    std.log.debug("Platform shim generated: {?s}", .{platform_shim_path});
+
+    // Link everything together
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    try object_files.append(shim_path);
+    try object_files.append(host_lib_path);
+    if (platform_shim_path) |psp| {
+        try object_files.append(psp);
+    }
+
+    var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32);
+
+    // Add system libraries
+    if (builtin.target.os.tag == .macos) {
+        try extra_args.append("-lSystem");
+    }
+
+    const linker_mod = @import("linker.zig");
+    const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
+    const link_config = linker_mod.LinkConfig{
+        .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
+        .object_files = object_files.items,
+        .platform_files_pre = &.{},
+        .platform_files_post = &.{},
+        .extra_args = extra_args.items,
+        .output_path = output_path,
+        .target_abi = target_abi,
+        .target_os = target.toOsTag(),
+        .target_arch = target.toCpuArch(),
+    };
+
+    try linker_mod.link(allocs, link_config);
+
+    std.log.info("Successfully built standalone executable: {s}", .{output_path});
+}
+
+/// Legacy cross-compilation build (stub-based, for testing)
+fn rocBuildCrossCompile(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     // Import needed modules
     const target_mod = @import("target.zig");
     const app_stub = @import("app_stub.zig");
