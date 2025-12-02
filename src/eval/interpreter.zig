@@ -9137,21 +9137,8 @@ pub const Interpreter = struct {
                 defer tag_list.deinit();
                 try self.appendUnionTags(rt_var, &tag_list);
 
-                // Try to find tag in expected type's tag list
-                var tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
-
-                // If not found in expected type, fall back to compile-time type.
-                // This handles open unions where the expected type (e.g., from a platform's
-                // requires clause) doesn't include all tags that the app actually uses.
-                if (tag_index_opt == null) {
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var);
-                    // Clear and repopulate with compile-time type's tags
-                    tag_list.clearRetainingCapacity();
-                    try self.appendUnionTags(ct_rt_var, &tag_list);
-                    rt_var = ct_rt_var; // Use compile-time type for the rest
-                    tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
-                }
+                // Find tag in the type's tag list
+                const tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
 
                 const tag_index = tag_index_opt orelse {
                     const name_text = self.env.getIdent(tag.name);
