@@ -935,7 +935,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue][ProvidedByCompiler]_others_
+    _[Blue, ..[ProvidedByCompiler, .._others]]_
 
 All patterns in an `match` must have compatible types.
 
@@ -991,7 +991,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(f, Str, Error, [O]_others, (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_l, [InvalidNumeral(Str)])]_
+    _(f, Str, Error, [O, .._others], (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_l, [InvalidNumeral(Str)])]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

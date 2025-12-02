@@ -940,7 +940,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue][ProvidedByCompiler]_others_
+    _[Red, Blue, ..[ProvidedByCompiler, .._others]]_
 
 All patterns in an `match` must have compatible types.
 
@@ -970,7 +970,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red, Blue][ProvidedByCompiler]_others, _arg -> Error_
+    _[Red, Blue, ..[ProvidedByCompiler, .._others]], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1038,7 +1038,7 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Error)][Err(d), Ok({  })]_others_
+    _[Stdoline!(Error), ..[Err(d), Ok({  }), .._others]]_
 
 But the type annotation says it should have the type:
     _Try(d)_

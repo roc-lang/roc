@@ -44,7 +44,7 @@ This expression produces a value, but it's not being used:
                                ^^^^
 
 It has the type:
-    _[Bool]_others_
+    _[Bool, .._others]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -55,7 +55,7 @@ This expression produces a value, but it's not being used:
                                     ^^^^^^^^^^^^^
 
 It has the type:
-    _[LaunchNukeErr]_others_
+    _[LaunchNukeErr, .._others]_
 
 # TOKENS
 ~~~zig

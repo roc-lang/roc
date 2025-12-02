@@ -556,7 +556,7 @@ This expression produces a value, but it's not being used:
     ^^^^^^^^^^
 
 It has the type:
-    _[PascalCase]_others_
+    _[PascalCase, .._others]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
