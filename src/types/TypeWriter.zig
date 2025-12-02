@@ -66,7 +66,9 @@ scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
-import_mapping: std.AutoHashMap(Ident.Idx, Ident.Idx),
+import_mapping: ?*const import_mapping_mod.ImportMapping,
+/// The allocator used to create owned fields
+gpa: std.mem.Allocator,
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
@@ -80,7 +82,7 @@ pub fn initFromParts(
     gpa: std.mem.Allocator,
     types_store: *const TypesStore,
     idents: *const Ident.Store,
-    import_mapping: ?import_mapping_mod.ImportMapping,
+    import_mapping: ?*const import_mapping_mod.ImportMapping,
 ) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
@@ -94,7 +96,8 @@ pub fn initFromParts(
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
-        .import_mapping = import_mapping orelse import_mapping_mod.ImportMapping.init(gpa),
+        .import_mapping = import_mapping,
+        .gpa = gpa,
     };
 }
 
@@ -107,7 +110,13 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
     self.scratch_record_fields.deinit();
-    self.import_mapping.deinit();
+    // import_mapping is borrowed, not owned, so don't deinit it
+}
+
+/// Update the import_mapping pointer. This is needed when the owning struct
+/// is returned by value, which invalidates the original pointer.
+pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mapping_mod.ImportMapping) void {
+    self.import_mapping = import_mapping;
 }
 
 /// Reset type writer state
@@ -674,8 +683,8 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
 
             if (flex.name) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
-            } else {
-                // TODO: here, we should consider polarity
+            } else if (true) {
+                // TODO: ^ here, we should consider polarity
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
 
@@ -934,8 +943,10 @@ pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
 /// If the identifier is in the import_mapping, returns the mapped name.
 /// Otherwise, returns the original identifier text.
 fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
-    if (self.import_mapping.get(idx)) |display_idx| {
-        return self.idents.getText(display_idx);
+    if (self.import_mapping) |mapping| {
+        if (mapping.get(idx)) |display_idx| {
+            return self.idents.getText(display_idx);
+        }
     }
 
     const name = self.idents.getText(idx);

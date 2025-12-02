@@ -243,6 +243,7 @@ pub const Interpreter = struct {
     snapshots: snapshot_mod.Store,
     import_mapping: *const import_mapping_mod.ImportMapping,
     unify_scratch: unify.Scratch,
+    type_writer: types.TypeWriter,
 
     // Minimal eval support
     stack_memory: stack.Stack,
@@ -401,6 +402,7 @@ pub const Interpreter = struct {
             .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
+            .type_writer = try types.TypeWriter.initFromParts(allocator, rt_types_ptr, env.common.getIdentStore(), null),
             .stack_memory = try stack.Stack.initCapacity(allocator, 8 * 1024 * 1024), // 8MB stack
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
@@ -6654,6 +6656,7 @@ pub const Interpreter = struct {
         self.problems.deinit(self.allocator);
         // Note: import_mapping is borrowed, not owned - don't deinit it
         self.unify_scratch.deinit();
+        self.type_writer.deinit();
         self.stack_memory.deinit();
         self.bindings.deinit();
         self.active_closures.deinit();
@@ -7266,8 +7269,11 @@ pub const Interpreter = struct {
                             var j: usize = 0;
                             while (j < acc.fields.items.len) : (j += 1) {
                                 const ct_field = acc.fields.items[j];
+                                // Translate field name from source module's ident store to runtime ident store
+                                const source_field_name_str = module.getIdent(ct_field.name);
+                                const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
                                 runtime_fields[j] = .{
-                                    .name = ct_field.name,
+                                    .name = rt_field_name,
                                     .var_ = try self.translateTypeVar(module, ct_field.var_),
                                 };
                             }
@@ -7282,8 +7288,11 @@ pub const Interpreter = struct {
                             var i: usize = 0;
                             while (i < ct_fields.len) : (i += 1) {
                                 const f = ct_fields.get(i);
+                                // Translate field name from source module's ident store to runtime ident store
+                                const source_field_name_str = module.getIdent(f.name);
+                                const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_field_name_str));
                                 runtime_fields[i] = .{
-                                    .name = f.name,
+                                    .name = rt_field_name,
                                     .var_ = try self.translateTypeVar(module, f.var_),
                                 };
                             }
@@ -7397,15 +7406,24 @@ pub const Interpreter = struct {
                     for (ct_args, 0..) |ct_arg, i| {
                         buf[i] = try self.translateTypeVar(module, ct_arg);
                     }
-                    const content = try self.runtime_types.mkAlias(alias.ident, rt_backing, buf);
+                    // Translate the alias's ident from source module's ident store to runtime ident store
+                    const source_alias_str = module.getIdent(alias.ident.ident_idx);
+                    const rt_alias_ident_idx = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_alias_str));
+                    const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
+                    const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                 },
                 .recursion_var => |rec_var| {
                     // Translate the structure variable that the recursion var points to
                     const rt_structure = try self.translateTypeVar(module, rec_var.structure);
+                    // Translate the recursion var's name (if present) from source module's ident store
+                    const rt_name: ?base_pkg.Ident.Idx = if (rec_var.name) |name| blk_name: {
+                        const source_name_str = module.getIdent(name);
+                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+                    } else null;
                     const content: types.Content = .{ .recursion_var = .{
                         .structure = rt_structure,
-                        .name = rec_var.name,
+                        .name = rt_name,
                     } };
                     break :blk try self.runtime_types.freshFromContent(content);
                 },
@@ -7413,6 +7431,12 @@ pub const Interpreter = struct {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
                     // before the translate_cache lookup. If we reach here, there was no
                     // contextual override, so we create a fresh flex var.
+
+                    // Translate the flex's name from source module's ident store to runtime ident store (if present)
+                    const rt_name: ?base_pkg.Ident.Idx = if (flex.name) |name| blk_name: {
+                        const source_name_str = module.getIdent(name);
+                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+                    } else null;
 
                     // Translate static dispatch constraints if present
                     const rt_flex = if (flex.constraints.len() > 0) blk_flex: {
@@ -7423,16 +7447,25 @@ pub const Interpreter = struct {
                         for (ct_constraints) |ct_constraint| {
                             // Translate the constraint's fn_var recursively
                             const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                            // Translate the constraint's fn_name from source module's ident store
+                            const ct_fn_name_str = module.getIdent(ct_constraint.fn_name);
+                            const rt_fn_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_fn_name_str));
                             try rt_constraints.append(self.allocator, .{
-                                .fn_name = ct_constraint.fn_name,
+                                .fn_name = rt_fn_name,
                                 .fn_var = rt_fn_var,
                                 .origin = ct_constraint.origin,
                             });
                         }
 
                         const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
-                        break :blk_flex flex.withConstraints(rt_constraints_range);
-                    } else flex;
+                        break :blk_flex types.Flex{
+                            .name = rt_name,
+                            .constraints = rt_constraints_range,
+                        };
+                    } else types.Flex{
+                        .name = rt_name,
+                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+                    };
 
                     const content: types.Content = .{ .flex = rt_flex };
                     break :blk try self.runtime_types.freshFromContent(content);
@@ -7444,6 +7477,10 @@ pub const Interpreter = struct {
                         break :blk try self.translateTypeVar(module, substitute_var);
                     }
 
+                    // Translate the rigid's name from source module's ident store to runtime ident store
+                    const source_name_str = module.getIdent(rigid.name);
+                    const rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
+
                     // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
                         const ct_constraints = module.types.sliceStaticDispatchConstraints(rigid.constraints);
@@ -7453,16 +7490,25 @@ pub const Interpreter = struct {
                         for (ct_constraints) |ct_constraint| {
                             // Translate the constraint's fn_var recursively
                             const rt_fn_var = try self.translateTypeVar(module, ct_constraint.fn_var);
+                            // Translate the constraint's fn_name from source module's ident store
+                            const ct_fn_name_str = module.getIdent(ct_constraint.fn_name);
+                            const rt_fn_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_fn_name_str));
                             try rt_constraints.append(self.allocator, .{
-                                .fn_name = ct_constraint.fn_name,
+                                .fn_name = rt_fn_name,
                                 .fn_var = rt_fn_var,
                                 .origin = ct_constraint.origin,
                             });
                         }
 
                         const rt_constraints_range = try self.runtime_types.appendStaticDispatchConstraints(rt_constraints.items);
-                        break :blk_rigid rigid.withConstraints(rt_constraints_range);
-                    } else rigid;
+                        break :blk_rigid types.Rigid{
+                            .name = rt_name,
+                            .constraints = rt_constraints_range,
+                        };
+                    } else types.Rigid{
+                        .name = rt_name,
+                        .constraints = types.StaticDispatchConstraint.SafeList.Range.empty(),
+                    };
 
                     const content: types.Content = .{ .rigid = rt_rigid };
                     break :blk try self.runtime_types.freshFromContent(content);
@@ -7761,6 +7807,7 @@ pub const Interpreter = struct {
                 self.runtime_types,
                 &self.problems,
                 &self.snapshots,
+                &self.type_writer,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
                 unify.ModuleEnvLookup{
@@ -8903,6 +8950,7 @@ pub const Interpreter = struct {
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
+                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 unify.ModuleEnvLookup{
@@ -8917,6 +8965,7 @@ pub const Interpreter = struct {
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
+                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 unify.ModuleEnvLookup{
@@ -8933,6 +8982,7 @@ pub const Interpreter = struct {
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
+                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 unify.ModuleEnvLookup{
@@ -8949,6 +8999,7 @@ pub const Interpreter = struct {
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
+                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 unify.ModuleEnvLookup{
@@ -9616,6 +9667,7 @@ pub const Interpreter = struct {
                         self.runtime_types,
                         &self.problems,
                         &self.snapshots,
+                        &self.type_writer,
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         unify.ModuleEnvLookup{

@@ -144,7 +144,7 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(a) where [a.from_numeral : Numeral -> Try(_b, [InvalidNumeral(Str)])]_
+    _List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadList_
@@ -158,7 +158,7 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: a } where [a.from_numeral : Numeral -> Try(_b, [InvalidNumeral(Str)])]_
+    _{ field: Str, other: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadRecord_
@@ -186,7 +186,7 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, a) where [a.from_numeral : Numeral -> Try(_b, [InvalidNumeral(Str)])]_
+    _(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadTuple_

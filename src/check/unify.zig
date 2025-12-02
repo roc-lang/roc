@@ -134,6 +134,7 @@ pub fn unify(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     module_lookup: ModuleEnvLookup,
@@ -147,6 +148,7 @@ pub fn unify(
         types,
         problems,
         snapshots,
+        type_writer,
         unify_scratch,
         occurs_scratch,
         module_lookup,
@@ -201,6 +203,7 @@ pub fn unifyWithConf(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     module_lookup: ModuleEnvLookup,
@@ -225,8 +228,8 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.deepCopyVar(types, a);
-                    const actual_snapshot = try snapshots.deepCopyVar(types, b);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
 
                     break :blk .{ .type_mismatch = .{
                         .types = .{
@@ -256,7 +259,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -279,7 +282,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -316,21 +319,21 @@ pub fn unifyWithConf(
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -338,11 +341,13 @@ pub fn unifyWithConf(
                             },
                         }
                     } else {
+                        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = try snapshots.deepCopyVar(types, a),
+                            .expected = expected_snapshot,
                             .actual_var = b,
-                            .actual = try snapshots.deepCopyVar(types, b),
+                            .actual = actual_snapshot,
                         } };
                     }
                 },

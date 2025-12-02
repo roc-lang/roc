@@ -124,6 +124,8 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The expected return type of the enclosing function, if any.
 /// Used to correctly type-check `return` expressions inside loops etc.
 enclosing_func_return_type: ?Var,
+/// Type writer for formatting types at snapshot time
+type_writer: types_mod.TypeWriter,
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -211,7 +213,15 @@ pub fn init(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
+        // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
+        .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
     };
+}
+
+/// Call this after Check has been stored at its final location to set up the import_mapping pointer.
+/// This is needed because returning Check by value invalidates the pointer set during init.
+pub fn fixupTypeWriter(self: *Self) void {
+    self.type_writer.setImportMapping(&self.import_mapping);
 }
 
 /// Deinit owned fields
@@ -237,6 +247,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_origins.deinit();
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
+    self.type_writer.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -369,6 +380,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         self.types,
         &self.problems,
         &self.snapshots,
+        &self.type_writer,
         &self.unify_scratch,
         &self.occurs_scratch,
         unifier.ModuleEnvLookup{ .auto_imported = self.module_envs },
@@ -3915,7 +3927,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     }
                 };
                 if (!is_empty_record) {
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, expr_var);
+                    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expr_var);
                     _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
                         .var_ = expr_var,
                         .snapshot = snapshot,
@@ -5344,7 +5356,7 @@ fn reportConstraintError(
     },
     env: *Env,
 ) !void {
-    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
             .dispatcher_does_not_impl_method = .{
@@ -5377,7 +5389,7 @@ fn reportEqualityError(
     constraint: StaticDispatchConstraint,
     env: *Env,
 ) !void {
-    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispach = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
