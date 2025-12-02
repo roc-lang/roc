@@ -145,9 +145,13 @@ pub const RocList = extern struct {
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
-    // This function is only valid if the list has refcounted elements.
-    fn getAllocationElementCount(self: RocList) usize {
-        if (self.isSeamlessSlice()) {
+    // Returns the number of elements to decref when freeing this list's allocation.
+    // For seamless slices with refcounted elements, this reads the original allocation size from the heap.
+    // For non-refcounted elements or non-slices, just returns the list length.
+    pub fn getAllocationElementCount(self: RocList, elements_refcounted: bool) usize {
+        // Only read from heap (-2) for seamless slices with refcounted elements.
+        // The count is only written by setAllocationElementCount when elements_refcounted=true.
+        if (self.isSeamlessSlice() and elements_refcounted) {
             // Seamless slices always refer to an underlying allocation.
             const alloc_ptr = self.getAllocationDataPtr() orelse unreachable;
             // - 1 is refcount.
@@ -195,7 +199,7 @@ pub const RocList = extern struct {
         // If unique, decref will free the list. Before that happens, all elements must be decremented.
         if (elements_refcounted and self.isUnique()) {
             if (self.getAllocationDataPtr()) |source| {
-                const count = self.getAllocationElementCount();
+                const count = self.getAllocationElementCount(elements_refcounted);
 
                 var i: usize = 0;
                 while (i < count) : (i += 1) {
