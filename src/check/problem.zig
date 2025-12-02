@@ -277,7 +277,6 @@ pub const ReportBuilder = struct {
     const Self = @This();
 
     gpa: Allocator,
-    snapshot_writer: snapshot.SnapshotWriter,
     bytes_buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
@@ -300,7 +299,6 @@ pub const ReportBuilder = struct {
     ) Self {
         return .{
             .gpa = gpa,
-            .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore(), import_mapping),
             .bytes_buf = std.array_list.Managed(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
@@ -315,18 +313,15 @@ pub const ReportBuilder = struct {
     /// Deinit report builder
     /// Only owned field is `buf`
     pub fn deinit(self: *Self) void {
-        self.snapshot_writer.deinit();
         self.bytes_buf.deinit();
     }
 
-    /// Check if any static dispatch constraint involves the is_eq method
-    fn hasEqualityConstraint(self: *Self) bool {
-        for (self.snapshot_writer.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == self.can_ir.idents.is_eq) {
-                return true;
-            }
-        }
-        return false;
+    /// Get the formatted string for a snapshot, asserting it exists
+    fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
+        return self.snapshots.getFormattedString(idx) orelse {
+            std.debug.assert(false); // Missing formatted string for snapshot
+            unreachable;
+        };
     }
 
     /// Build a report for a problem
@@ -423,8 +418,8 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
-        const owned_actual = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
-        const owned_expected = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+        const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         // For annotation mismatches, we want to highlight the expression that doesn't match,
         // not the annotation itself. When from_annotation is true and we're showing
@@ -459,16 +454,7 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is a method type mismatch (both types are functions with equality constraints)
-        const is_method_type_mismatch = self.areBothFunctionSnapshots(expected_content, actual_content) and
-            self.snapshot_writer.static_dispatch_constraints.items.len > 0 and
-            self.hasEqualityConstraint();
-
-        if (is_method_type_mismatch) {
-            try report.document.addReflowingText("This method has an unexpected type:");
-        } else {
-            try report.document.addReflowingText("This expression is used in an unexpected way:");
-        }
+        try report.document.addReflowingText("This expression is used in an unexpected way:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -509,8 +495,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.incompatible_elem_index);
@@ -638,7 +624,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         // Add description
         try report.document.addText("This ");
@@ -721,8 +707,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
@@ -855,8 +841,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         try report.document.addText("The first pattern in this ");
         try report.document.addAnnotated("match", .keyword);
@@ -941,8 +927,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
@@ -1058,8 +1044,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
@@ -1173,7 +1159,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         // Add description
         try report.document.addText("I'm having trouble with this bool operation:");
@@ -1311,7 +1297,7 @@ pub const ReportBuilder = struct {
             try report.document.addText("    ");
             try report.document.addAnnotated(expected_tag_str, .type_variable);
         } else {
-            const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+            const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
             try report.document.addLineBreak();
@@ -1363,8 +1349,8 @@ pub const ReportBuilder = struct {
         const actual_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
         const expected_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
 
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(actual_arg_type) orelse "?");
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(expected_arg_type) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(actual_arg_type));
+        const expected_type = try report.addOwnedString(self.getFormattedString(expected_arg_type));
 
         try report.document.addText("The ");
         try report.document.addText(arg_index);
@@ -1424,8 +1410,8 @@ pub const ReportBuilder = struct {
 
         // The types from unification already have the correct snapshots
         // expected = first argument, actual = second argument
-        const first_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
-        const second_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
+        const first_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const second_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         try report.document.addText("The ");
         try report.document.addText(first_arg_index);
@@ -1593,7 +1579,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
-        const snapshot_str = try report.addOwnedString(self.snapshots.getFormattedString(data.dispatcher_snapshot) orelse "?");
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
 
@@ -1637,7 +1623,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
-        const snapshot_str = try report.addOwnedString(self.snapshots.getFormattedString(data.dispatcher_snapshot) orelse "?");
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
 
@@ -1732,7 +1718,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "TYPE DOES NOT SUPPORT EQUALITY", .runtime_error);
         errdefer report.deinit();
 
-        const snapshot_str = try report.addOwnedString(self.snapshots.getFormattedString(data.dispatcher_snapshot) orelse "?");
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1813,7 +1799,7 @@ pub const ReportBuilder = struct {
                 if (!self.snapshotSupportsEquality(field_content_idx)) {
                     const field_name = self.can_ir.getIdentText(name);
 
-                    const field_type_str = try report.addOwnedString(self.snapshots.getFormattedString(field_content_idx) orelse "?");
+                    const field_type_str = try report.addOwnedString(self.getFormattedString(field_content_idx));
 
                     try report.document.addText("    ");
                     try report.document.addAnnotated(field_name, .emphasized);
@@ -1858,7 +1844,7 @@ pub const ReportBuilder = struct {
 
             for (elems, 0..) |elem_content_idx, i| {
                 if (!self.snapshotSupportsEquality(elem_content_idx)) {
-                    const elem_type_str = try report.addOwnedString(self.snapshots.getFormattedString(elem_content_idx) orelse "?");
+                    const elem_type_str = try report.addOwnedString(self.getFormattedString(elem_content_idx));
 
                     try report.document.addText("    element ");
                     var buf: [20]u8 = undefined;
@@ -1931,7 +1917,7 @@ pub const ReportBuilder = struct {
                             if (!first) try report.document.addText(", ");
                             first = false;
 
-                            const arg_type_str = try report.addOwnedString(self.snapshots.getFormattedString(arg_content_idx) orelse "?");
+                            const arg_type_str = try report.addOwnedString(self.getFormattedString(arg_content_idx));
                             try report.document.addAnnotated(arg_type_str, .type_variable);
                         }
                         try report.document.addText(")");
@@ -2008,7 +1994,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
         errdefer report.deinit();
 
-        const owned_expected = try report.addOwnedString(self.snapshots.getFormattedString(data.expected_type) orelse "?");
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
@@ -2046,7 +2032,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
         errdefer report.deinit();
 
-        const owned_expected = try report.addOwnedString(self.snapshots.getFormattedString(data.expected_type) orelse "?");
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
@@ -2088,7 +2074,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "INVALID NUMERIC LITERAL", .runtime_error);
         errdefer report.deinit();
 
-        const owned_expected = try report.addOwnedString(self.snapshots.getFormattedString(data.expected_type) orelse "?");
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -2156,7 +2142,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
         errdefer report.deinit();
 
-        const owned_expected = try report.addOwnedString(self.snapshots.getFormattedString(data.snapshot) orelse "?");
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.snapshot));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -2245,7 +2231,7 @@ pub const ReportBuilder = struct {
         try report.document.addText("It has the type:");
         try report.document.addLineBreak();
 
-        const expected_type = try report.addOwnedString(self.snapshots.getFormattedString(types.expected_snapshot) orelse "?");
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
         try report.document.addLineBreak();
@@ -2261,7 +2247,7 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        const actual_type = try report.addOwnedString(self.snapshots.getFormattedString(types.actual_snapshot) orelse "?");
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();
@@ -2440,7 +2426,7 @@ pub const ReportBuilder = struct {
 /// looses essential error information. So before doing this, we create a fully
 /// resolved snapshot of the type that we can use in reporting
 ///
-/// Entry points are `appendProblem` and `deepCopyVar`
+/// Entry point is `appendProblem`
 pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";

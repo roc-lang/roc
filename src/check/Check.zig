@@ -3927,7 +3927,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     }
                 };
                 if (!is_empty_record) {
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, expr_var);
+                    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expr_var);
                     _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
                         .var_ = expr_var,
                         .snapshot = snapshot,
@@ -5356,7 +5356,7 @@ fn reportConstraintError(
     },
     env: *Env,
 ) !void {
-    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
             .dispatcher_does_not_impl_method = .{
@@ -5389,7 +5389,7 @@ fn reportEqualityError(
     constraint: StaticDispatchConstraint,
     env: *Env,
 ) !void {
-    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispach = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,

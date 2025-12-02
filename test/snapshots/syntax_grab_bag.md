@@ -917,7 +917,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    _d_
+    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -944,7 +944,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _d_
+    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -969,7 +969,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _d_
+    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

@@ -100,10 +100,10 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
                        ^^^^^^^^^^^^^^^
 
 The tag is:
-    _Pair(a, b)_
+    _Pair a b_
 
 But the nominal type needs it to be:
-    _Pair(a, a)_
+    _Pair a a_
 
 # TOKENS
 ~~~zig

@@ -26,7 +26,7 @@ This **to_str** method is being called on a value whose type doesn't have that m
 
 The value's type, which does not have a method named **to_str**, is:
 
-    _{ first: a, first: Str, first: [True, ..b], pair1: { first: a, second: Str }, pair2: { first: Str, second: c }, pair3: { first: [True, ..b], second: [False, ..d] }, second: Str, second: c, second: [False, ..d] } where [a.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]_
+    _{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]_
 
 
 # TOKENS
