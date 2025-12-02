@@ -1499,6 +1499,59 @@ fn addMainExe(
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
+    // Cross-compile interpreter shim for all supported targets
+    // This allows `roc build --target=X` to work for cross-compilation
+    const cross_compile_shim_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+    };
+
+    for (cross_compile_shim_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Build builtins object for this target
+        const cross_builtins_obj = b.addObject(.{
+            .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = optimize != .Debug,
+                .pic = true,
+            }),
+        });
+        configureBackend(cross_builtins_obj, cross_resolved_target);
+
+        // Build interpreter shim library for this target
+        const cross_shim_lib = b.addLibrary(.{
+            .name = b.fmt("roc_interpreter_shim_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/interpreter_shim/main.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = optimize != .Debug,
+                .pic = true,
+            }),
+            .linkage = .static,
+        });
+        configureBackend(cross_shim_lib, cross_resolved_target);
+        roc_modules.addAll(cross_shim_lib);
+        cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
+        cross_shim_lib.addObject(cross_builtins_obj);
+        cross_shim_lib.bundle_compiler_rt = true;
+
+        // Copy to target-specific directory for embedding
+        const copy_cross_shim = b.addUpdateSourceFiles();
+        copy_cross_shim.addCopyFileToSource(
+            cross_shim_lib.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, "libroc_interpreter_shim.a" }),
+        );
+        exe.step.dependOn(&copy_cross_shim.step);
+    }
+
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
