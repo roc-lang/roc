@@ -443,14 +443,14 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag]_others");
+    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
 }
 
 test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, a)]_others where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, a), .._others] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 // blocks //

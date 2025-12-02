@@ -70,5 +70,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A]_others"))
+(expr (type "[A, .._others]"))
 ~~~

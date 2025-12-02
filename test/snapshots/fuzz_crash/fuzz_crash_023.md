@@ -2735,7 +2735,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red][Blue, Green][ProvidedByCompiler]_others, _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, ..[ProvidedByCompiler, .._others]]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "{}"))
@@ -2782,7 +2782,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red][Blue, Green][ProvidedByCompiler]_others, _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, ..[ProvidedByCompiler, .._others]]], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))
