@@ -148,5 +148,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List([Err(Str), Just(a), Left(b), None, Nothing, Ok(Str), Right(c), Some([Ok([Just(d)]_others)]_others2), Try([Ok([Some([True]_others3)]_others4)]_others5)]_others6) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+(expr (type "List([Err(Str), Just(a), Left(b), None, Nothing, Ok(Str), Right(c), Some([Ok([Just(d), .._others]), .._others2]), Try([Ok([Some([True, .._others3]), .._others4]), .._others5]), .._others6]) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 ~~~

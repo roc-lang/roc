@@ -649,8 +649,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
     const tags_len = self.types.tags.len();
     if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
         // Tags range is out of bounds - return error indicator
-        _ = try self.buf.writer().write("Error");
-        _ = try self.buf.writer().write("]");
+        _ = try self.buf.writer().write("Error]");
         return;
     }
 
@@ -664,33 +663,46 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         try self.writeTag(tag, root_var);
     }
 
-    _ = try self.buf.writer().write("]");
-
-    // Show extension variable if it's not empty
+    // Write extension variable inside the brackets with ".." prefix
     const ext_resolved = self.types.resolveVar(tag_union.ext);
+    const has_tags = tag_union.tags.count > 0;
+
     switch (ext_resolved.desc.content) {
         .flex => |flex| {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
+
             if (flex.name) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
-            } else if (true) {
-                // TODO: ^ here, we should consider polarity
-
+            } else {
+                // TODO: here, we should consider polarity
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
+
+            _ = try self.buf.writer().write("]");
 
             for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
             }
         },
         .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => {}, // Don't show empty extension
+            .empty_tag_union => {
+                // Closed union - just close the bracket
+                _ = try self.buf.writer().write("]");
+            },
             else => {
+                // Extension is a non-empty structure (e.g., another tag union)
+                if (has_tags) _ = try self.buf.writer().write(", ");
+                _ = try self.buf.writer().write("..");
                 try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+                _ = try self.buf.writer().write("]");
             },
         },
         .rigid => |rigid| {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
             _ = try self.buf.writer().write(self.getIdent(rigid.name));
-            // _ = try self.buf.writer().write("[r]");
+            _ = try self.buf.writer().write("]");
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
@@ -698,13 +710,20 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         },
         .err => {
             // Extension resolved to error - write error indicator
-            _ = try self.buf.writer().write("Error");
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..Error]");
         },
         .alias => {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+            _ = try self.buf.writer().write("]");
         },
         .recursion_var => {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+            _ = try self.buf.writer().write("]");
         },
     }
 }

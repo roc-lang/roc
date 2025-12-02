@@ -34,7 +34,7 @@ match ... {
  ^^^^^
 
 The third pattern has this type:
-    _[Ok(a)][ProvidedByCompiler]_
+    _[Ok(a)][ProvidedByCompiler]_others_
 
 But all the previous patterns have this type: 
     _Str_

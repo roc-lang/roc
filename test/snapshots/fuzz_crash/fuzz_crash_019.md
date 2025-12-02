@@ -925,7 +925,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue][ProvidedByCompiler]_
+    _[Blue][ProvidedByCompiler]_others_
 
 All patterns in an `match` must have compatible types.
 
@@ -955,7 +955,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Blue][ProvidedByCompiler], [Tb]_others -> Error_
+    _[Blue][ProvidedByCompiler]_others, [Tb]_others2 -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2073,7 +2073,7 @@ expect {
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
+		(patt (type "[Blue, ..[ProvidedByCompiler, .._others]], [Tb, .._others2] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2110,7 +2110,7 @@ expect {
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
+		(expr (type "[Blue, ..[ProvidedByCompiler, .._others]], [Tb, .._others2] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))

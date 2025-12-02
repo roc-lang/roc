@@ -9237,7 +9237,10 @@ pub const Interpreter = struct {
                 defer tag_list.deinit();
                 try self.appendUnionTags(rt_var, &tag_list);
 
-                const tag_index = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items) orelse {
+                // Find tag in the type's tag list
+                const tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
+
+                const tag_index = tag_index_opt orelse {
                     const name_text = self.env.getIdent(tag.name);
                     const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
                     self.triggerCrash(msg, true, roc_ops);

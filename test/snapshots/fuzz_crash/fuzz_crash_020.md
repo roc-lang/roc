@@ -935,7 +935,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue][ProvidedByCompiler]_
+    _[Blue][ProvidedByCompiler]_others_
 
 All patterns in an `match` must have compatible types.
 
@@ -2051,8 +2051,8 @@ expect {
 		(patt (type "()"))
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
-		(patt (type "[Rum]_others -> Error"))
-		(patt (type "[Blue][ProvidedByCompiler] -> Error"))
+		(patt (type "[Rum, .._others] -> Error"))
+		(patt (type "[Blue, ..[ProvidedByCompiler, .._others]] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2088,8 +2088,8 @@ expect {
 		(expr (type "()"))
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
-		(expr (type "[Rum]_others -> Error"))
-		(expr (type "[Blue][ProvidedByCompiler] -> Error"))
+		(expr (type "[Rum, .._others] -> Error"))
+		(expr (type "[Blue, ..[ProvidedByCompiler, .._others]] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))
