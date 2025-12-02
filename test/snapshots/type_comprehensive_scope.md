@@ -108,7 +108,7 @@ BadType : SomeUndeclaredType
 
 
 **TOO MANY ARGS**
-The type _Dict_ expects 0 argument, but got 2 instead.
+The type _Dict_ expects 0 arguments, but got 2 instead.
 **type_comprehensive_scope.md:29:10:29:24:**
 ```roc
 MyDict : Dict(Str, U64)

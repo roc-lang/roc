@@ -32,6 +32,12 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 
+/// Returns singular form if count is 1, plural form otherwise.
+/// Usage: pluralize(count, "argument", "arguments")
+fn pluralize(count: anytype, singular: []const u8, plural: []const u8) []const u8 {
+    return if (count == 1) singular else plural;
+}
+
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
@@ -1551,7 +1557,7 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated(type_name, .type_variable);
         try report.document.addReflowingText(" expects ");
         try report.document.addReflowingText(num_expected_args);
-        try report.document.addReflowingText(" argument, but got ");
+        try report.document.addReflowingText(pluralize(data.num_expected_args, " argument, but got ", " arguments, but got "));
         try report.document.addReflowingText(num_actual_args);
         try report.document.addReflowingText(" instead.");
         try report.document.addLineBreak();

@@ -64,7 +64,7 @@ boxed = Container(X)
 **Hint:** You can declare this type with `:=` to make it nominal.
 
 **TOO MANY ARGS**
-The type _Container_ expects 0 argument, but got 1 instead.
+The type _Container_ expects 0 arguments, but got 1 instead.
 **nominal_associated_in_tuples.md:11:9:11:27:**
 ```roc
 boxed : Container(Foo.Bar)
