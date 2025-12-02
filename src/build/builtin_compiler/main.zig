@@ -395,6 +395,22 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         if (env.common.findIdent(negate)) |ident| {
             try low_level_map.put(ident, .num_negate);
         }
+
+        // abs
+        const abs = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs", .{num_type});
+        if (env.common.findIdent(abs)) |ident| {
+            try low_level_map.put(ident, .num_abs);
+        }
+    }
+
+    // Numeric abs_diff operation (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const abs_diff = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs_diff", .{num_type});
+        if (env.common.findIdent(abs_diff)) |ident| {
+            try low_level_map.put(ident, .num_abs_diff);
+        }
     }
 
     // U8 conversion operations
