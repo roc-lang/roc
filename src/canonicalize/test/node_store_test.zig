@@ -163,6 +163,7 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(CIR.TypeHeader.Idx),
             .anno = rand_idx(CIR.TypeAnno.Idx),
+            .is_opaque = false,
         },
     });
 

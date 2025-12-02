@@ -427,6 +427,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
+        .is_opaque = false,
     };
     const str_type = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 

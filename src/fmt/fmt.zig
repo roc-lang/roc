@@ -508,10 +508,10 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                if (d.kind == .nominal) {
-                    try fmt.pushAll(":=");
-                } else {
-                    try fmt.push(':');
+                switch (d.kind) {
+                    .nominal => try fmt.pushAll(":="),
+                    .@"opaque" => try fmt.pushAll("::"),
+                    .alias => try fmt.push(':'),
                 }
                 const anno_region = fmt.nodeRegion(@intFromEnum(d.anno));
                 if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {

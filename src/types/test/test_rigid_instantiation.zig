@@ -271,6 +271,7 @@ test "instantiate - alias preserves structure" {
         rigid_a,
         &[_]Var{rigid_a},
         builtin_module_idx,
+        false,
     );
     const backing = try env.types.freshFromContent(backing_content);
     const alias_content = try env.mkAlias("MyList", backing, &[_]Var{rigid_a});
@@ -319,6 +320,7 @@ test "instantiate - box and list" {
             rigid_a,
             &[_]Var{rigid_a},
             builtin_module_idx,
+            false,
         );
         const box_var = try env.types.freshFromContent(box_content);
 
@@ -348,6 +350,7 @@ test "instantiate - box and list" {
             rigid_a,
             &[_]Var{rigid_a},
             builtin_module_idx,
+            false,
         );
         const list_var = try env.types.freshFromContent(list_content);
 

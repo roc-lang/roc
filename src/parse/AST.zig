@@ -834,12 +834,14 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
     try tree.toStringPretty(writer, .include_linecol);
 }
 
-/// The kind of the type declaration represented, either:
+/// The kind of the type declaration represented:
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
+/// 3. An opaque type of the form `Foo :: [Bar, Baz]`
 pub const TypeDeclKind = enum {
     alias,
     nominal,
+    @"opaque",
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.

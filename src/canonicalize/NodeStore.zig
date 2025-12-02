@@ -328,10 +328,14 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_nominal_decl => {
+            // Get is_opaque from extra_data
+            const extra_idx = node.data_3;
+            const is_opaque = store.extra_data.items.items[extra_idx] != 0;
             return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = @as(CIR.TypeHeader.Idx, @enumFromInt(node.data_1)),
                     .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_2)),
+                    .is_opaque = is_opaque,
                 },
             };
         },
@@ -1460,6 +1464,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_nominal_decl;
             node.data_1 = @intFromEnum(s.header);
             node.data_2 = @intFromEnum(s.anno);
+            // Store is_opaque in extra_data
+            const extra_idx = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
+            node.data_3 = @intCast(extra_idx);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;

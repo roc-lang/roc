@@ -288,6 +288,7 @@ pub const Store = struct {
         backing_var: Var,
         args: []const Var,
         origin_module: base.Ident.Idx,
+        is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
         const backing_idx = try self.appendVar(backing_var);
         var span = try self.appendVars(args);
@@ -301,6 +302,7 @@ pub const Store = struct {
                 .ident = ident,
                 .vars = .{ .nonempty = span },
                 .origin_module = origin_module,
+                .is_opaque = is_opaque,
             },
         } };
     }
@@ -1259,6 +1261,7 @@ test "Store comprehensive CompactWriter roundtrip" {
         list_elem,
         &[_]Var{list_elem},
         builtin_module_idx,
+        false,
     );
     const list_var = try original.freshFromContent(list_content);
 

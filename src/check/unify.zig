@@ -1365,6 +1365,7 @@ const Unifier = struct {
             backing_var,
             &[_]Var{u8_var},
             origin_module,
+            false, // List is nominal (not opaque)
         ) catch return error.AllocatorError;
 
         const list_var = self.types_store.register(.{

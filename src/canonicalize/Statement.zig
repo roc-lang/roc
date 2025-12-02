@@ -184,12 +184,14 @@ pub const Statement = union(enum) {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
     },
-    /// A nominal type declaration, e.g., `Foo := (U64, Str)`
+    /// A nominal type declaration, e.g., `Foo := (U64, Str)` or `Foo :: (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
+        /// True if declared with :: (opaque), false if declared with := (nominal)
+        is_opaque: bool,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///

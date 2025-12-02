@@ -1234,7 +1234,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual or self.peek() == .OpDoubleColon) .nominal else .alias;
+                const kind: AST.TypeDeclKind = switch (self.peek()) {
+                    .OpColonEqual => .nominal,
+                    .OpDoubleColon => .@"opaque",
+                    else => .alias,
+                };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();

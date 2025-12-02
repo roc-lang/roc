@@ -78,7 +78,16 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             const tags = ctx.runtime_types.getTagsSlice(tu.tags);
             var tag_index: usize = 0;
             var have_tag = false;
-            if (value.layout.tag == .scalar) {
+            if (value.layout.tag == .zst) {
+                // Zero-sized tag union - must be the first (and only) tag with no payload
+                if (tags.len > 0) {
+                    const tag_name = ctx.env.getIdent(tags.items(.name)[0]);
+                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                    errdefer out.deinit();
+                    try out.appendSlice(tag_name);
+                    return out.toOwnedSlice();
+                }
+            } else if (value.layout.tag == .scalar) {
                 if (value.layout.data.scalar.tag == .int) {
                     // Only treat as tag if value fits in usize (valid tag discriminants are small)
                     if (std.math.cast(usize, value.asI128())) |idx| {

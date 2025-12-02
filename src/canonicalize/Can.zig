@@ -486,10 +486,11 @@ fn processTypeDeclFirstPass(
                         .anno = @enumFromInt(0), // placeholder - will be replaced below
                     },
                 },
-                .nominal => Statement{
+                .nominal, .@"opaque" => Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
                         .anno = @enumFromInt(0), // placeholder - will be replaced below
+                        .is_opaque = type_decl.kind == .@"opaque",
                     },
                 },
             };
@@ -505,10 +506,11 @@ fn processTypeDeclFirstPass(
                     .anno = @enumFromInt(0), // placeholder - will be replaced
                 },
             },
-            .nominal => Statement{
+            .nominal, .@"opaque" => Statement{
                 .s_nominal_decl = .{
                     .header = final_header_idx,
                     .anno = @enumFromInt(0), // placeholder - will be replaced
+                    .is_opaque = type_decl.kind == .@"opaque",
                 },
             },
         };
@@ -560,11 +562,12 @@ fn processTypeDeclFirstPass(
                     },
                 };
             },
-            .nominal => {
+            .nominal, .@"opaque" => {
                 break :blk Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
                         .anno = anno_idx,
+                        .is_opaque = type_decl.kind == .@"opaque",
                     },
                 };
             },
@@ -636,10 +639,11 @@ fn introduceTypeNameOnly(
                 .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
             },
         },
-        .nominal => Statement{
+        .nominal, .@"opaque" => Statement{
             .s_nominal_decl = .{
                 .header = header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+                .is_opaque = type_decl.kind == .@"opaque",
             },
         },
     };
@@ -1503,8 +1507,8 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            // Only process nominal types in this phase; aliases will be processed later
-            if (type_decl.kind == .nominal) {
+            // Only process nominal/opaque types in this phase; aliases will be processed later
+            if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
                 try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
@@ -1516,7 +1520,7 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.kind == .nominal) {
+            if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
                 const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                 const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
 
@@ -1931,7 +1935,7 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.associated == null and type_decl.kind == .nominal) {
+            if (type_decl.associated == null and (type_decl.kind == .nominal or type_decl.kind == .@"opaque")) {
                 try self.introduceTypeNameOnly(type_decl);
             }
         }

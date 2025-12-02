@@ -677,6 +677,7 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
         backing_var,
         &type_args,
         origin_module_id,
+        false, // List is nominal (not opaque)
     );
 }
 
@@ -716,6 +717,7 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
         backing_var,
         no_type_args,
         origin_module_id,
+        true, // Number types are opaque (defined with ::)
     );
 }
 
@@ -814,6 +816,7 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         backing_var,
         &type_args,
         origin_module_id,
+        false, // Box is nominal (not opaque)
     );
 }
 
@@ -843,6 +846,7 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         backing_var,
         &type_args,
         origin_module_id,
+        false, // Try is nominal (not opaque)
     );
 }
 
@@ -879,6 +883,7 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
         backing_var,
         &.{}, // No type args
         origin_module_id,
+        true, // Numeral is opaque (defined with ::)
     );
 }
 
@@ -1366,6 +1371,7 @@ fn generateNominalDecl(
             backing_var,
             header_vars,
             self.builtin_ctx.module_name,
+            nominal.is_opaque,
         ),
         env,
     );
@@ -1607,6 +1613,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 this_decl.backing_var,
                                                 &.{},
                                                 self.builtin_ctx.module_name,
+                                                false, // Default to non-opaque for error case
                                             );
                                         },
                                     }
@@ -1701,6 +1708,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 this_decl.backing_var,
                                                 anno_arg_vars,
                                                 self.builtin_ctx.module_name,
+                                                false, // Default to non-opaque for error case
                                             );
                                         },
                                     }

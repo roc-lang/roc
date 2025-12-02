@@ -44,7 +44,7 @@ scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 /// Count of the header nodes in the AST
 pub const AST_HEADER_NODE_COUNT = 6;
 /// Count of the statement nodes in the AST
-pub const AST_STATEMENT_NODE_COUNT = 12;
+pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
 pub const AST_PATTERN_NODE_COUNT = 14;
 /// Count of the type annotation nodes in the AST
@@ -409,10 +409,11 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = data_start;
         },
         .type_decl => |d| {
-            node.tag = .type_decl;
-            if (d.kind == .nominal) {
-                node.tag = .type_decl_nominal;
-            }
+            node.tag = switch (d.kind) {
+                .alias => .type_decl,
+                .nominal => .type_decl_nominal,
+                .@"opaque" => .type_decl_opaque,
+            };
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.header);
             node.data.rhs = @intFromEnum(d.anno);
@@ -1318,6 +1319,40 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .header = @enumFromInt(node.data.lhs),
                 .anno = @enumFromInt(node.data.rhs),
                 .kind = .nominal,
+                .where = where_clause,
+                .associated = associated,
+            } };
+        },
+        .type_decl_opaque => {
+            // Read where and associated from extra_data if present (main_token != 0)
+            var where_clause: ?AST.Collection.Idx = null;
+            var associated: ?AST.Associated = null;
+            if (node.main_token != 0) {
+                const extra_start = node.main_token;
+                // Format: [where_idx, has_associated, associated_data...]
+                const where_idx = store.extra_data.items[extra_start];
+                if (where_idx != 0) {
+                    where_clause = @enumFromInt(where_idx);
+                }
+
+                const has_associated = store.extra_data.items[extra_start + 1];
+                if (has_associated == 1) {
+                    const stmt_start = store.extra_data.items[extra_start + 2];
+                    const stmt_len = store.extra_data.items[extra_start + 3];
+                    const reg_start = store.extra_data.items[extra_start + 4];
+                    const reg_end = store.extra_data.items[extra_start + 5];
+                    associated = AST.Associated{
+                        .statements = AST.Statement.Span{ .span = .{ .start = stmt_start, .len = stmt_len } },
+                        .region = .{ .start = reg_start, .end = reg_end },
+                    };
+                }
+            }
+
+            return .{ .type_decl = .{
+                .region = node.region,
+                .header = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.rhs),
+                .kind = .@"opaque",
                 .where = where_clause,
                 .associated = associated,
             } };

@@ -399,6 +399,7 @@ test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
         backing_var,
         &.{v2},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
     try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
 
@@ -552,6 +553,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
         box_backing_var,
         &.{linked_list},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // Build tag args: (elem, Box(linked_list))
@@ -601,6 +603,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
         backing_var,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // assert that starting from the nominal type, it works
@@ -666,6 +669,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         type_b_backing,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // Set up TypeA = Type B
@@ -674,6 +678,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         type_b_nominal,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // assert that starting from the `TypeA` nominal, it works
