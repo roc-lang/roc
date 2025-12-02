@@ -165,6 +165,8 @@ const TypeContext = enum {
 /// resolved snapshot of the type that we can use in reporting
 ///
 /// Entry point is `deepCopyVar`
+const TypeWriter = types.TypeWriter;
+
 pub const Store = struct {
     const Self = @This();
 
@@ -188,6 +190,9 @@ pub const Store = struct {
     scratch_record_fields: base.Scratch(SnapshotRecordField),
     scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
+    /// Formatted type strings, indexed by SnapshotContentIdx
+    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
+
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -201,10 +206,18 @@ pub const Store = struct {
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
+            .formatted_strings = .{},
         };
     }
 
     pub fn deinit(self: *Self) void {
+        // Free all stored formatted strings
+        var iter = self.formatted_strings.valueIterator();
+        while (iter.next()) |str| {
+            self.gpa.free(str.*);
+        }
+        self.formatted_strings.deinit(self.gpa);
+
         self.contents.deinit(self.gpa);
         self.seen_vars.deinit();
         self.content_indexes.deinit(self.gpa);
@@ -215,6 +228,20 @@ pub const Store = struct {
         self.scratch_tags.deinit();
         self.scratch_record_fields.deinit();
         self.scratch_static_dispatch_constraints.deinit();
+    }
+
+    /// Format a type variable using TypeWriter and store the result.
+    /// Call this after deepCopyVar to store the formatted string.
+    pub fn formatVar(self: *Self, type_writer: *TypeWriter, snapshot_idx: SnapshotContentIdx, var_: Var) !void {
+        type_writer.reset();
+        try type_writer.write(var_);
+        const formatted = try self.gpa.dupe(u8, type_writer.get());
+        try self.formatted_strings.put(self.gpa, snapshot_idx, formatted);
+    }
+
+    /// Get the pre-formatted string for a snapshot.
+    pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
+        return self.formatted_strings.get(idx);
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
@@ -552,6 +579,29 @@ pub const Store = struct {
 
     pub fn getContent(self: *const Self, idx: SnapshotContentIdx) SnapshotContent {
         return self.contents.get(idx).*;
+    }
+
+    /// Format a tag as a string, e.g. "TagName payload1 payload2"
+    pub fn formatTagString(self: *const Self, allocator: std.mem.Allocator, tag: SnapshotTag, idents: *const Ident.Store) ![]const u8 {
+        var result = std.array_list.Managed(u8).init(allocator);
+        errdefer result.deinit();
+
+        // Write tag name
+        const name = idents.getText(tag.name);
+        try result.appendSlice(name);
+
+        // Write payload arguments
+        const args = self.content_indexes.sliceRange(tag.args);
+        for (args) |arg_idx| {
+            try result.append(' ');
+            if (self.getFormattedString(arg_idx)) |formatted| {
+                try result.appendSlice(formatted);
+            } else {
+                try result.appendSlice("?");
+            }
+        }
+
+        return result.toOwnedSlice();
     }
 };
 
