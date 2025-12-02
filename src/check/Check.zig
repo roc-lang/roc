@@ -677,6 +677,7 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
         backing_var,
         &type_args,
         origin_module_id,
+        false, // List is nominal (not opaque)
     );
 }
 
@@ -716,6 +717,7 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
         backing_var,
         no_type_args,
         origin_module_id,
+        true, // Number types are opaque (defined with ::)
     );
 }
 
@@ -814,6 +816,7 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         backing_var,
         &type_args,
         origin_module_id,
+        false, // Box is nominal (not opaque)
     );
 }
 
@@ -843,6 +846,7 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         backing_var,
         &type_args,
         origin_module_id,
+        false, // Try is nominal (not opaque)
     );
 }
 
@@ -879,6 +883,7 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
         backing_var,
         &.{}, // No type args
         origin_module_id,
+        true, // Numeral is opaque (defined with ::)
     );
 }
 
@@ -1366,6 +1371,7 @@ fn generateNominalDecl(
             backing_var,
             header_vars,
             self.builtin_ctx.module_name,
+            nominal.is_opaque,
         ),
         env,
     );
@@ -1607,6 +1613,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 this_decl.backing_var,
                                                 &.{},
                                                 self.builtin_ctx.module_name,
+                                                false, // Default to non-opaque for error case
                                             );
                                         },
                                     }
@@ -1701,6 +1708,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 this_decl.backing_var,
                                                 anno_arg_vars,
                                                 self.builtin_ctx.module_name,
+                                                false, // Default to non-opaque for error case
                                             );
                                         },
                                     }
@@ -3591,6 +3599,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
+        .e_inspect => |inspect| {
+            // inspect evaluates its inner expression and returns Str
+            // Note: does NOT set does_fx because inspect is pure
+            _ = try self.checkExpr(inspect.expr, env, .no_expectation);
+            const str_var = try self.freshStr(env, expr_region);
+            _ = try self.unify(expr_var, str_var, env);
+        },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
@@ -3942,6 +3957,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
+            .s_inspect => |expr| {
+                // inspect returns Str (not the inner expression type)
+                _ = try self.checkExpr(expr.expr, env, .no_expectation);
+                const str_var = try self.freshStr(env, stmt_region);
+                _ = try self.unify(stmt_var, str_var, env);
+            },
             .s_expect => |expr_stmt| {
                 does_fx = try self.checkExpr(expr_stmt.body, env, .no_expectation) or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
@@ -4057,6 +4078,9 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.body, return_var, env);
         },
         .s_dbg => |s| {
+            try self.unifyEarlyReturns(s.expr, return_var, env);
+        },
+        .s_inspect => |s| {
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns

@@ -486,10 +486,11 @@ fn processTypeDeclFirstPass(
                         .anno = @enumFromInt(0), // placeholder - will be replaced below
                     },
                 },
-                .nominal => Statement{
+                .nominal, .@"opaque" => Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
                         .anno = @enumFromInt(0), // placeholder - will be replaced below
+                        .is_opaque = type_decl.kind == .@"opaque",
                     },
                 },
             };
@@ -505,10 +506,11 @@ fn processTypeDeclFirstPass(
                     .anno = @enumFromInt(0), // placeholder - will be replaced
                 },
             },
-            .nominal => Statement{
+            .nominal, .@"opaque" => Statement{
                 .s_nominal_decl = .{
                     .header = final_header_idx,
                     .anno = @enumFromInt(0), // placeholder - will be replaced
+                    .is_opaque = type_decl.kind == .@"opaque",
                 },
             },
         };
@@ -560,11 +562,12 @@ fn processTypeDeclFirstPass(
                     },
                 };
             },
-            .nominal => {
+            .nominal, .@"opaque" => {
                 break :blk Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
                         .anno = anno_idx,
+                        .is_opaque = type_decl.kind == .@"opaque",
                     },
                 };
             },
@@ -636,10 +639,11 @@ fn introduceTypeNameOnly(
                 .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
             },
         },
-        .nominal => Statement{
+        .nominal, .@"opaque" => Statement{
             .s_nominal_decl = .{
                 .header = header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+                .is_opaque = type_decl.kind == .@"opaque",
             },
         },
     };
@@ -1507,8 +1511,8 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            // Only process nominal types in this phase; aliases will be processed later
-            if (type_decl.kind == .nominal) {
+            // Only process nominal/opaque types in this phase; aliases will be processed later
+            if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
                 try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
@@ -1520,7 +1524,7 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.kind == .nominal) {
+            if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
                 const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                 const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
 
@@ -1935,7 +1939,7 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.associated == null and type_decl.kind == .nominal) {
+            if (type_decl.associated == null and (type_decl.kind == .nominal or type_decl.kind == .@"opaque")) {
                 try self.introduceTypeNameOnly(type_decl);
             }
         }
@@ -2035,6 +2039,15 @@ pub fn canonicalizeFile(
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("dbg");
                 const region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
+            .inspect => |inspect_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("inspect");
+                const region = self.parse_ir.tokenizedRegionToRegion(inspect_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                     .region = region,
@@ -5584,6 +5597,18 @@ pub fn canonicalizeExpr(
 
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
+        .inspect => |d| {
+            // Inspect expression - canonicalize the inner expression
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+            const can_inner = try self.canonicalizeExpr(d.expr) orelse return null;
+
+            // Create inspect expression
+            const inspect_expr = try self.env.addExpr(Expr{ .e_inspect = .{
+                .expr = can_inner.idx,
+            } }, region);
+
+            return CanonicalizedExpr{ .idx = inspect_expr, .free_vars = can_inner.free_vars };
+        },
         .record_builder => |_| {
             const feature = try self.env.insertString("canonicalize record_builder expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -8608,6 +8633,17 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     } }, debug_region);
                     last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
                 },
+                .inspect => |inspect_stmt| {
+                    // For final inspect statements, canonicalize as inspect expression
+                    const inspect_region = self.parse_ir.tokenizedRegionToRegion(inspect_stmt.region);
+                    const inner_expr = try self.canonicalizeExprOrMalformed(inspect_stmt.expr);
+
+                    // Create inspect expression
+                    const inspect_expr = try self.env.addExpr(Expr{ .e_inspect = .{
+                        .expr = inner_expr.idx,
+                    } }, inspect_region);
+                    last_expr = CanonicalizedExpr{ .idx = inspect_expr, .free_vars = inner_expr.free_vars };
+                },
                 .@"return" => |return_stmt| {
                     // Create an e_return expression to preserve early return semantics
                     // This is for when return is the final expression in a block
@@ -8868,6 +8904,19 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Create dbg statement
 
             const stmt_idx = try self.env.addStatement(Statement{ .s_dbg = .{
+                .expr = expr.idx,
+            } }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+        },
+        .inspect => |d| {
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+
+            // Canonicalize the inspect expression
+            const expr = try self.canonicalizeExprOrMalformed(d.expr);
+
+            // Create inspect statement
+            const stmt_idx = try self.env.addStatement(Statement{ .s_inspect = .{
                 .expr = expr.idx,
             } }, region);
 

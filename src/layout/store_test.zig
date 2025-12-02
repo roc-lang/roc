@@ -41,6 +41,7 @@ const LayoutTest = struct {
             elem_var,
             &[_]types.Var{elem_var},
             builtin_module_idx,
+            false,
         );
         return try self.type_store.freshFromContent(box_content);
     }
@@ -134,6 +135,7 @@ test "addTypeVar - zero-sized types (ZST)" {
         empty_tag_union_var,
         &[_]types.Var{empty_tag_union_var},
         builtin_module_idx,
+        false,
     );
     const list_zst_var = try lt.type_store.freshFromContent(list_zst_content);
     const list_zst_idx = try lt.layout_store.addTypeVar(list_zst_var, &lt.type_scope);
@@ -221,6 +223,7 @@ test "deeply nested containers with inner ZST" {
         inner_box,
         &[_]types.Var{inner_box},
         builtin_module_idx,
+        false,
     );
     const inner_list = try lt.type_store.freshFromContent(inner_list_content);
     const outer_box = try lt.mkBoxType(inner_list, box_ident_idx, builtin_module_idx);
@@ -229,6 +232,7 @@ test "deeply nested containers with inner ZST" {
         outer_box,
         &[_]types.Var{outer_box},
         builtin_module_idx,
+        false,
     );
     const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
@@ -272,7 +276,7 @@ test "nested ZST detection - List of record with ZST field" {
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
     // List of this record should be list_of_zst since the record only has ZST fields
-    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, record_var, &[_]types.Var{record_var}, builtin_module_idx);
+    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, record_var, &[_]types.Var{record_var}, builtin_module_idx, false);
     const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
@@ -348,7 +352,7 @@ test "nested ZST detection - deeply nested" {
     const outer_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_record_fields, .ext = empty_record_var } } });
 
     // List({ field: ({ field2: {} }, ()) })
-    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx);
+    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx, false);
     const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.addTypeVar(list_var, &lt.type_scope);
 

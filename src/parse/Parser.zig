@@ -1121,6 +1121,16 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
+        .KwInspect => {
+            const start = self.pos;
+            self.advance();
+            const expr = try self.parseExpr();
+            const statement_idx = try self.store.addStatement(.{ .inspect = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
+        },
         .KwReturn => {
             const start = self.pos;
             self.advance();
@@ -1224,7 +1234,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual or self.peek() == .OpDoubleColon) .nominal else .alias;
+                const kind: AST.TypeDeclKind = switch (self.peek()) {
+                    .OpColonEqual => .nominal,
+                    .OpDoubleColon => .@"opaque",
+                    else => .alias,
+                };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
@@ -2149,6 +2163,14 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             self.advance();
             const e = try self.parseExpr();
             expr = try self.store.addExpr(.{ .dbg = .{
+                .region = .{ .start = start, .end = self.pos },
+                .expr = e,
+            } });
+        },
+        .KwInspect => {
+            self.advance();
+            const e = try self.parseExpr();
+            expr = try self.store.addExpr(.{ .inspect = .{
                 .region = .{ .start = start, .end = self.pos },
                 .expr = e,
             } });

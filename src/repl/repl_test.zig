@@ -356,7 +356,7 @@ test "Repl - minimal interpreter integration" {
     // Step 8: Verify result using renderer
     const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
     const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
-    const rendered = try interpreter.renderValueRocWithType(result, rt_var);
+    const rendered = try interpreter.renderValueRocWithType(result, rt_var, test_env.get_ops());
     defer gpa.free(rendered);
     try testing.expectEqualStrings("42", rendered);
 }
@@ -726,4 +726,28 @@ test "Repl - full str_to_utf8 snapshot test" {
         defer std.testing.allocator.free(result);
         try testing.expectEqualStrings("False", result);
     }
+}
+
+test "Repl - lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x| x + 1");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
+}
+
+test "Repl - multi-arg lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x, y| x + y");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
 }

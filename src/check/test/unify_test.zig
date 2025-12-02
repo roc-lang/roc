@@ -177,6 +177,7 @@ const TestEnv = struct {
             backing_var,
             args,
             Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+            false, // Use nominal for tests
         );
     }
 
