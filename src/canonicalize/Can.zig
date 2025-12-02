@@ -778,8 +778,6 @@ fn processAssociatedBlock(
     // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
     // were added in their declaration scope, making them visible to all child scopes.
 
-    const parent_type_text = self.env.getIdent(type_name);
-
     // FIRST: Add decl aliases to current scope BEFORE processing nested blocks.
     // This is critical so nested scopes can access parent decls via scope chain lookup.
     // For example, in:
@@ -810,7 +808,10 @@ fn processAssociatedBlock(
                             try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
                             // Add type-qualified name (e.g., "MyBool.my_not")
-                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
+                            // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
+                            const parent_type_text_refetched = self.env.getIdent(type_name);
+                            const decl_text_refetched = self.env.getIdent(decl_ident);
+                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, decl_text_refetched);
                             try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                         },
                         .not_found => {},
@@ -928,7 +929,10 @@ fn processAssociatedBlock(
                             try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
 
                             // Add type-qualified name (e.g., "List.len")
-                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
+                            // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
+                            const parent_type_text_refetched = self.env.getIdent(type_name);
+                            const anno_text_refetched = self.env.getIdent(anno_ident);
+                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, anno_text_refetched);
                             try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                         },
                         .not_found => {
