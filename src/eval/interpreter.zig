@@ -6734,6 +6734,103 @@ pub const Interpreter = struct {
         );
     }
 
+    /// Infer a type from a runtime layout for method dispatch.
+    /// Returns null if the layout doesn't have a clear type mapping (e.g., generic scalars).
+    fn inferTypeFromLayout(self: *Interpreter, lay: layout.Layout) !?types.Content {
+        const origin_module_id = self.root_env.idents.builtin_module;
+
+        switch (lay.tag) {
+            .list, .list_of_zst => {
+                // Create Builtin.List type
+                const qualified_type_name = "Builtin.List";
+                const type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(qualified_type_name));
+                const type_ident = types.TypeIdent{
+                    .ident_idx = type_name_ident,
+                };
+
+                // List backing is [] (empty tag union with closed extension)
+                const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+                const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+                const empty_tag_union = types.TagUnion{
+                    .tags = types.Tag.SafeMultiList.Range.empty(),
+                    .ext = ext_var,
+                };
+                const backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+                const backing_var = try self.runtime_types.freshFromContent(backing_content);
+
+                // List has one type argument (element type) - use a flex var for now
+                const elem_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+                const type_args = try self.allocator.alloc(types.Var, 1);
+                type_args[0] = elem_var;
+
+                return try self.runtime_types.mkNominal(
+                    type_ident,
+                    backing_var,
+                    type_args,
+                    origin_module_id,
+                );
+            },
+            .scalar => {
+                const scalar_data = lay.data.scalar;
+                // For scalar types, try to infer the numeric type
+                switch (scalar_data.tag) {
+                    .str => {
+                        // Create Builtin.Str type
+                        const qualified_type_name = "Builtin.Str";
+                        const type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(qualified_type_name));
+                        const type_ident = types.TypeIdent{
+                            .ident_idx = type_name_ident,
+                        };
+
+                        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+                        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+                        const empty_tag_union = types.TagUnion{
+                            .tags = types.Tag.SafeMultiList.Range.empty(),
+                            .ext = ext_var,
+                        };
+                        const backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+                        const backing_var = try self.runtime_types.freshFromContent(backing_content);
+
+                        const no_type_args: []const types.Var = &.{};
+
+                        return try self.runtime_types.mkNominal(
+                            type_ident,
+                            backing_var,
+                            no_type_args,
+                            origin_module_id,
+                        );
+                    },
+                    .int => {
+                        // Map integer types to their Num type names
+                        const type_name: []const u8 = switch (scalar_data.data.int) {
+                            .i8 => "I8",
+                            .i16 => "I16",
+                            .i32 => "I32",
+                            .i64 => "I64",
+                            .i128 => "I128",
+                            .u8 => "U8",
+                            .u16 => "U16",
+                            .u32 => "U32",
+                            .u64 => "U64",
+                            .u128 => "U128",
+                        };
+                        return try self.mkNumberTypeContentRuntime(type_name);
+                    },
+                    .frac => {
+                        const type_name: []const u8 = switch (scalar_data.data.frac) {
+                            .dec => "Dec",
+                            .f32 => "F32",
+                            .f64 => "F64",
+                        };
+                        return try self.mkNumberTypeContentRuntime(type_name);
+                    },
+                    .opaque_ptr => return null,
+                }
+            },
+            else => return null,
+        }
+    }
+
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         var resolved = self.runtime_types.resolveVar(type_var);
@@ -8634,7 +8731,7 @@ pub const Interpreter = struct {
                         self.env = @constCast(app_env);
                         defer {
                             self.env = saved_env;
-                            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                         }
 
                         // Evaluate the app's exported expression synchronously
@@ -9556,16 +9653,11 @@ pub const Interpreter = struct {
 
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
-                var receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
+                const receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
 
-                // If the receiver type is a flex/rigid var, default to Dec
-                // (Unsuffixed numeric literals default to Dec in Roc)
-                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
-                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    receiver_rt_var = dec_var;
-                }
+                // NOTE: We don't default flex/rigid vars to Dec here because we don't know
+                // the actual receiver type yet. The dot_access_resolve continuation will
+                // infer the type from the runtime layout after the receiver is evaluated.
 
                 // Schedule: first evaluate receiver, then resolve field/method
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
@@ -9576,7 +9668,7 @@ pub const Interpreter = struct {
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dot_access.receiver,
-                    .expected_rt_var = receiver_rt_var,
+                    .expected_rt_var = null, // Don't constrain, let runtime layout determine type
                 } });
             },
 
@@ -10045,9 +10137,17 @@ pub const Interpreter = struct {
         var field_names = try self.allocator.alloc(base_pkg.Ident.Idx, caps.len);
         defer self.allocator.free(field_names);
 
-        // Resolve all capture values
+        // Resolve all capture values.
+        // IMPORTANT: resolveCapture always returns owned values, so we must decref them
+        // after copying into the closure.
         var capture_values = try self.allocator.alloc(StackValue, caps.len);
-        defer self.allocator.free(capture_values);
+        defer {
+            // Decref all capture values since they were copies (resolveCapture always returns owned values)
+            for (capture_values) |cap_val| {
+                cap_val.decref(&self.runtime_layout_store, roc_ops);
+            }
+            self.allocator.free(capture_values);
+        }
 
         for (caps, 0..) |cap_idx, i| {
             const cap = self.env.store.getCapture(cap_idx);
@@ -10099,14 +10199,19 @@ pub const Interpreter = struct {
         return value;
     }
 
-    /// Helper to resolve a capture value from bindings, active closures, or top-level defs
+    /// Helper to resolve a capture value from bindings, active closures, or top-level defs.
+    /// IMPORTANT: Always returns an OWNED copy. The caller is responsible for decref'ing
+    /// the returned value after use.
     fn resolveCapture(self: *Interpreter, cap: can.CIR.Expr.Capture, roc_ops: *RocOps) ?StackValue {
         // First try local bindings by pattern idx
         var i: usize = self.bindings.items.len;
         while (i > 0) {
             i -= 1;
             const b = self.bindings.items[i];
-            if (b.pattern_idx == cap.pattern_idx) return b.value;
+            if (b.pattern_idx == cap.pattern_idx) {
+                // Return a copy so caller owns the value
+                return self.pushCopy(b.value, roc_ops) catch null;
+            }
         }
         // Next try ALL active closure captures in reverse order
         if (self.active_closures.items.len > 0) {
@@ -10125,7 +10230,8 @@ pub const Interpreter = struct {
                     var rec_acc = (rec_val.asRecord(&self.runtime_layout_store)) catch continue;
                     if (rec_acc.findFieldIndex(cap.name)) |fidx| {
                         if (rec_acc.getFieldByIndex(fidx) catch null) |field_val| {
-                            return field_val;
+                            // Return a copy so caller owns the value
+                            return self.pushCopy(field_val, roc_ops) catch null;
                         }
                     }
                 }
@@ -10142,11 +10248,13 @@ pub const Interpreter = struct {
                     const entry = self.def_stack.items[k];
                     if (entry.pattern_idx == cap.pattern_idx) {
                         if (entry.value) |val| {
-                            return val;
+                            // Return a copy so caller owns the value
+                            return self.pushCopy(val, roc_ops) catch null;
                         }
                     }
                 }
                 // Found the def! Evaluate it to get the captured value
+                // This already returns an owned value
                 const new_entry = DefInProgress{
                     .pattern_idx = def.pattern,
                     .expr_idx = def.expr,
@@ -10310,7 +10418,7 @@ pub const Interpreter = struct {
         self.env = @constCast(other_env);
         defer {
             self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Evaluate the definition's expression in the other module's context
@@ -12331,13 +12439,20 @@ pub const Interpreter = struct {
                 }
 
                 // Method call - resolve receiver type for dispatch
-                // First check if the type is still a flex/rigid var, default to Dec
+                // First check if the type is still a flex/rigid var, infer from layout
                 var effective_receiver_rt_var = da.receiver_rt_var;
                 const receiver_resolved_check = self.runtime_types.resolveVar(da.receiver_rt_var);
                 if (receiver_resolved_check.desc.content == .flex or receiver_resolved_check.desc.content == .rigid) {
-                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    effective_receiver_rt_var = dec_var;
+                    // Infer type from runtime layout instead of defaulting to Dec
+                    if (try self.inferTypeFromLayout(receiver_value.layout)) |inferred_content| {
+                        const inferred_var = try self.runtime_types.freshFromContent(inferred_content);
+                        effective_receiver_rt_var = inferred_var;
+                    } else {
+                        // For types without a clear layout mapping, default to Dec
+                        const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                        const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                        effective_receiver_rt_var = dec_var;
+                    }
                 }
 
                 // Don't use resolveBaseVar here - we need to keep the nominal type
