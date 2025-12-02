@@ -428,7 +428,7 @@ func = {
 (inferred-types
 	(defs
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
-		(patt (type "[Value(c), Empty]_others, c -> c"))
+		(patt (type "[Value(c), Empty, .._others], c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
 		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(type_decls
@@ -438,7 +438,7 @@ func = {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
-		(expr (type "[Value(c), Empty]_others, c -> c"))
+		(expr (type "[Value(c), Empty, .._others], c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
 		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -443,14 +443,14 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag]_others");
+    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
 }
 
 test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, a)]_others where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, a), .._others] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 // blocks //
@@ -1346,7 +1346,9 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // With no let-generalization for numeric flex vars, the `x == 1` comparison
+    // adds an is_eq constraint to x (since x is not generalized and remains monomorphic)
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {

@@ -146,6 +146,7 @@ pub const Token = struct {
         KwIf,
         KwImplements,
         KwImport,
+        KwInspect,
         KwImports,
         KwIn,
         KwInterface,
@@ -184,6 +185,7 @@ pub const Token = struct {
                 .KwImport,
                 .KwImports,
                 .KwIn,
+                .KwInspect,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -287,6 +289,7 @@ pub const Token = struct {
                 .KwImport,
                 .KwImports,
                 .KwIn,
+                .KwInspect,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -380,6 +383,7 @@ pub const Token = struct {
         .{ "import", .KwImport },
         .{ "imports", .KwImports },
         .{ "in", .KwIn },
+        .{ "inspect", .KwInspect },
         .{ "interface", .KwInterface },
         .{ "match", .KwMatch },
         .{ "module", .KwModule },
@@ -2259,6 +2263,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwIn => {
                 try buf2.appendSlice("in");
+            },
+            .KwInspect => {
+                try buf2.appendSlice("inspect");
             },
             .KwInterface => {
                 try buf2.appendSlice("interface");

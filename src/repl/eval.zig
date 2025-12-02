@@ -670,13 +670,13 @@ pub const Repl = struct {
         // but the runtime type is concrete (e.g. Bool).
         const output = blk: {
             if (result.rt_var) |rt_var| {
-                break :blk try interpreter.renderValueRocWithType(result, rt_var);
+                break :blk try interpreter.renderValueRocWithType(result, rt_var, self.roc_ops);
             }
             const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
             const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
                 break :blk try interpreter.renderValueRoc(result);
             };
-            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var);
+            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var, self.roc_ops);
         };
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
@@ -822,6 +822,13 @@ pub const Repl = struct {
             return .{ .type_error = try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err}) };
         };
 
+        // Check for type problems (e.g., type mismatches)
+        if (checker.problems.problems.items.len > 0) {
+            // Return a generic type error message
+            // TODO: Use ReportBuilder to produce a more detailed error message
+            return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
+        }
+
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
         var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping, null) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
@@ -850,13 +857,13 @@ pub const Repl = struct {
 
         const output = blk: {
             if (result.rt_var) |rt_var| {
-                break :blk try interpreter.renderValueRocWithType(result, rt_var);
+                break :blk try interpreter.renderValueRocWithType(result, rt_var, self.roc_ops);
             }
             const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
             const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
                 break :blk try interpreter.renderValueRoc(result);
             };
-            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var);
+            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var, self.roc_ops);
         };
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);

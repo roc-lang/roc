@@ -30,7 +30,7 @@ main! = |_| processDict(Dict.empty().insert("one", 1))
 
 
 **TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
+The type _Dict_ expects 0 arguments, but got 2 instead.
 **type_app_multiple_args.md:3:15:3:29:**
 ```roc
 processDict : Dict(Str, U64) -> List(Str)

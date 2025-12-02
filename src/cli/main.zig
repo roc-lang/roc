@@ -2529,7 +2529,11 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
 
     // Create temporary output file
     const temp_filename = "temp_bundle.tar.zst";
-    const temp_file = try tmp_dir.createFile(temp_filename, .{});
+    const temp_file = try tmp_dir.createFile(temp_filename, .{
+        // Allow querying metadata (stat) on the handle, necessary for windows
+        .read = true,
+        .truncate = true,
+    });
     defer temp_file.close();
 
     // Create file path iterator

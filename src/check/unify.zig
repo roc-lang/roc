@@ -134,6 +134,7 @@ pub fn unify(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     module_lookup: ModuleEnvLookup,
@@ -147,6 +148,7 @@ pub fn unify(
         types,
         problems,
         snapshots,
+        type_writer,
         unify_scratch,
         occurs_scratch,
         module_lookup,
@@ -201,6 +203,7 @@ pub fn unifyWithConf(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     module_lookup: ModuleEnvLookup,
@@ -225,8 +228,8 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.deepCopyVar(types, a);
-                    const actual_snapshot = try snapshots.deepCopyVar(types, b);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
 
                     break :blk .{ .type_mismatch = .{
                         .types = .{
@@ -256,7 +259,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -279,7 +282,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -316,21 +319,21 @@ pub fn unifyWithConf(
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -338,11 +341,13 @@ pub fn unifyWithConf(
                             },
                         }
                     } else {
+                        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = try snapshots.deepCopyVar(types, a),
+                            .expected = expected_snapshot,
                             .actual_var = b,
-                            .actual = try snapshots.deepCopyVar(types, b),
+                            .actual = actual_snapshot,
                         } };
                     }
                 },
@@ -1360,6 +1365,7 @@ const Unifier = struct {
             backing_var,
             &[_]Var{u8_var},
             origin_module,
+            false, // List is nominal (not opaque)
         ) catch return error.AllocatorError;
 
         const list_var = self.types_store.register(.{
@@ -2215,35 +2221,40 @@ const Unifier = struct {
                 );
             },
             .both_extend => {
+                // Create a shared extension variable first
+                // This is critical: both only_in_a_var and only_in_b_var must use this
+                // shared extension to avoid creating circular type references
+                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
+
                 // Create a new variable of a tag_union with only a's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
                 const only_in_a_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_a_tags_range,
-                    .ext = a_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
 
                 // Create a new variable of a tag_union with only b's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
                 const only_in_b_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_b_tags_range,
-                    .ext = b_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
-
-                // Create a new ext var
-                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
 
                 // Unify shared tags
-                // This copies tags from scratch into type_store
+                // Include all tags in the merged type - both shared and unique
+                // The unique tags must be included because the merged type is what
+                // callers see, and the extension chain via only_in_a_var/only_in_b_var
+                // is for proper type equality, not for visibility
                 try self.unifySharedTags(
                     vars,
                     self.scratch.in_both_tags.sliceRange(partitioned.in_both),
@@ -2408,8 +2419,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const range_start: u32 = self.types_store.tags.len();
-
+        // IMPORTANT: First unify all shared tag arguments BEFORE recording range_start.
+        // This is because unifyGuarded may trigger recursive unifications that also
+        // append tags to the global tags list. We need to record range_start AFTER
+        // all inner unifications complete, so we only capture this level's tags.
         for (shared_tags) |tags| {
             const tag_a_args = self.types_store.sliceVars(tags.a.args);
             const tag_b_args = self.types_store.sliceVars(tags.b.args);
@@ -2419,7 +2432,13 @@ const Unifier = struct {
             for (tag_a_args, tag_b_args) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
+        }
 
+        // NOW record range_start after all inner unifications are done
+        const range_start: u32 = self.types_store.tags.len();
+
+        // Append this level's shared tags
+        for (shared_tags) |tags| {
             _ = self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,

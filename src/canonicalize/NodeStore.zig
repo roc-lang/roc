@@ -144,9 +144,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 39;
+pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -275,6 +275,9 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_dbg => return CIR.Statement{ .s_dbg = .{
             .expr = @enumFromInt(node.data_1),
         } },
+        .statement_inspect => return CIR.Statement{ .s_inspect = .{
+            .expr = @enumFromInt(node.data_1),
+        } },
         .statement_expr => return .{ .s_expr = .{
             .expr = @enumFromInt(node.data_1),
         } },
@@ -325,10 +328,14 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_nominal_decl => {
+            // Get is_opaque from extra_data
+            const extra_idx = node.data_3;
+            const is_opaque = store.extra_data.items.items[extra_idx] != 0;
             return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = @as(CIR.TypeHeader.Idx, @enumFromInt(node.data_1)),
                     .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_2)),
+                    .is_opaque = is_opaque,
                 },
             };
         },
@@ -643,6 +650,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dbg => {
             return CIR.Expr{ .e_dbg = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_inspect => {
+            return CIR.Expr{ .e_inspect = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
@@ -1383,6 +1395,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_dbg;
             node.data_1 = @intFromEnum(s.expr);
         },
+        .s_inspect => |s| {
+            node.tag = .statement_inspect;
+            node.data_1 = @intFromEnum(s.expr);
+        },
         .s_expr => |s| {
             node.tag = .statement_expr;
             node.data_1 = @intFromEnum(s.expr);
@@ -1448,6 +1464,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_nominal_decl;
             node.data_1 = @intFromEnum(s.header);
             node.data_2 = @intFromEnum(s.anno);
+            // Store is_opaque in extra_data
+            const extra_idx = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
+            node.data_3 = @intCast(extra_idx);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
@@ -1636,6 +1656,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_dbg => |d| {
             node.tag = .expr_dbg;
+            node.data_1 = @intFromEnum(d.expr);
+        },
+        .e_inspect => |d| {
+            node.tag = .expr_inspect;
             node.data_1 = @intFromEnum(d.expr);
         },
         .e_ellipsis => |_| {

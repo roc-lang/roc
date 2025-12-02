@@ -886,7 +886,7 @@ app [main!] { pf: platform "c" }
 You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **fuzz_crash_020.md:17:3:18:4:**
 ```roc
 		List( #rg
@@ -904,7 +904,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    _f where [f.from_numeral : Numeral -> Try(_j, [InvalidNumeral(Str)])]_
+    _f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -935,7 +935,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue][ProvidedByCompiler]_
+    _[Blue, ..[ProvidedByCompiler, .._others]]_
 
 All patterns in an `match` must have compatible types.
 
@@ -950,7 +950,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    _f_
+    __f_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -991,7 +991,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(f, Str, Error, [O]_others, (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_l, [InvalidNumeral(Str)])]_
+    _(f, Str, Error, [O, .._others], (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1013,7 +1013,7 @@ This expression produces a value, but it's not being used:
 	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _f_
+    __f_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1024,7 +1024,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^
 
 It has the type:
-    _f_
+    __f_
 
 # TOKENS
 ~~~zig
@@ -2051,8 +2051,8 @@ expect {
 		(patt (type "()"))
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
-		(patt (type "[Rum]_others -> Error"))
-		(patt (type "[Blue][ProvidedByCompiler] -> Error"))
+		(patt (type "[Rum, .._others] -> Error"))
+		(patt (type "[Blue, ..[ProvidedByCompiler, .._others]] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2088,8 +2088,8 @@ expect {
 		(expr (type "()"))
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
-		(expr (type "[Rum]_others -> Error"))
-		(expr (type "[Blue][ProvidedByCompiler] -> Error"))
+		(expr (type "[Rum, .._others] -> Error"))
+		(expr (type "[Blue, ..[ProvidedByCompiler, .._others]] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))

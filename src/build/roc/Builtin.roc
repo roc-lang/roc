@@ -165,6 +165,34 @@ Builtin :: [].{
 		single : item -> List(item)
 		single = |x| [x]
 
+		drop_at : List(a), U64 -> List(a)
+
+		sublist : List(a), {start : U64, len : U64} -> List(a)
+
+		take_first : List(a), U64 -> List(a)
+		take_first = |list, n| {
+			List.sublist(list, {len: n, start: 0})
+		}
+
+		take_last : List(a), U64 -> List(a)
+		take_last = |list, n| {
+			len = List.len(list)
+			start = if (len <= n) 0 else len - n
+			List.sublist(list, {start: start, len: len})
+		}
+
+		drop_first : List(a), U64 -> List(a)
+		drop_first = |list, n| {
+			len = List.len(list)
+			List.sublist(list, {start: n, len: len})
+		}
+
+		drop_last : List(a), U64 -> List(a)
+		drop_last = |list, n| {
+			len = List.len(list)
+			take_len = if (len  <= n) 0 else len - n
+			List.sublist(list, {start: 0, len: take_len})
+		}
 	}
 
 	Bool := [False, True].{
@@ -278,6 +306,8 @@ Builtin :: [].{
 			div_by : U8, U8 -> U8
 			div_trunc_by : U8, U8 -> U8
 			rem_by : U8, U8 -> U8
+			mod_by : U8, U8 -> U8
+			abs_diff : U8, U8 -> U8
 
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
@@ -315,12 +345,15 @@ Builtin :: [].{
 			is_lte : I8, I8 -> Bool
 
 			negate : I8 -> I8
+			abs : I8 -> I8
 			plus : I8, I8 -> I8
 			minus : I8, I8 -> I8
 			times : I8, I8 -> I8
 			div_by : I8, I8 -> I8
 			div_trunc_by : I8, I8 -> I8
 			rem_by : I8, I8 -> I8
+			mod_by : I8, I8 -> I8
+			abs_diff : I8, I8 -> U8
 
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
@@ -365,6 +398,8 @@ Builtin :: [].{
 			div_by : U16, U16 -> U16
 			div_trunc_by : U16, U16 -> U16
 			rem_by : U16, U16 -> U16
+			mod_by : U16, U16 -> U16
+			abs_diff : U16, U16 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
@@ -404,12 +439,15 @@ Builtin :: [].{
 			is_lte : I16, I16 -> Bool
 
 			negate : I16 -> I16
+			abs : I16 -> I16
 			plus : I16, I16 -> I16
 			minus : I16, I16 -> I16
 			times : I16, I16 -> I16
 			div_by : I16, I16 -> I16
 			div_trunc_by : I16, I16 -> I16
 			rem_by : I16, I16 -> I16
+			mod_by : I16, I16 -> I16
+			abs_diff : I16, I16 -> U16
 
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
@@ -455,6 +493,8 @@ Builtin :: [].{
 			div_by : U32, U32 -> U32
 			div_trunc_by : U32, U32 -> U32
 			rem_by : U32, U32 -> U32
+			mod_by : U32, U32 -> U32
+			abs_diff : U32, U32 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
@@ -496,12 +536,15 @@ Builtin :: [].{
 			is_lte : I32, I32 -> Bool
 
 			negate : I32 -> I32
+			abs : I32 -> I32
 			plus : I32, I32 -> I32
 			minus : I32, I32 -> I32
 			times : I32, I32 -> I32
 			div_by : I32, I32 -> I32
 			div_trunc_by : I32, I32 -> I32
 			rem_by : I32, I32 -> I32
+			mod_by : I32, I32 -> I32
+			abs_diff : I32, I32 -> U32
 
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
@@ -548,6 +591,8 @@ Builtin :: [].{
 			div_by : U64, U64 -> U64
 			div_trunc_by : U64, U64 -> U64
 			rem_by : U64, U64 -> U64
+			mod_by : U64, U64 -> U64
+			abs_diff : U64, U64 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
@@ -591,12 +636,15 @@ Builtin :: [].{
 			is_lte : I64, I64 -> Bool
 
 			negate : I64 -> I64
+			abs : I64 -> I64
 			plus : I64, I64 -> I64
 			minus : I64, I64 -> I64
 			times : I64, I64 -> I64
 			div_by : I64, I64 -> I64
 			div_trunc_by : I64, I64 -> I64
 			rem_by : I64, I64 -> I64
+			mod_by : I64, I64 -> I64
+			abs_diff : I64, I64 -> U64
 
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
@@ -644,6 +692,8 @@ Builtin :: [].{
 			div_by : U128, U128 -> U128
 			div_trunc_by : U128, U128 -> U128
 			rem_by : U128, U128 -> U128
+			mod_by : U128, U128 -> U128
+			abs_diff : U128, U128 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
@@ -691,12 +741,15 @@ Builtin :: [].{
 			is_lte : I128, I128 -> Bool
 
 			negate : I128 -> I128
+			abs : I128 -> I128
 			plus : I128, I128 -> I128
 			minus : I128, I128 -> I128
 			times : I128, I128 -> I128
 			div_by : I128, I128 -> I128
 			div_trunc_by : I128, I128 -> I128
 			rem_by : I128, I128 -> I128
+			mod_by : I128, I128 -> I128
+			abs_diff : I128, I128 -> U128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
@@ -744,12 +797,14 @@ Builtin :: [].{
 			is_lte : Dec, Dec -> Bool
 
 			negate : Dec -> Dec
+			abs : Dec -> Dec
 			plus : Dec, Dec -> Dec
 			minus : Dec, Dec -> Dec
 			times : Dec, Dec -> Dec
 			div_by : Dec, Dec -> Dec
 			div_trunc_by : Dec, Dec -> Dec
 			rem_by : Dec, Dec -> Dec
+			abs_diff : Dec, Dec -> Dec
 
 			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
@@ -797,12 +852,14 @@ Builtin :: [].{
 			is_lte : F32, F32 -> Bool
 
 			negate : F32 -> F32
+			abs : F32 -> F32
 			plus : F32, F32 -> F32
 			minus : F32, F32 -> F32
 			times : F32, F32 -> F32
 			div_by : F32, F32 -> F32
 			div_trunc_by : F32, F32 -> F32
 			rem_by : F32, F32 -> F32
+			abs_diff : F32, F32 -> F32
 
 			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
@@ -848,12 +905,14 @@ Builtin :: [].{
 			is_lte : F64, F64 -> Bool
 
 			negate : F64 -> F64
+			abs : F64 -> F64
 			plus : F64, F64 -> F64
 			minus : F64, F64 -> F64
 			times : F64, F64 -> F64
 			div_by : F64, F64 -> F64
 			div_trunc_by : F64, F64 -> F64
 			rem_by : F64, F64 -> F64
+			abs_diff : F64, F64 -> F64
 
 			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])

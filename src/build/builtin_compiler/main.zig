@@ -169,6 +169,12 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
+    if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
+        try low_level_map.put(list_drop_at_ident, .list_drop_at);
+    }
+    if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
+        try low_level_map.put(list_sublist_ident, .list_sublist);
+    }
     if (env.common.findIdent("Builtin.Bool.is_eq")) |bool_is_eq_ident| {
         try low_level_map.put(bool_is_eq_ident, .bool_is_eq);
     }
@@ -368,6 +374,18 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         }
     }
 
+    // Numeric modulo operation (integer types only)
+    const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
+    for (integer_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // mod_by
+        const mod_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.mod_by", .{num_type});
+        if (env.common.findIdent(mod_by)) |ident| {
+            try low_level_map.put(ident, .num_mod_by);
+        }
+    }
+
     // Numeric negate operation (signed types only)
     for (signed_types) |num_type| {
         var buf: [256]u8 = undefined;
@@ -376,6 +394,22 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const negate = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.negate", .{num_type});
         if (env.common.findIdent(negate)) |ident| {
             try low_level_map.put(ident, .num_negate);
+        }
+
+        // abs
+        const abs = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs", .{num_type});
+        if (env.common.findIdent(abs)) |ident| {
+            try low_level_map.put(ident, .num_abs);
+        }
+    }
+
+    // Numeric abs_diff operation (all numeric types)
+    for (numeric_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        const abs_diff = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs_diff", .{num_type});
+        if (env.common.findIdent(abs_diff)) |ident| {
+            try low_level_map.put(ident, .num_abs_diff);
         }
     }
 

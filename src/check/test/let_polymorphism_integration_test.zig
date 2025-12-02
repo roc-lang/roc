@@ -89,7 +89,7 @@ test "polymorphic record constructor" {
         \\    { pair1, pair2, pair3 }
         \\}
     ;
-    try typeCheck(source, "{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True]_others, second: [False]_others2 } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    try typeCheck(source, "{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
 }
 
 test "polymorphic identity with various numeric types" {
@@ -102,7 +102,7 @@ test "polymorphic identity with various numeric types" {
         \\    { int_val, float_val, bool_val }
         \\}
     ;
-    try typeCheck(source, "{ bool_val: [True]_others, float_val: a, int_val: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    try typeCheck(source, "{ bool_val: [True, .._others], float_val: a, int_val: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
 }
 
 test "nested polymorphic data structures" {
@@ -144,7 +144,7 @@ test "polymorphic swap function" {
         \\    { swapped1, swapped2 }
         \\}
     ;
-    try typeCheck(source, "{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True]_others } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
+    try typeCheck(source, "{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True, .._others] } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]");
 }
 
 test "polymorphic option type simulation" {

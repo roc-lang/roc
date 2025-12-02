@@ -66,7 +66,9 @@ scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
-import_mapping: std.AutoHashMap(Ident.Idx, Ident.Idx),
+import_mapping: ?*const import_mapping_mod.ImportMapping,
+/// The allocator used to create owned fields
+gpa: std.mem.Allocator,
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
@@ -80,7 +82,7 @@ pub fn initFromParts(
     gpa: std.mem.Allocator,
     types_store: *const TypesStore,
     idents: *const Ident.Store,
-    import_mapping: ?import_mapping_mod.ImportMapping,
+    import_mapping: ?*const import_mapping_mod.ImportMapping,
 ) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
@@ -94,7 +96,8 @@ pub fn initFromParts(
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
-        .import_mapping = import_mapping orelse import_mapping_mod.ImportMapping.init(gpa),
+        .import_mapping = import_mapping,
+        .gpa = gpa,
     };
 }
 
@@ -107,7 +110,13 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
     self.scratch_record_fields.deinit();
-    self.import_mapping.deinit();
+    // import_mapping is borrowed, not owned, so don't deinit it
+}
+
+/// Update the import_mapping pointer. This is needed when the owning struct
+/// is returned by value, which invalidates the original pointer.
+pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mapping_mod.ImportMapping) void {
+    self.import_mapping = import_mapping;
 }
 
 /// Reset type writer state
@@ -649,8 +658,7 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
     const tags_len = self.types.tags.len();
     if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
         // Tags range is out of bounds - return error indicator
-        _ = try self.buf.writer().write("Error");
-        _ = try self.buf.writer().write("]");
+        _ = try self.buf.writer().write("Error]");
         return;
     }
 
@@ -664,33 +672,46 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         try self.writeTag(tag, root_var);
     }
 
-    _ = try self.buf.writer().write("]");
-
-    // Show extension variable if it's not empty
+    // Write extension variable inside the brackets with ".." prefix
     const ext_resolved = self.types.resolveVar(tag_union.ext);
+    const has_tags = tag_union.tags.count > 0;
+
     switch (ext_resolved.desc.content) {
         .flex => |flex| {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
+
             if (flex.name) |ident_idx| {
                 _ = try self.buf.writer().write(self.getIdent(ident_idx));
             } else if (true) {
                 // TODO: ^ here, we should consider polarity
-
                 try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
             }
+
+            _ = try self.buf.writer().write("]");
 
             for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
             }
         },
         .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => {}, // Don't show empty extension
+            .empty_tag_union => {
+                // Closed union - just close the bracket
+                _ = try self.buf.writer().write("]");
+            },
             else => {
+                // Extension is a non-empty structure (e.g., another tag union)
+                if (has_tags) _ = try self.buf.writer().write(", ");
+                _ = try self.buf.writer().write("..");
                 try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+                _ = try self.buf.writer().write("]");
             },
         },
         .rigid => |rigid| {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
             _ = try self.buf.writer().write(self.getIdent(rigid.name));
-            // _ = try self.buf.writer().write("[r]");
+            _ = try self.buf.writer().write("]");
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                 try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
@@ -698,13 +719,20 @@ fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.
         },
         .err => {
             // Extension resolved to error - write error indicator
-            _ = try self.buf.writer().write("Error");
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..Error]");
         },
         .alias => {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+            _ = try self.buf.writer().write("]");
         },
         .recursion_var => {
+            if (has_tags) _ = try self.buf.writer().write(", ");
+            _ = try self.buf.writer().write("..");
             try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+            _ = try self.buf.writer().write("]");
         },
     }
 }
@@ -915,8 +943,10 @@ pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
 /// If the identifier is in the import_mapping, returns the mapped name.
 /// Otherwise, returns the original identifier text.
 fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
-    if (self.import_mapping.get(idx)) |display_idx| {
-        return self.idents.getText(display_idx);
+    if (self.import_mapping) |mapping| {
+        if (mapping.get(idx)) |display_idx| {
+            return self.idents.getText(display_idx);
+        }
     }
 
     const name = self.idents.getText(idx);
