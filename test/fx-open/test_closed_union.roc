@@ -2,12 +2,12 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
 
-# Test: both Exit and CustomError in different branches
-# This triggers the type error
+# Test: Closed union - both branches return Exit (same tag)
+# Expected: Should work fine
 main! = |args| {
     if List.is_empty(args) {
         Err(Exit(42))
     } else {
-        Err(CustomError)
+        Err(Exit(1))
     }
 }

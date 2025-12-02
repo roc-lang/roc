@@ -2215,35 +2215,40 @@ const Unifier = struct {
                 );
             },
             .both_extend => {
+                // Create a shared extension variable first
+                // This is critical: both only_in_a_var and only_in_b_var must use this
+                // shared extension to avoid creating circular type references
+                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
+
                 // Create a new variable of a tag_union with only a's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
                 const only_in_a_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_a_tags_range,
-                    .ext = a_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
 
                 // Create a new variable of a tag_union with only b's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
                 const only_in_b_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_b_tags_range,
-                    .ext = b_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
-
-                // Create a new ext var
-                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
 
                 // Unify shared tags
-                // This copies tags from scratch into type_store
+                // Include all tags in the merged type - both shared and unique
+                // The unique tags must be included because the merged type is what
+                // callers see, and the extension chain via only_in_a_var/only_in_b_var
+                // is for proper type equality, not for visibility
                 try self.unifySharedTags(
                     vars,
                     self.scratch.in_both_tags.sliceRange(partitioned.in_both),
@@ -2408,8 +2413,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const range_start: u32 = self.types_store.tags.len();
-
+        // IMPORTANT: First unify all shared tag arguments BEFORE recording range_start.
+        // This is because unifyGuarded may trigger recursive unifications that also
+        // append tags to the global tags list. We need to record range_start AFTER
+        // all inner unifications complete, so we only capture this level's tags.
         for (shared_tags) |tags| {
             const tag_a_args = self.types_store.sliceVars(tags.a.args);
             const tag_b_args = self.types_store.sliceVars(tags.b.args);
@@ -2419,7 +2426,13 @@ const Unifier = struct {
             for (tag_a_args, tag_b_args) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
+        }
 
+        // NOW record range_start after all inner unifications are done
+        const range_start: u32 = self.types_store.tags.len();
+
+        // Append this level's shared tags
+        for (shared_tags) |tags| {
             _ = self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
