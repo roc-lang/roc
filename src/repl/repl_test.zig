@@ -356,7 +356,7 @@ test "Repl - minimal interpreter integration" {
     // Step 8: Verify result using renderer
     const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
     const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
-    const rendered = try interpreter.renderValueRocWithType(result, rt_var);
+    const rendered = try interpreter.renderValueRocWithType(result, rt_var, test_env.get_ops());
     defer gpa.free(rendered);
     try testing.expectEqualStrings("42", rendered);
 }

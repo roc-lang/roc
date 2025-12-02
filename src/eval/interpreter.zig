@@ -725,7 +725,7 @@ pub const Interpreter = struct {
 
         const rendered = blk: {
             if (value_rt_var) |rt_var| {
-                break :blk try self.renderValueRocWithType(value, rt_var);
+                break :blk try self.renderValueRocWithType(value, rt_var, roc_ops);
             } else {
                 break :blk try self.renderValueRoc(value);
             }
@@ -6078,16 +6078,108 @@ pub const Interpreter = struct {
         };
     }
 
+    /// Context for the to_inspect callback containing both interpreter and RocOps.
+    const ToInspectCallbackContext = struct {
+        interpreter: *Interpreter,
+        roc_ops: *RocOps,
+    };
+
+    /// Make a render context with to_inspect callback enabled for recursive method calls.
+    /// This version is used when rendering values that may contain nested nominal types
+    /// with custom to_inspect methods (e.g., inside records).
+    fn makeRenderCtxWithCallback(self: *Interpreter, callback_ctx: *ToInspectCallbackContext) render_helpers.RenderCtx {
+        return .{
+            .allocator = self.allocator,
+            .env = self.root_env,
+            .runtime_types = self.runtime_types,
+            .layout_store = &self.runtime_layout_store,
+            .type_scope = &self.empty_scope,
+            .to_inspect_callback = toInspectCallback,
+            .callback_ctx = callback_ctx,
+        };
+    }
+
+    /// Callback for render_helpers to handle nominal types with custom to_inspect methods.
+    /// Returns the rendered string if the type has a to_inspect method, null otherwise.
+    fn toInspectCallback(ctx: *anyopaque, value: StackValue, rt_var: types.Var) ?[]u8 {
+        const cb_ctx: *ToInspectCallbackContext = @ptrCast(@alignCast(ctx));
+        const self = cb_ctx.interpreter;
+        const roc_ops = cb_ctx.roc_ops;
+
+        // Check if this is a nominal type with to_inspect
+        const resolved = self.runtime_types.resolveVar(rt_var);
+        if (resolved.desc.content != .structure) return null;
+        const nom = switch (resolved.desc.content.structure) {
+            .nominal_type => |n| n,
+            else => return null,
+        };
+
+        const maybe_method = self.tryResolveMethodByName(
+            nom.origin_module,
+            nom.ident.ident_idx,
+            "to_inspect",
+            roc_ops,
+        ) catch return null;
+
+        const method_func = maybe_method orelse return null;
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+        // Found to_inspect - call it synchronously
+        if (method_func.layout.tag != .closure) return null;
+
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != 1) return null;
+
+        // Save state before calling to_inspect
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        // Copy the value to pass to the method
+        const copied_value = self.pushCopy(value, roc_ops) catch return null;
+
+        // Bind the parameter
+        self.bindings.append(.{
+            .pattern_idx = params[0],
+            .value = copied_value,
+            .expr_idx = @enumFromInt(0),
+            .source_env = self.env,
+        }) catch return null;
+
+        // Evaluate the method body
+        const result = self.eval(closure_header.body_idx, roc_ops) catch return null;
+        defer result.decref(&self.runtime_layout_store, roc_ops);
+
+        // The result should be a Str
+        if (result.layout.tag != .scalar) return null;
+        if (result.layout.data.scalar.tag != .str) return null;
+
+        const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
+        const s = rs.asSlice();
+
+        // Return a copy of the string
+        return self.allocator.dupe(u8, s) catch return null;
+    }
+
     pub fn renderValueRoc(self: *Interpreter, value: StackValue) Error![]u8 {
         var ctx = self.makeRenderCtx();
         return render_helpers.renderValueRoc(&ctx, value);
     }
 
-    // removed duplicate
-
-    // Helper for REPL and tests: render a value given its runtime type var
-    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var) Error![]u8 {
-        var ctx = self.makeRenderCtx();
+    // Helper for REPL and tests: render a value given its runtime type var.
+    // Uses callback-enabled context for recursive to_inspect handling on nested nominal types.
+    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var, roc_ops: *RocOps) Error![]u8 {
+        var cb_ctx = ToInspectCallbackContext{
+            .interpreter = self,
+            .roc_ops = roc_ops,
+        };
+        var ctx = self.makeRenderCtxWithCallback(&cb_ctx);
         return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
     }
 
@@ -11278,22 +11370,28 @@ pub const Interpreter = struct {
                     }
 
                     // Add explicit field layouts to union
+                    // Translate field names from self.env's identifier store to runtime_layout_store.env's
+                    // identifier store. This is necessary because field names may come from different modules
+                    // (e.g., app module), but rendering uses root_env (same as runtime_layout_store.env).
                     for (rc.all_fields, 0..) |field_idx_enum, idx| {
                         const f = self.env.store.getRecordField(field_idx_enum);
                         const field_layout = field_values[idx].layout;
-                        const key: u32 = @bitCast(f.name);
+                        // Translate field name to runtime layout store's identifier space
+                        const field_name_str = self.env.getIdent(f.name);
+                        const translated_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                        const key: u32 = @bitCast(translated_name);
                         if (union_indices.get(key)) |idx_ptr| {
                             union_layouts.items[idx_ptr] = field_layout;
-                            union_names.items[idx_ptr] = f.name;
+                            union_names.items[idx_ptr] = translated_name;
                         } else {
                             try union_layouts.append(field_layout);
-                            try union_names.append(f.name);
+                            try union_names.append(translated_name);
                             try union_indices.put(key, union_layouts.items.len - 1);
                         }
                     }
 
-                    // Create record layout
-                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.env, union_layouts.items, union_names.items);
+                    // Create record layout using runtime_layout_store.env for field name lookups
+                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, union_layouts.items, union_names.items);
                     const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
 
                     // Cache the layout for this var
@@ -11320,13 +11418,16 @@ pub const Interpreter = struct {
                     // Set explicit field values (overwriting base values if needed)
                     for (rc.all_fields, 0..) |field_idx_enum, explicit_index| {
                         const f = self.env.store.getRecordField(field_idx_enum);
-                        const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
+                        // Translate field name to runtime layout store's identifier space for lookup
+                        const field_name_str = self.env.getIdent(f.name);
+                        const translated_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                        const dest_field_idx = accessor.findFieldIndex(translated_name) orelse return error.TypeMismatch;
                         const val = field_values[explicit_index];
 
                         // If overwriting a base field, decref the existing value
                         if (base_value_opt) |base_value| {
                             var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
-                            if (base_accessor.findFieldIndex(f.name) != null) {
+                            if (base_accessor.findFieldIndex(translated_name) != null) {
                                 const existing = try accessor.getFieldByIndex(dest_field_idx);
                                 existing.decref(&self.runtime_layout_store, roc_ops);
                             }
@@ -11792,7 +11893,7 @@ pub const Interpreter = struct {
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
+                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var, roc_ops);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Return {} (empty record) - dbg always returns unit like expect
@@ -11862,7 +11963,7 @@ pub const Interpreter = struct {
                         value.decref(&self.runtime_layout_store, roc_ops);
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         // Fall back to default rendering
-                        const rendered = try self.renderValueRocWithType(value, ir.inner_rt_var);
+                        const rendered = try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
                         defer self.allocator.free(rendered);
                         const str_value = try self.pushStr();
                         const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
@@ -11912,13 +12013,13 @@ pub const Interpreter = struct {
                         // Nominal types render as "TypeName.InnerValue"
                         // Use the original type var - render_helpers will unwrap the nominal type
                         const type_name = self.root_env.getIdent(nom.ident.ident_idx);
-                        const inner_rendered = try self.renderValueRocWithType(value, ir.inner_rt_var);
+                        const inner_rendered = try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
                         defer self.allocator.free(inner_rendered);
                         break :blk try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, inner_rendered });
                     }
                 } else blk: {
                     // Non-nominal types use default rendering
-                    break :blk try self.renderValueRocWithType(value, ir.inner_rt_var);
+                    break :blk try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
                 };
                 defer self.allocator.free(rendered);
 
@@ -13325,7 +13426,7 @@ pub const Interpreter = struct {
                 // Dbg statement: print value
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.rt_var);
+                const rendered = try self.renderValueRocWithType(value, dp.rt_var, roc_ops);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Continue with remaining statements
@@ -13365,7 +13466,7 @@ pub const Interpreter = struct {
                         value.decref(&self.runtime_layout_store, roc_ops);
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         // Fall back to default rendering
-                        const rendered = try self.renderValueRocWithType(value, ir.rt_var);
+                        const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
                         self.allocator.free(rendered);
                         if (ir.remaining_stmts.len == 0) {
                             try work_stack.push(.{ .eval_expr = .{
@@ -13419,7 +13520,7 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         value.decref(&self.runtime_layout_store, roc_ops);
                         method_func.decref(&self.runtime_layout_store, roc_ops);
-                        const rendered = try self.renderValueRocWithType(value, ir.rt_var);
+                        const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
                         self.allocator.free(rendered);
                         if (ir.remaining_stmts.len == 0) {
                             try work_stack.push(.{ .eval_expr = .{
@@ -13467,7 +13568,7 @@ pub const Interpreter = struct {
 
                 // No to_inspect method - use default rendering
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, ir.rt_var);
+                const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
                 self.allocator.free(rendered);
                 // Continue with remaining statements
                 if (ir.remaining_stmts.len == 0) {

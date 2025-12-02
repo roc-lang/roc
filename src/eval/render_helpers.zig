@@ -18,6 +18,11 @@ fn toVarRange(range: anytype) types.Var.SafeList.Range {
     return @as(RangeType, range);
 }
 
+/// Callback function type for checking and rendering nominal types with custom to_inspect methods.
+/// Returns the rendered string if the type has a to_inspect method, null otherwise.
+/// Ownership of the returned string is transferred to the caller.
+pub const ToInspectCallback = *const fn (ctx: *anyopaque, value: StackValue, rt_var: types.Var) ?[]u8;
+
 /// Shared rendering context that provides allocator, module environment, and runtime caches.
 pub const RenderCtx = struct {
     allocator: std.mem.Allocator,
@@ -25,6 +30,11 @@ pub const RenderCtx = struct {
     runtime_types: *types.store.Store,
     layout_store: *layout.Store,
     type_scope: *const TypeScope,
+    /// Optional callback for handling nominal types with custom to_inspect methods.
+    /// If set, this callback will be invoked when rendering nominal type values.
+    to_inspect_callback: ?ToInspectCallback = null,
+    /// Opaque context pointer passed to the to_inspect callback.
+    callback_ctx: ?*anyopaque = null,
 };
 
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
@@ -55,7 +65,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         }
     }
 
-    // unwrap aliases/nominals
+    // unwrap aliases/nominals, but check for to_inspect callbacks on nominal types first
     unwrap: while (true) {
         switch (resolved.desc.content) {
             .alias => |al| {
@@ -64,6 +74,17 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
             },
             .structure => |st| switch (st) {
                 .nominal_type => |nt| {
+                    // Check if there's a to_inspect callback for this nominal type
+                    if (ctx.to_inspect_callback) |callback| {
+                        if (ctx.callback_ctx) |cb_ctx| {
+                            // The callback returns the rendered string if the type has to_inspect,
+                            // null otherwise
+                            if (callback(cb_ctx, value, rt_var)) |rendered| {
+                                return rendered;
+                            }
+                        }
+                    }
+                    // No custom to_inspect, unwrap to backing type
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);
                 },
@@ -440,14 +461,13 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const name_text = ctx.env.getIdent(f.name);
                     try out.appendSlice(name_text);
                     try out.appendSlice(": ");
-                    if (acc.findFieldIndex(f.name)) |idx| {
-                        const field_val = try acc.getFieldByIndex(idx);
-                        const rendered = try renderValueRocWithType(ctx, field_val, f.var_);
-                        defer gpa.free(rendered);
-                        try out.appendSlice(rendered);
-                    } else {
-                        try out.appendSlice("<missing>");
-                    }
+                    const idx = acc.findFieldIndex(f.name) orelse {
+                        std.debug.panic("Record field not found in layout: type says field '{s}' exists but layout doesn't have it", .{name_text});
+                    };
+                    const field_val = try acc.getFieldByIndex(idx);
+                    const rendered = try renderValueRocWithType(ctx, field_val, f.var_);
+                    defer gpa.free(rendered);
+                    try out.appendSlice(rendered);
                     if (i + 1 < all_fields.items.len) try out.appendSlice(", ");
                 }
                 try out.appendSlice(" }");
