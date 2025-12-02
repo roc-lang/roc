@@ -7828,6 +7828,9 @@ pub const Interpreter = struct {
         /// Dbg print - print evaluated value and return {}.
         dbg_print: DbgPrint,
 
+        /// Inspect render - render value to Str and push result.
+        inspect_render: InspectRender,
+
         /// String interpolation - collect segment strings.
         str_collect: StrCollect,
 
@@ -7875,6 +7878,9 @@ pub const Interpreter = struct {
 
         /// Dbg statement - print value after evaluation.
         dbg_print_stmt: DbgPrintStmt,
+
+        /// Inspect statement - render value to Str after evaluation.
+        inspect_render_stmt: InspectRenderStmt,
 
         /// Sort - process comparison result and continue insertion sort.
         sort_compare_result: SortCompareResult,
@@ -8058,6 +8064,14 @@ pub const Interpreter = struct {
         /// Dbg continuation - after expression is evaluated, print and return {}
         pub const DbgPrint = struct {
             /// Original dbg expression index (for type info)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Inner expression runtime type variable
+            inner_rt_var: types.Var,
+        };
+
+        /// Inspect continuation - after expression is evaluated, render to Str and push result
+        pub const InspectRender = struct {
+            /// Original inspect expression index (for type info)
             expr_idx: can.CIR.Expr.Idx,
             /// Inner expression runtime type variable
             inner_rt_var: types.Var,
@@ -8299,6 +8313,18 @@ pub const Interpreter = struct {
             /// Runtime type for rendering
             rt_var: types.Var,
             /// Remaining statements after dbg
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Inspect statement - render value to Str (value is discarded unless final)
+        pub const InspectRenderStmt = struct {
+            /// Runtime type for rendering
+            rt_var: types.Var,
+            /// Remaining statements after inspect
             remaining_stmts: []const can.CIR.Statement.Idx,
             /// Final expression to evaluate after all statements
             final_expr: can.CIR.Expr.Idx,
@@ -9395,6 +9421,20 @@ pub const Interpreter = struct {
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_expr.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            .e_inspect => |inspect_expr| {
+                const inner_ct_var = can.ModuleEnv.varFrom(inspect_expr.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                // Schedule: first evaluate inner expression, then render to Str
+                try work_stack.push(.{ .apply_continuation = .{ .inspect_render = .{
+                    .expr_idx = expr_idx,
+                    .inner_rt_var = inner_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = inspect_expr.expr,
                     .expected_rt_var = inner_rt_var,
                 } });
             },
@@ -10653,6 +10693,25 @@ pub const Interpreter = struct {
                     .expected_rt_var = inner_rt_var,
                 } });
             },
+            .s_inspect => |inspect_stmt| {
+                // Evaluate expression, then render to Str (value is discarded in stmt context)
+                const inner_ct_var = can.ModuleEnv.varFrom(inspect_stmt.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+
+                // Push inspect_render_stmt continuation
+                try work_stack.push(.{ .apply_continuation = .{ .inspect_render_stmt = .{
+                    .rt_var = inner_rt_var,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = inspect_stmt.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
             .s_return => |ret| {
                 // Early return: evaluate expression, then use early_return continuation
                 const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
@@ -11668,6 +11727,22 @@ pub const Interpreter = struct {
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 const result = try self.pushRaw(layout_val, 0);
                 try value_stack.push(result);
+                return true;
+            },
+            .inspect_render => |ir| {
+                // Pop evaluated value from stack
+                const value = value_stack.pop() orelse return error.Crash;
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Render the value to a string representation
+                const rendered = try self.renderValueRocWithType(value, ir.inner_rt_var);
+                defer self.allocator.free(rendered);
+
+                // Create a RocStr from the rendered bytes and push it
+                const str_value = try self.pushStr();
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                try value_stack.push(str_value);
                 return true;
             },
             .str_collect => |sc| {
@@ -13078,6 +13153,25 @@ pub const Interpreter = struct {
                 } else {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
                     try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, null, roc_ops);
+                }
+                return true;
+            },
+            .inspect_render_stmt => |ir| {
+                // Inspect statement: render value to Str (discarded in statement context)
+                const value = value_stack.pop() orelse return error.Crash;
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                // Render but discard the result in statement context
+                const rendered = try self.renderValueRocWithType(value, ir.rt_var);
+                self.allocator.free(rendered);
+                // Continue with remaining statements
+                if (ir.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ir.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
                 }
                 return true;
             },

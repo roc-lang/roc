@@ -2036,6 +2036,15 @@ pub fn canonicalizeFile(
                     .region = region,
                 } });
             },
+            .inspect => |inspect_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("inspect");
+                const region = self.parse_ir.tokenizedRegionToRegion(inspect_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
             .expect => |e| {
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -5580,6 +5589,18 @@ pub fn canonicalizeExpr(
 
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
+        .inspect => |d| {
+            // Inspect expression - canonicalize the inner expression
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+            const can_inner = try self.canonicalizeExpr(d.expr) orelse return null;
+
+            // Create inspect expression
+            const inspect_expr = try self.env.addExpr(Expr{ .e_inspect = .{
+                .expr = can_inner.idx,
+            } }, region);
+
+            return CanonicalizedExpr{ .idx = inspect_expr, .free_vars = can_inner.free_vars };
+        },
         .record_builder => |_| {
             const feature = try self.env.insertString("canonicalize record_builder expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -8604,6 +8625,17 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     } }, debug_region);
                     last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
                 },
+                .inspect => |inspect_stmt| {
+                    // For final inspect statements, canonicalize as inspect expression
+                    const inspect_region = self.parse_ir.tokenizedRegionToRegion(inspect_stmt.region);
+                    const inner_expr = try self.canonicalizeExprOrMalformed(inspect_stmt.expr);
+
+                    // Create inspect expression
+                    const inspect_expr = try self.env.addExpr(Expr{ .e_inspect = .{
+                        .expr = inner_expr.idx,
+                    } }, inspect_region);
+                    last_expr = CanonicalizedExpr{ .idx = inspect_expr, .free_vars = inner_expr.free_vars };
+                },
                 .@"return" => |return_stmt| {
                     // Create an e_return expression to preserve early return semantics
                     // This is for when return is the final expression in a block
@@ -8864,6 +8896,19 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Create dbg statement
 
             const stmt_idx = try self.env.addStatement(Statement{ .s_dbg = .{
+                .expr = expr.idx,
+            } }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+        },
+        .inspect => |d| {
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+
+            // Canonicalize the inspect expression
+            const expr = try self.canonicalizeExprOrMalformed(d.expr);
+
+            // Create inspect statement
+            const stmt_idx = try self.env.addStatement(Statement{ .s_inspect = .{
                 .expr = expr.idx,
             } }, region);
 

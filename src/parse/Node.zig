@@ -83,6 +83,11 @@ pub const Tag = enum {
     /// * lhs - node index to expression being debugged
     /// * rhs - ignored
     dbg,
+    /// An inspect expression
+    /// Example: `inspect someValue`
+    /// * lhs - node index to expression being inspected
+    /// * rhs - ignored
+    inspect,
     /// Any plain expression - see Exprs below
     /// * lhs - node index for block or expr
     /// * rhs - ignored

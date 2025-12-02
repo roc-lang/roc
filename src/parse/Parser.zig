@@ -1121,6 +1121,16 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
+        .KwInspect => {
+            const start = self.pos;
+            self.advance();
+            const expr = try self.parseExpr();
+            const statement_idx = try self.store.addStatement(.{ .inspect = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
+        },
         .KwReturn => {
             const start = self.pos;
             self.advance();
@@ -2149,6 +2159,14 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             self.advance();
             const e = try self.parseExpr();
             expr = try self.store.addExpr(.{ .dbg = .{
+                .region = .{ .start = start, .end = self.pos },
+                .expr = e,
+            } });
+        },
+        .KwInspect => {
+            self.advance();
+            const e = try self.parseExpr();
+            expr = try self.store.addExpr(.{ .inspect = .{
                 .region = .{ .start = start, .end = self.pos },
                 .expr = e,
             } });

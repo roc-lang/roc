@@ -3591,6 +3591,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
+        .e_inspect => |inspect| {
+            // inspect evaluates its inner expression and returns Str
+            // Note: does NOT set does_fx because inspect is pure
+            _ = try self.checkExpr(inspect.expr, env, .no_expectation);
+            const str_var = try self.freshStr(env, expr_region);
+            _ = try self.unify(expr_var, str_var, env);
+        },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
@@ -3942,6 +3949,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
+            .s_inspect => |expr| {
+                // inspect returns Str (not the inner expression type)
+                _ = try self.checkExpr(expr.expr, env, .no_expectation);
+                const str_var = try self.freshStr(env, stmt_region);
+                _ = try self.unify(stmt_var, str_var, env);
+            },
             .s_expect => |expr_stmt| {
                 does_fx = try self.checkExpr(expr_stmt.body, env, .no_expectation) or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
@@ -4057,6 +4070,9 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.body, return_var, env);
         },
         .s_dbg => |s| {
+            try self.unifyEarlyReturns(s.expr, return_var, env);
+        },
+        .s_inspect => |s| {
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
