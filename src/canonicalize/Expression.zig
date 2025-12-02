@@ -510,6 +510,8 @@ pub const Expr = union(enum) {
 
         // Numeric arithmetic operations
         num_negate, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs_diff, // All numeric types (signed returns unsigned counterpart)
         num_plus, // All numeric types
         num_minus, // All numeric types
         num_times, // All numeric types
@@ -852,8 +854,8 @@ pub const Expr = union(enum) {
                 .bool_is_eq => &.{ .borrow, .borrow },
 
                 // Numeric operations - all value types (no heap allocation)
-                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate => &.{.borrow},
-                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by => &.{ .borrow, .borrow },
+                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
+                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff => &.{ .borrow, .borrow },
 
                 // Numeric parsing - list borrowed for digits, string borrowed
                 .num_from_int_digits => &.{.borrow},

@@ -2508,6 +2508,62 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .num_abs => {
+                // num.abs : num -> num (signed types only)
+                std.debug.assert(args.len == 1); // low-level .num_abs expects 1 argument
+                const num_val = try self.extractNumericValue(args[0]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (num_val) {
+                    .int => |i| try out.setInt(if (i < 0) -i else i),
+                    .f32 => |f| out.setF32(@abs(f)),
+                    .f64 => |f| out.setF64(@abs(f)),
+                    .dec => |d| out.setDec(RocDec{ .num = if (d.num < 0) -d.num else d.num }),
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_abs_diff => {
+                // num.abs_diff : num, num -> num (all numeric types)
+                // For signed types, returns unsigned counterpart
+                std.debug.assert(args.len == 2); // low-level .num_abs_diff expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0);
+                out.is_initialized = false;
+
+                switch (lhs) {
+                    .int => |l| switch (rhs) {
+                        .int => |r| {
+                            const diff = if (l > r) l - r else r - l;
+                            try out.setInt(diff);
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                    .f32 => |l| switch (rhs) {
+                        .f32 => |r| out.setF32(@abs(l - r)),
+                        else => return error.TypeMismatch,
+                    },
+                    .f64 => |l| switch (rhs) {
+                        .f64 => |r| out.setF64(@abs(l - r)),
+                        else => return error.TypeMismatch,
+                    },
+                    .dec => |l| switch (rhs) {
+                        .dec => |r| {
+                            const diff = l.num - r.num;
+                            out.setDec(RocDec{ .num = if (diff < 0) -diff else diff });
+                        },
+                        else => return error.TypeMismatch,
+                    },
+                }
+                out.is_initialized = true;
+                return out;
+            },
             .num_plus => {
                 std.debug.assert(args.len == 2); // low-level .num_plus expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
