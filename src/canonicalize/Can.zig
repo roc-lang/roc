@@ -2719,6 +2719,10 @@ fn addPlatformProvidesItems(
 /// when an identifier is looked up and not found, we check env.requires_types to see if it's
 /// a required identifier from the platform. This avoids conflicts with local definitions.
 fn processRequiresSignatures(self: *Self, requires_rigids_idx: AST.Collection.Idx, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    // Enter a type var scope for the rigids - they should only be in scope while processing signatures
+    const type_var_scope = self.scopeEnterTypeVar();
+    defer self.scopeExitTypeVar(type_var_scope);
+
     // First, process the requires_rigids to add them to the type variable scope
     // This allows R1, R2, etc. to be recognized when processing the signatures
     const rigids_collection = self.parse_ir.store.getCollection(requires_rigids_idx);
@@ -9638,7 +9642,17 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 try self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
         },
-        .ty, .underscore, .tag_union, .malformed => {
+        .tag_union => |tag_union| {
+            // Extract type variables from tags
+            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                try self.extractTypeVarIdentsFromASTAnno(tag_idx, idents_start_idx);
+            }
+            // Extract type variable from open extension if present
+            if (tag_union.open_anno) |open_idx| {
+                try self.extractTypeVarIdentsFromASTAnno(open_idx, idents_start_idx);
+            }
+        },
+        .ty, .underscore, .malformed => {
             // These don't contain type variables to extract
         },
     }

@@ -605,6 +605,21 @@ fn setupTestPlatforms(
     copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
     clear_cache_step.dependOn(&copy_test_fx_host.step);
 
+    // Create test platform host static library (fx-open) - native target
+    const test_platform_fx_open_host_lib = createTestPlatformHostLib(
+        b,
+        "test_platform_fx_open_host",
+        "test/fx-open/platform/host.zig",
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Copy the fx-open test platform host library to the source directory
+    const copy_test_fx_open_host = b.addUpdateSourceFiles();
+    copy_test_fx_open_host.addCopyFileToSource(test_platform_fx_open_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx-open/platform", test_fx_host_filename }));
+    clear_cache_step.dependOn(&copy_test_fx_open_host.step);
+
     // Cross-compile int and fx platform host libraries for musl and glibc targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
         .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
@@ -645,6 +660,21 @@ fn setupTestPlatforms(
         const copy_cross_fx_host = b.addUpdateSourceFiles();
         copy_cross_fx_host.addCopyFileToSource(cross_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libhost.a" }));
         clear_cache_step.dependOn(&copy_cross_fx_host.step);
+
+        // Create cross-compiled fx-open host library
+        const cross_fx_open_host_lib = createTestPlatformHostLib(
+            b,
+            b.fmt("test_platform_fx_open_host_{s}", .{cross_target.name}),
+            "test/fx-open/platform/host.zig",
+            cross_resolved_target,
+            optimize,
+            roc_modules,
+        );
+
+        // Copy to target-specific directory
+        const copy_cross_fx_open_host = b.addUpdateSourceFiles();
+        copy_cross_fx_open_host.addCopyFileToSource(cross_fx_open_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx-open/platform/targets", cross_target.name, "libhost.a" }));
+        clear_cache_step.dependOn(&copy_cross_fx_open_host.step);
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
