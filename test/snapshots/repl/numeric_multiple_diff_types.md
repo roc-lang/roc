@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Numeric without annotation, multiple uses with different types (polymorphism)
+description=Numeric without annotation, multiple uses with different types (produces type error)
 type=repl
 ~~~
 # SOURCE
@@ -17,6 +17,6 @@ assigned `a`
 ---
 assigned `b`
 ---
-"4242.0"
+TYPE MISMATCH
 # PROBLEMS
 NIL
