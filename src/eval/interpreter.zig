@@ -6228,10 +6228,10 @@ pub const Interpreter = struct {
             else => return null,
         };
 
-        const maybe_method = self.tryResolveMethodByName(
+        const maybe_method = self.tryResolveMethodByIdent(
             nom.origin_module,
             nom.ident.ident_idx,
-            "to_inspect",
+            self.env.idents.to_inspect,
             roc_ops,
         ) catch return null;
 
@@ -6851,15 +6851,15 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Get type and method name strings from their respective stores.
+        // Use index-based lookup to find the qualified method ident.
         // nominal_ident comes from runtime types - always in runtime_layout_store.env
-        // (see translateTypeVar's nominal handling and mkNumberTypeContentRuntime)
         // method_name_ident comes from the CIR - in self.env
-        const type_name = self.runtime_layout_store.env.getIdent(nominal_ident);
-        const method_name_str = self.env.getIdent(method_name_ident);
-
-        // Use getMethodIdent which handles the qualified name construction properly
-        const method_ident = origin_env.getMethodIdent(type_name, method_name_str) orelse {
+        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+            self.runtime_layout_store.env,
+            nominal_ident,
+            self.env,
+            method_name_ident,
+        ) orelse {
             return error.MethodLookupFailed;
         };
 
@@ -6900,13 +6900,13 @@ pub const Interpreter = struct {
         return method_value;
     }
 
-    /// Try to resolve a method by string name. Returns null if method not found.
-    /// Used for special methods like `to_inspect` where we need to look up by name.
-    fn tryResolveMethodByName(
+    /// Try to resolve a method by ident. Returns null if method not found.
+    /// Used for special methods like `to_inspect` where we need to look up by ident.
+    fn tryResolveMethodByIdent(
         self: *Interpreter,
         origin_module: base_pkg.Ident.Idx,
         nominal_ident: base_pkg.Ident.Idx,
-        method_name_str: []const u8,
+        method_name_ident: base_pkg.Ident.Idx,
         roc_ops: *RocOps,
     ) Error!?StackValue {
         // Get the module environment for this type's origin
@@ -6914,11 +6914,14 @@ pub const Interpreter = struct {
             return null;
         };
 
-        // Get type name from the nominal ident
-        const type_name = self.runtime_layout_store.env.getIdent(nominal_ident);
-
-        // Use getMethodIdent which handles the qualified name construction properly
-        const method_ident = origin_env.getMethodIdent(type_name, method_name_str) orelse {
+        // Use index-based method lookup - the method_name_ident is in self.env's ident space,
+        // nominal_ident is in runtime_layout_store.env's ident space
+        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+            self.runtime_layout_store.env,
+            nominal_ident,
+            self.env,
+            method_name_ident,
+        ) orelse {
             return null;
         };
 
@@ -12026,10 +12029,10 @@ pub const Interpreter = struct {
                 const resolved = self.runtime_types.resolveVar(ir.inner_rt_var);
                 const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
                     switch (resolved.desc.content.structure) {
-                        .nominal_type => |nom| try self.tryResolveMethodByName(
+                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
                             nom.origin_module,
                             nom.ident.ident_idx,
-                            "to_inspect",
+                            self.env.idents.to_inspect,
                             roc_ops,
                         ),
                         else => null,
@@ -13563,10 +13566,10 @@ pub const Interpreter = struct {
                 const resolved = self.runtime_types.resolveVar(ir.rt_var);
                 const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
                     switch (resolved.desc.content.structure) {
-                        .nominal_type => |nom| try self.tryResolveMethodByName(
+                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
                             nom.origin_module,
                             nom.ident.ident_idx,
-                            "to_inspect",
+                            self.env.idents.to_inspect,
                             roc_ops,
                         ),
                         else => null,

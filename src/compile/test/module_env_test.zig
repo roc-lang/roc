@@ -108,6 +108,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
+        .method_idents = deserialized_ptr.method_idents.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
     };
 
     // Verify the data was preserved
@@ -125,7 +126,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 6 from_utf8 identifiers: byte_index, string, is_ok, problem_code, problem, index
     // Plus 2 synthetic identifiers for ? operator desugaring: #ok, #err
     // Plus 2 numeric method identifiers: abs, abs_diff
-    try testing.expectEqual(@as(u32, 64), original.common.idents.interner.entry_count);
+    // Plus 1 inspect method identifier: to_inspect
+    try testing.expectEqual(@as(u32, 65), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -134,9 +136,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 64 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) from ModuleEnv.init()
+    // Should have same 65 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) from ModuleEnv.init()
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 64), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 65), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
