@@ -1160,6 +1160,9 @@ fn processAssociatedItemsSecondPass(
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
+                                    // Register the method ident mapping for fast index-based lookup
+                                    try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
+
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
@@ -1215,6 +1218,9 @@ fn processAssociatedItemsSecondPass(
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
+                    // Register the method ident mapping for fast index-based lookup
+                    try self.env.registerMethodIdent(type_name, name_ident, qualified_idx);
+
                     // Pattern is now available in scope (was created in createAnnoOnlyDef)
 
                     try self.env.store.addScratchDef(def_idx);
@@ -1239,6 +1245,9 @@ fn processAssociatedItemsSecondPass(
                         // Register this associated item by its qualified name
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                        // Register the method ident mapping for fast index-based lookup
+                        try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names

@@ -1258,14 +1258,12 @@ const Unifier = struct {
         else
             self.module_lookup.get(nominal_type.origin_module) orelse return null;
 
-        // For cross-module lookups, use getMethodIdent to build the qualified method name
+        // For cross-module lookups, use lookupMethodIdentFromEnvConst to find the qualified method
         const lookup_ident = if (is_this_module)
             method_ident
         else blk: {
-            // Get the type name and method name for the qualified lookup
-            const type_name = self.module_env.getIdent(nominal_type.ident.ident_idx);
-            const method_name = self.module_env.getIdent(method_ident);
-            break :blk origin_env.getMethodIdent(type_name, method_name) orelse return null;
+            // Look up the qualified method ident in the origin module using index-based lookup
+            break :blk origin_env.lookupMethodIdentFromEnvConst(self.module_env, nominal_type.ident.ident_idx, method_ident) orelse return null;
         };
 
         // Look up method by the ident

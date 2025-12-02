@@ -25,6 +25,12 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
         const Self = @This();
 
+        // For packed structs backed by integers, get the backing integer type
+        const KeyBackingInt = if (@typeInfo(K) == .@"struct" and @typeInfo(K).@"struct".backing_integer != null)
+            @typeInfo(K).@"struct".backing_integer.?
+        else
+            void;
+
         pub const Entry = struct {
             key: K,
             value: V,
@@ -34,6 +40,9 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     return std.mem.lessThan(u8, a.key, b.key);
                 } else if (@typeInfo(K) == .int or @typeInfo(K) == .@"enum") {
                     return a.key < b.key;
+                } else if (KeyBackingInt != void) {
+                    // Packed struct backed by integer - compare as integers
+                    return @as(KeyBackingInt, @bitCast(a.key)) < @as(KeyBackingInt, @bitCast(b.key));
                 } else {
                     @compileError("Unsupported key type for SortedArrayBuilder");
                 }
@@ -63,6 +72,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 const last = self.entries.items[self.entries.items.len - 1];
                 if (K == []const u8) {
                     self.sorted = std.mem.lessThan(u8, last.key, new_key);
+                } else if (KeyBackingInt != void) {
+                    self.sorted = @as(KeyBackingInt, @bitCast(last.key)) < @as(KeyBackingInt, @bitCast(new_key));
                 } else {
                     self.sorted = last.key < new_key;
                 }
@@ -84,7 +95,16 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
                 const cmp = if (K == []const u8)
                     std.mem.order(u8, mid_key, key)
-                else if (mid_key == key)
+                else if (KeyBackingInt != void) blk: {
+                    const mid_int = @as(KeyBackingInt, @bitCast(mid_key));
+                    const key_int = @as(KeyBackingInt, @bitCast(key));
+                    break :blk if (mid_int == key_int)
+                        std.math.Order.eq
+                    else if (mid_int < key_int)
+                        std.math.Order.lt
+                    else
+                        std.math.Order.gt;
+                } else if (mid_key == key)
                     std.math.Order.eq
                 else if (mid_key < key)
                     std.math.Order.lt

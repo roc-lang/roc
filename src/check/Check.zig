@@ -5076,7 +5076,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             // Get some data about the nominal type
             const region = self.getRegionAt(deferred_constraint.var_);
-            const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -5087,11 +5086,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Look up the method in the original env.
+                // Look up the method in the original env using index-based lookup.
                 // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
-                // Use the module's getMethodIdent to build and look up the qualified name.
-                const method_name_bytes = self.cir.getIdent(constraint.fn_name);
-                const method_ident = original_env.getMethodIdent(type_name_bytes, method_name_bytes) orelse {
+                const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
                     // Method name doesn't exist in target module
                     try self.reportConstraintError(
                         deferred_constraint.var_,
