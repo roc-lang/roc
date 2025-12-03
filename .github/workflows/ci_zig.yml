@@ -119,6 +119,16 @@ jobs:
           error_string_contains: "EndOfStream"
           retry_count: 3
 
+      - name: Check Builtin.roc formatting (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./zig-out/bin/roc fmt --check src/build/roc/Builtin.roc
+
+      - name: Check Builtin.roc formatting (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig-out\bin\roc.exe fmt --check src/build/roc/Builtin.roc
+
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
