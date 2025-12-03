@@ -1,3 +1,6 @@
+//! Syntax checking integration that runs the Roc compiler and converts
+//! reports to LSP diagnostics.
+
 const std = @import("std");
 const compile = @import("compile");
 const reporting = @import("reporting");

@@ -7,6 +7,8 @@ const SyntaxChecker = @import("syntax.zig").SyntaxChecker;
 const DebugFlags = @import("syntax.zig").DebugFlags;
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
+
+/// TODO
 pub const DebugOptions = struct {
     transport: bool = false,
     build: bool = false,

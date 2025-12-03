@@ -1,3 +1,5 @@
+//! URI utilities for converting between file:// URIs and filesystem paths.
+
 const std = @import("std");
 const builtin = @import("builtin");
 

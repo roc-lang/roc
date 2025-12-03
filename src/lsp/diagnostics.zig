@@ -1,3 +1,5 @@
+//! LSP diagnostic types for reporting errors, warnings, and hints to editors.
+
 const std = @import("std");
 
 /// The position of the diagnostic

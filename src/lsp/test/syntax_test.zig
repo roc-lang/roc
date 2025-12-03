@@ -1,3 +1,5 @@
+//! Tests for the LSP syntax checker integration.
+
 const std = @import("std");
 const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
 const uri_util = @import("../uri.zig");
