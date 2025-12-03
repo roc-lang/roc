@@ -7975,10 +7975,6 @@ pub const Interpreter = struct {
                 &self.type_writer,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
-                unify.ModuleEnvLookup{
-                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                },
                 params[i],
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -9158,10 +9154,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 lhs_rt_var,
                                 dec_var,
                             );
@@ -9173,10 +9165,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 rhs_rt_var,
                                 dec_var,
                             );
@@ -9190,10 +9178,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 lhs_rt_var,
                                 rhs_rt_var,
                             );
@@ -9207,10 +9191,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 rhs_rt_var,
                                 lhs_rt_var,
                             );
@@ -9889,10 +9869,6 @@ pub const Interpreter = struct {
                         &self.type_writer,
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
-                        unify.ModuleEnvLookup{
-                            .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                            .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                        },
                         call_ret_rt_var,
                         entry.return_var,
                         unify.Conf{ .ctx = .anon, .constraint_origin_var = null },

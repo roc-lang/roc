@@ -169,6 +169,41 @@ test "cross-module - check type - static dispatch - no annotation & indirection"
     try test_env_b.assertDefType("main", "(Str, Str, Str)");
 }
 
+test "cross-module - check type - opaque types 1" {
+    const source_a =
+        \\A :: [A(Str)].{}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A
+        \\
+        \\a_val : A.A 
+        \\a_val = A("hello")
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "cross-module - check type - opaque types 2" {
+    const source_a =
+        \\A :: [A(Str)].{}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+
+    const source_b =
+        \\import A
+        \\
+        \\a_val = A.A("hello")
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertFirstTypeError("CANNOT USE OPAQUE NOMINAL TYPE");
+}
+
 test "displayNameIsBetter - shorter names are preferred" {
     // Tests the core comparison logic used when multiple imports provide different
     // display names for the same type (e.g., `import Foo as F` and `import Foo as Foo`).

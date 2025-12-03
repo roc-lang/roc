@@ -40,7 +40,6 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:63
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:63
 MODULE NOT FOUND - everything.md:2:1:2:31
 MODULE NOT FOUND - everything.md:3:1:3:47
-EXPECTED NOMINAL TYPE - everything.md:19:7:19:15
 UNUSED VARIABLE - everything.md:24:10:24:11
 UNUSED VARIABLE - everything.md:25:9:25:10
 UNUSED VARIABLE - everything.md:26:11:26:12
@@ -94,19 +93,6 @@ import I2 exposing [I21 as Ias1, I22 as Ias2,]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-
-**EXPECTED NOMINAL TYPE**
-You are using the type _A_ like a nominal type, but it is an alias.
-
-This type is referenced here:
-**everything.md:19:7:19:15:**
-```roc
-	h3 = A(x, y,)
-```
-	     ^^^^^^^^
-
-
-**Hint:** You can declare this type with `:=` to make it nominal.
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -544,7 +530,12 @@ h = |x, y| {
 								(p-assign (ident "y")))))
 					(s-let
 						(p-assign (ident "h3"))
-						(e-runtime-error (tag "type_alias_but_needed_nominal")))
+						(e-tag (name "A")
+							(args
+								(e-lookup-local
+									(p-assign (ident "x")))
+								(e-lookup-local
+									(p-assign (ident "y"))))))
 					(s-let
 						(p-assign (ident "h4"))
 						(e-list

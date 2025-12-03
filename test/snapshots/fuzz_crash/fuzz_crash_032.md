@@ -28,7 +28,6 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_032.md:1:14:1:17
 UNDECLARED TYPE - fuzz_crash_032.md:1:21:1:24
 UNDECLARED TYPE - fuzz_crash_032.md:4:25:4:30
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:6:26:6:37
-EXPECTED NOMINAL TYPE - fuzz_crash_032.md:7:10:7:21
 INVALID PATTERN - :0:0:0:0
 UNDECLARED TYPE - fuzz_crash_032.md:8:3:8:4
 EXPECTED NOMINAL TYPE - fuzz_crash_032.md:8:13:8:24
@@ -182,19 +181,6 @@ This type is referenced here:
 
 **Hint:** You can declare this type with `:=` to make it nominal.
 
-**EXPECTED NOMINAL TYPE**
-You are using the type _LocalStatus_ like a nominal type, but it is an alias.
-
-This type is referenced here:
-**fuzz_crash_032.md:7:10:7:21:**
-```roc
-Green => LocalStatus-Complete
-```
-         ^^^^^^^^^^^
-
-
-**Hint:** You can declare this type with `:=` to make it nominal.
-
 **INVALID PATTERN**
 This pattern contains invalid syntax or uses unsupported features.
 
@@ -323,7 +309,7 @@ olor = |color| {
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-runtime-error (tag "type_alias_but_needed_nominal"))))
+									(e-tag (name "LocalStatus"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)

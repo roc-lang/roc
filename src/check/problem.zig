@@ -43,6 +43,7 @@ pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
     static_dispach: StaticDispatch,
+    cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
@@ -257,6 +258,14 @@ pub const TypeDoesNotSupportEquality = struct {
 
 // bug //
 
+/// Error when you try to use an opaque nominal type constructor
+pub const CannotAccessOpaqueNominal = struct {
+    var_: Var,
+    nominal_type_name: Ident.Idx,
+};
+
+// bug //
+
 /// Error when you try to apply the wrong number of arguments to a type in
 /// an annotation
 pub const TypeApplyArityMismatch = struct {
@@ -382,6 +391,9 @@ pub const ReportBuilder = struct {
             },
             .type_apply_mismatch_arities => |data| {
                 return self.buildTypeApplyArityMismatchReport(data);
+            },
+            .cannot_access_opaque_nominal => |data| {
+                return self.buildCannotAccessOpaqueNominal(data);
             },
             .static_dispach => |detail| {
                 switch (detail) {
@@ -1683,7 +1695,7 @@ pub const ReportBuilder = struct {
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addAnnotated("Hint: ", .emphasized);
+        try report.document.addAnnotated("Hint:", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
                 if (is_plus_operator) {
@@ -1693,7 +1705,7 @@ pub const ReportBuilder = struct {
                     try report.document.addAnnotated("plus", .emphasized);
                     try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
                 } else {
-                    try report.document.addReflowingText("For this to work, the type would need to have a method named ");
+                    try report.document.addReflowingText(" For this to work, the type would need to have a method named ");
                     try report.document.addAnnotated(method_name_str, .emphasized);
                     try report.document.addReflowingText(" associated with it in the type's declaration.");
                 }
@@ -1776,6 +1788,43 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for when an anonymous type doesn't support equality
+    fn buildCannotAccessOpaqueNominal(
+        self: *Self,
+        data: CannotAccessOpaqueNominal,
+    ) !Report {
+        var report = Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("You're attempting to create an instance of ");
+        try report.document.addAnnotated(self.can_ir.getIdentText(data.nominal_type_name), .inline_code);
+        try report.document.addReflowingText(", but it's an ");
+        try report.document.addAnnotated("opaque", .emphasized);
+        try report.document.addReflowingText(" type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" To create an instance of this type outside the module it's defined it, you have to define it with ");
+        try report.document.addAnnotated(":=", .emphasized);
+        try report.document.addReflowingText(" instead of ");
+        try report.document.addAnnotated("::", .emphasized);
+        try report.document.addReflowingText(".");
+
+        return report;
+    }
+
     /// Explain which record fields don't support equality
     fn explainRecordEqualityFailure(
         self: *Self,
@@ -1815,8 +1864,8 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint: ", .emphasized);
-            try report.document.addReflowingText("Anonymous records only have an ");
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Anonymous records only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(" method if all of their fields have ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -1862,8 +1911,8 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint: ", .emphasized);
-            try report.document.addReflowingText("Tuples only have an ");
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Tuples only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(" method if all of their elements have ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -1932,8 +1981,8 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint: ", .emphasized);
-            try report.document.addReflowingText("Tag unions only have an ");
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Tag unions only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(" method if all of their payload types have ");
             try report.document.addAnnotated("is_eq", .emphasized);
