@@ -46,18 +46,18 @@ fn runRoc(allocator: std.mem.Allocator, roc_file: []const u8, options: RunOption
 
     try args.append(allocator, roc_binary_path);
 
-    // Determine if this is a test or check command
-    const is_test_or_check = blk: {
+    // Determine if this is a test command
+    const is_test = blk: {
         for (options.extra_args) |arg| {
-            if (std.mem.eql(u8, arg, "test") or std.mem.eql(u8, arg, "check")) {
+            if (std.mem.eql(u8, arg, "test")) {
                 break :blk true;
             }
         }
         break :blk false;
     };
 
-    // Add --no-cache before other args for non-test/non-check commands
-    if (!is_test_or_check) {
+    // Add --no-cache before other args for non-test commands (including check)
+    if (!is_test) {
         try args.append(allocator, "--no-cache");
     }
 
