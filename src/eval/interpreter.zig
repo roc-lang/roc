@@ -497,6 +497,10 @@ pub const Interpreter = struct {
 
     /// Evaluates a Roc expression and returns the result.
     pub fn eval(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
+        // Clear flex_type_context at the start of each top-level evaluation.
+        // This prevents stale type mappings from previous evaluations from
+        // interfering with polymorphic function instantiation.
+        self.flex_type_context.clearRetainingCapacity();
         return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
@@ -5772,6 +5776,7 @@ pub const Interpreter = struct {
             nom.ident.ident_idx,
             self.root_env.idents.is_eq,
             roc_ops,
+            lhs.rt_var,
         ) catch |err| {
             // If method lookup fails, we can't compare this type
             if (err == error.MethodLookupFailed) {
@@ -6233,6 +6238,7 @@ pub const Interpreter = struct {
             nom.ident.ident_idx,
             self.env.idents.to_inspect,
             roc_ops,
+            rt_var,
         ) catch return null;
 
         const method_func = maybe_method orelse return null;
@@ -6845,6 +6851,7 @@ pub const Interpreter = struct {
         nominal_ident: base_pkg.Ident.Idx,
         method_name_ident: base_pkg.Ident.Idx,
         roc_ops: *RocOps,
+        receiver_rt_var: ?types.Var,
     ) Error!StackValue {
         // Get the module environment for this type's origin
         const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
@@ -6890,6 +6897,31 @@ pub const Interpreter = struct {
             self.bindings.items.len = saved_bindings_len;
         }
 
+        // Propagate receiver type to flex_type_context BEFORE translating the method's type.
+        // This ensures that polymorphic methods like `to` have their type parameters mapped
+        // to the correct concrete type (e.g., U8) before the closure is created.
+        if (receiver_rt_var) |recv_rt_var| {
+            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
+            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+
+            // If the method has a function type, extract its first parameter type
+            // and propagate mappings from the receiver type to it
+            if (def_resolved.desc.content == .structure) {
+                const flat = def_resolved.desc.content.structure;
+                switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
+                        const param_vars = origin_env.types.sliceVars(fn_type.args);
+                        if (param_vars.len > 0) {
+                            // The first parameter is the receiver type (e.g., Num a)
+                            // Propagate mappings from the concrete receiver to this type
+                            try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+
         // Translate the def's type var to runtime
         const def_var = can.ModuleEnv.varFrom(target_def_idx);
         const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
@@ -6908,6 +6940,7 @@ pub const Interpreter = struct {
         nominal_ident: base_pkg.Ident.Idx,
         method_name_ident: base_pkg.Ident.Idx,
         roc_ops: *RocOps,
+        receiver_rt_var: ?types.Var,
     ) Error!?StackValue {
         // Get the module environment for this type's origin
         const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
@@ -6950,6 +6983,31 @@ pub const Interpreter = struct {
             self.env = saved_env;
             // Restore bindings
             self.bindings.items.len = saved_bindings_len;
+        }
+
+        // Propagate receiver type to flex_type_context BEFORE translating the method's type.
+        // This ensures that polymorphic methods have their type parameters mapped
+        // to the correct concrete type before the closure is created.
+        if (receiver_rt_var) |recv_rt_var| {
+            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
+            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+
+            // If the method has a function type, extract its first parameter type
+            // and propagate mappings from the receiver type to it
+            if (def_resolved.desc.content == .structure) {
+                const flat = def_resolved.desc.content.structure;
+                switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
+                        const param_vars = origin_env.types.sliceVars(fn_type.args);
+                        if (param_vars.len > 0) {
+                            // The first parameter is the receiver type (e.g., Num a)
+                            // Propagate mappings from the concrete receiver to this type
+                            try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
+                        }
+                    },
+                    else => {},
+                }
+            }
         }
 
         // Translate the def's type var to runtime
@@ -7069,10 +7127,41 @@ pub const Interpreter = struct {
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
 
-        // If we have a flex var, default it to Dec
-        // This is the interpreter-time defaulting for numeric literals
+        // If we have a flex var, check if we have a mapping in flex_type_context
+        // This handles polymorphic functions where the type parameter needs to be resolved
         if (resolved.desc.content == .flex) {
-            // Directly return Dec's scalar layout
+            // Try to find a mapping for this flex var from any entry in flex_type_context
+            // Since this is a runtime flex var, we need to check if any context entry
+            // maps to a concrete type that we can use
+            if (self.flex_type_context.count() > 0) {
+                var it = self.flex_type_context.iterator();
+                var first_rt_var: ?types.Var = null;
+                var all_same = true;
+                while (it.next()) |entry| {
+                    const rt_var = entry.value_ptr.*;
+                    const rt_resolved = self.runtime_types.resolveVar(rt_var);
+                    // Only consider non-flex entries as candidates
+                    if (rt_resolved.desc.content != .flex) {
+                        if (first_rt_var) |first| {
+                            const first_resolved = self.runtime_types.resolveVar(first);
+                            if (first_resolved.var_ != rt_resolved.var_) {
+                                all_same = false;
+                                break;
+                            }
+                        } else {
+                            first_rt_var = rt_var;
+                        }
+                    }
+                }
+                if (all_same) {
+                    if (first_rt_var) |concrete_rt_var| {
+                        // Recurse with the concrete type
+                        return try self.getRuntimeLayout(concrete_rt_var);
+                    }
+                }
+            }
+
+            // Default to Dec for unresolved flex vars
             const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
             const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
             slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;
@@ -7331,6 +7420,104 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Propagate flex type context mappings by walking compile-time and runtime types in parallel.
+    /// This is used when entering polymorphic functions to map flex vars in the function's type
+    /// to their concrete runtime types based on the arguments.
+    ///
+    /// For example, if CT type is `Num a` and RT type is `U8`, we need to extract `a` and map it to U8.
+    /// This ensures that when we later encounter just `a` (e.g., in `List a` for an empty list),
+    /// we can find the mapping.
+    fn propagateFlexMappings(self: *Interpreter, module: *can.ModuleEnv, ct_var: types.Var, rt_var: types.Var) Error!void {
+        const ct_resolved = module.types.resolveVar(ct_var);
+        const rt_resolved = self.runtime_types.resolveVar(rt_var);
+
+        // If the CT type is a flex var, add the mapping directly
+        if (ct_resolved.desc.content == .flex) {
+            const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
+            try self.flex_type_context.put(flex_key, rt_var);
+            return;
+        }
+
+        // If the CT type is a rigid var, also add to flex_type_context.
+        // This is needed because: in polymorphic functions, the parameter type might be rigid
+        // (from the function signature), but flex vars inside the function body were unified
+        // with this rigid var at compile time. After serialization, these unifications might
+        // not be preserved, so we need to map both the rigid var and any flex vars that might
+        // be looking for it.
+        if (ct_resolved.desc.content == .rigid) {
+            const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
+            try self.flex_type_context.put(flex_key, rt_var);
+            return;
+        }
+
+        // If the CT type is a structure, walk its children and propagate recursively
+        if (ct_resolved.desc.content == .structure) {
+            const ct_flat = ct_resolved.desc.content.structure;
+
+            switch (ct_flat) {
+                .nominal_type => |ct_nom| {
+                    // For nominal types like `Num a`, extract the type args and map them
+                    const ct_args = module.types.sliceNominalArgs(ct_nom);
+
+                    // If the RT type is also a nominal type, try to match up the args
+                    if (rt_resolved.desc.content == .structure) {
+                        if (rt_resolved.desc.content.structure == .nominal_type) {
+                            const rt_nom = rt_resolved.desc.content.structure.nominal_type;
+                            const rt_args = self.runtime_types.sliceNominalArgs(rt_nom);
+
+                            const min_args = @min(ct_args.len, rt_args.len);
+                            for (0..min_args) |i| {
+                                try self.propagateFlexMappings(module, ct_args[i], rt_args[i]);
+                            }
+
+                            // If CT has more args than RT (common case: CT is `Num a` but RT is `U8` with no args),
+                            // we need to map those CT args to the RT type itself.
+                            // This handles the case where `Num a` in CT should map `a` to U8.
+                            if (ct_args.len > rt_args.len) {
+                                for (rt_args.len..ct_args.len) |i| {
+                                    try self.propagateFlexMappings(module, ct_args[i], rt_var);
+                                }
+                            }
+                        }
+                    }
+                },
+                .tuple => |ct_tuple| {
+                    if (rt_resolved.desc.content == .structure and rt_resolved.desc.content.structure == .tuple) {
+                        const ct_elems = module.types.sliceVars(ct_tuple.elems);
+                        const rt_tuple = rt_resolved.desc.content.structure.tuple;
+                        const rt_elems = self.runtime_types.sliceVars(rt_tuple.elems);
+
+                        const min_elems = @min(ct_elems.len, rt_elems.len);
+                        for (0..min_elems) |i| {
+                            try self.propagateFlexMappings(module, ct_elems[i], rt_elems[i]);
+                        }
+                    }
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    // Function type propagation is complex - skip for now
+                    // The main use case we need is nominal types like `Num a`
+                },
+                .tag_union => {
+                    // Tag union propagation is complex - skip for now
+                    // This case is less common for the numeric range use case we're fixing
+                },
+                .record => {
+                    // Record propagation is complex - skip for now
+                    // This case is less common for the numeric range use case we're fixing
+                },
+                else => {
+                    // For other structure types, no recursive propagation needed
+                },
+            }
+        }
+
+        // Also add a mapping for the outer type itself (in case it's referenced directly)
+        if (ct_resolved.desc.content == .flex or ct_resolved.desc.content == .rigid) {
+            const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
+            try self.flex_type_context.put(flex_key, rt_var);
+        }
+    }
+
     /// Translate a compile-time type variable from a module's type store to the runtime type store.
     /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
     /// Uses caching to handle recursive types and avoid duplicate work.
@@ -7339,19 +7526,29 @@ pub const Interpreter = struct {
 
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
-        // Check flex_type_context BEFORE translate_cache for flex types.
-        // This is critical for polymorphic functions: the same compile-time flex var
+        // Check flex_type_context BEFORE translate_cache for flex and rigid types.
+        // This is critical for polymorphic functions: the same compile-time flex/rigid var
         // may need to translate to different runtime types depending on calling context.
         // For example, `sum = |num| 0 + num` called as U64.to_str(sum(2400)) needs
         // the literal 0 to become U64, not the cached Dec default.
-        if (resolved.desc.content == .flex) {
+        if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
             if (self.flex_type_context.get(key)) |context_rt_var| {
                 return context_rt_var;
             }
         }
 
-        if (self.translate_cache.get(key)) |found| {
-            return found;
+        // Skip translate_cache for flex/rigid vars when inside a polymorphic function.
+        // The cache may have stale mappings from a different calling context where the
+        // flex var defaulted to Dec, but we now have a concrete type from flex_type_context.
+        // We check if flex_type_context has ANY entries as a proxy for "inside polymorphic call".
+        const in_polymorphic_context = self.flex_type_context.count() > 0;
+        const skip_cache_for_this_var = in_polymorphic_context and
+            (resolved.desc.content == .flex or resolved.desc.content == .rigid);
+
+        if (!skip_cache_for_this_var) {
+            if (self.translate_cache.get(key)) |found| {
+                return found;
+            }
         }
 
         // Insert a placeholder to break cycles during recursive type translation.
@@ -7585,7 +7782,50 @@ pub const Interpreter = struct {
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
                     // before the translate_cache lookup. If we reach here, there was no
-                    // contextual override, so we create a fresh flex var.
+                    // contextual override.
+                    //
+                    // However, if we're in a polymorphic function context (flex_type_context is non-empty)
+                    // and there's exactly one mapping, we should use it. This handles the case where
+                    // a flex var inside a function body (e.g., the element type of an empty list)
+                    // was unified with the function's type parameter at compile time, but the
+                    // union-find structure wasn't preserved during serialization.
+                    //
+                    // For example, in `range_to = |current, end| { var answer = [] ... }`:
+                    // - The function has type `Num a, Num a -> List (Num a)` with rigid `a`
+                    // - The empty list `[]` has element type `Num flex_b` where `flex_b` was unified with `a`
+                    // - After serialization, `flex_b` and `a` are different vars
+                    // - If we mapped `a -> U8` from the call arguments, we should use U8 for `flex_b` too
+                    //
+                    // Check if all entries in flex_type_context map to the same runtime type.
+                    // This handles the case where multiple var entries exist (e.g., from parameters
+                    // and internal type vars) but they all represent the same type parameter.
+                    const ctx_count = self.flex_type_context.count();
+                    if (ctx_count > 0) {
+                        var it = self.flex_type_context.iterator();
+                        var first_rt_var: ?types.Var = null;
+                        var all_same = true;
+                        while (it.next()) |entry| {
+                            const rt_var = entry.value_ptr.*;
+                            if (first_rt_var) |first| {
+                                // Check if this entry maps to the same runtime type
+                                // by comparing the resolved root var
+                                const first_resolved = self.runtime_types.resolveVar(first);
+                                const this_resolved = self.runtime_types.resolveVar(rt_var);
+                                // If they resolve to the same root var, they're the same type
+                                if (first_resolved.var_ != this_resolved.var_) {
+                                    all_same = false;
+                                    break;
+                                }
+                            } else {
+                                first_rt_var = rt_var;
+                            }
+                        }
+                        if (all_same) {
+                            if (first_rt_var) |rt_var| {
+                                break :blk rt_var;
+                            }
+                        }
+                    }
 
                     // Translate the flex's name from source module's ident store to runtime ident store (if present)
                     const rt_name: ?base_pkg.Ident.Idx = if (flex.name) |name| blk_name: {
@@ -10188,7 +10428,61 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const derived_layout = try self.getRuntimeLayout(rt_var);
+
+        // Get the element type from the list type and use flex_type_context for it
+        const list_resolved = self.runtime_types.resolveVar(rt_var);
+        var final_rt_var = rt_var;
+        if (list_resolved.desc.content == .structure) {
+            if (list_resolved.desc.content.structure == .nominal_type) {
+                const list_nom = list_resolved.desc.content.structure.nominal_type;
+                const list_args = self.runtime_types.sliceNominalArgs(list_nom);
+                if (list_args.len > 0) {
+                    const elem_var = list_args[0];
+                    const elem_resolved = self.runtime_types.resolveVar(elem_var);
+                    // If element type is a flex var and we have mappings, use the mapped type
+                    if (elem_resolved.desc.content == .flex and self.flex_type_context.count() > 0) {
+                        var it = self.flex_type_context.iterator();
+                        var first_concrete: ?types.Var = null;
+                        var all_same = true;
+                        while (it.next()) |entry| {
+                            const mapped_var = entry.value_ptr.*;
+                            const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                            if (mapped_resolved.desc.content != .flex) {
+                                if (first_concrete) |first| {
+                                    const first_resolved = self.runtime_types.resolveVar(first);
+                                    if (first_resolved.var_ != mapped_resolved.var_) {
+                                        all_same = false;
+                                        break;
+                                    }
+                                } else {
+                                    first_concrete = mapped_var;
+                                }
+                            }
+                        }
+                        if (all_same) {
+                            if (first_concrete) |concrete_elem_var| {
+                                // Create a new List type with the concrete element type
+                                // Get the backing var from the original list type
+                                const backing_var = self.runtime_types.getNominalBackingVar(list_nom);
+                                // Create new nominal content
+                                const args = [_]types.Var{concrete_elem_var};
+                                const new_list_content = self.runtime_types.mkNominal(
+                                    list_nom.ident,
+                                    backing_var,
+                                    &args,
+                                    list_nom.origin_module,
+                                    list_nom.is_opaque,
+                                ) catch unreachable;
+                                // Create a new Var from that content
+                                final_rt_var = self.runtime_types.freshFromContent(new_list_content) catch unreachable;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        const derived_layout = try self.getRuntimeLayout(final_rt_var);
 
         // Ensure we have a proper list layout even if the type variable defaulted to Dec.
         const list_layout = if (derived_layout.tag == .list or derived_layout.tag == .list_of_zst)
@@ -10634,11 +10928,9 @@ pub const Interpreter = struct {
                                     // Re-evaluate the numeric expression with the expected type.
                                     // Set up flex_type_context so flex vars in the expression
                                     // translate to the expected type instead of defaulting to Dec.
-                                    const saved_flex_ctx = try self.flex_type_context.clone();
-                                    defer {
-                                        self.flex_type_context.deinit();
-                                        self.flex_type_context = saved_flex_ctx;
-                                    }
+                                    // Note: We no longer save/restore flex_type_context here because
+                                    // the type mappings need to persist across the call chain for
+                                    // polymorphic functions from pre-compiled modules like Builtin.
                                     try self.setupFlexContextForNumericExpr(root_expr_idx, b.source_env, exp_var);
 
                                     const result = try self.evalWithExpectedType(root_expr_idx, roc_ops, exp_var);
@@ -12034,6 +12326,7 @@ pub const Interpreter = struct {
                             nom.ident.ident_idx,
                             self.env.idents.to_inspect,
                             roc_ops,
+                            ir.inner_rt_var,
                         ),
                         else => null,
                     }
@@ -12469,9 +12762,9 @@ pub const Interpreter = struct {
                                 // Only add mapping if the argument has a concrete type (structure)
                                 if (arg_rt_resolved.desc.content == .structure) {
                                     const param_ct_var = can.ModuleEnv.varFrom(param);
-                                    const param_resolved = self.env.types.resolveVar(param_ct_var);
-                                    const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
-                                    try self.flex_type_context.put(flex_key, vars[idx]);
+                                    // Propagate flex mappings from the compile-time type to runtime type.
+                                    // This walks both types in parallel and maps any flex vars found in CT to their RT counterparts.
+                                    try self.propagateFlexMappings(self.env, param_ct_var, vars[idx]);
                                 }
                             }
                         }
@@ -12548,10 +12841,10 @@ pub const Interpreter = struct {
                         self.rigid_subst = saved;
                     }
 
-                    // Restore flex_type_context if we added parameter type mappings
+                    // Note: Don't restore flex_type_context (same rationale as normal return case)
                     if (cleanup.saved_flex_type_context) |saved| {
-                        self.flex_type_context.deinit();
-                        self.flex_type_context = saved;
+                        var saved_copy = saved;
+                        saved_copy.deinit();
                     }
 
                     // Restore environment and cleanup bindings
@@ -12581,10 +12874,21 @@ pub const Interpreter = struct {
                     self.rigid_subst = saved;
                 }
 
-                // Restore flex_type_context if we added parameter type mappings
+                // Note: We intentionally do NOT restore flex_type_context here.
+                // The type mappings need to persist across the call chain for polymorphic
+                // functions from pre-compiled modules like Builtin. When a function returns
+                // a value that is used in subsequent calls (e.g., method dispatch returning
+                // a closure that is then invoked), those later calls need the type mappings
+                // from the original call arguments.
+                //
+                // The mappings are keyed by compile-time type vars, so mappings from different
+                // call sites with different type vars won't conflict. For the same polymorphic
+                // function called multiple times with different concrete types, the later call
+                // will overwrite the mapping with the new concrete type, which is correct.
                 if (cleanup.saved_flex_type_context) |saved| {
-                    self.flex_type_context.deinit();
-                    self.flex_type_context = saved;
+                    // Just free the saved context, don't restore it
+                    var saved_copy = saved;
+                    saved_copy.deinit();
                 }
 
                 // Restore environment and cleanup bindings
@@ -12630,6 +12934,7 @@ pub const Interpreter = struct {
                     nominal_info.ident,
                     ua.method_ident,
                     roc_ops,
+                    ua.operand_rt_var,
                 );
                 defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
@@ -12795,6 +13100,7 @@ pub const Interpreter = struct {
                     nominal_info.?.ident,
                     ba.method_ident,
                     roc_ops,
+                    ba.receiver_rt_var,
                 );
                 defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
@@ -12955,6 +13261,7 @@ pub const Interpreter = struct {
                     nominal_info.ident,
                     da.field_name,
                     roc_ops,
+                    effective_receiver_rt_var,
                 ) catch |err| {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     if (err == error.MethodLookupFailed) {
@@ -13571,6 +13878,7 @@ pub const Interpreter = struct {
                             nom.ident.ident_idx,
                             self.env.idents.to_inspect,
                             roc_ops,
+                            ir.rt_var,
                         ),
                         else => null,
                     }

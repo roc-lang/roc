@@ -1242,6 +1242,11 @@ pub const Pattern = union(enum) {
         ident_tok: Token.Idx,
         region: TokenizedRegion,
     },
+    /// A mutable variable binding in a pattern, e.g., `var $x` in `|var $x, y|`
+    var_ident: struct {
+        ident_tok: Token.Idx,
+        region: TokenizedRegion,
+    },
     tag: struct {
         tag_tok: Token.Idx,
         args: Pattern.Span,
@@ -1305,6 +1310,7 @@ pub const Pattern = union(enum) {
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |p| p.region,
+            .var_ident => |p| p.region,
             .tag => |p| p.region,
             .int => |p| p.region,
             .frac => |p| p.region,
@@ -1327,6 +1333,21 @@ pub const Pattern = union(enum) {
             .ident => |ident| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-ident");
+                try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
+
+                // Add raw attribute
+                const raw_begin = tree.beginNode();
+                try tree.pushStaticAtom("raw");
+                try tree.pushString(ast.resolve(ident.ident_tok));
+                const attrs2 = tree.beginNode();
+                try tree.endNode(raw_begin, attrs2);
+                const attrs = tree.beginNode();
+
+                try tree.endNode(begin, attrs);
+            },
+            .var_ident => |ident| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-var-ident");
                 try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
 
                 // Add raw attribute

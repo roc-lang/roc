@@ -317,13 +317,13 @@ Builtin :: [].{
 			## (Use [until] instead to end with the other `U8` minus one.)
 			## Returns an empty list if this `U8` is greater than the other.
 			to : U8, U8 -> List(U8)
-			to = range_to
+			to = |start, end| range_to(start, end)
 
 			## List of integers beginning with this `U8` and ending with the other `U8` minus one.
 			## (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
 			## Returns an empty list if this `U8` is greater than or equal to the other.
 			until : U8, U8 -> List(U8)
-			until = range_until
+			until = |start, end| range_until(start, end)
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 			to_i8_wrap : U8 -> I8

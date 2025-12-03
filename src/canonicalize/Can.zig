@@ -6403,6 +6403,28 @@ fn canonicalizePattern(
                 return malformed_idx;
             }
         },
+        .var_ident => |e| {
+            // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                // Create a Pattern node for our mutable identifier
+                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                    .ident = ident_idx,
+                } }, region);
+
+                // Introduce the var with function boundary tracking (using scopeIntroduceVar)
+                _ = try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
+
+                return pattern_idx;
+            } else {
+                const feature = try self.env.insertString("report an error when unable to resolve identifier");
+                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
+                    .feature = feature,
+                    .region = Region.zero(),
+                } });
+                return malformed_idx;
+            }
+        },
         .underscore => |p| {
             const region = self.parse_ir.tokenizedRegionToRegion(p.region);
             const underscore_pattern = Pattern{

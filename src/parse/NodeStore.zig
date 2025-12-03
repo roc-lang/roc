@@ -46,7 +46,7 @@ pub const AST_HEADER_NODE_COUNT = 6;
 /// Count of the statement nodes in the AST
 pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
-pub const AST_PATTERN_NODE_COUNT = 14;
+pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 10;
 /// Count of the expression nodes in the AST
@@ -475,6 +475,11 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
     switch (pattern) {
         .ident => |i| {
             node.tag = .ident_patt;
+            node.region = i.region;
+            node.main_token = i.ident_tok;
+        },
+        .var_ident => |i| {
+            node.tag = .var_ident_patt;
             node.region = i.region;
             node.main_token = i.ident_tok;
         },
@@ -1383,6 +1388,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
     switch (node.tag) {
         .ident_patt => {
             return .{ .ident = .{
+                .ident_tok = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .var_ident_patt => {
+            return .{ .var_ident = .{
                 .ident_tok = node.main_token,
                 .region = node.region,
             } };

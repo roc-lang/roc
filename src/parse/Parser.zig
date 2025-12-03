@@ -1452,6 +1452,19 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
                     .region = .{ .start = start, .end = self.pos },
                 } });
             },
+            .KwVar => {
+                // Mutable variable binding in pattern, e.g., `var $x`
+                self.advance();
+                if (self.peek() != .LowerIdent) {
+                    return try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
+                }
+                const ident_tok = self.pos;
+                self.advance();
+                pattern = try self.store.addPattern(.{ .var_ident = .{
+                    .ident_tok = ident_tok,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
             .NamedUnderscore => {
                 self.advance();
                 pattern = try self.store.addPattern(.{ .ident = .{
