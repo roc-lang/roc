@@ -2875,7 +2875,11 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return error.PlatformHostLibraryNotFound;
     };
 
-    const is_cross_compile = target.toOsTag() != builtin.target.os.tag;
+    // Detect if we're cross-compiling by comparing against the native target
+    // This checks both OS and architecture (not just OS) to handle cases like
+    // compiling from Linux x64 to Linux arm64
+    const native_target = roc_target.RocTarget.detectNative();
+    const is_cross_compile = target != native_target;
     const host_lib_path: []const u8 = if (is_cross_compile and target.isLinux()) blk: {
         // For cross-compilation, look for target-specific host library
         const platform_dir = std.fs.path.dirname(native_host_lib_path) orelse ".";
@@ -2954,8 +2958,7 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32);
 
     // For cross-compilation to Linux, we need CRT files from the platform's targets/ directory
-    const is_cross_compiling = target.toOsTag() != builtin.target.os.tag;
-    if (is_cross_compiling and target.isLinux()) {
+    if (is_cross_compile and target.isLinux()) {
         // Extract platform directory from the NATIVE host library path (not the target-specific one)
         // The CRT files are organized as platform/targets/{target}/, so we need the base platform dir
         const platform_dir = std.fs.path.dirname(native_host_lib_path) orelse ".";
