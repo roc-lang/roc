@@ -38,7 +38,7 @@ The value's type, which does not have a method named **plus**, is:
 
     _MyType_
 
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **MISSING METHOD**
 This **plus** method is being called on a value whose type doesn't have that method:
@@ -52,7 +52,7 @@ The value's type, which does not have a method named **plus**, is:
 
     _MyType_
 
-**Hint: **For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

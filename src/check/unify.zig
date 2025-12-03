@@ -851,6 +851,11 @@ const Unifier = struct {
                         try self.unifyTagUnionWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_tag_union, .a_is_nominal);
                     },
                     .empty_tag_union => {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!a_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
                         if (a_backing_resolved.desc.content == .structure and
                             a_backing_resolved.desc.content.structure == .empty_tag_union)
                         {
@@ -1015,6 +1020,11 @@ const Unifier = struct {
                         try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
                     },
                     .nominal_type => |b_type| {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
                         // Try to unify anonymous tag union (a) with nominal tag union (b)
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
@@ -1148,7 +1158,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        _ = nominal_type; // Used for identity in nominal type, but not needed here
+        // If this nominal is opaque and we're not in the origin module, error
+        if (!nominal_type.canLiftInner(self.module_env.module_name_idx)) {
+            return error.TypeMismatch;
+        }
 
         // Check if the nominal's backing type is a tag union (including empty)
         const nominal_backing_content = nominal_backing_resolved.desc.content;
