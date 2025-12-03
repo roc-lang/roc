@@ -3,6 +3,14 @@ platform ""
     exposes []
     packages {}
     provides { add_ints_for_host: "add_ints", multiply_ints_for_host: "multiply_ints" }
+    targets: {
+        exe: {
+            x64mac: [app],
+            arm64mac: [app],
+            x64linux: [app],
+            arm64linux: [app],
+        }
+    }
 
 add_ints_for_host : I64, I64 -> I64
 add_ints_for_host = add_ints

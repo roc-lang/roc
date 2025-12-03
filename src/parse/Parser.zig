@@ -552,6 +552,13 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         },
     );
 
+    // Parse optional targets section
+    var targets: ?AST.TargetsSection.Idx = null;
+    if (self.peek() == .KwTargets) {
+        self.advance(); // Advance past 'targets'
+        targets = try self.parseTargetsSection();
+    }
+
     return self.store.addHeader(.{ .platform = .{
         .name = name,
         .requires_rigids = rigids,
@@ -559,6 +566,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         .exposes = exposes,
         .packages = packages,
         .provides = provides,
+        .targets = targets,
         .region = .{ .start = start, .end = self.pos },
     } });
 }
@@ -928,6 +936,210 @@ pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
             return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start);
         },
     }
+}
+
+// -----------------------------------------------------------------
+// Target section parsing functions
+// -----------------------------------------------------------------
+
+/// Parses a single file item in a target list: "crt1.o" or app
+pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+    switch (self.peek()) {
+        .StringStart => {
+            // Parse string literal: "crt1.o"
+            self.advance(); // Advance past StringStart
+            // Capture StringPart token (the actual content)
+            var content_tok = start;
+            if (self.peek() == .StringPart) {
+                content_tok = self.pos;
+                self.advance(); // Advance past StringPart
+            }
+            // Skip any remaining parts until StringEnd
+            while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            if (self.peek() == .EndOfFile) {
+                return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, start);
+            }
+            self.advance(); // Advance past StringEnd
+            return try self.store.addTargetFile(.{ .string_literal = content_tok });
+        },
+        .LowerIdent => {
+            // Parse special identifier: win_gui or other lower idents
+            self.advance(); // Advance past LowerIdent
+            return try self.store.addTargetFile(.{ .special_ident = start });
+        },
+        .KwApp => {
+            // Parse 'app' keyword as special identifier
+            self.advance(); // Advance past KwApp
+            return try self.store.addTargetFile(.{ .special_ident = start });
+        },
+        else => {
+            return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, start);
+        },
+    }
+}
+
+/// Parses a single target entry: x64musl: ["crt1.o", "host.o", app]
+pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Expect target name (lower identifier)
+    if (self.peek() != .LowerIdent) {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
+    }
+    const target_name = self.pos;
+    self.advance(); // Advance past target name
+
+    // Expect colon
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
+    };
+
+    // Expect open square bracket
+    self.expect(.OpenSquare) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start);
+    };
+
+    // Parse file list
+    const files_top = self.store.scratchTargetFileTop();
+    self.parseCollectionSpan(AST.TargetFile.Idx, .CloseSquare, NodeStore.addScratchTargetFile, Parser.parseTargetFile) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchTargetFilesFrom(files_top);
+                return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    const files_span = try self.store.targetFileSpanFrom(files_top);
+
+    return try self.store.addTargetEntry(.{
+        .target = target_name,
+        .files = files_span,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+/// Parses a target link type section: exe: { x64musl: [...], ... }
+pub fn parseTargetLinkType(self: *Parser) Error!AST.TargetLinkType.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Expect open curly brace
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_open_curly, start);
+    };
+
+    // Parse target entries
+    const entries_top = self.store.scratchTargetEntryTop();
+    self.parseCollectionSpan(AST.TargetEntry.Idx, .CloseCurly, NodeStore.addScratchTargetEntry, Parser.parseTargetEntry) catch |err| {
+        switch (err) {
+            error.ExpectedNotFound => {
+                self.store.clearScratchTargetEntriesFrom(entries_top);
+                return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooNested => return error.TooNested,
+        }
+    };
+    const entries_span = try self.store.targetEntrySpanFrom(entries_top);
+
+    return try self.store.addTargetLinkType(.{
+        .entries = entries_span,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+/// Parses a targets section: targets: { files: "targets/", exe: { ... } }
+pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Expect colon after 'targets'
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
+    };
+
+    // Expect open curly brace
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
+    };
+
+    var files_path: ?TokenIdx = null;
+    var exe: ?AST.TargetLinkType.Idx = null;
+
+    // Parse fields until closing curly brace
+    // Field identification is done by value type, not field name (deferred to CLI)
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        // Expect field name (lower identifier)
+        if (self.peek() != .LowerIdent) {
+            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+        }
+
+        self.advance(); // Advance past field name
+
+        // Expect colon
+        self.expect(.OpColon) catch {
+            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
+        };
+
+        // Determine field type by what follows
+        switch (self.peek()) {
+            .StringStart => {
+                // Parse files path: "targets/"
+                self.advance(); // Advance past StringStart
+                // Capture StringPart token (the actual content)
+                if (self.peek() == .StringPart) {
+                    files_path = self.pos;
+                    self.advance(); // Advance past StringPart
+                }
+                // Skip any remaining parts until StringEnd
+                while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                if (self.peek() == .StringEnd) {
+                    self.advance(); // Advance past StringEnd
+                }
+            },
+            .OpenCurly => {
+                // Parse link type section (exe, static_lib, shared_lib)
+                // For now, we only support exe
+                exe = try self.parseTargetLinkType();
+            },
+            else => {
+                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            },
+        }
+
+        // Consume optional comma
+        if (self.peek() == .Comma) {
+            self.advance();
+        }
+    }
+
+    // Expect closing curly brace
+    self.expect(.CloseCurly) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
+    };
+
+    return try self.store.addTargetsSection(.{
+        .files_path = files_path,
+        .exe = exe,
+        .region = .{ .start = start, .end = self.pos },
+    });
 }
 
 const StatementType = enum { top_level, in_body, in_associated_block };

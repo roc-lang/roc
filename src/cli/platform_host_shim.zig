@@ -157,12 +157,86 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
 ///
 /// The generated library is then compiled using LLVM to an object file and linked with
 /// both the host and the Roc interpreter to create a dev build executable.
-pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget) !void {
+pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint, target: RocTarget, serialized_module: ?[]const u8) !void {
     // Add the extern roc_entrypoint declaration
     const entrypoint_fn = try addRocEntrypoint(builder, target);
 
     // Add each exported entrypoint function
     for (entrypoints) |entry| {
         _ = try addRocExportedFunction(builder, entrypoint_fn, entry.name, entry.idx, target);
+    }
+
+    try addRocSerializedModule(builder, target, serialized_module);
+}
+
+/// Adds exported globals for serialized module data.
+///
+/// This creates two exported globals:
+/// - roc__serialized_base_ptr: pointer to the serialized data (or null)
+/// - roc__serialized_size: size of the serialized data in bytes (or 0)
+///
+/// When data is provided, an internal constant array is created and the base_ptr
+/// points to it. When data is null, both values are set to null/zero.
+fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_module: ?[]const u8) !void {
+    const ptr_type = try builder.ptrType(.default);
+
+    // Determine usize type based on target pointer width
+    const usize_type: Builder.Type = switch (target.ptrBitWidth()) {
+        32 => .i32,
+        64 => .i64,
+        else => unreachable,
+    };
+
+    // Create platform-specific name for base_ptr
+    // Add underscore prefix for macOS (required for MachO symbol names)
+    const base_ptr_name_str = if (target.isMacOS())
+        try std.fmt.allocPrint(builder.gpa, "_roc__serialized_base_ptr", .{})
+    else
+        try builder.gpa.dupe(u8, "roc__serialized_base_ptr");
+    defer builder.gpa.free(base_ptr_name_str);
+    const base_ptr_name = try builder.strtabString(base_ptr_name_str);
+
+    // Create platform-specific name for size
+    const size_name_str = if (target.isMacOS())
+        try std.fmt.allocPrint(builder.gpa, "_roc__serialized_size", .{})
+    else
+        try builder.gpa.dupe(u8, "roc__serialized_size");
+    defer builder.gpa.free(size_name_str);
+    const size_name = try builder.strtabString(size_name_str);
+
+    if (serialized_module) |bytes| {
+        // Create a string constant for the byte data
+        const str = try builder.string(bytes);
+        const str_const = try builder.stringConst(str);
+
+        // Create an internal constant variable to hold the array
+        const internal_name = try builder.strtabString(".roc_serialized_data");
+        const array_var = try builder.addVariable(internal_name, str_const.typeOf(builder), .default);
+        try array_var.setInitializer(str_const, builder);
+        array_var.setLinkage(.internal, builder);
+        array_var.setMutability(.global, builder);
+
+        // Create the external base_ptr variable pointing to the internal array
+        const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);
+        try base_ptr_var.setInitializer(array_var.toConst(builder), builder);
+        base_ptr_var.setLinkage(.external, builder);
+
+        // Create the external size variable
+        const size_const = try builder.intConst(usize_type, bytes.len);
+        const size_var = try builder.addVariable(size_name, usize_type, .default);
+        try size_var.setInitializer(size_const, builder);
+        size_var.setLinkage(.external, builder);
+    } else {
+        // Create null pointer for base_ptr
+        const null_ptr = try builder.nullConst(ptr_type);
+        const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);
+        try base_ptr_var.setInitializer(null_ptr, builder);
+        base_ptr_var.setLinkage(.external, builder);
+
+        // Create zero size
+        const zero_size = try builder.intConst(usize_type, 0);
+        const size_var = try builder.addVariable(size_name, usize_type, .default);
+        try size_var.setInitializer(zero_size, builder);
+        size_var.setLinkage(.external, builder);
     }
 }

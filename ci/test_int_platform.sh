@@ -13,12 +13,23 @@ INT_APP="test/int/app.roc"
 TEST_OUTPUT_DIR="tmp_test_outputs"
 
 # Supported targets for cross-compilation
-CROSS_TARGETS=(
-    "x64musl"
-    "arm64musl"
-    "x64glibc"
-    "arm64glibc"
-)
+# Note: glibc targets require a full libc for linking, which is only available on Linux hosts.
+# On macOS/Windows, we skip glibc targets as the linker can't resolve libc symbols.
+if [[ "$(uname -s)" == "Linux" ]]; then
+    CROSS_TARGETS=(
+        "x64musl"
+        "arm64musl"
+        "x64glibc"
+        "arm64glibc"
+    )
+else
+    # On non-Linux hosts, only test statically-linked musl targets
+    CROSS_TARGETS=(
+        "x64musl"
+        "arm64musl"
+    )
+    echo "Note: Skipping glibc targets on $(uname -s) (requires Linux host for linking)"
+fi
 
 # Test results tracking
 TESTS_RUN=0
