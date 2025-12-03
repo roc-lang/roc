@@ -7127,41 +7127,10 @@ pub const Interpreter = struct {
         try self.ensureVarLayoutCapacity(idx + 1);
         const slot_ptr = &self.var_to_layout_slot.items[idx];
 
-        // If we have a flex var, check if we have a mapping in flex_type_context
-        // This handles polymorphic functions where the type parameter needs to be resolved
+        // If we have a flex var, default to Dec.
+        // Note: flex_type_context mappings are handled in translateTypeVar, not here.
+        // This function receives runtime type vars that should already be resolved.
         if (resolved.desc.content == .flex) {
-            // Try to find a mapping for this flex var from any entry in flex_type_context
-            // Since this is a runtime flex var, we need to check if any context entry
-            // maps to a concrete type that we can use
-            if (self.flex_type_context.count() > 0) {
-                var it = self.flex_type_context.iterator();
-                var first_rt_var: ?types.Var = null;
-                var all_same = true;
-                while (it.next()) |entry| {
-                    const rt_var = entry.value_ptr.*;
-                    const rt_resolved = self.runtime_types.resolveVar(rt_var);
-                    // Only consider non-flex entries as candidates
-                    if (rt_resolved.desc.content != .flex) {
-                        if (first_rt_var) |first| {
-                            const first_resolved = self.runtime_types.resolveVar(first);
-                            if (first_resolved.var_ != rt_resolved.var_) {
-                                all_same = false;
-                                break;
-                            }
-                        } else {
-                            first_rt_var = rt_var;
-                        }
-                    }
-                }
-                if (all_same) {
-                    if (first_rt_var) |concrete_rt_var| {
-                        // Recurse with the concrete type
-                        return try self.getRuntimeLayout(concrete_rt_var);
-                    }
-                }
-            }
-
-            // Default to Dec for unresolved flex vars
             const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
             const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
             slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;

@@ -7,6 +7,7 @@ const collections = @import("collections");
 const serialization = @import("serialization");
 
 const types = @import("types.zig");
+const debug = @import("debug.zig");
 
 const Allocator = std.mem.Allocator;
 const Desc = types.Descriptor;
@@ -589,7 +590,9 @@ pub const Store = struct {
         if (initial_var != redirected_root_var) {
             var compressed_slot_idx = Self.varToSlotIdx(initial_var);
             var compressed_slot: Slot = self.slots.get(compressed_slot_idx);
+            var guard = debug.IterationGuard.init("resolveVarAndCompressPath");
             while (true) {
+                guard.tick();
                 switch (compressed_slot) {
                     .redirect => |next_redirect_var| {
                         self.slots.set(compressed_slot_idx, Slot{ .redirect = redirected_root_var });
@@ -611,8 +614,10 @@ pub const Store = struct {
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
 
         var is_root = true;
+        var guard = debug.IterationGuard.init("resolveVar");
 
         while (true) {
+            guard.tick();
             switch (redirected_slot) {
                 .redirect => |next_redirect_var| {
                     redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
