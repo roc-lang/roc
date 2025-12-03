@@ -34,10 +34,12 @@ const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
+pub const targets_validator = @import("targets_validator.zig");
 
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(targets_validator);
     }
 }
 const bench = @import("bench.zig");
@@ -1783,6 +1785,10 @@ fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const
     // Check if this is a platform file with a platform header
     switch (header) {
         .platform => |platform_header| {
+            // Validate platform header has targets section (non-blocking warning)
+            // This helps platform authors know they need to add targets
+            _ = validatePlatformHeader(allocs, &parse_ast, roc_file_path);
+
             // Get the exposes collection
             const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
             const exposes_items = parse_ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
@@ -1802,6 +1808,32 @@ fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const
         },
         else => {
             return error.NotPlatformFile;
+        },
+    }
+}
+
+/// Validate a platform header and report any errors/warnings
+/// Returns true if valid, false if there are validation issues
+/// This currently only warns about missing targets sections - it doesn't block compilation
+fn validatePlatformHeader(allocs: *Allocators, parse_ast: *const parse.AST, platform_path: []const u8) bool {
+    const validation_result = targets_validator.validatePlatformHasTargets(allocs.gpa, parse_ast.*, platform_path);
+
+    switch (validation_result) {
+        .valid => return true,
+        else => {
+            // Create and render the validation report
+            var report = targets_validator.createValidationReport(allocs.gpa, validation_result) catch {
+                std.log.warn("Platform at {s} is missing targets section", .{platform_path});
+                return false;
+            };
+            defer report.deinit();
+
+            // Render to stderr
+            if (!builtin.is_test) {
+                const stderr = stderrWriter();
+                reporting.renderReportToTerminal(&report, stderr, .ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+            }
+            return false;
         },
     }
 }

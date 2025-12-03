@@ -78,9 +78,9 @@ pub fn validatePlatformHasTargets(
 
     const store = &ast.store;
 
-    // Get the root header
-    const header_idx: parse.AST.Header.Idx = @enumFromInt(0);
-    const header = store.getHeader(header_idx);
+    // Get the file node first, then get the header from it
+    const file = store.getFile();
+    const header = store.getHeader(file.header);
 
     // Only platform headers should have targets
     const platform = switch (header) {
@@ -208,7 +208,7 @@ pub fn createValidationReport(
         .valid => unreachable, // Should not create report for valid result
 
         .missing_targets_section => |info| {
-            var report = Report.init(allocator, "MISSING TARGETS SECTION", .@"error");
+            var report = Report.init(allocator, "MISSING TARGETS SECTION", .runtime_error);
 
             try report.document.addText("Platform headers must include a `targets` section that specifies");
             try report.document.addLineBreak();
@@ -249,7 +249,7 @@ pub fn createValidationReport(
         },
 
         .missing_files_directory => |info| {
-            var report = Report.init(allocator, "MISSING FILES DIRECTORY", .@"error");
+            var report = Report.init(allocator, "MISSING FILES DIRECTORY", .runtime_error);
 
             try report.document.addText("The targets section specifies files directory ");
             try report.document.addAnnotated(info.files_dir, .emphasized);
@@ -274,7 +274,7 @@ pub fn createValidationReport(
         },
 
         .missing_target_file => |info| {
-            var report = Report.init(allocator, "MISSING TARGET FILE", .@"error");
+            var report = Report.init(allocator, "MISSING TARGET FILE", .runtime_error);
 
             try report.document.addText("The targets section declares file ");
             try report.document.addAnnotated(info.file_path, .emphasized);
@@ -318,7 +318,7 @@ pub fn createValidationReport(
         },
 
         .empty_targets => |info| {
-            var report = Report.init(allocator, "EMPTY TARGETS SECTION", .@"error");
+            var report = Report.init(allocator, "EMPTY TARGETS SECTION", .runtime_error);
 
             try report.document.addText("The targets section in ");
             try report.document.addAnnotated(info.platform_path, .emphasized);
@@ -335,7 +335,305 @@ pub fn createValidationReport(
     }
 }
 
-test "validatePlatformHasTargets returns missing for platform without targets" {
-    // This would require setting up a mock AST, which is complex.
-    // For now, just verify the module compiles.
+test "createValidationReport generates correct report for missing_targets_section" {
+    const allocator = std.testing.allocator;
+
+    var report = try createValidationReport(allocator, .{
+        .missing_targets_section = .{ .platform_path = "test/platform/main.roc" },
+    });
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("MISSING TARGETS SECTION", report.title);
+    try std.testing.expectEqual(Severity.runtime_error, report.severity);
+}
+
+test "createValidationReport generates correct report for missing_files_directory" {
+    const allocator = std.testing.allocator;
+
+    var report = try createValidationReport(allocator, .{
+        .missing_files_directory = .{
+            .platform_path = "test/platform/main.roc",
+            .files_dir = "targets/",
+        },
+    });
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("MISSING FILES DIRECTORY", report.title);
+    try std.testing.expectEqual(Severity.runtime_error, report.severity);
+}
+
+test "createValidationReport generates correct report for missing_target_file" {
+    const allocator = std.testing.allocator;
+
+    var report = try createValidationReport(allocator, .{
+        .missing_target_file = .{
+            .target = .x64linux,
+            .link_type = .exe,
+            .file_path = "host.o",
+            .expected_full_path = "targets/x64linux/host.o",
+        },
+    });
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("MISSING TARGET FILE", report.title);
+    try std.testing.expectEqual(Severity.runtime_error, report.severity);
+}
+
+test "createValidationReport generates correct report for extra_file" {
+    const allocator = std.testing.allocator;
+
+    var report = try createValidationReport(allocator, .{
+        .extra_file = .{
+            .target = .x64linux,
+            .file_path = "unused.o",
+        },
+    });
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("EXTRA FILE IN TARGETS", report.title);
+    try std.testing.expectEqual(Severity.warning, report.severity);
+}
+
+test "createValidationReport generates correct report for empty_targets" {
+    const allocator = std.testing.allocator;
+
+    var report = try createValidationReport(allocator, .{
+        .empty_targets = .{ .platform_path = "test/platform/main.roc" },
+    });
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("EMPTY TARGETS SECTION", report.title);
+    try std.testing.expectEqual(Severity.runtime_error, report.severity);
+}
+
+test "validateTargetFilesExist returns valid when no files_dir specified" {
+    const allocator = std.testing.allocator;
+
+    const config = TargetsConfig{
+        .files_dir = null,
+        .exe = &.{},
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    const result = try validateTargetFilesExist(allocator, config, std.fs.cwd());
+    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
+}
+
+test "validatePlatformHasTargets detects missing targets section" {
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+
+    // Platform without targets section
+    const source =
+        \\platform ""
+        \\    requires {} { main : {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host: "main" }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    var ast = try parse.parse(&env, allocator);
+    defer ast.deinit(allocator);
+
+    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+
+    switch (result) {
+        .missing_targets_section => |info| {
+            try std.testing.expectEqualStrings("test/platform/main.roc", info.platform_path);
+        },
+        else => {
+            std.debug.print("Expected missing_targets_section but got {}\n", .{result});
+            return error.UnexpectedResult;
+        },
+    }
+}
+
+test "validatePlatformHasTargets accepts platform with targets section" {
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+
+    // Platform with targets section
+    const source =
+        \\platform ""
+        \\    requires {} { main : {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host: "main" }
+        \\    targets: {
+        \\        exe: {
+        \\            x64linux: [app],
+        \\            arm64linux: [app],
+        \\        }
+        \\    }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    var ast = try parse.parse(&env, allocator);
+    defer ast.deinit(allocator);
+
+    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+
+    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
+}
+
+test "validatePlatformHasTargets skips non-platform headers" {
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+
+    // App module (not a platform)
+    const source =
+        \\app [main] { pf: platform "some-platform" }
+        \\
+        \\main = {}
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    var ast = try parse.parse(&env, allocator);
+    defer ast.deinit(allocator);
+
+    const result = validatePlatformHasTargets(allocator, ast, "app/main.roc");
+
+    // Non-platform headers should return valid (they don't need targets)
+    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
+}
+
+test "validatePlatformHasTargets accepts platform with multiple target types" {
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+
+    // Platform with exe and static_lib targets
+    const source =
+        \\platform ""
+        \\    requires {} { main : {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host: "main" }
+        \\    targets: {
+        \\        files: "targets/",
+        \\        exe: {
+        \\            x64linux: ["host.o", app],
+        \\            arm64mac: [app],
+        \\        },
+        \\        static_lib: {
+        \\            x64mac: ["libhost.a"],
+        \\        }
+        \\    }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    var ast = try parse.parse(&env, allocator);
+    defer ast.deinit(allocator);
+
+    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+
+    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
+}
+
+test "validatePlatformHasTargets accepts platform with win_gui target" {
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+
+    // Platform with win_gui special identifier
+    const source =
+        \\platform ""
+        \\    requires {} { main : {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host: "main" }
+        \\    targets: {
+        \\        exe: {
+        \\            x64win: [win_gui],
+        \\        }
+        \\    }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    var ast = try parse.parse(&env, allocator);
+    defer ast.deinit(allocator);
+
+    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+
+    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
+}
+
+test "TargetsConfig.fromAST extracts targets configuration" {
+    const allocator = std.testing.allocator;
+    const base = @import("base");
+
+    // Platform with various targets
+    const source =
+        \\platform ""
+        \\    requires {} { main : {} }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host: "main" }
+        \\    targets: {
+        \\        files: "targets/",
+        \\        exe: {
+        \\            x64linux: ["host.o", app],
+        \\            arm64linux: [app],
+        \\        }
+        \\    }
+        \\
+    ;
+
+    const source_copy = try allocator.dupe(u8, source);
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    var ast = try parse.parse(&env, allocator);
+    defer ast.deinit(allocator);
+
+    // Try to extract targets config from the AST
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    try std.testing.expect(maybe_config != null);
+
+    const config = maybe_config.?;
+    defer {
+        for (config.exe) |spec| {
+            allocator.free(spec.items);
+        }
+        allocator.free(config.exe);
+    }
+
+    // Check files_dir
+    try std.testing.expect(config.files_dir != null);
+    try std.testing.expectEqualStrings("targets/", config.files_dir.?);
+
+    // Check exe targets
+    try std.testing.expectEqual(@as(usize, 2), config.exe.len);
 }

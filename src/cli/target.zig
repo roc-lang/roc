@@ -404,14 +404,12 @@ pub const TargetsConfig = struct {
     /// Returns null if the platform header has no targets section
     pub fn fromAST(allocator: Allocator, ast: anytype) !?TargetsConfig {
         const NodeStore = parse.NodeStore;
-        const AST = parse.AST;
 
         const store: *const NodeStore = &ast.store;
-        const tokens: parse.tokenize.TokenizedBuffer = ast.tokens;
 
-        // Get the root header
-        const header_idx: AST.Header.Idx = @enumFromInt(0);
-        const header = store.getHeader(header_idx);
+        // Get the file node first, then get the header from it
+        const file = store.getFile();
+        const header = store.getHeader(file.header);
 
         // Only platform headers have targets
         const platform = switch (header) {
@@ -423,14 +421,14 @@ pub const TargetsConfig = struct {
         const targets_section_idx = platform.targets orelse return null;
         const targets_section = store.getTargetsSection(targets_section_idx);
 
-        // Extract files_dir from string literal token
+        // Extract files_dir from string literal token (StringPart token)
         const files_dir: ?[]const u8 = if (targets_section.files_path) |tok_idx|
-            tokens.resolveStrLit(tok_idx)
+            ast.resolve(tok_idx)
         else
             null;
 
         // Convert exe link type
-        var exe_specs = std.ArrayList(TargetLinkSpec).init(allocator);
+        var exe_specs = std.array_list.Managed(TargetLinkSpec).init(allocator);
         errdefer exe_specs.deinit();
 
         if (targets_section.exe) |exe_idx| {
@@ -441,24 +439,25 @@ pub const TargetsConfig = struct {
                 const entry = store.getTargetEntry(entry_idx);
 
                 // Parse target name from token
-                const target_name = tokens.resolve(entry.target).slice(ast.env.source);
+                const target_name = ast.resolve(entry.target);
                 const target = RocTarget.fromString(target_name) orelse continue; // Skip unknown targets
 
                 // Convert files
-                var link_items = std.ArrayList(LinkItem).init(allocator);
+                var link_items = std.array_list.Managed(LinkItem).init(allocator);
                 errdefer link_items.deinit();
 
                 const file_indices = store.targetFileSlice(entry.files);
                 for (file_indices) |file_idx| {
-                    const file = store.getTargetFile(file_idx);
+                    const target_file = store.getTargetFile(file_idx);
 
-                    switch (file) {
+                    switch (target_file) {
                         .string_literal => |tok| {
-                            const path = tokens.resolveStrLit(tok);
+                            // The tok points to StringPart token containing the path
+                            const path = ast.resolve(tok);
                             try link_items.append(.{ .file_path = path });
                         },
                         .special_ident => |tok| {
-                            const ident = tokens.resolve(tok).slice(ast.env.source);
+                            const ident = ast.resolve(tok);
                             if (std.mem.eql(u8, ident, "app")) {
                                 try link_items.append(.app);
                             } else if (std.mem.eql(u8, ident, "win_gui")) {

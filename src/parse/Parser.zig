@@ -952,8 +952,13 @@ pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
         .StringStart => {
             // Parse string literal: "crt1.o"
             self.advance(); // Advance past StringStart
-            // For simple strings, we just need the start token
-            // Skip to StringEnd
+            // Capture StringPart token (the actual content)
+            var content_tok = start;
+            if (self.peek() == .StringPart) {
+                content_tok = self.pos;
+                self.advance(); // Advance past StringPart
+            }
+            // Skip any remaining parts until StringEnd
             while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
                 self.advance();
             }
@@ -961,11 +966,16 @@ pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
                 return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, start);
             }
             self.advance(); // Advance past StringEnd
-            return try self.store.addTargetFile(.{ .string_literal = start });
+            return try self.store.addTargetFile(.{ .string_literal = content_tok });
         },
         .LowerIdent => {
-            // Parse special identifier: app, win_gui
+            // Parse special identifier: win_gui or other lower idents
             self.advance(); // Advance past LowerIdent
+            return try self.store.addTargetFile(.{ .special_ident = start });
+        },
+        .KwApp => {
+            // Parse 'app' keyword as special identifier
+            self.advance(); // Advance past KwApp
             return try self.store.addTargetFile(.{ .special_ident = start });
         },
         else => {
@@ -1090,8 +1100,13 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
         switch (self.peek()) {
             .StringStart => {
                 // Parse files path: "targets/"
-                files_path = self.pos;
                 self.advance(); // Advance past StringStart
+                // Capture StringPart token (the actual content)
+                if (self.peek() == .StringPart) {
+                    files_path = self.pos;
+                    self.advance(); // Advance past StringPart
+                }
+                // Skip any remaining parts until StringEnd
                 while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
                     self.advance();
                 }
