@@ -73,7 +73,10 @@ EndOfFile,
 ~~~roc
 Foo := [Whatever].{
 	Bar := [X, Y, Z]
+
+	# Alias within the associated block
 	Baz : Foo.Bar
+
 	defaultBaz : Foo.Baz
 	defaultBaz = Foo.Bar.X
 }

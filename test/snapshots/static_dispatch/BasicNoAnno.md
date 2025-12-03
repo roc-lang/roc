@@ -109,6 +109,7 @@ EndOfFile,
 ~~~roc
 BasicNoAnno := [Val(Str)].{
 	to_str = |BasicNoAnno.Val(s)| s
+
 	to_str2 = |test| test.to_str()
 }
 

@@ -32,7 +32,7 @@ Builtin :: [].{
 		release_excess_capacity : Str -> Str
 		to_utf8 : Str -> List(U8)
 		from_utf8_lossy : List(U8) -> Str
-		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem: Str.Utf8Problem, index: U64 }), ..others])
+		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..others])
 		split_on : Str, Str -> List(Str)
 		join_with : List(Str), Str -> Str
 
@@ -43,20 +43,20 @@ Builtin :: [].{
 		len : List(_item) -> U64
 		is_empty : List(_item) -> Bool
 		concat : List(item), List(item) -> List(item)
-		with_capacity: U64 -> List(item)
+		with_capacity : U64 -> List(item)
 		sort_with : List(item), (item, item -> [LT, EQ, GT]) -> List(item)
 
 		is_eq : List(item), List(item) -> Bool
-		    where [item.is_eq : item, item -> Bool]
+			where [item.is_eq : item, item -> Bool]
 		is_eq = |self, other| {
-		    if self.len() != other.len() {
+			if self.len() != other.len() {
 				return False
 			}
 
 			var $index = 0
 
 			while $index < self.len() {
-			    if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
+				if list_get_unsafe(self, $index) != list_get_unsafe(other, $index) {
 					return False
 				}
 
@@ -84,25 +84,39 @@ Builtin :: [].{
 
 		for_each! : List(item), (item => {}) => {}
 		for_each! = |items, cb!| for item in items {
-            cb!(item)
+			cb!(item)
 		}
 
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform|
-			# Implement using fold + concat for now
-			# TODO: Optimize with in-place update when list is unique and element sizes match
+		# Implement using fold + concat for now
+		# TODO: Optimize with in-place update when list is unique and element sizes match
 			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate|
-			List.fold(list, [], |acc, elem|
-				if predicate(elem) { List.concat(acc, [elem]) } else { acc }
+			List.fold(
+				list,
+				[],
+				|acc, elem|
+					if predicate(elem) {
+						List.concat(acc, [elem])
+					} else {
+						acc
+					},
 			)
 
 		drop_if : List(a), (a -> Bool) -> List(a)
 		drop_if = |list, predicate|
-			List.fold(list, [], |acc, elem|
-				if predicate(elem) { acc } else { List.concat(acc, [elem]) }
+			List.fold(
+				list,
+				[],
+				|acc, elem|
+					if predicate(elem) {
+						acc
+					} else {
+						List.concat(acc, [elem])
+					},
 			)
 
 		fold : List(item), state, (state, item -> state) -> state
@@ -123,7 +137,7 @@ Builtin :: [].{
 
 			while $index > 0 {
 				$index = $index - 1
-			    item = list_get_unsafe(list, $index)
+				item = list_get_unsafe(list, $index)
 				$state = step(item, $state)
 			}
 
@@ -140,7 +154,7 @@ Builtin :: [].{
 			False
 		}
 
-		contains : List(a), a -> Bool where [a.is_eq: a, a -> Bool]
+		contains : List(a), a -> Bool where [a.is_eq : a, a -> Bool]
 		contains = |list, elt| {
 			List.any(list, |x| x == elt)
 		}
@@ -167,31 +181,31 @@ Builtin :: [].{
 
 		drop_at : List(a), U64 -> List(a)
 
-		sublist : List(a), {start : U64, len : U64} -> List(a)
+		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
 		take_first : List(a), U64 -> List(a)
 		take_first = |list, n| {
-			List.sublist(list, {len: n, start: 0})
+			List.sublist(list, { len: n, start: 0 })
 		}
 
 		take_last : List(a), U64 -> List(a)
 		take_last = |list, n| {
 			len = List.len(list)
 			start = if (len <= n) 0 else len - n
-			List.sublist(list, {start: start, len: len})
+			List.sublist(list, { start: start, len: len })
 		}
 
 		drop_first : List(a), U64 -> List(a)
 		drop_first = |list, n| {
 			len = List.len(list)
-			List.sublist(list, {start: n, len: len})
+			List.sublist(list, { start: n, len: len })
 		}
 
 		drop_last : List(a), U64 -> List(a)
 		drop_last = |list, n| {
 			len = List.len(list)
-			take_len = if (len  <= n) 0 else len - n
-			List.sublist(list, {start: 0, len: take_len})
+			take_len = if (len <= n) 0 else len - n
+			List.sublist(list, { start: 0, len: take_len })
 		}
 	}
 
@@ -204,11 +218,11 @@ Builtin :: [].{
 
 		is_eq : Bool, Bool -> Bool
 
-		#encoder : Bool -> Encoder(fmt, [])
-		#	where [fmt implements EncoderFormatting]
-		#encoder =
+		# encoder : Bool -> Encoder(fmt, [])
+		# 	where [fmt implements EncoderFormatting]
+		# encoder =
 
-		#Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
+		# Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 	}
 
 	Box(item) :: [ProvidedByCompiler].{}
@@ -228,14 +242,14 @@ Builtin :: [].{
 
 		ok_or : Try(ok, _err), ok -> ok
 		ok_or = |try, fallback| match try {
-		    Ok(val) => val
-		    Err(_) => fallback
+			Ok(val) => val
+			Err(_) => fallback
 		}
 
 		err_or : Try(_ok, err), err -> err
 		err_or = |try, fallback| match try {
-		    Err(val) => val
-		    Ok(_) => fallback
+			Err(val) => val
+			Ok(_) => fallback
 		}
 
 		is_eq : Try(ok, err), Try(ok, err) -> Bool
@@ -267,23 +281,27 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
-		Numeral :: [Self({ # TODO get rid of the "Self" wrapper once we have nominal records"
-		    # True iff there was a minus sign in front of the literal
-    		is_negative: Bool,
-            # Base-256 digits before and after the decimal point, with any underscores
-            # and leading/trailing zeros removed from the source code.
-            #
-            # Example: If I write "0356.5170" in the source file, that will be:
-            # - [1, 100] before the pt, because in base-256, 356 = (1 * 256^1) + (100 * 256^0)
-            # - [2, 5] after the pt, because in base-256, 517 = (2 * 256^1) + (5 * 256^0)
-            #
-            # This design compactly represents the digits without wasting any memory
-            # (because base-256 stores each digit using every single bit of the U8), and also
-            # allows arbitrary digit length so that userspace custom number types can work with
-            # arbitrarily long number literals as long as the number types can support them.
-            digits_before_pt: List(U8),
-            digits_after_pt: List(U8),
-		})].{
+		Numeral :: [
+			Self(
+				{ # TODO get rid of the "Self" wrapper once we have nominal records"
+					# True iff there was a minus sign in front of the literal
+					is_negative : Bool,
+					# Base-256 digits before and after the decimal point, with any underscores
+					# and leading/trailing zeros removed from the source code.
+					#
+					# Example: If I write "0356.5170" in the source file, that will be:
+					# - [1, 100] before the pt, because in base-256, 356 = (1 * 256^1) + (100 * 256^0)
+					# - [2, 5] after the pt, because in base-256, 517 = (2 * 256^1) + (5 * 256^0)
+					#
+					# This design compactly represents the digits without wasting any memory
+					# (because base-256 stores each digit using every single bit of the U8), and also
+					# allows arbitrary digit length so that userspace custom number types can work with
+					# arbitrarily long number literals as long as the number types can support them.
+					digits_before_pt : List(U8),
+					digits_after_pt : List(U8),
+				},
+			),
+		].{
 			is_negative : Numeral -> Bool
 			is_negative = |self| match self {
 				# TODO make this a nominal record once we have those
@@ -786,7 +804,7 @@ Builtin :: [].{
 		}
 
 		Dec :: [].{
-		    to_str : Dec -> Str
+			to_str : Dec -> Str
 			is_zero : Dec -> Bool
 			is_negative : Dec -> Bool
 			is_positive : Dec -> Bool
@@ -948,8 +966,12 @@ Builtin :: [].{
 
 			to_f32_try : F64 -> Try(F32, [OutOfRange, ..others])
 			to_f32_try = |num| {
-			    answer = f64_to_f32_try_unsafe(num)
-				if answer.success != 0 { Ok(answer.val_or_memory_garbage) } else { Err(OutOfRange) }
+				answer = f64_to_f32_try_unsafe(num)
+				if answer.success != 0 {
+					Ok(answer.val_or_memory_garbage)
+				} else {
+					Err(OutOfRange)
+				}
 			}
 		}
 	}
