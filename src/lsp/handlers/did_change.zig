@@ -60,6 +60,8 @@ pub fn handler(comptime ServerType: type) type {
                     std.log.err("failed to apply full change for {s}: {s}", .{ uri, @errorName(err) });
                 };
             }
+
+            self.onDocumentChanged(uri);
         }
 
         fn parseRange(value: std.json.Value) !DocumentStore.Range {

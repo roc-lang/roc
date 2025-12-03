@@ -48,6 +48,12 @@ const AtomicUsize = std.atomic.Value(usize);
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 
+/// Optional virtual file provider for overriding module sources.
+pub const FileProvider = struct {
+    ctx: ?*anyopaque,
+    read: *const fn (ctx: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8,
+};
+
 /// Build execution mode
 pub const Mode = enum { single_threaded, multi_threaded };
 
@@ -159,6 +165,8 @@ pub const PackageEnv = struct {
     compiler_version: []const u8,
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
+    /// Optional virtual file provider (owned by caller)
+    file_provider: ?FileProvider = null,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -185,7 +193,7 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
         return .{
             .gpa = gpa,
             .package_name = package_name,
@@ -196,6 +204,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
+            .file_provider = file_provider,
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -213,6 +222,7 @@ pub const PackageEnv = struct {
         schedule_hook: ScheduleHook,
         compiler_version: []const u8,
         builtin_modules: *const BuiltinModules,
+        file_provider: ?FileProvider,
     ) PackageEnv {
         return .{
             .gpa = gpa,
@@ -225,6 +235,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
+            .file_provider = file_provider,
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -558,7 +569,7 @@ pub const PackageEnv = struct {
     fn doParse(self: *PackageEnv, module_id: ModuleId) !void {
         // Load source and init ModuleEnv
         var st = &self.modules.items[module_id];
-        const src = std.fs.cwd().readFileAlloc(self.gpa, st.path, std.math.maxInt(usize)) catch |read_err| {
+        const src = self.readModuleSource(st.path) catch |read_err| {
             // Note: Let the FileNotFound error propagate naturally
             // The existing error handling will report it appropriately
             return read_err;
@@ -580,6 +591,15 @@ pub const PackageEnv = struct {
 
         st.phase = .Canonicalize;
         try self.enqueue(module_id);
+    }
+
+    fn readModuleSource(self: *PackageEnv, path: []const u8) ![]u8 {
+        if (self.file_provider) |fp| {
+            if (try fp.read(fp.ctx, path, self.gpa)) |data| {
+                return data;
+            }
+        }
+        return std.fs.cwd().readFileAlloc(self.gpa, path, std.math.maxInt(usize));
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {

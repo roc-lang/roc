@@ -671,6 +671,18 @@ pub const NominalType = struct {
     origin_module: Ident.Idx,
     /// True if this type was declared with :: (opaque), false if declared with := (nominal)
     is_opaque: bool,
+
+    /// Checks if backing types can unify directly with this nominal type
+    pub fn canLiftInner(self: NominalType, cur_module_idx: Ident.Idx) bool {
+        if (self.is_opaque) {
+            // If opaque, then can only lift inner type if the current module is
+            // the same
+            return self.origin_module == cur_module_idx;
+        }
+
+        // If not opaque, then the inner type can always be lifted
+        return true;
+    }
 };
 
 // functions //

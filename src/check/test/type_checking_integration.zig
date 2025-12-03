@@ -391,6 +391,13 @@ test "check type - record inequality - same records" {
     try checkTypesExpr(source, .pass, "Bool");
 }
 
+test "check type - record inequality - diff records" {
+    const source =
+        \\{ x: 1, y: 2 } == { x: 1, z: 2 }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+}
+
 test "check type - tuple inequality" {
     const source =
         \\(1, 2) != (1, 2)

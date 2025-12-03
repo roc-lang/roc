@@ -226,7 +226,7 @@ The value's type, which does not have a method named **to_frac**, is:
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
@@ -240,7 +240,7 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
@@ -254,7 +254,7 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
@@ -268,7 +268,7 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
@@ -282,7 +282,7 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
@@ -296,7 +296,7 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
@@ -310,7 +310,7 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
     _U8_
 
-**Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_named_color** method is being called on a value whose type doesn't have that method:
@@ -324,7 +324,7 @@ The value's type, which does not have a method named **is_named_color**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **to_str** method is being called on a value whose type doesn't have that method:
@@ -338,7 +338,7 @@ The value's type, which does not have a method named **to_str**, is:
 
     _Color_
 
-**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **to_str** method is being called on a value whose type doesn't have that method:
@@ -352,7 +352,7 @@ The value's type, which does not have a method named **to_str**, is:
 
     _Color_
 
-**Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **map_ok** method is being called on a value whose type doesn't have that method:
@@ -366,7 +366,7 @@ The value's type, which does not have a method named **map_ok**, is:
 
     _Try(Color, [InvalidHex(Str)])_
 
-**Hint: **For this to work, the type would need to have a method named **map_ok** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **map_ok** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

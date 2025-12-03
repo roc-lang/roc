@@ -610,7 +610,12 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .repl => rocRepl(allocs),
         .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(allocs, docs_args),
-        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, lsp_args.debug_io),
+        .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
+            .transport = lsp_args.debug_io,
+            .build = lsp_args.debug_build,
+            .syntax = lsp_args.debug_syntax,
+            .server = lsp_args.debug_server,
+        }),
         .help => |help_message| {
             try stdout.writeAll(help_message);
         },
