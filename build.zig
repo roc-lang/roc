@@ -315,12 +315,48 @@ const MiniCiStep = struct {
         // mini CI pipeline.
         try runSubBuild(step, "fmt", "zig build fmt");
         try runSubBuild(step, null, "zig build");
+        try checkBuiltinRocFormatting(step);
         try runSubBuild(step, "snapshot", "zig build snapshot");
         try checkSnapshotChanges(step);
         try runSubBuild(step, "test", "zig build test");
         try runSubBuild(step, "test-playground", "zig build test-playground");
         try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
         try runSubBuild(step, "test-cli", "zig build test-cli");
+    }
+
+    fn checkBuiltinRocFormatting(step: *Step) !void {
+        const b = step.owner;
+        std.debug.print("---- minici: checking Builtin.roc formatting ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "./zig-out/bin/roc");
+        try child_argv.append(b.allocator, "fmt");
+        try child_argv.append(b.allocator, "--check");
+        try child_argv.append(b.allocator, "src/build/roc/Builtin.roc");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "src/build/roc/Builtin.roc is not formatted. " ++
+                            "Run 'zig build run -- fmt src/build/roc/Builtin.roc' to format it.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("roc fmt --check terminated abnormally", .{});
+            },
+        }
     }
 
     fn checkSnapshotChanges(step: *Step) !void {

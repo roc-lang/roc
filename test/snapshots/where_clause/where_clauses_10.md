@@ -65,8 +65,9 @@ import Decode exposing [Decode]
 decode_things # After member name
 	: # After colon
 		List(List(U8)) -> List(a) # After anno
-			where
-				[a.Decode]
+			where [
+				a.Decode,
+			]
 ~~~
 # CANONICALIZE
 ~~~clojure
