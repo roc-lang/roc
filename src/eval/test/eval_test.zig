@@ -1303,3 +1303,52 @@ test "List.map - adding" {
         .no_trace,
     );
 }
+
+// ============================================================================
+// Bug regression tests - interpreter crash issues
+// ============================================================================
+
+test "match with tag containing pattern-bound variable - regression" {
+    // Regression test for GitHub issue: interpreter crash when creating a tag
+    // with a payload that contains a variable bound by a match pattern.
+    //
+    // In isolated eval tests this works, but when running as a full app with
+    // platform integration it crashes with "e_closure: failed to resolve capture value".
+    // The issue is specific to module management in full app execution.
+    //
+    // This test ensures the basic case works in the eval context.
+    // Full reproduction requires running as: `roc run <app-with-platform.roc>`
+    try runExpectSuccess(
+        \\match Some("x") {
+        \\    Some(a) => Tagged(a)
+        \\    None => Tagged("")
+        \\}
+    , .no_trace);
+}
+
+test "nested match with Result type - regression" {
+    // Regression test for interpreter crash when using nested match expressions
+    // with Result types (Ok/Err).
+    //
+    // Original bug report:
+    //   match ["x"] {
+    //       [a] => {
+    //           match Ok(a) {
+    //               Ok(val) => Ok(val),
+    //               _ => Err(Oops)
+    //           }
+    //       }
+    //   }
+    //
+    // Like the above test, this works in isolation but crashes in full app execution.
+    try runExpectSuccess(
+        \\match ["x"] {
+        \\    [a] => {
+        \\        match Ok(a) {
+        \\            Ok(val) => Ok(val),
+        \\            _ => Err(Oops)
+        \\        }
+        \\    }
+        \\}
+    , .no_trace);
+}

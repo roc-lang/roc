@@ -5828,7 +5828,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         }
 
         // Tag without a qualifier and not a type in scope - treat as anonymous structural tag
-        return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = null };
+        const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+        return CanonicalizedExpr{ .idx = tag_expr_idx, .free_vars = if (free_vars_span.len > 0) free_vars_span else null };
     } else if (e.qualifiers.span.len == 1) {
         // If this is a tag with a single qualifier, then it is a nominal tag and the qualifier
         // is the type name. Check both local type_decls and imported types in exposed_items.
