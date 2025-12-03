@@ -955,7 +955,6 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Check for errors - abort unless --allow-errors flag is set
     if (shm_result.error_count > 0 and !args.allow_errors) {
-        std.log.err("Use --allow-errors to try running anyway.", .{});
         return error.TypeCheckingFailed;
     }
 

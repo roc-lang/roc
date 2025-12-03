@@ -125,7 +125,8 @@ test "integration - shared memory setup and parsing" {
     const roc_path = "test/int/app.roc";
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_handle = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
+    const shm_result = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
+    const shm_handle = shm_result.handle;
 
     // Clean up shared memory resources
     defer {
@@ -169,10 +170,11 @@ test "integration - compilation pipeline for different platforms" {
 
     for (test_apps) |roc_path| {
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_handle = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path) catch |err| {
+        const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path) catch |err| {
             std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
             continue;
         };
+        const shm_handle = shm_result.handle;
 
         // Clean up shared memory resources
         defer {
@@ -213,7 +215,8 @@ test "integration - error handling for non-existent file" {
     const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
 
     // We expect this to fail - the important thing is that it doesn't crash
-    if (result) |shm_handle| {
+    if (result) |shm_result| {
+        const shm_handle = shm_result.handle;
         // Clean up shared memory resources if somehow successful
         defer {
             if (comptime builtin.os.tag == .windows) {

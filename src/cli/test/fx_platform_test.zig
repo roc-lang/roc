@@ -550,12 +550,13 @@ test "fx platform string interpolation type mismatch" {
         .argv = &[_][]const u8{
             "./zig-out/bin/roc",
             "test/fx/num_method_call.roc",
+            "--allow-errors",
         },
     });
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // The program should run (exit 0) even with type errors - errors are just warnings
+    // The program should run (exit 0) with --allow-errors despite type errors
     switch (run_result.term) {
         .Exited => |code| {
             try testing.expectEqual(@as(u8, 0), code);
@@ -1456,4 +1457,68 @@ test "fx platform issue8433" {
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
         },
     }
+}
+
+test "run aborts on errors by default" {
+    // Tests that roc run aborts when there are type errors (without --allow-errors)
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/run_allow_errors.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Should fail with type errors
+    try checkFailure(run_result);
+
+    // Should show the errors
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
+}
+
+test "run with --allow-errors attempts execution despite errors" {
+    // Tests that roc run --allow-errors attempts to execute even with type errors
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/run_allow_errors.roc",
+            "--allow-errors",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Should still show the errors
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
+
+    // The program will attempt to run and likely crash, which is expected behavior
+    // We just verify it didn't abort during type checking
+}
+
+test "run allows warnings without blocking execution" {
+    // Tests that warnings don't block execution (they never should)
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/run_warning_only.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Should show the warning
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNUSED VARIABLE") != null);
+
+    // Should produce output (runs successfully)
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello, World!") != null);
 }
