@@ -5377,6 +5377,20 @@ pub const Interpreter = struct {
         return self.orderNumericValues(lhs_value, rhs_value);
     }
 
+    const CompareOp = enum { gt, gte, lt, lte, eq };
+
+    /// Compare two numeric values using the specified comparison operation
+    fn compareNumericValues(self: *Interpreter, lhs: StackValue, rhs: StackValue, op: CompareOp) !bool {
+        const order = try self.compareNumericScalars(lhs, rhs);
+        return switch (op) {
+            .gt => order == .gt,
+            .gte => order == .gt or order == .eq,
+            .lt => order == .lt,
+            .lte => order == .lt or order == .eq,
+            .eq => order == .eq,
+        };
+    }
+
     fn orderNumericValues(self: *Interpreter, lhs: NumericValue, rhs: NumericValue) !std.math.Order {
         return switch (lhs) {
             .int => self.orderInt(lhs.int, rhs),
@@ -5852,7 +5866,9 @@ pub const Interpreter = struct {
 
     fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
         var current = self.runtime_types.resolveVar(runtime_var);
+        var guard = types.debug.IterationGuard.init("resolveBaseVar");
         while (true) {
+            guard.tick();
             switch (current.desc.content) {
                 .alias => |al| {
                     const backing = self.runtime_types.getAliasBackingVar(al);
@@ -5875,10 +5891,14 @@ pub const Interpreter = struct {
         defer var_stack.deinit();
         try var_stack.append(runtime_var);
 
+        var outer_guard = types.debug.IterationGuard.init("appendUnionTags.outer");
         while (var_stack.items.len > 0) {
+            outer_guard.tick();
             const current_var = var_stack.pop().?;
             var resolved = self.runtime_types.resolveVar(current_var);
+            var inner_guard = types.debug.IterationGuard.init("appendUnionTags.expand");
             expand: while (true) {
+                inner_guard.tick();
                 switch (resolved.desc.content) {
                     .alias => |al| {
                         const backing = self.runtime_types.getAliasBackingVar(al);
@@ -6427,7 +6447,12 @@ pub const Interpreter = struct {
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
-                const copied = try self.pushCopy(value, roc_ops);
+                var copied = try self.pushCopy(value, roc_ops);
+                // If the value doesn't have an rt_var (e.g., list elements from pattern matching),
+                // use the pattern's type. Otherwise preserve the value's original type.
+                if (copied.rt_var == null) {
+                    copied.rt_var = value_rt_var;
+                }
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -6438,7 +6463,11 @@ pub const Interpreter = struct {
                     return false;
                 }
 
-                const alias_value = try self.pushCopy(value, roc_ops);
+                var alias_value = try self.pushCopy(value, roc_ops);
+                // If the value doesn't have an rt_var, use the pattern's type
+                if (alias_value.rt_var == null) {
+                    alias_value.rt_var = value_rt_var;
+                }
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -6510,18 +6539,47 @@ pub const Interpreter = struct {
                 // which may differ from the type system's layout if runtime defaulting occurred.
                 const list_layout = value.layout;
 
-                const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
-                const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
-                std.debug.assert(list_rt_content == .structure);
-                std.debug.assert(list_rt_content.structure == .nominal_type);
+                // Check if the list value itself is polymorphic (from a polymorphic function)
+                const value_rt_resolved = self.runtime_types.resolveVar(value_rt_var);
+                const list_is_polymorphic = value_rt_resolved.desc.content == .flex or
+                    value_rt_resolved.desc.content == .rigid;
 
-                // Extract the element type variable from the List type
-                // Note: nominal.vars contains [backing_var, elem_var] for List types
-                // where backing_var is the ProvidedByCompiler tag union, and elem_var is the element type
-                const nominal = list_rt_content.structure.nominal_type;
-                const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
-                std.debug.assert(vars.len == 2); // List has backing var + elem var
-                const elem_rt_var = vars[1];
+                // Get element type from the list value's type if available, otherwise from the pattern
+                // Using the value's type preserves proper method bindings through polymorphic calls
+                const elem_rt_var: types.Var = if (list_is_polymorphic) blk: {
+                    // List came from polymorphic context - create a fresh flex variable for elements
+                    // so they maintain their polymorphic nature
+                    break :blk try self.runtime_types.fresh();
+                } else if (value_rt_resolved.desc.content == .structure and
+                    value_rt_resolved.desc.content.structure == .nominal_type)
+                blk: {
+                    // Use the element type from the list value's actual type
+                    // This preserves method bindings through polymorphic function calls
+                    const nominal = value_rt_resolved.desc.content.structure.nominal_type;
+                    const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
+                    if (vars.len == 2) {
+                        break :blk vars[1]; // element type is second var
+                    }
+                    // Fallback to pattern translation if structure is unexpected
+                    const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
+                    const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
+                    std.debug.assert(list_rt_content == .structure);
+                    std.debug.assert(list_rt_content.structure == .nominal_type);
+                    const nom = list_rt_content.structure.nominal_type;
+                    const pattern_vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    std.debug.assert(pattern_vars.len == 2);
+                    break :blk pattern_vars[1];
+                } else blk: {
+                    // Value's type is not a nominal List type - extract from pattern
+                    const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
+                    const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
+                    std.debug.assert(list_rt_content == .structure);
+                    std.debug.assert(list_rt_content.structure == .nominal_type);
+                    const nominal = list_rt_content.structure.nominal_type;
+                    const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
+                    std.debug.assert(vars.len == 2);
+                    break :blk vars[1];
+                };
 
                 // Get element layout from the actual list layout, not from the type system.
                 // The list's runtime layout may differ from the type system's expectation
@@ -7114,9 +7172,12 @@ pub const Interpreter = struct {
 
         // Apply rigid variable substitution if this is a rigid variable
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Note: Cycles are prevented by unification, so this chain must terminate
+        // Use a counter to prevent infinite loops from cyclic substitutions
+        var count: u32 = 0;
         while (resolved.desc.content == .rigid) {
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
+                count += 1;
+                if (count > 1000) break; // Prevent infinite loops
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -7891,9 +7952,13 @@ pub const Interpreter = struct {
 
         // Check if this variable has a substitution active (for generic function instantiation)
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
-            // Recursively check if the substituted variable also has a substitution
+            // Follow the substitution chain to find the final variable
+            // Use a counter to prevent infinite loops from cyclic substitutions
             var current = substituted;
+            var count: u32 = 0;
             while (self.rigid_subst.get(current)) |next_subst| {
+                count += 1;
+                if (count > 1000) break; // Prevent infinite loops
                 current = next_subst;
             }
             break :blk current;
@@ -7923,9 +7988,12 @@ pub const Interpreter = struct {
         }
 
         const instantiated = switch (resolved.desc.content) {
-            .rigid => blk: {
+            .rigid => |rigid| blk: {
                 // Replace rigid with fresh flex that can be unified
-                const fresh = try self.runtime_types.fresh();
+                // IMPORTANT: Copy the rigid's constraints so numeric constraints are preserved
+                const fresh = try self.runtime_types.freshFromContent(.{
+                    .flex = .{ .name = rigid.name, .constraints = rigid.constraints },
+                });
                 try subst_map.put(resolved.var_, fresh);
                 break :blk fresh;
             },
@@ -8059,7 +8127,9 @@ pub const Interpreter = struct {
         }
 
         var current_ext = tag_union.ext;
+        var guard = types.debug.IterationGuard.init("interpreter.gatherTags");
         while (true) {
+            guard.tick();
             const resolved_ext = module.types.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| {
@@ -8187,11 +8257,14 @@ pub const Interpreter = struct {
 
         // Apply rigid substitutions to ret_var if needed
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Note: Cycles are prevented by unification, so this chain must terminate
+        // Use a counter to prevent infinite loops from cyclic substitutions
         var resolved_ret = self.runtime_types.resolveVar(ret_var);
         var substituted_ret = ret_var;
+        var ret_count: u32 = 0;
         while (resolved_ret.desc.content == .rigid) {
             if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                ret_count += 1;
+                if (ret_count > 1000) break; // Prevent infinite loops
                 substituted_ret = subst_var;
                 resolved_ret = self.runtime_types.resolveVar(subst_var);
             } else {
@@ -9541,11 +9614,12 @@ pub const Interpreter = struct {
                 if (elems.len == 0) {
                     // Empty list - create immediately
                     const list_layout = try self.getRuntimeLayout(list_rt_var);
-                    const dest = try self.pushRaw(list_layout, 0);
+                    var dest = try self.pushRaw(list_layout, 0);
                     if (dest.ptr != null) {
                         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
                         header.* = RocList.empty();
                     }
+                    dest.rt_var = list_rt_var;
                     try value_stack.push(dest);
                 } else {
                     // Get element type variable from first element
@@ -10231,7 +10305,15 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(rt_var);
+        var layout_val = try self.getRuntimeLayout(rt_var);
+
+        // If the layout isn't a numeric type (e.g., ZST from unconstrained flex/rigid),
+        // default to Dec since we're evaluating a numeric literal
+        const is_numeric_layout = layout_val.tag == .scalar and
+            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+        if (!is_numeric_layout) {
+            layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+        }
 
         var value = try self.pushRaw(layout_val, 0);
         value.is_initialized = false;
@@ -11604,11 +11686,12 @@ pub const Interpreter = struct {
                     if (total_count == 0) {
                         // Empty list (shouldn't happen as it's handled directly)
                         const list_layout = try self.getRuntimeLayout(lc.list_rt_var);
-                        const dest = try self.pushRaw(list_layout, 0);
+                        var dest = try self.pushRaw(list_layout, 0);
                         if (dest.ptr != null) {
                             const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
                             header.* = RocList.empty();
                         }
+                        dest.rt_var = lc.list_rt_var;
                         try value_stack.push(dest);
                     } else {
                         // Pop all collected values from the value stack
@@ -11670,7 +11753,10 @@ pub const Interpreter = struct {
                             val.decref(&self.runtime_layout_store, roc_ops);
                         }
 
-                        try value_stack.push(dest);
+                        // Set the runtime type variable so method dispatch works correctly
+                        var result = dest;
+                        result.rt_var = lc.list_rt_var;
+                        try value_stack.push(result);
                     }
                 }
                 return true;
@@ -12131,6 +12217,10 @@ pub const Interpreter = struct {
                 const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
                 scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
 
+                // Use the scrutinee's own rt_var if available (preserves type through polymorphic calls),
+                // otherwise fall back to the translated scrutinee type from the match expression
+                const effective_scrutinee_rt_var = scrutinee.rt_var orelse mb.scrutinee_rt_var;
+
                 // Try branches starting from current_branch
                 var branch_idx = mb.current_branch;
                 while (branch_idx < mb.branches.len) : (branch_idx += 1) {
@@ -12147,7 +12237,7 @@ pub const Interpreter = struct {
                         if (!try self.patternMatchesBind(
                             self.env.store.getMatchBranchPattern(bp_idx).pattern,
                             scrutinee,
-                            mb.scrutinee_rt_var,
+                            effective_scrutinee_rt_var,
                             roc_ops,
                             &temp_binds,
                             @enumFromInt(0),
@@ -12793,8 +12883,13 @@ pub const Interpreter = struct {
                     self.early_return_value = null;
                     var return_val = return_val_in;
 
-                    if (cleanup.call_ret_rt_var) |rt_var| {
-                        return_val.rt_var = rt_var;
+                    // Only set rt_var if the return value doesn't already have one.
+                    // This preserves the original type for identity-like functions where
+                    // the return value is the same as an input (which already has a valid rt_var).
+                    if (return_val.rt_var == null) {
+                        if (cleanup.call_ret_rt_var) |rt_var| {
+                            return_val.rt_var = rt_var;
+                        }
                     }
 
                     // Pop active closure if needed
@@ -12867,8 +12962,13 @@ pub const Interpreter = struct {
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
-                if (cleanup.call_ret_rt_var) |rt_var| {
-                    result.rt_var = rt_var;
+                // Only set rt_var if the result doesn't already have one.
+                // This preserves the original type for identity-like functions where
+                // the return value is the same as an input (which already has a valid rt_var).
+                if (result.rt_var == null) {
+                    if (cleanup.call_ret_rt_var) |rt_var| {
+                        result.rt_var = rt_var;
+                    }
                 }
                 try value_stack.push(result);
                 return true;
@@ -12996,17 +13096,113 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
+                // Prefer the runtime type from the evaluated value if it's more concrete
+                // (i.e., has a structure type rather than flex/rigid from polymorphic calls)
+                // Track if the value came from a polymorphic context (flex/rigid rt_var)
+                var effective_receiver_rt_var = ba.receiver_rt_var;
+                var value_is_polymorphic = false;
+                if (lhs.rt_var) |val_rt_var| {
+                    const val_resolved = self.runtime_types.resolveVar(val_rt_var);
+                    // Only use the value's type if it's concrete (has structure/alias)
+                    if (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias) {
+                        effective_receiver_rt_var = val_rt_var;
+                    } else if (val_resolved.desc.content == .flex or val_resolved.desc.content == .rigid) {
+                        // The value came from a polymorphic context
+                        value_is_polymorphic = true;
+                    }
+                }
+
+                // Check if effective type is still flex/rigid after trying value's rt_var
+                // Track whether we had to default to Dec so we know to use direct numeric handling
+                var defaulted_to_dec = false;
+                const resolved_check = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                if (resolved_check.desc.content == .flex or resolved_check.desc.content == .rigid) {
+                    // No concrete type info available, default to Dec for numeric operations
+                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
+                    effective_receiver_rt_var = dec_var;
+                    defaulted_to_dec = true;
+                } else if (value_is_polymorphic) {
+                    // The value is polymorphic but we have a concrete type from CIR - mark as polymorphic
+                    // so we use direct numeric handling instead of method dispatch
+                    defaulted_to_dec = true;
+                }
+
                 // Resolve the lhs type
-                const lhs_resolved = self.runtime_types.resolveVar(ba.receiver_rt_var);
+                const lhs_resolved = self.runtime_types.resolveVar(effective_receiver_rt_var);
 
                 // Get nominal type info, or handle anonymous structural types
                 // Follow aliases to get to the underlying type
-                var current_var = ba.receiver_rt_var;
+                var current_var = effective_receiver_rt_var;
                 var current_resolved = lhs_resolved;
+                var alias_count: u32 = 0;
                 while (current_resolved.desc.content == .alias) {
+                    alias_count += 1;
+                    if (alias_count > 1000) break; // Prevent infinite loops
                     const alias = current_resolved.desc.content.alias;
                     current_var = self.runtime_types.getAliasBackingVar(alias);
                     current_resolved = self.runtime_types.resolveVar(current_var);
+                }
+
+                // Check if we can use low-level numeric comparison based on layout
+                // This handles cases where method dispatch would fail (e.g., polymorphic values)
+                // Only use direct handling when we had to default to Dec due to flex/rigid types
+                const is_numeric_layout = lhs.layout.tag == .scalar and
+                    (lhs.layout.data.scalar.tag == .int or lhs.layout.data.scalar.tag == .frac);
+                if (is_numeric_layout and defaulted_to_dec) {
+                    // Handle numeric comparisons directly via low-level ops
+                    if (ba.method_ident == self.root_env.idents.is_gt) {
+                        const result = try self.compareNumericValues(lhs, rhs, .gt);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                        const result = try self.compareNumericValues(lhs, rhs, .gte);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                        const result = try self.compareNumericValues(lhs, rhs, .lt);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                        const result = try self.compareNumericValues(lhs, rhs, .lte);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                        const result = try self.compareNumericValues(lhs, rhs, .eq);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    }
+                    // Handle numeric arithmetic directly via evalDecBinop
+                    if (ba.method_ident == self.root_env.idents.plus) {
+                        const result = try self.evalDecBinop(.add, lhs.layout, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.minus) {
+                        const result = try self.evalDecBinop(.sub, lhs.layout, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.times) {
+                        const result = try self.evalDecBinop(.mul, lhs.layout, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.div_by) {
+                        const result = try self.evalDecBinop(.div, lhs.layout, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                        const result = try self.evalDecBinop(.div_trunc, lhs.layout, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                        const result = try self.evalDecBinop(.rem, lhs.layout, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    }
                 }
 
                 const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (current_resolved.desc.content) {
@@ -13018,7 +13214,7 @@ pub const Interpreter = struct {
                         .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Anonymous structural types have implicit is_eq
                             if (ba.method_ident == self.root_env.idents.is_eq) {
-                                var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
+                                var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
                                     if (err == error.NotImplemented) {
                                         self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                         return error.Crash;
@@ -13035,13 +13231,10 @@ pub const Interpreter = struct {
                         },
                         else => null,
                     },
-                    // Flex, rigid, and error vars are unresolved type variables (e.g., numeric literals defaulting to Dec,
-                    // or type parameters in generic functions). For is_eq, use structural equality which works
-                    // for all numeric types and generic type parameters with is_eq constraints.
-                    // Error types can occur during generic instantiation when types couldn't be resolved.
+                    // Flex, rigid, and error vars are unresolved type variables
                     .flex, .rigid, .err => blk: {
                         if (ba.method_ident == self.root_env.idents.is_eq) {
-                            var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
+                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
                                 if (err == error.NotImplemented) {
                                     self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                     return error.Crash;
@@ -13069,7 +13262,7 @@ pub const Interpreter = struct {
                     nominal_info.?.ident,
                     ba.method_ident,
                     roc_ops,
-                    ba.receiver_rt_var,
+                    effective_receiver_rt_var,
                 );
                 defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
