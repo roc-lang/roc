@@ -534,14 +534,18 @@ const Formatter = struct {
                     try fmt.pushAll(".");
                     try fmt.push('{');
                     if (assoc.statements.span.len > 0) {
-                        try fmt.ensureNewline();
                         fmt.curr_indent += 1;
                         const statements = fmt.ast.store.statementSlice(assoc.statements);
                         for (statements) |stmt_idx| {
+                            const stmt_region = fmt.nodeRegion(@intFromEnum(stmt_idx));
+                            _ = try fmt.flushCommentsBefore(stmt_region.start);
+                            try fmt.ensureNewline();
                             try fmt.pushIndent();
                             _ = try fmt.formatStatement(stmt_idx);
-                            try fmt.ensureNewline();
                         }
+                        // Flush any trailing comments before the closing brace
+                        _ = try fmt.flushCommentsBefore(assoc.region.end - 1);
+                        try fmt.ensureNewline();
                         fmt.curr_indent -= 1;
                         try fmt.pushIndent();
                     }
@@ -702,10 +706,8 @@ const Formatter = struct {
 
         // Add opening bracket
         if (clauses_are_multiline) {
-            try fmt.ensureNewline();
+            try fmt.pushAll(" [");
             fmt.curr_indent += 1;
-            try fmt.pushIndent();
-            try fmt.push('[');
         } else {
             try fmt.pushAll(" [");
         }
@@ -714,19 +716,25 @@ const Formatter = struct {
             if (clauses_are_multiline) {
                 const clause_region = fmt.nodeRegion(@intFromEnum(clause));
                 _ = try fmt.flushCommentsBefore(clause_region.start);
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
             }
             if (i > 0) {
-                if (clauses_are_multiline) {
-                    try fmt.push(',');
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                } else {
+                if (!clauses_are_multiline) {
                     try fmt.pushAll(", ");
                 }
             }
             try fmt.formatWhereClause(clause);
+            if (clauses_are_multiline) {
+                try fmt.push(',');
+            }
         }
 
+        if (clauses_are_multiline) {
+            try fmt.ensureNewline();
+            fmt.curr_indent -= 1;
+            try fmt.pushIndent();
+        }
         try fmt.push(']');
     }
 
@@ -1965,7 +1973,56 @@ const Formatter = struct {
             },
             .tag_union => |t| {
                 region = t.region;
-                try fmt.formatCollection(t.region, .square, AST.TypeAnno.Idx, fmt.ast.store.typeAnnoSlice(t.tags), Formatter.formatTypeAnno);
+                const tags = fmt.ast.store.typeAnnoSlice(t.tags);
+                const has_open = t.open_anno != null;
+                const tag_multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags);
+                const tag_indent = fmt.curr_indent;
+                defer {
+                    fmt.curr_indent = tag_indent;
+                }
+                try fmt.push('[');
+                if (tags.len == 0 and !has_open) {
+                    try fmt.push(']');
+                } else {
+                    if (tag_multiline) {
+                        fmt.curr_indent += 1;
+                    }
+                    for (tags, 0..) |tag_idx, i| {
+                        const tag_region = fmt.nodeRegion(@intFromEnum(tag_idx));
+                        if (tag_multiline) {
+                            _ = try fmt.flushCommentsBefore(tag_region.start);
+                            try fmt.ensureNewline();
+                            try fmt.pushIndent();
+                        }
+                        _ = try fmt.formatTypeAnno(tag_idx);
+                        if (tag_multiline) {
+                            try fmt.push(',');
+                        } else if (i < (tags.len - 1) or has_open) {
+                            try fmt.pushAll(", ");
+                        }
+                    }
+                    // Handle the open extension (..others)
+                    if (t.open_anno) |open| {
+                        const open_region = fmt.nodeRegion(@intFromEnum(open));
+                        if (tag_multiline) {
+                            _ = try fmt.flushCommentsBefore(open_region.start);
+                            try fmt.ensureNewline();
+                            try fmt.pushIndent();
+                        }
+                        try fmt.pushAll("..");
+                        _ = try fmt.formatTypeAnno(open);
+                        if (tag_multiline) {
+                            try fmt.push(',');
+                        }
+                    }
+                    if (tag_multiline) {
+                        _ = try fmt.flushCommentsBefore(region.end - 1);
+                        fmt.curr_indent -= 1;
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    }
+                    try fmt.push(']');
+                }
             },
             .@"fn" => |f| {
                 region = f.region;
