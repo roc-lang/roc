@@ -539,3 +539,30 @@ test "roc build fails with invalid target error" {
         std.mem.indexOf(u8, result.stderr, "invalid") != null;
     try testing.expect(has_error);
 }
+
+test "roc build glibc target gives helpful error on non-Linux" {
+    const testing = std.testing;
+    const builtin = @import("builtin");
+    const gpa = testing.allocator;
+
+    // This test only applies on non-Linux platforms
+    if (builtin.os.tag == .linux) {
+        return; // Skip on Linux where glibc cross-compilation is supported
+    }
+
+    const result = try util.runRoc(gpa, &.{ "build", "--target=x64glibc" }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code)
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains helpful error message about glibc not being supported
+    const has_glibc_error = std.mem.indexOf(u8, result.stderr, "glibc") != null;
+    try testing.expect(has_glibc_error);
+
+    // 3. Stderr suggests using musl instead
+    const suggests_musl = std.mem.indexOf(u8, result.stderr, "musl") != null;
+    try testing.expect(suggests_musl);
+}

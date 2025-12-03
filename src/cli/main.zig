@@ -2802,6 +2802,19 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     std.log.debug("Target: {} ({s})", .{ target, target.toTriple() });
 
+    // Check for unsupported cross-compilation scenarios
+    // glibc targets require a full libc for linking, which is only available on Linux hosts
+    const host_os = builtin.target.os.tag;
+    if (target.isDynamic() and host_os != .linux) {
+        std.log.err("Cross-compilation to glibc targets ({s}) is not supported on {s}.", .{
+            @tagName(target),
+            @tagName(host_os),
+        });
+        std.log.err("glibc targets require dynamic linking with libc symbols that are only available on Linux.", .{});
+        std.log.err("Use a statically-linked musl target instead: x64musl or arm64musl", .{});
+        return error.UnsupportedCrossCompilation;
+    }
+
     // Set up shared memory with ModuleEnv (same as roc run)
     std.log.debug("Compiling Roc file: {s}", .{args.path});
     const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
