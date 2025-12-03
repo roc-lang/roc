@@ -29,6 +29,10 @@ jobs:
         run: |
           zig run ci/check_test_wiring.zig
 
+      - name: Check fx platform test coverage
+        run: |
+          zig build checkfx
+
       # We run zig check with tracy enabled.
       # This ensure it compiles and doesn't go stale.
       - name: Checkout Tracy
