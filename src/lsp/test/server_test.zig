@@ -184,7 +184,7 @@ test "server tracks documents on didOpen/didChange" {
     defer allocator.free(combined);
 
     var reader_stream = std.io.fixedBufferStream(combined);
-    var writer_buffer: [32]u8 = undefined;
+    var writer_buffer: [8192]u8 = undefined;
     var writer_stream = std.io.fixedBufferStream(&writer_buffer);
 
     const ReaderType = @TypeOf(reader_stream.reader());
