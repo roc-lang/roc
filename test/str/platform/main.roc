@@ -3,6 +3,14 @@ platform ""
     exposes []
     packages {}
     provides { process_string_for_host: "process_string" }
+    targets: {
+        exe: {
+            x64mac: [app],
+            arm64mac: [app],
+            x64linux: [app],
+            arm64linux: [app],
+        }
+    }
 
 process_string_for_host : Str -> Str
 process_string_for_host = process_string
