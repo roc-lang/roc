@@ -82,6 +82,7 @@ Outer := [A].{
 	Inner := [B].{
 		inner_val = 100
 	}
+
 	outer_val = inner_val
 }
 ~~~

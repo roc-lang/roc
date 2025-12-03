@@ -290,10 +290,13 @@ EndOfFile,
 Adv := [Val(U64, Str)].{
 	to_str : Adv -> Str
 	to_str = |Adv.Val(_, s)| s
+
 	to_u64 : Adv -> U64
 	to_u64 = |Adv.Val(u, _)| u
+
 	update_str : Adv, Str -> Adv
 	update_str = |Adv.Val(u64, _), next_str| Adv.Val(u64, next_str)
+
 	update_u64 : Adv, U64 -> Adv
 	update_u64 = |Adv.Val(_, str), next_u64| Adv.Val(next_u64, str)
 }
