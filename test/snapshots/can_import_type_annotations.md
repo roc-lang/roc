@@ -483,48 +483,44 @@ combineTrys = |result1, result2|
 				(ty-lookup (name "Value") (external-module "json.Json")))))
 	(d-let
 		(p-assign (ident "handleApi"))
-		(e-closure
-			(captures
-				(capture (ident "data"))
-				(capture (ident "err")))
-			(e-lambda
-				(args
-					(p-assign (ident "request")))
-				(e-block
-					(s-let
-						(p-assign (ident "result"))
-						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-dot-access (field "body")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "request")))))))
-					(e-match
-						(match
-							(cond
+		(e-lambda
+			(args
+				(p-assign (ident "request")))
+			(e-block
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-dot-access (field "body")
+							(receiver
 								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Ok")
-											(args
-												(e-call
-													(e-runtime-error (tag "ident_not_in_scope"))
-													(e-lookup-local
-														(p-assign (ident "data"))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Err")
-											(args
+									(p-assign (ident "request")))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Ok")
+										(args
+											(e-call
+												(e-runtime-error (tag "ident_not_in_scope"))
 												(e-lookup-local
-													(p-assign (ident "err")))))))))))))
+													(p-assign (ident "data"))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-lookup-local
+												(p-assign (ident "err"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Request") (external-module "http.Client"))
@@ -557,63 +553,58 @@ combineTrys = |result1, result2|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "combineTrys"))
-		(e-closure
-			(captures
-				(capture (ident "value2"))
-				(capture (ident "err"))
-				(capture (ident "err")))
-			(e-lambda
-				(args
-					(p-assign (ident "result1"))
-					(p-assign (ident "result2")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result1"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-match
-										(match
-											(cond
-												(e-lookup-local
-													(p-assign (ident "result2"))))
-											(branches
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-applied-tag)))
-													(value
-														(e-tag (name "Ok")
-															(args
-																(e-tuple
-																	(elems
-																		(e-lookup-local
-																			(p-assign (ident "value1")))
-																		(e-lookup-local
-																			(p-assign (ident "value2")))))))))
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-applied-tag)))
-													(value
-														(e-tag (name "Err")
-															(args
-																(e-lookup-local
-																	(p-assign (ident "err"))))))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Err")
-										(args
+		(e-lambda
+			(args
+				(p-assign (ident "result1"))
+				(p-assign (ident "result2")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "result1"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-match
+									(match
+										(cond
 											(e-lookup-local
-												(p-assign (ident "err"))))))))))))
+												(p-assign (ident "result2"))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-applied-tag)))
+												(value
+													(e-tag (name "Ok")
+														(args
+															(e-tuple
+																(elems
+																	(e-lookup-local
+																		(p-assign (ident "value1")))
+																	(e-lookup-local
+																		(p-assign (ident "value2")))))))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-applied-tag)))
+												(value
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "err"))))))))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-tag (name "Err")
+									(args
+										(e-lookup-local
+											(p-assign (ident "err")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

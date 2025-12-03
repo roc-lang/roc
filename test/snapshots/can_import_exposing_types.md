@@ -871,46 +871,42 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineTrys"))
-		(e-closure
-			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
-			(e-lambda
-				(args
-					(p-assign (ident "jsonTry"))
-					(p-assign (ident "httpStatus")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "jsonTry"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Ok")
-										(args
-											(e-record
-												(fields
-													(field (name "body")
-														(e-call
-															(e-runtime-error (tag "ident_not_in_scope"))
-															(e-lookup-local
-																(p-assign (ident "value")))))
-													(field (name "status")
+		(e-lambda
+			(args
+				(p-assign (ident "jsonTry"))
+				(p-assign (ident "httpStatus")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "jsonTry"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-tag (name "Ok")
+									(args
+										(e-record
+											(fields
+												(field (name "body")
+													(e-call
+														(e-runtime-error (tag "ident_not_in_scope"))
 														(e-lookup-local
-															(p-assign (ident "httpStatus"))))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Err")
-										(args
-											(e-lookup-local
-												(p-assign (ident "error"))))))))))))
+															(p-assign (ident "value")))))
+												(field (name "status")
+													(e-lookup-local
+														(p-assign (ident "httpStatus"))))))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-tag (name "Err")
+									(args
+										(e-lookup-local
+											(p-assign (ident "error")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
