@@ -193,23 +193,23 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
-pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
-    return .{
-        .gpa = gpa,
-        .package_name = package_name,
-        .root_dir = root_dir,
-        .mode = mode,
-        .max_threads = max_threads,
-        .sink = sink,
-        .schedule_hook = schedule_hook,
-        .compiler_version = compiler_version,
-        .builtin_modules = builtin_modules,
-        .file_provider = file_provider,
-        .injector = std.ArrayList(Task).empty,
-        .modules = std.ArrayList(ModuleState).empty,
-        .discovered = std.ArrayList(ModuleId).empty,
-    };
-}
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
+        return .{
+            .gpa = gpa,
+            .package_name = package_name,
+            .root_dir = root_dir,
+            .mode = mode,
+            .max_threads = max_threads,
+            .sink = sink,
+            .schedule_hook = schedule_hook,
+            .compiler_version = compiler_version,
+            .builtin_modules = builtin_modules,
+            .file_provider = file_provider,
+            .injector = std.ArrayList(Task).empty,
+            .modules = std.ArrayList(ModuleState).empty,
+            .discovered = std.ArrayList(ModuleId).empty,
+        };
+    }
 
     pub fn initWithResolver(
         gpa: Allocator,
@@ -218,29 +218,29 @@ pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode
         mode: Mode,
         max_threads: usize,
         sink: ReportSink,
-    resolver: ImportResolver,
-    schedule_hook: ScheduleHook,
-    compiler_version: []const u8,
-    builtin_modules: *const BuiltinModules,
-    file_provider: ?FileProvider,
-) PackageEnv {
-    return .{
-        .gpa = gpa,
-        .package_name = package_name,
-        .root_dir = root_dir,
+        resolver: ImportResolver,
+        schedule_hook: ScheduleHook,
+        compiler_version: []const u8,
+        builtin_modules: *const BuiltinModules,
+        file_provider: ?FileProvider,
+    ) PackageEnv {
+        return .{
+            .gpa = gpa,
+            .package_name = package_name,
+            .root_dir = root_dir,
             .mode = mode,
             .max_threads = max_threads,
             .sink = sink,
-        .resolver = resolver,
-        .schedule_hook = schedule_hook,
-        .compiler_version = compiler_version,
-        .builtin_modules = builtin_modules,
-        .file_provider = file_provider,
-        .injector = std.ArrayList(Task).empty,
-        .modules = std.ArrayList(ModuleState).empty,
-        .discovered = std.ArrayList(ModuleId).empty,
-    };
-}
+            .resolver = resolver,
+            .schedule_hook = schedule_hook,
+            .compiler_version = compiler_version,
+            .builtin_modules = builtin_modules,
+            .file_provider = file_provider,
+            .injector = std.ArrayList(Task).empty,
+            .modules = std.ArrayList(ModuleState).empty,
+            .discovered = std.ArrayList(ModuleId).empty,
+        };
+    }
 
     pub fn deinit(self: *PackageEnv) void {
         // NOTE: builtin_modules is not owned by PackageEnv, so we don't deinit it here

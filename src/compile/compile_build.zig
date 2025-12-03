@@ -1157,7 +1157,6 @@ pub const BuildEnv = struct {
         return try std.fs.path.resolve(self.gpa, &.{ cwd_tmp, path });
     }
 
-
     fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
         if (self.file_provider) |fp| {
             if (try fp.read(fp.ctx, path, self.gpa)) |data| {
