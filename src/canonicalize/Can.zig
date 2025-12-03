@@ -486,10 +486,11 @@ fn processTypeDeclFirstPass(
                         .anno = @enumFromInt(0), // placeholder - will be replaced below
                     },
                 },
-                .nominal => Statement{
+                .nominal, .@"opaque" => Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
                         .anno = @enumFromInt(0), // placeholder - will be replaced below
+                        .is_opaque = type_decl.kind == .@"opaque",
                     },
                 },
             };
@@ -505,10 +506,11 @@ fn processTypeDeclFirstPass(
                     .anno = @enumFromInt(0), // placeholder - will be replaced
                 },
             },
-            .nominal => Statement{
+            .nominal, .@"opaque" => Statement{
                 .s_nominal_decl = .{
                     .header = final_header_idx,
                     .anno = @enumFromInt(0), // placeholder - will be replaced
+                    .is_opaque = type_decl.kind == .@"opaque",
                 },
             },
         };
@@ -560,11 +562,12 @@ fn processTypeDeclFirstPass(
                     },
                 };
             },
-            .nominal => {
+            .nominal, .@"opaque" => {
                 break :blk Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
                         .anno = anno_idx,
+                        .is_opaque = type_decl.kind == .@"opaque",
                     },
                 };
             },
@@ -636,10 +639,11 @@ fn introduceTypeNameOnly(
                 .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
             },
         },
-        .nominal => Statement{
+        .nominal, .@"opaque" => Statement{
             .s_nominal_decl = .{
                 .header = header_idx,
                 .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+                .is_opaque = type_decl.kind == .@"opaque",
             },
         },
     };
@@ -778,8 +782,6 @@ fn processAssociatedBlock(
     // When nested types were introduced in processTypeDeclFirstPass, unqualified aliases
     // were added in their declaration scope, making them visible to all child scopes.
 
-    const parent_type_text = self.env.getIdent(type_name);
-
     // FIRST: Add decl aliases to current scope BEFORE processing nested blocks.
     // This is critical so nested scopes can access parent decls via scope chain lookup.
     // For example, in:
@@ -810,7 +812,10 @@ fn processAssociatedBlock(
                             try current_scope.idents.put(self.env.gpa, decl_ident, pattern_idx);
 
                             // Add type-qualified name (e.g., "MyBool.my_not")
-                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, decl_text);
+                            // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
+                            const parent_type_text_refetched = self.env.getIdent(type_name);
+                            const decl_text_refetched = self.env.getIdent(decl_ident);
+                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, decl_text_refetched);
                             try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                         },
                         .not_found => {},
@@ -928,7 +933,10 @@ fn processAssociatedBlock(
                             try current_scope.idents.put(self.env.gpa, anno_ident, pattern_idx);
 
                             // Add type-qualified name (e.g., "List.len")
-                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text, anno_text);
+                            // Re-fetch strings since insertQualifiedIdent may have reallocated the ident store
+                            const parent_type_text_refetched = self.env.getIdent(type_name);
+                            const anno_text_refetched = self.env.getIdent(anno_ident);
+                            const type_qualified_ident_idx = try self.env.insertQualifiedIdent(parent_type_text_refetched, anno_text_refetched);
                             try current_scope.idents.put(self.env.gpa, type_qualified_ident_idx, pattern_idx);
                         },
                         .not_found => {
@@ -1152,6 +1160,9 @@ fn processAssociatedItemsSecondPass(
                                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
+                                    // Register the method ident mapping for fast index-based lookup
+                                    try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
+
                                     // Add aliases for this item in the current (associated block) scope
                                     const def_cir = self.env.store.getDef(def_idx);
                                     const pattern_idx = def_cir.pattern;
@@ -1207,6 +1218,9 @@ fn processAssociatedItemsSecondPass(
                     const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                     try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
 
+                    // Register the method ident mapping for fast index-based lookup
+                    try self.env.registerMethodIdent(type_name, name_ident, qualified_idx);
+
                     // Pattern is now available in scope (was created in createAnnoOnlyDef)
 
                     try self.env.store.addScratchDef(def_idx);
@@ -1231,6 +1245,9 @@ fn processAssociatedItemsSecondPass(
                         // Register this associated item by its qualified name
                         const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
                         try self.env.setExposedNodeIndexById(qualified_idx, def_idx_u16);
+
+                        // Register the method ident mapping for fast index-based lookup
+                        try self.env.registerMethodIdent(type_name, decl_ident, qualified_idx);
 
                         // Add aliases for this item in the current (associated block) scope
                         // so it can be referenced by unqualified and type-qualified names
@@ -1503,8 +1520,8 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            // Only process nominal types in this phase; aliases will be processed later
-            if (type_decl.kind == .nominal) {
+            // Only process nominal/opaque types in this phase; aliases will be processed later
+            if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
                 try self.processTypeDeclFirstPass(type_decl, parent_name, relative_parent_name, true); // defer associated blocks
             }
         }
@@ -1516,7 +1533,7 @@ fn processAssociatedItemsFirstPass(
         const stmt = self.parse_ir.store.getStatement(stmt_idx);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.kind == .nominal) {
+            if (type_decl.kind == .nominal or type_decl.kind == .@"opaque") {
                 const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
                 const nested_type_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
 
@@ -1931,7 +1948,7 @@ pub fn canonicalizeFile(
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.associated == null and type_decl.kind == .nominal) {
+            if (type_decl.associated == null and (type_decl.kind == .nominal or type_decl.kind == .@"opaque")) {
                 try self.introduceTypeNameOnly(type_decl);
             }
         }
@@ -2031,6 +2048,15 @@ pub fn canonicalizeFile(
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("dbg");
                 const region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
+            .inspect => |inspect_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("inspect");
+                const region = self.parse_ir.tokenizedRegionToRegion(inspect_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                     .region = region,
@@ -2719,6 +2745,10 @@ fn addPlatformProvidesItems(
 /// when an identifier is looked up and not found, we check env.requires_types to see if it's
 /// a required identifier from the platform. This avoids conflicts with local definitions.
 fn processRequiresSignatures(self: *Self, requires_rigids_idx: AST.Collection.Idx, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
+    // Enter a type var scope for the rigids - they should only be in scope while processing signatures
+    const type_var_scope = self.scopeEnterTypeVar();
+    defer self.scopeExitTypeVar(type_var_scope);
+
     // First, process the requires_rigids to add them to the type variable scope
     // This allows R1, R2, etc. to be recognized when processing the signatures
     const rigids_collection = self.parse_ir.store.getCollection(requires_rigids_idx);
@@ -5575,6 +5605,18 @@ pub fn canonicalizeExpr(
             } }, region);
 
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
+        },
+        .inspect => |d| {
+            // Inspect expression - canonicalize the inner expression
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+            const can_inner = try self.canonicalizeExpr(d.expr) orelse return null;
+
+            // Create inspect expression
+            const inspect_expr = try self.env.addExpr(Expr{ .e_inspect = .{
+                .expr = can_inner.idx,
+            } }, region);
+
+            return CanonicalizedExpr{ .idx = inspect_expr, .free_vars = can_inner.free_vars };
         },
         .record_builder => |_| {
             const feature = try self.env.insertString("canonicalize record_builder expression");
@@ -8600,6 +8642,17 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     } }, debug_region);
                     last_expr = CanonicalizedExpr{ .idx = dbg_expr, .free_vars = inner_expr.free_vars };
                 },
+                .inspect => |inspect_stmt| {
+                    // For final inspect statements, canonicalize as inspect expression
+                    const inspect_region = self.parse_ir.tokenizedRegionToRegion(inspect_stmt.region);
+                    const inner_expr = try self.canonicalizeExprOrMalformed(inspect_stmt.expr);
+
+                    // Create inspect expression
+                    const inspect_expr = try self.env.addExpr(Expr{ .e_inspect = .{
+                        .expr = inner_expr.idx,
+                    } }, inspect_region);
+                    last_expr = CanonicalizedExpr{ .idx = inspect_expr, .free_vars = inner_expr.free_vars };
+                },
                 .@"return" => |return_stmt| {
                     // Create an e_return expression to preserve early return semantics
                     // This is for when return is the final expression in a block
@@ -8860,6 +8913,19 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Create dbg statement
 
             const stmt_idx = try self.env.addStatement(Statement{ .s_dbg = .{
+                .expr = expr.idx,
+            } }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+        },
+        .inspect => |d| {
+            const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+
+            // Canonicalize the inspect expression
+            const expr = try self.canonicalizeExprOrMalformed(d.expr);
+
+            // Create inspect statement
+            const stmt_idx = try self.env.addStatement(Statement{ .s_inspect = .{
                 .expr = expr.idx,
             } }, region);
 
@@ -9638,7 +9704,17 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
                 try self.extractTypeVarIdentsFromASTAnno(field.ty, idents_start_idx);
             }
         },
-        .ty, .underscore, .tag_union, .malformed => {
+        .tag_union => |tag_union| {
+            // Extract type variables from tags
+            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                try self.extractTypeVarIdentsFromASTAnno(tag_idx, idents_start_idx);
+            }
+            // Extract type variable from open extension if present
+            if (tag_union.open_anno) |open_idx| {
+                try self.extractTypeVarIdentsFromASTAnno(open_idx, idents_start_idx);
+            }
+        },
+        .ty, .underscore, .malformed => {
             // These don't contain type variables to extract
         },
     }

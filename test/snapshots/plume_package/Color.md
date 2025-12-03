@@ -95,10 +95,10 @@ MISSING METHOD - Color.md:37:23:37:43
 MISSING METHOD - Color.md:38:23:38:43
 MISSING METHOD - Color.md:39:23:39:43
 MISSING METHOD - Color.md:40:23:40:43
-TYPE MISMATCH - Color.md:32:5:45:6
 MISSING METHOD - Color.md:62:12:62:26
 MISSING METHOD - Color.md:56:26:56:32
 MISSING METHOD - Color.md:57:32:57:38
+MISSING METHOD - Color.md:58:23:58:29
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -312,32 +312,6 @@ The value's type, which does not have a method named **is_char_in_hex_range**, i
 
 **Hint: **For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:32:5:45:6:**
-```roc
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-```
-
-It has the type:
-    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
-
-But the type annotation says it should have the type:
-    _Try(Color, [InvalidHex(Str)])_
-
 **MISSING METHOD**
 This **is_named_color** method is being called on a value whose type doesn't have that method:
 **Color.md:62:12:62:26:**
@@ -379,6 +353,20 @@ The value's type, which does not have a method named **to_str**, is:
     _Color_
 
 **Hint: **For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **map_ok** method is being called on a value whose type doesn't have that method:
+**Color.md:58:23:58:29:**
+```roc
+expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
+```
+                      ^^^^^^
+
+The value's type, which does not have a method named **map_ok**, is:
+
+    _Try(Color, [InvalidHex(Str)])_
+
+**Hint: **For this to work, the type would need to have a method named **map_ok** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -1321,7 +1309,7 @@ is_named_color = |str| {
 	(defs
 		(patt (type "U8, U8, U8 -> Color"))
 		(patt (type "U8, U8, U8, U8 -> Color"))
-		(patt (type "Str -> Error"))
+		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(patt (type "Color -> Error"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
@@ -1331,7 +1319,7 @@ is_named_color = |str| {
 	(expressions
 		(expr (type "U8, U8, U8 -> Color"))
 		(expr (type "U8, U8, U8, U8 -> Color"))
-		(expr (type "Str -> Error"))
+		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(expr (type "Color -> Error"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))

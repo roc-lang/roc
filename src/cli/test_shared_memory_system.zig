@@ -90,7 +90,7 @@ test "platform resolution - insecure HTTP URL rejected" {
     defer temp_dir.cleanup();
 
     const roc_content =
-        \\app "test" packages { pf: platform "http://example.com/abc123.tar.zst" } imports [pf.Task] provides [main] to pf
+        \\app [main] { pf: platform "http://example.com/abc123.tar.zst" }
         \\
         \\main = "Hello, World!"
     ;

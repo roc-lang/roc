@@ -137,6 +137,23 @@ pub const RocStr = extern struct {
         return RocStr.init(slice.ptr, slice.len, roc_ops);
     }
 
+    /// Create a small string from a slice. The slice must fit in a small string
+    /// (length < SMALL_STRING_SIZE). This does not require roc_ops since small
+    /// strings are stored inline and don't need heap allocation.
+    /// Asserts in debug mode if the slice is too large.
+    pub fn fromSliceSmall(slice: []const u8) RocStr {
+        std.debug.assert(slice.len < SMALL_STRING_SIZE);
+        var result = RocStr.empty();
+        @memcpy(result.asU8ptrMut()[0..slice.len], slice);
+        result.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(slice.len)) | 0b1000_0000;
+        return result;
+    }
+
+    /// Returns true if the given length would fit in a small string (stored inline).
+    pub fn fitsInSmallStr(length: usize) bool {
+        return length < SMALL_STRING_SIZE;
+    }
+
     fn allocateBig(
         length: usize,
         capacity: usize,
@@ -806,6 +823,9 @@ pub fn strDropPrefix(
     const prefix_len = prefix.len();
     const new_len = string.len() - prefix_len;
 
+    // Increment refcount for the seamless slice we're about to create.
+    // This is safe even for small strings (incref is a no-op for them).
+    string.incref(1);
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
@@ -832,6 +852,9 @@ pub fn strDropSuffix(
     const suffix_len = suffix.len();
     const new_len = string.len() - suffix_len;
 
+    // Increment refcount for the seamless slice we're about to create.
+    // This is safe even for small strings (incref is a no-op for them).
+    string.incref(1);
     return substringUnsafe(string, 0, new_len, roc_ops);
 }
 

@@ -749,10 +749,9 @@ pub const ComptimeEvaluator = struct {
                 };
             };
 
-            // Look up the method using ident indices directly
-            // The getMethodIdentByIdents function handles qualified name construction internally
+            // Look up the method using ident indices directly via the method_idents map
             // Pass self.env as the source since that's where the idents are from
-            const ident_in_origin = origin_env.getMethodIdentByIdents(
+            const ident_in_origin = origin_env.lookupMethodIdentFromEnvConst(
                 self.env,
                 nominal_type.ident.ident_idx,
                 literal.constraint.fn_name,

@@ -443,14 +443,14 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag]_others");
+    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
 }
 
 test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, a)]_others where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, a), .._others] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 // blocks //
@@ -1346,7 +1346,9 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // With no let-generalization for numeric flex vars, the `x == 1` comparison
+    // adds an is_eq constraint to x (since x is not generalized and remains monomorphic)
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {
@@ -2475,4 +2477,23 @@ test "imports of non-existent modules produce MODULE NOT FOUND errors" {
     // 2. http.Client
     // 3. utils.String
     try testing.expectEqual(@as(usize, 3), module_not_found_count);
+}
+
+// Try with match and error propagation //
+
+test "check type - try return with match and error propagation should type-check" {
+    // This tests that a function returning Try(Str, _) with a wildcard error type
+    // should accept both error propagation (?) and explicit Err tags in match branches.
+    // The wildcard _ in the return type annotation should unify with any error type.
+    const source =
+        \\get_greeting : {} -> Try(Str, _)
+        \\get_greeting = |{}| {
+        \\    match 0 {
+        \\        0 => Try.Ok(List.first(["hello"])?),
+        \\        _ => Err(Impossible)
+        \\    }
+        \\}
+    ;
+    // Expected: should pass type-checking with combined error type (open tag union)
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
 }

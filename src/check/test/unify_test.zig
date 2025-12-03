@@ -69,6 +69,7 @@ const TestEnv = struct {
     module_env: *ModuleEnv,
     snapshots: snapshot_mod.Store,
     problems: problem_mod.Store,
+    type_writer: types_mod.TypeWriter,
     scratch: Scratch,
     occurs_scratch: occurs.Scratch,
 
@@ -86,6 +87,7 @@ const TestEnv = struct {
             .module_env = module_env,
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),
             .problems = try problem_mod.Store.initCapacity(gpa, 16),
+            .type_writer = try types_mod.TypeWriter.initFromParts(gpa, &module_env.types, module_env.getIdentStore(), null),
             .scratch = try Scratch.init(module_env.gpa),
             .occurs_scratch = try occurs.Scratch.init(module_env.gpa),
         };
@@ -97,6 +99,7 @@ const TestEnv = struct {
         self.module_env.gpa.destroy(self.module_env);
         self.snapshots.deinit();
         self.problems.deinit(self.module_env.gpa);
+        self.type_writer.deinit();
         self.scratch.deinit();
         self.occurs_scratch.deinit();
     }
@@ -108,6 +111,7 @@ const TestEnv = struct {
             &self.module_env.types,
             &self.problems,
             &self.snapshots,
+            &self.type_writer,
             &self.scratch,
             &self.occurs_scratch,
             unify_mod.ModuleEnvLookup{},
@@ -173,6 +177,7 @@ const TestEnv = struct {
             backing_var,
             args,
             Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+            false, // Use nominal for tests
         );
     }
 

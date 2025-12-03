@@ -124,6 +124,8 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The expected return type of the enclosing function, if any.
 /// Used to correctly type-check `return` expressions inside loops etc.
 enclosing_func_return_type: ?Var,
+/// Type writer for formatting types at snapshot time
+type_writer: types_mod.TypeWriter,
 
 /// A map of rigid variables that we build up during a branch of type checking
 const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
@@ -211,7 +213,15 @@ pub fn init(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
+        // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
+        .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
     };
+}
+
+/// Call this after Check has been stored at its final location to set up the import_mapping pointer.
+/// This is needed because returning Check by value invalidates the pointer set during init.
+pub fn fixupTypeWriter(self: *Self) void {
+    self.type_writer.setImportMapping(&self.import_mapping);
 }
 
 /// Deinit owned fields
@@ -237,6 +247,7 @@ pub fn deinit(self: *Self) void {
     self.constraint_origins.deinit();
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
+    self.type_writer.deinit();
 }
 
 /// Assert that type vars and regions in sync
@@ -369,6 +380,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         self.types,
         &self.problems,
         &self.snapshots,
+        &self.type_writer,
         &self.unify_scratch,
         &self.occurs_scratch,
         unifier.ModuleEnvLookup{ .auto_imported = self.module_envs },
@@ -665,6 +677,7 @@ fn mkListContent(self: *Self, elem_var: Var, env: *Env) Allocator.Error!Content 
         backing_var,
         &type_args,
         origin_module_id,
+        false, // List is nominal (not opaque)
     );
 }
 
@@ -704,6 +717,7 @@ fn mkNumberTypeContent(self: *Self, type_name: []const u8, env: *Env) Allocator.
         backing_var,
         no_type_args,
         origin_module_id,
+        true, // Number types are opaque (defined with ::)
     );
 }
 
@@ -802,6 +816,7 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
         backing_var,
         &type_args,
         origin_module_id,
+        false, // Box is nominal (not opaque)
     );
 }
 
@@ -831,6 +846,7 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         backing_var,
         &type_args,
         origin_module_id,
+        false, // Try is nominal (not opaque)
     );
 }
 
@@ -867,6 +883,7 @@ fn mkNumeralContent(self: *Self, env: *Env) Allocator.Error!Content {
         backing_var,
         &.{}, // No type args
         origin_module_id,
+        true, // Numeral is opaque (defined with ::)
     );
 }
 
@@ -1354,6 +1371,7 @@ fn generateNominalDecl(
             backing_var,
             header_vars,
             self.builtin_ctx.module_name,
+            nominal.is_opaque,
         ),
         env,
     );
@@ -1595,6 +1613,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 this_decl.backing_var,
                                                 &.{},
                                                 self.builtin_ctx.module_name,
+                                                false, // Default to non-opaque for error case
                                             );
                                         },
                                     }
@@ -1689,6 +1708,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                                 this_decl.backing_var,
                                                 anno_arg_vars,
                                                 self.builtin_ctx.module_name,
+                                                false, // Default to non-opaque for error case
                                             );
                                         },
                                     }
@@ -3579,6 +3599,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
+        .e_inspect => |inspect| {
+            // inspect evaluates its inner expression and returns Str
+            // Note: does NOT set does_fx because inspect is pure
+            _ = try self.checkExpr(inspect.expr, env, .no_expectation);
+            const str_var = try self.freshStr(env, expr_region);
+            _ = try self.unify(expr_var, str_var, env);
+        },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
@@ -3915,7 +3942,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     }
                 };
                 if (!is_empty_record) {
-                    const snapshot = try self.snapshots.deepCopyVar(self.types, expr_var);
+                    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expr_var);
                     _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
                         .var_ = expr_var,
                         .snapshot = snapshot,
@@ -3929,6 +3956,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
                 _ = try self.unify(stmt_var, expr_var, env);
+            },
+            .s_inspect => |expr| {
+                // inspect returns Str (not the inner expression type)
+                _ = try self.checkExpr(expr.expr, env, .no_expectation);
+                const str_var = try self.freshStr(env, stmt_region);
+                _ = try self.unify(stmt_var, str_var, env);
             },
             .s_expect => |expr_stmt| {
                 does_fx = try self.checkExpr(expr_stmt.body, env, .no_expectation) or does_fx;
@@ -4045,6 +4078,9 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.body, return_var, env);
         },
         .s_dbg => |s| {
+            try self.unifyEarlyReturns(s.expr, return_var, env);
+        },
+        .s_inspect => |s| {
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
@@ -5040,7 +5076,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             // Get some data about the nominal type
             const region = self.getRegionAt(deferred_constraint.var_);
-            const type_name_bytes = self.cir.getIdent(nominal_type.ident.ident_idx);
 
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
@@ -5051,11 +5086,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 std.debug.assert(mb_resolved_func != null);
                 const resolved_func = mb_resolved_func.?;
 
-                // Look up the method in the original env.
+                // Look up the method in the original env using index-based lookup.
                 // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
-                // Use the module's getMethodIdent to build and look up the qualified name.
-                const method_name_bytes = self.cir.getIdent(constraint.fn_name);
-                const method_ident = original_env.getMethodIdent(type_name_bytes, method_name_bytes) orelse {
+                const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
                     // Method name doesn't exist in target module
                     try self.reportConstraintError(
                         deferred_constraint.var_,
@@ -5344,7 +5377,7 @@ fn reportConstraintError(
     },
     env: *Env,
 ) !void {
-    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
             .dispatcher_does_not_impl_method = .{
@@ -5377,7 +5410,7 @@ fn reportEqualityError(
     constraint: StaticDispatchConstraint,
     env: *Env,
 ) !void {
-    const snapshot = try self.snapshots.deepCopyVar(self.types, dispatcher_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const equality_problem = problem.Problem{ .static_dispach = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,

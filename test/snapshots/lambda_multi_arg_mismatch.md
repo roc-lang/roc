@@ -86,7 +86,7 @@ The first argument has the type:
     _Str_
 
 But the seventh argument has the type:
-    _[True][ProvidedByCompiler]_
+    _[True, ..[ProvidedByCompiler, .._others]]_
 
 `multi_arg_fn` needs these arguments to have compatible types.
 

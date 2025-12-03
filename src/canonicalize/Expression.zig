@@ -352,6 +352,16 @@ pub const Expr = union(enum) {
     e_dbg: struct {
         expr: Expr.Idx,
     },
+    /// An inspect expression that returns a string representation of a value.
+    /// If the type has a `to_inspect : T -> Str` method, it calls that method.
+    /// Otherwise, it generates an automatic string representation like the REPL.
+    ///
+    /// ```roc
+    /// str = inspect someValue
+    /// ```
+    e_inspect: struct {
+        expr: Expr.Idx,
+    },
     /// An expect expression that performs a runtime assertion.
     /// This expression evaluates to empty record {} but can fail at runtime.
     /// Used for both top-level tests and inline assertions.
@@ -488,6 +498,8 @@ pub const Expr = union(enum) {
         list_concat,
         list_with_capacity,
         list_sort_with,
+        list_drop_at,
+        list_sublist,
         list_append,
 
         // Set operations
@@ -510,6 +522,8 @@ pub const Expr = union(enum) {
 
         // Numeric arithmetic operations
         num_negate, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs_diff, // All numeric types (signed returns unsigned counterpart)
         num_plus, // All numeric types
         num_minus, // All numeric types
         num_times, // All numeric types
@@ -847,13 +861,15 @@ pub const Expr = union(enum) {
                 .list_with_capacity => &.{.borrow}, // capacity is value type
                 .list_sort_with => &.{.consume},
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
+                .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
+                .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
 
                 // Bool operations - value types
                 .bool_is_eq => &.{ .borrow, .borrow },
 
                 // Numeric operations - all value types (no heap allocation)
-                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate => &.{.borrow},
-                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by => &.{ .borrow, .borrow },
+                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
+                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff => &.{ .borrow, .borrow },
 
                 // Numeric parsing - list borrowed for digits, string borrowed
                 .num_from_int_digits => &.{.borrow},
@@ -1824,6 +1840,17 @@ pub const Expr = union(enum) {
             .e_dbg => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-dbg");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_inspect => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-inspect");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

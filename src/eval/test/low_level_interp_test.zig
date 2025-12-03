@@ -195,7 +195,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
         if (i == decl_index) {
             defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, can.ModuleEnv.varFrom(def.expr));
-            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var);
+            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var, ops);
         }
     }
 
@@ -847,6 +847,131 @@ test "e_low_level_lambda - List.append for already refcounted elt" {
 
     const len_value = try evalModuleAndGetInt(src, 3);
     try testing.expectEqual(@as(i128, 4), len_value);
+}
+
+test "e_low_level_lambda - List.drop_at on an empty list at index 0" {
+    const src =
+        \\x = List.drop_at([], 0)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.drop_at on an empty list at index >0" {
+    const src =
+        \\x = List.drop_at([], 10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.drop_at on non-empty list" {
+    const src =
+        \\x = List.drop_at([1, 2, 3], 0)
+        \\len = List.len(x)
+        \\first = List.get(x, 0)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 2), len_value);
+
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(2)", value);
+}
+
+test "e_low_level_lambda - List.drop_at out of bounds on non-empty list" {
+    const src =
+        \\x = List.drop_at([1, 2, 3, 4, 5], 10)
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "e_low_level_lambda - List.drop_at on refcounted List(Str)" {
+    const src =
+        \\x = List.drop_at(["cat", "chases", "rat"], 1)
+        \\len = List.len(x)
+        \\second = List.get(x, 1)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 2), len_value);
+
+    const value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("Ok(\"rat\")", value);
+}
+
+test "e_low_level_lambda - List.drop_at on refcounted List(List(Str))" {
+    const src =
+        \\x = List.drop_at([["two", "words"], [], ["a", "four", "word", "list"]], 1)
+        \\len = List.len(x)
+        \\second = Try.ok_or(List.get(x, 1), [])
+        \\elt_len =  List.len(second)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 2), len_value);
+
+    const elt_len_value = try evalModuleAndGetInt(src, 3);
+    try testing.expectEqual(@as(i128, 4), elt_len_value);
+}
+
+test "e_low_level_lambda - List.sublist on empty list" {
+    const src =
+        \\x = List.sublist([], {start: 0, len: 10})
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.sublist on non-empty list" {
+    const src =
+        \\x = List.sublist([0, 1, 2, 3, 4], {start: 1, len: 3})
+        \\len = List.len(x)
+        \\slice_start = List.get(x, 0)
+        \\slice_end = List.get(x, 2)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 3), len_value);
+
+    const head_value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(head_value);
+    try testing.expectEqualStrings("Ok(1)", head_value);
+
+    const tail_value = try evalModuleAndGetString(src, 3, test_allocator);
+    defer test_allocator.free(tail_value);
+    try testing.expectEqualStrings("Ok(3)", tail_value);
+}
+
+test "e_low_level_lambda - List.sublist start out of bounds" {
+    const src =
+        \\x = List.sublist([0, 1, 2, 3, 4], {start: 100, len: 3})
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 0), len_value);
+}
+
+test "e_low_level_lambda - List.sublist requesting beyond end of list gives you input list" {
+    const src =
+        \\x = List.sublist([0, 1, 2, 3, 4], {start: 0, len: 10000})
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 5), len_value);
 }
 
 test "e_low_level_lambda - Dec.to_str returns string representation of decimal" {

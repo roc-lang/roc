@@ -50,14 +50,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-# Opaque type with underscore-prefixed parameter - should be allowed
-OpaqueType(_a) := Str
-
-# Opaque type with multiple parameters including underscore-prefixed
-OpaqueType2(_a, b) := b
-
-# Opaque type where underscore comes second
-OpaqueType3(a, _b) := a
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -1121,6 +1121,16 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
+        .KwInspect => {
+            const start = self.pos;
+            self.advance();
+            const expr = try self.parseExpr();
+            const statement_idx = try self.store.addStatement(.{ .inspect = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
+        },
         .KwReturn => {
             const start = self.pos;
             self.advance();
@@ -1224,7 +1234,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     // Point to the unexpected token (e.g., "U8" in "List U8")
                     return try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
                 }
-                const kind: AST.TypeDeclKind = if (self.peek() == .OpColonEqual or self.peek() == .OpDoubleColon) .nominal else .alias;
+                const kind: AST.TypeDeclKind = switch (self.peek()) {
+                    .OpColonEqual => .nominal,
+                    .OpDoubleColon => .@"opaque",
+                    else => .alias,
+                };
                 self.advance();
                 const anno = try self.parseTypeAnno(.not_looking_for_args);
                 const where_clause = try self.parseWhereConstraint();
@@ -2153,6 +2167,14 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .expr = e,
             } });
         },
+        .KwInspect => {
+            self.advance();
+            const e = try self.parseExpr();
+            expr = try self.store.addExpr(.{ .inspect = .{
+                .region = .{ .start = start, .end = self.pos },
+                .expr = e,
+            } });
+        },
         .KwFor => {
             self.advance();
             const patt = try self.parsePattern(.alternatives_forbidden);
@@ -2756,14 +2778,37 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenSquare => {
             self.advance(); // Advance past OpenSquare
             const scratch_top = self.store.scratchTypeAnnoTop();
-            self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseSquare, NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
+            var open_anno: ?AST.TypeAnno.Idx = null;
+
+            // Parse tag union elements, with support for open union extension
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                if (self.peek() == .DoubleDot) {
+                    // Handle open tag union extension: [Tag, ..ext]
+                    self.advance(); // consume DoubleDot
+
+                    if (self.peek() == .LowerIdent) {
+                        // Parse the extension type variable
+                        open_anno = try self.parseTypeAnno(.looking_for_args);
+                    }
+                    // If no identifier follows .., it's an anonymous extension (just ..)
+                    // Break out since .. must be the last element
+                    break;
+                } else {
+                    // Regular tag in the union
+                    try NodeStore.addScratchTypeAnno(&self.store, try parseTypeAnnoInCollection(self));
+                    self.expect(.Comma) catch {
+                        break;
+                    };
+                }
+            }
+            self.expect(.CloseSquare) catch {
                 self.store.clearScratchTypeAnnosFrom(scratch_top);
                 return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
             };
             const tags = try self.store.typeAnnoSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .tag_union = .{
                 .region = .{ .start = start, .end = self.pos },
-                .open_anno = null,
+                .open_anno = open_anno,
                 .tags = tags,
             } });
         },

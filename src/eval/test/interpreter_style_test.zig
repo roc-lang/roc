@@ -318,7 +318,7 @@ test "interpreter: literal tag renders as tag name" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("MyTag", rendered);
 }
@@ -337,7 +337,7 @@ test "interpreter: True == False yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -358,7 +358,7 @@ test "interpreter: \"hi\" == \"hi\" yields True" {
     //
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -377,7 +377,7 @@ test "interpreter: (1, 2) == (1, 2) yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -396,7 +396,7 @@ test "interpreter: (1, 2) == (2, 1) yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -415,7 +415,7 @@ test "interpreter: { x: 1, y: 2 } == { y: 2, x: 1 } yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -434,7 +434,7 @@ test "interpreter: { x: 1, y: 2 } == { x: 1, y: 3 } yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -564,7 +564,7 @@ test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -583,7 +583,7 @@ test "interpreter: [1, 2, 3] == [1, 3, 2] yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -602,7 +602,7 @@ test "interpreter: Ok(1) == Ok(1) yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -621,7 +621,7 @@ test "interpreter: Ok(1) == Err(1) yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -712,7 +712,7 @@ test "interpreter: render Try.Ok literal" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("Ok(42)", rendered);
 }
@@ -731,7 +731,7 @@ test "interpreter: render Try.Err string" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("Err(\"boom\")", rendered);
 }
@@ -750,7 +750,7 @@ test "interpreter: render Try.Ok tuple payload" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("Ok((1, 2))", rendered);
 }
@@ -974,7 +974,7 @@ test "interpreter: List.any True on integers" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -994,7 +994,7 @@ test "interpreter: List.any False on unsigned integers" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1014,7 +1014,7 @@ test "interpreter: List.any False on empty list" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1034,7 +1034,7 @@ test "interpreter: List.all False when some elements are False" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1054,7 +1054,7 @@ test "interpreter: List.all True on small integers" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1074,7 +1074,7 @@ test "interpreter: List.all False on empty list" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1094,7 +1094,7 @@ test "interpreter: List.contains is False for a missing element" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1114,7 +1114,7 @@ test "interpreter: List.contains is True when element is found" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1134,7 +1134,7 @@ test "interpreter: List.contains is False on empty list" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1173,7 +1173,7 @@ test "interpreter: expect expression succeeds" {
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     try std.testing.expect(host.crashState() == .did_not_crash);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("{}", rendered);
 }
@@ -1211,7 +1211,7 @@ test "interpreter: empty record expression renders {}" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("{}", rendered);
 }
@@ -1258,7 +1258,7 @@ test "interpreter: f64 equality True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1277,7 +1277,7 @@ test "interpreter: decimal equality True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1306,7 +1306,7 @@ test "interpreter: int and f64 equality True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1335,7 +1335,7 @@ test "interpreter: int and decimal equality True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1354,7 +1354,7 @@ test "interpreter: int less-than yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1373,7 +1373,7 @@ test "interpreter: int greater-than yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1392,7 +1392,7 @@ test "interpreter: 0.1 + 0.2 yields 0.3" {
 
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("0.3", rendered);
 }
@@ -1411,7 +1411,7 @@ test "interpreter: f64 greater-than yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1430,7 +1430,7 @@ test "interpreter: decimal less-than-or-equal yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1449,7 +1449,7 @@ test "interpreter: int and f64 less-than yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1468,7 +1468,7 @@ test "interpreter: int and decimal greater-than yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1487,7 +1487,7 @@ test "interpreter: bool inequality yields True" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("True", rendered);
 }
@@ -1506,7 +1506,7 @@ test "interpreter: decimal inequality yields False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1525,7 +1525,7 @@ test "interpreter: f64 equality False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }
@@ -1544,7 +1544,7 @@ test "interpreter: decimal equality False" {
 
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
-    //     const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    //     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("False", rendered);
 }

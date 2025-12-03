@@ -834,12 +834,14 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
     try tree.toStringPretty(writer, .include_linecol);
 }
 
-/// The kind of the type declaration represented, either:
+/// The kind of the type declaration represented:
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
+/// 3. An opaque type of the form `Foo :: [Bar, Baz]`
 pub const TypeDeclKind = enum {
     alias,
     nominal,
+    @"opaque",
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.
@@ -859,6 +861,10 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     },
     dbg: struct {
+        expr: Expr.Idx,
+        region: TokenizedRegion,
+    },
+    inspect: struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
@@ -1080,6 +1086,16 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .inspect => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-inspect");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .expect => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-expect");
@@ -1173,6 +1189,7 @@ pub const Statement = union(enum) {
             .type_decl => |s| s.region,
             .crash => |s| s.region,
             .dbg => |s| s.region,
+            .inspect => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
             .@"while" => |s| s.region,
@@ -2387,6 +2404,10 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
+    inspect: struct {
+        expr: Expr.Idx,
+        region: TokenizedRegion,
+    },
     record_builder: struct {
         mapper: Expr.Idx,
         fields: RecordField.Idx,
@@ -2447,6 +2468,7 @@ pub const Expr = union(enum) {
             .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
+            .inspect => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
@@ -2700,6 +2722,15 @@ pub const Expr = union(enum) {
             .dbg => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-dbg");
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .inspect => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-inspect");
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);

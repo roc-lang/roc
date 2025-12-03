@@ -34,7 +34,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _[A]_others_
+    _[A, .._others]_
 
 
 # TOKENS
@@ -70,5 +70,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[A]_others"))
+(expr (type "[A, .._others]"))
 ~~~

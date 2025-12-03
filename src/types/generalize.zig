@@ -56,6 +56,7 @@ const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
 const Rank = @import("types.zig").Rank;
+const StaticDispatchConstraint = @import("types.zig").StaticDispatchConstraint;
 const Ident = base.Ident;
 
 /// Manages the generalization process for type variables.
@@ -204,6 +205,13 @@ pub const Generalizer = struct {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                } else if (self.hasNumeralConstraint(resolved.desc.content)) {
+                    // Flex var with numeric constraint - don't generalize.
+                    // This ensures numeric literals like `x = 15` stay monomorphic so that
+                    // later usage like `I64.to_str(x)` can constrain x to I64.
+                    // Without this, let-generalization would create a fresh copy at each use,
+                    // leaving the original as an unconstrained flex var that defaults to Dec.
+                    try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Rank unchanged - safe to generalize
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
@@ -213,6 +221,24 @@ pub const Generalizer = struct {
 
         // Clear the rank we just processed from the main pool
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
+    }
+
+    /// Check if a type content is a flex var with a from_numeral constraint.
+    /// Numeric flex vars should not be generalized so that later usages can
+    /// constrain them to a specific numeric type (e.g., I64, Dec, etc.).
+    fn hasNumeralConstraint(self: *Self, content: Content) bool {
+        switch (content) {
+            .flex => |flex| {
+                const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
+                for (constraints) |constraint| {
+                    if (constraint.origin == .from_numeral) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            else => return false,
+        }
     }
 
     // adjust rank //

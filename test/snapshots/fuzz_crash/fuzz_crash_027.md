@@ -876,7 +876,7 @@ tuple : Value((a, b, c))
 
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **fuzz_crash_027.md:21:3:22:4:**
 ```roc
 		List( #rg
@@ -940,7 +940,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue][ProvidedByCompiler]_
+    _[Red, Blue, ..[ProvidedByCompiler, .._others2]]_
 
 All patterns in an `match` must have compatible types.
 
@@ -955,7 +955,7 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    _d_
+    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -970,7 +970,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red, Blue][ProvidedByCompiler], _arg -> Error_
+    _[Red, Blue, ..[ProvidedByCompiler, .._others2]], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -982,7 +982,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _d_
+    __d_
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -1038,10 +1038,10 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Error)][Err(d), Ok({  })]_
+    _[Stdoline!(Error), ..[Err(_d), Ok({  }), .._others2]]_
 
 But the type annotation says it should have the type:
-    _Try(d)_
+    _Try({  }, _d)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2412,7 +2412,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
+		(patt (type "[Red, Blue, ..[ProvidedByCompiler, .._others2]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2449,7 +2449,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
+		(expr (type "[Red, Blue, ..[ProvidedByCompiler, .._others2]], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
