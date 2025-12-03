@@ -1260,6 +1260,21 @@ const Formatter = struct {
             .block => |b| {
                 try fmt.formatBlock(b);
             },
+            .for_expr => |f| {
+                try fmt.pushAll("for ");
+                _ = try fmt.formatPattern(f.patt);
+                try fmt.pushAll(" in ");
+                _ = try fmt.formatExpr(f.expr);
+                const body_region = fmt.nodeRegion(@intFromEnum(f.body));
+                const flushed = try fmt.flushCommentsBefore(body_region.start);
+                if (flushed) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(f.body);
+            },
             .ellipsis => |_| {
                 try fmt.pushAll("...");
             },
@@ -2266,6 +2281,13 @@ const Formatter = struct {
                         }
 
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, l.right);
+                    },
+                    .for_expr => |f| {
+                        if (fmt.nodeWillBeMultiline(AST.Expr.Idx, f.expr)) {
+                            return true;
+                        }
+
+                        return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.body);
                     },
                     else => return false,
                 }
