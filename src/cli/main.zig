@@ -1995,122 +1995,70 @@ pub const PlatformPaths = struct {
 /// Resolve platform specification from a Roc file to find both host library and platform source.
 /// Returns PlatformPaths with arena-allocated paths (no need to free).
 pub fn resolvePlatformPaths(allocs: *Allocators, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })!PlatformPaths {
-    // Read the Roc file to parse the app header
-    const roc_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return error.NoPlatformFound,
-        else => return error.NoPlatformFound, // Treat all file errors as no platform found
-    };
-    defer roc_file.close();
-
-    const file_size = roc_file.getEndPos() catch return error.NoPlatformFound;
-    const source = allocs.gpa.alloc(u8, @intCast(file_size)) catch return error.OutOfMemory;
-    defer allocs.gpa.free(source);
-    _ = roc_file.read(source) catch return error.NoPlatformFound;
-
-    // Parse the source to find the app header
-    // Look for "app" followed by platform specification
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-
-        // Check if this is an app header line
-        if (std.mem.startsWith(u8, trimmed, "app")) {
-            // Look for platform specification after "platform"
-            if (std.mem.indexOf(u8, trimmed, "platform")) |platform_start| {
-                const after_platform = trimmed[platform_start + "platform".len ..];
-
-                // Find the platform name/URL in quotes
-                if (std.mem.indexOf(u8, after_platform, "\"")) |quote_start| {
-                    const after_quote = after_platform[quote_start + 1 ..];
-                    if (std.mem.indexOf(u8, after_quote, "\"")) |quote_end| {
-                        const platform_spec = after_quote[0..quote_end];
-
-                        // If it's a relative path, resolve it relative to the app directory
-                        if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../")) {
-                            const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-                            const platform_path = try std.fs.path.join(allocs.arena, &.{ app_dir, platform_spec });
-
-                            // Look for host library near the platform file
-                            const platform_dir = std.fs.path.dirname(platform_path) orelse ".";
-                            const host_filename = if (comptime builtin.target.os.tag == .windows) "host.lib" else "libhost.a";
-                            const host_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, host_filename });
-
-                            std.fs.cwd().access(host_path, .{}) catch {
-                                return error.PlatformNotSupported;
-                            };
-
-                            // Try to find platform source file (commonly main.roc but could be anything)
-                            const platform_source_path = blk: {
-                                // First try the exact path if it's a .roc file
-                                if (std.mem.endsWith(u8, platform_path, ".roc")) {
-                                    std.fs.cwd().access(platform_path, .{}) catch break :blk null;
-                                    break :blk platform_path;
-                                }
-
-                                // Try common platform source names in the platform directory
-                                const common_names = [_][]const u8{ "main.roc", "platform.roc", "Platform.roc" };
-                                for (common_names) |name| {
-                                    const source_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, name });
-                                    std.fs.cwd().access(source_path, .{}) catch continue;
-                                    break :blk source_path;
-                                }
-                                break :blk null;
-                            };
-
-                            return PlatformPaths{
-                                .host_lib_path = host_path,
-                                .platform_source_path = platform_source_path,
-                            };
-                        }
-
-                        // Try to resolve platform to a local host library and source
-                        const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-                        return resolvePlatformSpecToPaths(allocs, platform_spec, app_dir);
-                    }
-                }
-            }
-        }
-    }
-
-    return error.NoPlatformFound;
+    // Use the parser to extract the platform spec
+    const platform_spec = extractPlatformSpecFromApp(allocs, roc_file_path) catch return error.NoPlatformFound;
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+    return resolvePlatformSpecToPaths(allocs, platform_spec, app_dir);
 }
 
-/// Extract platform specification from app file header using simple string parsing
-///
-/// TODO use this information from BuildEnv once we have the parser/can/typechcking setup
-/// for multiple modules, and we have this information available. This is just a temporary hack
-/// for testing now.
+/// Extract platform specification from app file header by parsing it properly.
 fn extractPlatformSpecFromApp(allocs: *Allocators, app_file_path: []const u8) ![]const u8 {
     // Read the app file
     const source = std.fs.cwd().readFileAlloc(allocs.gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
     defer allocs.gpa.free(source);
 
-    // Simple string parsing to find platform specification
-    // Look for pattern: platform "..." or platform ".../..."
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (std.mem.startsWith(u8, trimmed, "app ")) {
-            // Look for pf: platform "..." pattern
-            if (std.mem.indexOf(u8, trimmed, "pf: platform \"")) |start_idx| {
-                const after_quote = start_idx + 14; // length of "pf: platform \""
-                if (std.mem.indexOfScalarPos(u8, trimmed, after_quote, '"')) |end_idx| {
-                    const platform_path = trimmed[after_quote..end_idx];
-                    return try allocs.arena.dupe(u8, platform_path);
-                }
-            }
-            // Also try alternative format: platform "..."
-            if (std.mem.indexOf(u8, trimmed, "platform \"")) |start_idx| {
-                const quote_start = start_idx + 10; // length of "platform \""
-                if (std.mem.indexOfScalarPos(u8, trimmed, quote_start, '"')) |end_idx| {
-                    const platform_path = trimmed[quote_start..end_idx];
-                    return try allocs.arena.dupe(u8, platform_path);
-                }
-            }
-        }
-    }
+    // Extract module name from file path
+    const basename = std.fs.path.basename(app_file_path);
+    const module_name = try allocs.arena.dupe(u8, basename);
 
-    return error.NotAppFile;
+    // Create ModuleEnv for parsing
+    var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    env.common.calcLineStarts(allocs.gpa) catch return error.ParseFailed;
+
+    // Parse the source
+    var ast = parse.parse(&env.common, allocs.gpa) catch return error.ParseFailed;
+    defer ast.deinit(allocs.gpa);
+
+    // Get the file header
+    const file = ast.store.getFile();
+    const header = ast.store.getHeader(file.header);
+
+    // Check if this is an app file
+    switch (header) {
+        .app => |a| {
+            // Get the platform field
+            const pf = ast.store.getRecordField(a.platform_idx);
+            const value_expr = pf.value orelse return error.NotAppFile;
+
+            // Extract the string value from the expression
+            const platform_spec = stringFromExpr(&ast, value_expr) catch return error.NotAppFile;
+            return try allocs.arena.dupe(u8, platform_spec);
+        },
+        else => return error.NotAppFile,
+    }
+}
+
+/// Extract a string value from an expression (for platform/package paths).
+fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
+    const e = ast.store.getExpr(expr_idx);
+    return switch (e) {
+        .string => |s| {
+            // For simple strings, iterate through the parts
+            for (ast.store.exprSlice(s.parts)) |part_idx| {
+                const part = ast.store.getExpr(part_idx);
+                if (part == .string_part) {
+                    // Return the first string part (platform specs are simple strings)
+                    return ast.resolve(part.string_part.token);
+                }
+            }
+            return error.ExpectedString;
+        },
+        else => error.ExpectedString,
+    };
 }
 
 /// Resolve a platform specification to both host library and platform source paths
@@ -2656,7 +2604,11 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
 
     // Create temporary output file
     const temp_filename = "temp_bundle.tar.zst";
-    const temp_file = try tmp_dir.createFile(temp_filename, .{});
+    const temp_file = try tmp_dir.createFile(temp_filename, .{
+        // Allow querying metadata (stat) on the handle, necessary for windows
+        .read = true,
+        .truncate = true,
+    });
     defer temp_file.close();
 
     // Create file path iterator

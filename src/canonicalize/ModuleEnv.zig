@@ -18,6 +18,7 @@ const DependencyGraph = @import("DependencyGraph.zig");
 
 const TypeWriter = types_mod.TypeWriter;
 const CompactWriter = collections.CompactWriter;
+const SortedArrayBuilder = collections.SortedArrayBuilder;
 const CommonEnv = base.CommonEnv;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
@@ -152,6 +153,7 @@ pub const CommonIdents = extern struct {
     digits_after_pt: Ident.Idx,
     box_method: Ident.Idx,
     unbox_method: Ident.Idx,
+    to_inspect: Ident.Idx,
     ok: Ident.Idx,
     err: Ident.Idx,
     from_numeral: Ident.Idx,
@@ -222,6 +224,7 @@ pub const CommonIdents = extern struct {
             .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
             .box_method = try common.insertIdent(gpa, Ident.for_text("box")),
             .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
+            .to_inspect = try common.insertIdent(gpa, Ident.for_text("to_inspect")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
@@ -295,6 +298,7 @@ pub const CommonIdents = extern struct {
             .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
             .box_method = common.findIdent("box") orelse unreachable,
             .unbox_method = common.findIdent("unbox") orelse unreachable,
+            .to_inspect = common.findIdent("to_inspect") orelse unreachable,
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
@@ -314,6 +318,19 @@ pub const CommonIdents = extern struct {
         };
     }
 };
+
+/// Key for method identifier lookup: (type_ident, method_ident) pair.
+pub const MethodKey = packed struct(u64) {
+    type_ident: Ident.Idx,
+    method_ident: Ident.Idx,
+};
+
+/// Mapping from (type_ident, method_ident) pairs to their qualified method ident.
+/// This enables O(log n) index-based method lookup instead of O(n) string comparison.
+/// The value is the qualified method ident (e.g., "Bool.is_eq" for type "Bool" and method "is_eq").
+///
+/// This is populated during canonicalization when methods are defined in associated blocks.
+pub const MethodIdents = SortedArrayBuilder(MethodKey, Ident.Idx);
 
 gpa: std.mem.Allocator,
 
@@ -370,6 +387,11 @@ deferred_numeric_literals: DeferredNumericLiteral.SafeList,
 /// Example: "MyModule.Foo" -> "F" if user has `import MyModule exposing [Foo as F]`
 import_mapping: types_mod.import_mapping.ImportMapping,
 
+/// Mapping from (type_ident, method_ident) pairs to qualified method idents.
+/// Enables O(1) index-based method lookup during type checking and evaluation.
+/// Populated during canonicalization when methods are defined in associated blocks.
+method_idents: MethodIdents,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
@@ -404,6 +426,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
+    self.method_idents.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -462,6 +485,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .idents = idents,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+        .method_idents = MethodIdents.init(),
     };
 }
 
@@ -474,6 +498,7 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
+    self.method_idents.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1892,6 +1917,7 @@ pub const Serialized = extern struct {
     idents: CommonIdents,
     deferred_numeric_literals: DeferredNumericLiteral.SafeList.Serialized,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
+    method_idents: MethodIdents.Serialized,
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -1933,6 +1959,8 @@ pub const Serialized = extern struct {
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
+        // Serialize method_idents map
+        try self.method_idents.serialize(&env.method_idents, allocator, writer);
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
@@ -1979,6 +2007,7 @@ pub const Serialized = extern struct {
             .idents = self.idents,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = self.method_idents.deserialize(offset).*,
         };
 
         return env;
@@ -2682,23 +2711,116 @@ pub fn getMethodIdent(self: *const Self, type_name: []const u8, method_name: []c
     }
 }
 
-/// Looks up a method identifier on a type using ident indices instead of strings.
-/// This is the semantic alternative to string-based method lookup - it takes
-/// the type's ident and method's ident directly, avoiding string manipulation at the call site.
+/// Registers a method identifier mapping for fast index-based lookup.
+/// This should be called during canonicalization when a method is defined in an associated block.
+///
+/// Parameters:
+/// - type_ident: The type's identifier index (e.g., the ident for "Bool")
+/// - method_ident: The method's identifier index (e.g., the ident for "is_eq")
+/// - qualified_ident: The qualified method ident (e.g., "Bool.is_eq")
+pub fn registerMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) !void {
+    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+    try self.method_idents.put(self.gpa, key, qualified_ident);
+}
+
+/// Looks up a method identifier by type and method ident indices.
+/// This is the fast O(log n) index-based lookup that avoids string comparison.
+///
+/// Parameters:
+/// - type_ident: The type's identifier index (must be in this module's ident store)
+/// - method_ident: The method's identifier index (must be in this module's ident store)
+///
+/// Returns the qualified method's ident index if found, or null if not registered.
+pub fn lookupMethodIdent(self: *Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+    return self.method_idents.get(self.gpa, key);
+}
+
+/// Looks up a method identifier by type and method ident indices (const version).
+/// This is the fast O(log n) index-based lookup that avoids string comparison.
+pub fn lookupMethodIdentConst(self: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    const key = MethodKey{ .type_ident = type_ident, .method_ident = method_ident };
+    // Cast away const for the get operation (it doesn't modify the structure, just ensures sorted)
+    const mutable_self = @constCast(self);
+    return mutable_self.method_idents.get(self.gpa, key);
+}
+
+/// Looks up a method identifier by translating idents from a source environment.
+/// This first finds the corresponding idents in this module, then does index-based lookup.
 ///
 /// Parameters:
 /// - source_env: The module environment where type_ident and method_ident are from
-///               (may be different from self when doing cross-module lookup)
-/// - type_ident: The type's identifier index (e.g., the ident for "Num.U64" or "Bool")
-/// - method_ident: The method's identifier index (e.g., the ident for "from_numeral")
+/// - type_ident: The type's identifier index in source_env
+/// - method_ident: The method's identifier index in source_env
 ///
 /// Returns the qualified method's ident index if found, or null if the method doesn't exist.
-/// This internally resolves the idents to strings and builds the qualified name.
-pub fn getMethodIdentByIdents(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    // Resolve idents from the source environment (where they were defined)
+/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
+pub fn lookupMethodIdentFromEnv(self: *Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    // First, try to find the type and method idents in our own ident store
     const type_name = source_env.getIdent(type_ident);
     const method_name = source_env.getIdent(method_ident);
-    // Look up in this module's ident store
+
+    // Find corresponding idents in this module
+    const local_type_ident = self.common.findIdent(type_name) orelse return null;
+    const local_method_ident = self.common.findIdent(method_name) orelse return null;
+
+    // Try index-based lookup first (O(log n))
+    if (self.lookupMethodIdent(local_type_ident, local_method_ident)) |result| {
+        return result;
+    }
+
+    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
+    // that don't have method_idents populated. This can be removed once all modules are recompiled.
+    return self.getMethodIdent(type_name, method_name);
+}
+
+/// Const version of lookupMethodIdentFromEnv for use with immutable module environments.
+/// Safe to use on deserialized modules since method_idents is already sorted.
+/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
+pub fn lookupMethodIdentFromEnvConst(self: *const Self, source_env: *const Self, type_ident: Ident.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    // First, try to find the type and method idents in our own ident store
+    const type_name = source_env.getIdent(type_ident);
+    const method_name = source_env.getIdent(method_ident);
+
+    // Find corresponding idents in this module
+    const local_type_ident = self.common.findIdent(type_name) orelse return null;
+    const local_method_ident = self.common.findIdent(method_name) orelse return null;
+
+    // Try index-based lookup first (O(log n))
+    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
+        return result;
+    }
+
+    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
+    // that don't have method_idents populated. This can be removed once all modules are recompiled.
+    return self.getMethodIdent(type_name, method_name);
+}
+
+/// Looks up a method identifier when the type and method idents come from different source environments.
+/// This is needed when e.g. type_ident is from runtime layout store and method_ident is from CIR.
+/// Falls back to string-based getMethodIdent for backward compatibility with pre-compiled modules.
+pub fn lookupMethodIdentFromTwoEnvsConst(
+    self: *const Self,
+    type_source_env: *const Self,
+    type_ident: Ident.Idx,
+    method_source_env: *const Self,
+    method_ident: Ident.Idx,
+) ?Ident.Idx {
+    // Get strings from respective source environments
+    const type_name = type_source_env.getIdent(type_ident);
+    const method_name = method_source_env.getIdent(method_ident);
+
+    // Find corresponding idents in this module
+    const local_type_ident = self.common.findIdent(type_name) orelse return null;
+    const local_method_ident = self.common.findIdent(method_name) orelse return null;
+
+    // Try index-based lookup first (O(log n))
+    if (self.lookupMethodIdentConst(local_type_ident, local_method_ident)) |result| {
+        return result;
+    }
+
+    // Fall back to string-based lookup for backward compatibility with pre-compiled modules
+    // that don't have method_idents populated. This can be removed once all modules are recompiled.
     return self.getMethodIdent(type_name, method_name);
 }
 

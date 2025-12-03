@@ -2478,3 +2478,22 @@ test "imports of non-existent modules produce MODULE NOT FOUND errors" {
     // 3. utils.String
     try testing.expectEqual(@as(usize, 3), module_not_found_count);
 }
+
+// Try with match and error propagation //
+
+test "check type - try return with match and error propagation should type-check" {
+    // This tests that a function returning Try(Str, _) with a wildcard error type
+    // should accept both error propagation (?) and explicit Err tags in match branches.
+    // The wildcard _ in the return type annotation should unify with any error type.
+    const source =
+        \\get_greeting : {} -> Try(Str, _)
+        \\get_greeting = |{}| {
+        \\    match 0 {
+        \\        0 => Try.Ok(List.first(["hello"])?),
+        \\        _ => Err(Impossible)
+        \\    }
+        \\}
+    ;
+    // Expected: should pass type-checking with combined error type (open tag union)
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
+}

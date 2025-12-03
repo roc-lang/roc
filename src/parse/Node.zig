@@ -83,6 +83,11 @@ pub const Tag = enum {
     /// * lhs - node index to expression being debugged
     /// * rhs - ignored
     dbg,
+    /// An inspect expression
+    /// Example: `inspect someValue`
+    /// * lhs - node index to expression being inspected
+    /// * rhs - ignored
+    inspect,
     /// Any plain expression - see Exprs below
     /// * lhs - node index for block or expr
     /// * rhs - ignored
@@ -127,6 +132,15 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_nominal,
+    /// A Type declaration for opaque types
+    /// Example: `Color :: { red : U8, green: U8, blue: U8 }`
+    /// Example: `Color :: [Red, Green, Blue]`
+    /// * main_token - upper_ident for type ident
+    /// * lhs - describes extra_data: struct(packed){ num_type_args: u31, has_where: u1 }
+    /// * rhs - extra_data index
+    /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
+    /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
+    type_decl_opaque,
     /// A Type annotation
     /// Example: `main! : List Str => Try {} _`
     /// Example: `colors : List Color`

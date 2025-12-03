@@ -195,7 +195,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
         if (i == decl_index) {
             defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, can.ModuleEnv.varFrom(def.expr));
-            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var);
+            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var, ops);
         }
     }
 

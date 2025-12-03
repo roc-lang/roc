@@ -725,7 +725,7 @@ pub const Interpreter = struct {
 
         const rendered = blk: {
             if (value_rt_var) |rt_var| {
-                break :blk try self.renderValueRocWithType(value, rt_var);
+                break :blk try self.renderValueRocWithType(value, rt_var, roc_ops);
             } else {
                 break :blk try self.renderValueRoc(value);
             }
@@ -6185,11 +6185,100 @@ pub const Interpreter = struct {
     fn makeRenderCtx(self: *Interpreter) render_helpers.RenderCtx {
         return .{
             .allocator = self.allocator,
-            .env = self.env,
+            .env = self.root_env, // Use root_env for consistent identifier lookups
             .runtime_types = self.runtime_types,
             .layout_store = &self.runtime_layout_store,
             .type_scope = &self.empty_scope,
         };
+    }
+
+    /// Context for the to_inspect callback containing both interpreter and RocOps.
+    const ToInspectCallbackContext = struct {
+        interpreter: *Interpreter,
+        roc_ops: *RocOps,
+    };
+
+    /// Make a render context with to_inspect callback enabled for recursive method calls.
+    /// This version is used when rendering values that may contain nested nominal types
+    /// with custom to_inspect methods (e.g., inside records).
+    fn makeRenderCtxWithCallback(self: *Interpreter, callback_ctx: *ToInspectCallbackContext) render_helpers.RenderCtx {
+        return .{
+            .allocator = self.allocator,
+            .env = self.root_env,
+            .runtime_types = self.runtime_types,
+            .layout_store = &self.runtime_layout_store,
+            .type_scope = &self.empty_scope,
+            .to_inspect_callback = toInspectCallback,
+            .callback_ctx = callback_ctx,
+        };
+    }
+
+    /// Callback for render_helpers to handle nominal types with custom to_inspect methods.
+    /// Returns the rendered string if the type has a to_inspect method, null otherwise.
+    fn toInspectCallback(ctx: *anyopaque, value: StackValue, rt_var: types.Var) ?[]u8 {
+        const cb_ctx: *ToInspectCallbackContext = @ptrCast(@alignCast(ctx));
+        const self = cb_ctx.interpreter;
+        const roc_ops = cb_ctx.roc_ops;
+
+        // Check if this is a nominal type with to_inspect
+        const resolved = self.runtime_types.resolveVar(rt_var);
+        if (resolved.desc.content != .structure) return null;
+        const nom = switch (resolved.desc.content.structure) {
+            .nominal_type => |n| n,
+            else => return null,
+        };
+
+        const maybe_method = self.tryResolveMethodByIdent(
+            nom.origin_module,
+            nom.ident.ident_idx,
+            self.env.idents.to_inspect,
+            roc_ops,
+        ) catch return null;
+
+        const method_func = maybe_method orelse return null;
+        defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+        // Found to_inspect - call it synchronously
+        if (method_func.layout.tag != .closure) return null;
+
+        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != 1) return null;
+
+        // Save state before calling to_inspect
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+
+        defer {
+            self.env = saved_env;
+            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+        }
+
+        // Copy the value to pass to the method
+        const copied_value = self.pushCopy(value, roc_ops) catch return null;
+
+        // Bind the parameter
+        self.bindings.append(.{
+            .pattern_idx = params[0],
+            .value = copied_value,
+            .expr_idx = @enumFromInt(0),
+            .source_env = self.env,
+        }) catch return null;
+
+        // Evaluate the method body
+        const result = self.eval(closure_header.body_idx, roc_ops) catch return null;
+        defer result.decref(&self.runtime_layout_store, roc_ops);
+
+        // The result should be a Str
+        if (result.layout.tag != .scalar) return null;
+        if (result.layout.data.scalar.tag != .str) return null;
+
+        const rs: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
+        const s = rs.asSlice();
+
+        // Return a copy of the string
+        return self.allocator.dupe(u8, s) catch return null;
     }
 
     pub fn renderValueRoc(self: *Interpreter, value: StackValue) Error![]u8 {
@@ -6197,11 +6286,14 @@ pub const Interpreter = struct {
         return render_helpers.renderValueRoc(&ctx, value);
     }
 
-    // removed duplicate
-
-    // Helper for REPL and tests: render a value given its runtime type var
-    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var) Error![]u8 {
-        var ctx = self.makeRenderCtx();
+    // Helper for REPL and tests: render a value given its runtime type var.
+    // Uses callback-enabled context for recursive to_inspect handling on nested nominal types.
+    pub fn renderValueRocWithType(self: *Interpreter, value: StackValue, rt_var: types.Var, roc_ops: *RocOps) Error![]u8 {
+        var cb_ctx = ToInspectCallbackContext{
+            .interpreter = self,
+            .roc_ops = roc_ops,
+        };
+        var ctx = self.makeRenderCtxWithCallback(&cb_ctx);
         return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
     }
 
@@ -6759,15 +6851,15 @@ pub const Interpreter = struct {
             return error.MethodLookupFailed;
         };
 
-        // Get type and method name strings from their respective stores.
+        // Use index-based lookup to find the qualified method ident.
         // nominal_ident comes from runtime types - always in runtime_layout_store.env
-        // (see translateTypeVar's nominal handling and mkNumberTypeContentRuntime)
         // method_name_ident comes from the CIR - in self.env
-        const type_name = self.runtime_layout_store.env.getIdent(nominal_ident);
-        const method_name_str = self.env.getIdent(method_name_ident);
-
-        // Use getMethodIdent which handles the qualified name construction properly
-        const method_ident = origin_env.getMethodIdent(type_name, method_name_str) orelse {
+        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+            self.runtime_layout_store.env,
+            nominal_ident,
+            self.env,
+            method_name_ident,
+        ) orelse {
             return error.MethodLookupFailed;
         };
 
@@ -6782,6 +6874,68 @@ pub const Interpreter = struct {
                 }
             }
             return error.MethodLookupFailed;
+        };
+
+        // The node should be a Def
+        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const target_def = origin_env.store.getDef(target_def_idx);
+
+        // Save current environment and bindings
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(origin_env);
+        defer {
+            self.env = saved_env;
+            // Restore bindings
+            self.bindings.items.len = saved_bindings_len;
+        }
+
+        // Translate the def's type var to runtime
+        const def_var = can.ModuleEnv.varFrom(target_def_idx);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+
+        // Evaluate the method's expression
+        const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
+
+        return method_value;
+    }
+
+    /// Try to resolve a method by ident. Returns null if method not found.
+    /// Used for special methods like `to_inspect` where we need to look up by ident.
+    fn tryResolveMethodByIdent(
+        self: *Interpreter,
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name_ident: base_pkg.Ident.Idx,
+        roc_ops: *RocOps,
+    ) Error!?StackValue {
+        // Get the module environment for this type's origin
+        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+            return null;
+        };
+
+        // Use index-based method lookup - the method_name_ident is in self.env's ident space,
+        // nominal_ident is in runtime_layout_store.env's ident space
+        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+            self.runtime_layout_store.env,
+            nominal_ident,
+            self.env,
+            method_name_ident,
+        ) orelse {
+            return null;
+        };
+
+        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            // Fallback: search all definitions for the method
+            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+            for (all_defs) |def_idx| {
+                const def = origin_env.store.getDef(def_idx);
+                const pat = origin_env.store.getPattern(def.pattern);
+                if (pat == .assign and pat.assign.ident == method_ident) {
+                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                }
+            }
+            return null;
         };
 
         // The node should be a Def
@@ -6836,7 +6990,7 @@ pub const Interpreter = struct {
         const str_backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
         const str_backing_var = try self.runtime_types.freshFromContent(str_backing_content);
         const no_type_args: []const types.Var = &.{};
-        const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id);
+        const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id, false);
         const str_var = try self.runtime_types.freshFromContent(str_content);
 
         // Create Builtin.List type with Str as element type
@@ -6855,7 +7009,7 @@ pub const Interpreter = struct {
         // List has one type argument (element type)
         // Use stack-allocated array - mkNominal copies via appendVars so no heap allocation needed
         const type_args: [1]types.Var = .{str_var};
-        const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id);
+        const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id, false);
         return try self.runtime_types.freshFromContent(list_content);
     }
 
@@ -6892,6 +7046,7 @@ pub const Interpreter = struct {
             backing_var,
             no_type_args,
             origin_module_id,
+            true, // Number types are opaque
         );
     }
 
@@ -7392,7 +7547,7 @@ pub const Interpreter = struct {
                                 const origin_str = module.getIdent(nom.origin_module);
                                 break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             } else nom.origin_module;
-                            const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin);
+                            const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                     }
@@ -7942,6 +8097,9 @@ pub const Interpreter = struct {
         /// Dbg print - print evaluated value and return {}.
         dbg_print: DbgPrint,
 
+        /// Inspect render - render value to Str and push result.
+        inspect_render: InspectRender,
+
         /// String interpolation - collect segment strings.
         str_collect: StrCollect,
 
@@ -7989,6 +8147,12 @@ pub const Interpreter = struct {
 
         /// Dbg statement - print value after evaluation.
         dbg_print_stmt: DbgPrintStmt,
+
+        /// Inspect statement - render value to Str after evaluation.
+        inspect_render_stmt: InspectRenderStmt,
+
+        /// Cleanup after to_inspect method call in statement context.
+        inspect_stmt_cleanup: InspectStmtCleanup,
 
         /// Sort - process comparison result and continue insertion sort.
         sort_compare_result: SortCompareResult,
@@ -8172,6 +8336,14 @@ pub const Interpreter = struct {
         /// Dbg continuation - after expression is evaluated, print and return {}
         pub const DbgPrint = struct {
             /// Original dbg expression index (for type info)
+            expr_idx: can.CIR.Expr.Idx,
+            /// Inner expression runtime type variable
+            inner_rt_var: types.Var,
+        };
+
+        /// Inspect continuation - after expression is evaluated, render to Str and push result
+        pub const InspectRender = struct {
+            /// Original inspect expression index (for type info)
             expr_idx: can.CIR.Expr.Idx,
             /// Inner expression runtime type variable
             inner_rt_var: types.Var,
@@ -8413,6 +8585,29 @@ pub const Interpreter = struct {
             /// Runtime type for rendering
             rt_var: types.Var,
             /// Remaining statements after dbg
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Inspect statement - render value to Str (value is discarded unless final)
+        pub const InspectRenderStmt = struct {
+            /// Runtime type for rendering
+            rt_var: types.Var,
+            /// Remaining statements after inspect
+            remaining_stmts: []const can.CIR.Statement.Idx,
+            /// Final expression to evaluate after all statements
+            final_expr: can.CIR.Expr.Idx,
+            /// Bindings length at block start (for cleanup)
+            bindings_start: usize,
+        };
+
+        /// Cleanup after to_inspect method call in statement context
+        /// Discards the result and continues with remaining statements
+        pub const InspectStmtCleanup = struct {
+            /// Remaining statements after inspect
             remaining_stmts: []const can.CIR.Statement.Idx,
             /// Final expression to evaluate after all statements
             final_expr: can.CIR.Expr.Idx,
@@ -9509,6 +9704,20 @@ pub const Interpreter = struct {
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_expr.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
+
+            .e_inspect => |inspect_expr| {
+                const inner_ct_var = can.ModuleEnv.varFrom(inspect_expr.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                // Schedule: first evaluate inner expression, then render to Str
+                try work_stack.push(.{ .apply_continuation = .{ .inspect_render = .{
+                    .expr_idx = expr_idx,
+                    .inner_rt_var = inner_rt_var,
+                } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = inspect_expr.expr,
                     .expected_rt_var = inner_rt_var,
                 } });
             },
@@ -10767,6 +10976,25 @@ pub const Interpreter = struct {
                     .expected_rt_var = inner_rt_var,
                 } });
             },
+            .s_inspect => |inspect_stmt| {
+                // Evaluate expression, then render to Str (value is discarded in stmt context)
+                const inner_ct_var = can.ModuleEnv.varFrom(inspect_stmt.expr);
+                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+
+                // Push inspect_render_stmt continuation
+                try work_stack.push(.{ .apply_continuation = .{ .inspect_render_stmt = .{
+                    .rt_var = inner_rt_var,
+                    .remaining_stmts = remaining_stmts,
+                    .final_expr = final_expr,
+                    .bindings_start = bindings_start,
+                } } });
+
+                // Evaluate the expression
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = inspect_stmt.expr,
+                    .expected_rt_var = inner_rt_var,
+                } });
+            },
             .s_return => |ret| {
                 // Early return: evaluate expression, then use early_return continuation
                 const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
@@ -11259,22 +11487,28 @@ pub const Interpreter = struct {
                     }
 
                     // Add explicit field layouts to union
+                    // Translate field names from self.env's identifier store to runtime_layout_store.env's
+                    // identifier store. This is necessary because field names may come from different modules
+                    // (e.g., app module), but rendering uses root_env (same as runtime_layout_store.env).
                     for (rc.all_fields, 0..) |field_idx_enum, idx| {
                         const f = self.env.store.getRecordField(field_idx_enum);
                         const field_layout = field_values[idx].layout;
-                        const key: u32 = @bitCast(f.name);
+                        // Translate field name to runtime layout store's identifier space
+                        const field_name_str = self.env.getIdent(f.name);
+                        const translated_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                        const key: u32 = @bitCast(translated_name);
                         if (union_indices.get(key)) |idx_ptr| {
                             union_layouts.items[idx_ptr] = field_layout;
-                            union_names.items[idx_ptr] = f.name;
+                            union_names.items[idx_ptr] = translated_name;
                         } else {
                             try union_layouts.append(field_layout);
-                            try union_names.append(f.name);
+                            try union_names.append(translated_name);
                             try union_indices.put(key, union_layouts.items.len - 1);
                         }
                     }
 
-                    // Create record layout
-                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.env, union_layouts.items, union_names.items);
+                    // Create record layout using runtime_layout_store.env for field name lookups
+                    const record_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, union_layouts.items, union_names.items);
                     const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
 
                     // Cache the layout for this var
@@ -11301,13 +11535,16 @@ pub const Interpreter = struct {
                     // Set explicit field values (overwriting base values if needed)
                     for (rc.all_fields, 0..) |field_idx_enum, explicit_index| {
                         const f = self.env.store.getRecordField(field_idx_enum);
-                        const dest_field_idx = accessor.findFieldIndex(f.name) orelse return error.TypeMismatch;
+                        // Translate field name to runtime layout store's identifier space for lookup
+                        const field_name_str = self.env.getIdent(f.name);
+                        const translated_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                        const dest_field_idx = accessor.findFieldIndex(translated_name) orelse return error.TypeMismatch;
                         const val = field_values[explicit_index];
 
                         // If overwriting a base field, decref the existing value
                         if (base_value_opt) |base_value| {
                             var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
-                            if (base_accessor.findFieldIndex(f.name) != null) {
+                            if (base_accessor.findFieldIndex(translated_name) != null) {
                                 const existing = try accessor.getFieldByIndex(dest_field_idx);
                                 existing.decref(&self.runtime_layout_store, roc_ops);
                             }
@@ -11773,7 +12010,7 @@ pub const Interpreter = struct {
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var);
+                const rendered = try self.renderValueRocWithType(value, dp.inner_rt_var, roc_ops);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Return {} (empty record) - dbg always returns unit like expect
@@ -11782,6 +12019,132 @@ pub const Interpreter = struct {
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 const result = try self.pushRaw(layout_val, 0);
                 try value_stack.push(result);
+                return true;
+            },
+            .inspect_render => |ir| {
+                // Pop evaluated value from stack
+                const value = value_stack.pop() orelse return error.Crash;
+
+                // Check if the type is nominal and has a to_inspect method
+                const resolved = self.runtime_types.resolveVar(ir.inner_rt_var);
+                const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
+                    switch (resolved.desc.content.structure) {
+                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
+                            nom.origin_module,
+                            nom.ident.ident_idx,
+                            self.env.idents.to_inspect,
+                            roc_ops,
+                        ),
+                        else => null,
+                    }
+                else
+                    null;
+
+                if (maybe_to_inspect) |method_func| {
+                    // Found to_inspect method - call it with the value
+                    if (method_func.layout.tag != .closure) {
+                        value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Check if low-level lambda (unlikely for user-defined to_inspect)
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var args = [1]StackValue{value};
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                        // Decref based on ownership semantics
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                            value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    const params = self.env.store.slicePatterns(closure_header.params);
+                    if (params.len != 1) {
+                        // to_inspect must take exactly one argument
+                        self.env = saved_env;
+                        value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        // Fall back to default rendering
+                        const rendered = try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
+                        defer self.allocator.free(rendered);
+                        const str_value = try self.pushStr();
+                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                        roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                        try value_stack.push(str_value);
+                        return true;
+                    }
+
+                    try self.active_closures.append(method_func);
+                    try self.bindings.append(.{
+                        .pattern_idx = params[0],
+                        .value = value,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = saved_env,
+                        .saved_bindings_len = saved_bindings_len,
+                        .param_count = 1,
+                        .has_active_closure = true,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = null,
+                        .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = closure_header.body_idx,
+                        .expected_rt_var = null,
+                    } });
+                    return true;
+                }
+
+                // No to_inspect method found - use default rendering
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Check if this is an opaque or nominal type (without to_inspect)
+                const rendered: []const u8 = if (resolved.desc.content == .structure and
+                    resolved.desc.content.structure == .nominal_type)
+                blk: {
+                    const nom = resolved.desc.content.structure.nominal_type;
+                    if (nom.is_opaque) {
+                        // Opaque types without to_inspect render as "<opaque>"
+                        break :blk try self.allocator.dupe(u8, "<opaque>");
+                    } else {
+                        // Nominal types render as "TypeName.InnerValue"
+                        // Use the original type var - render_helpers will unwrap the nominal type
+                        const type_name = self.root_env.getIdent(nom.ident.ident_idx);
+                        const inner_rendered = try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
+                        defer self.allocator.free(inner_rendered);
+                        break :blk try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, inner_rendered });
+                    }
+                } else blk: {
+                    // Non-nominal types use default rendering
+                    break :blk try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
+                };
+                defer self.allocator.free(rendered);
+
+                // Create a RocStr from the rendered bytes and push it
+                const str_value = try self.pushStr();
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                try value_stack.push(str_value);
                 return true;
             },
             .str_collect => |sc| {
@@ -13180,7 +13543,7 @@ pub const Interpreter = struct {
                 // Dbg statement: print value
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.rt_var);
+                const rendered = try self.renderValueRocWithType(value, dp.rt_var, roc_ops);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Continue with remaining statements
@@ -13192,6 +13555,164 @@ pub const Interpreter = struct {
                 } else {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
                     try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, null, roc_ops);
+                }
+                return true;
+            },
+            .inspect_render_stmt => |ir| {
+                // Inspect statement: render value to Str (discarded in statement context)
+                const value = value_stack.pop() orelse return error.Crash;
+
+                // Check if the type is nominal and has a to_inspect method
+                const resolved = self.runtime_types.resolveVar(ir.rt_var);
+                const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
+                    switch (resolved.desc.content.structure) {
+                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
+                            nom.origin_module,
+                            nom.ident.ident_idx,
+                            self.env.idents.to_inspect,
+                            roc_ops,
+                        ),
+                        else => null,
+                    }
+                else
+                    null;
+
+                if (maybe_to_inspect) |method_func| {
+                    // Found to_inspect method - call it with the value
+                    if (method_func.layout.tag != .closure) {
+                        value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        // Fall back to default rendering
+                        const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
+                        self.allocator.free(rendered);
+                        if (ir.remaining_stmts.len == 0) {
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = ir.final_expr,
+                                .expected_rt_var = null,
+                            } });
+                        } else {
+                            const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
+                            try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
+                        }
+                        return true;
+                    }
+
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Check if low-level lambda
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var args = [1]StackValue{value};
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
+
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                            value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        result.decref(&self.runtime_layout_store, roc_ops); // Discard result
+                        self.env = saved_env;
+
+                        if (ir.remaining_stmts.len == 0) {
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = ir.final_expr,
+                                .expected_rt_var = null,
+                            } });
+                        } else {
+                            const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
+                            try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
+                        }
+                        return true;
+                    }
+
+                    const params = self.env.store.slicePatterns(closure_header.params);
+                    if (params.len != 1) {
+                        // to_inspect must take exactly one argument - fall back to default
+                        self.env = saved_env;
+                        value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
+                        self.allocator.free(rendered);
+                        if (ir.remaining_stmts.len == 0) {
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = ir.final_expr,
+                                .expected_rt_var = null,
+                            } });
+                        } else {
+                            const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
+                            try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
+                        }
+                        return true;
+                    }
+
+                    try self.active_closures.append(method_func);
+                    try self.bindings.append(.{
+                        .pattern_idx = params[0],
+                        .value = value,
+                        .expr_idx = @enumFromInt(0),
+                        .source_env = self.env,
+                    });
+
+                    // Schedule cleanup to discard result and continue after method call
+                    try work_stack.push(.{ .apply_continuation = .{ .inspect_stmt_cleanup = .{
+                        .remaining_stmts = ir.remaining_stmts,
+                        .final_expr = ir.final_expr,
+                        .bindings_start = ir.bindings_start,
+                    } } });
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_env = saved_env,
+                        .saved_bindings_len = saved_bindings_len,
+                        .param_count = 1,
+                        .has_active_closure = true,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = null,
+                        .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = closure_header.body_idx,
+                        .expected_rt_var = null,
+                    } });
+                    return true;
+                }
+
+                // No to_inspect method - use default rendering
+                defer value.decref(&self.runtime_layout_store, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
+                self.allocator.free(rendered);
+                // Continue with remaining statements
+                if (ir.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = ir.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
+                }
+                return true;
+            },
+            .inspect_stmt_cleanup => |isc| {
+                // Discard the result from to_inspect method call and continue with statements
+                const result = value_stack.pop() orelse return error.Crash;
+                result.decref(&self.runtime_layout_store, roc_ops);
+
+                // Continue with remaining statements
+                if (isc.remaining_stmts.len == 0) {
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = isc.final_expr,
+                        .expected_rt_var = null,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(isc.remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, isc.remaining_stmts[1..], isc.final_expr, isc.bindings_start, null, roc_ops);
                 }
                 return true;
             },
@@ -13517,6 +14038,7 @@ test "interpreter: translateTypeVar for alias of Str" {
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
+        .is_opaque = false,
     };
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
@@ -13569,11 +14091,12 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
+        .is_opaque = false,
     };
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     // backing type is Str for simplicity
-    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal);
+    const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal, false);
     const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
@@ -13689,6 +14212,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
+        .is_opaque = false,
     };
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
     const rt_var = try interp.translateTypeVar(&env, ct_str);

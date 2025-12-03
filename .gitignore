@@ -66,6 +66,7 @@ metadata
 .exrc
 .vimrc
 .nvimrc
+.zed/
 
 # rust cache (sccache folder)
 sccache_dir
