@@ -1243,6 +1243,9 @@ pub const SharedMemoryHandle = struct {
     size: usize,
 };
 
+/// Result of setting up shared memory with type checking information.
+/// Contains both the shared memory handle for the compiled modules and
+/// a count of type errors encountered during compilation.
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     error_count: usize,
