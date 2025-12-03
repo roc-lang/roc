@@ -947,11 +947,18 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Set up shared memory with ModuleEnv
     std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
         return err;
     };
-    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_handle.size});
+    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_result.handle.size});
+
+    // Check for errors - abort unless --allow-errors flag is set
+    if (shm_result.error_count > 0 and !args.allow_errors) {
+        return error.TypeCheckingFailed;
+    }
+
+    const shm_handle = shm_result.handle;
 
     // Ensure we clean up shared memory resources on all exit paths
     defer {
@@ -1236,6 +1243,14 @@ pub const SharedMemoryHandle = struct {
     size: usize,
 };
 
+/// Result of setting up shared memory with type checking information.
+/// Contains both the shared memory handle for the compiled modules and
+/// a count of type errors encountered during compilation.
+pub const SharedMemoryResult = struct {
+    handle: SharedMemoryHandle,
+    error_count: usize,
+};
+
 /// Write data to shared memory for inter-process communication.
 /// Creates a shared memory region and writes the data with a length prefix.
 /// Returns a handle that can be used to access the shared memory.
@@ -1295,7 +1310,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
-pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8) !SharedMemoryHandle {
+pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -1702,20 +1717,24 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Render all type problems (errors and warnings) exactly as roc check would
-    // The program still runs afterward - we don't block on errors
+    // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
-    if (!builtin.is_test) {
-        _ = renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path);
-    }
+    const error_count = if (!builtin.is_test)
+        renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path)
+    else
+        0;
 
     app_env_ptr.* = app_env;
 
     shm.updateHeader();
 
-    return SharedMemoryHandle{
-        .fd = shm.handle,
-        .ptr = shm.base_ptr,
-        .size = shm.getUsedSize(),
+    return SharedMemoryResult{
+        .handle = SharedMemoryHandle{
+            .fd = shm.handle,
+            .ptr = shm.base_ptr,
+            .size = shm.getUsedSize(),
+        },
+        .error_count = error_count,
     };
 }
 
