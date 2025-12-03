@@ -3,6 +3,18 @@ const builtin = @import("builtin");
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
 const DocumentStore = @import("document_store.zig").DocumentStore;
+const SyntaxChecker = @import("syntax.zig").SyntaxChecker;
+const DebugFlags = @import("syntax.zig").DebugFlags;
+const Diagnostics = @import("diagnostics.zig");
+const uri_util = @import("uri.zig");
+
+/// TODO
+pub const DebugOptions = struct {
+    transport: bool = false,
+    build: bool = false,
+    syntax: bool = false,
+    server: bool = false,
+};
 const initialize_handler_mod = @import("handlers/initialize.zig");
 const shutdown_handler_mod = @import("handlers/shutdown.zig");
 const did_open_handler_mod = @import("handlers/did_open.zig");
@@ -37,6 +49,9 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         client: protocol.ClientState = .{},
         state: State = .waiting_for_initialize,
         doc_store: DocumentStore,
+        syntax_checker: SyntaxChecker,
+        log_file: ?std.fs.File = null,
+        debug: DebugFlags,
 
         pub const server_name = "roc-lsp";
         pub const version = "0.1";
@@ -50,11 +65,25 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             exit_failure,
         };
 
-        pub fn init(allocator: std.mem.Allocator, reader: ReaderType, writer: WriterType, log_file: ?std.fs.File) !Self {
+        pub fn init(
+            allocator: std.mem.Allocator,
+            reader: ReaderType,
+            writer: WriterType,
+            log_file: ?std.fs.File,
+            debug_options: DebugOptions,
+        ) !Self {
+            const flags = DebugFlags{
+                .build = debug_options.build,
+                .syntax = debug_options.syntax,
+                .server = debug_options.server,
+            };
             return .{
                 .allocator = allocator,
-                .transport = TransportType.init(allocator, reader, writer, log_file),
+                .transport = TransportType.init(allocator, reader, writer, if (debug_options.transport) log_file else null),
                 .doc_store = DocumentStore.init(allocator),
+                .syntax_checker = SyntaxChecker.init(allocator, flags, log_file),
+                .log_file = log_file,
+                .debug = flags,
             };
         }
 
@@ -62,6 +91,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             self.client.deinit(self.allocator);
             self.transport.deinit();
             self.doc_store.deinit();
+            self.syntax_checker.deinit();
         }
 
         pub fn run(self: *Self) !void {
@@ -189,6 +219,57 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             });
         }
 
+        pub fn onDocumentChanged(self: *Self, uri: []const u8) void {
+            self.runSyntaxCheck(uri) catch |err| {
+                log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) });
+            };
+        }
+
+        fn runSyntaxCheck(self: *Self, uri: []const u8) !void {
+            const doc = self.doc_store.get(uri);
+            const root_path = if (self.client.root_uri) |root_uri| blk: {
+                const path = uri_util.uriToPath(self.allocator, root_uri) catch null;
+                break :blk path;
+            } else null;
+            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path);
+            if (root_path) |p| self.allocator.free(p);
+            defer {
+                for (publish_sets) |*set| set.deinit(self.allocator);
+                self.allocator.free(publish_sets);
+            }
+
+            for (publish_sets) |set| {
+                try self.publishDiagnostics(set);
+            }
+        }
+
+        fn publishDiagnostics(self: *Self, publish: Diagnostics.PublishDiagnostics) !void {
+            const Notification = struct {
+                jsonrpc: []const u8 = "2.0",
+                method: []const u8 = "textDocument/publishDiagnostics",
+                params: struct {
+                    uri: []const u8,
+                    diagnostics: []const Diagnostics.Diagnostic,
+                },
+            };
+
+            self.logDebug("publishing {d} diagnostics for {s}", .{ publish.diagnostics.len, publish.uri });
+
+            try self.transport.sendJson(Notification{
+                .params = .{ .uri = publish.uri, .diagnostics = publish.diagnostics },
+            });
+        }
+
+        fn logDebug(self: *Self, comptime fmt: []const u8, args: anytype) void {
+            if (!self.debug.server) return;
+            var file = self.log_file orelse return;
+            var buffer: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buffer, fmt, args) catch return;
+            file.writeAll(msg) catch return;
+            file.writeAll("\n") catch {};
+            file.sync() catch {};
+        }
+
         /// Returns the stored document (testing helper; returns null outside tests).
         pub fn getDocumentForTesting(self: *Self, uri: []const u8) ?DocumentStore.Document {
             if (!builtin.is_test) return null;
@@ -198,7 +279,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
 }
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
-pub fn runWithStdIo(allocator: std.mem.Allocator, enable_logging: bool) !void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, debug: DebugOptions) !void {
     var stdin_file = std.fs.File.stdin();
     var stdout_file = std.fs.File.stdout();
 
@@ -208,6 +289,7 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, enable_logging: bool) !void {
     const writer = stdout_file.writerStreaming(&stdout_buffer);
 
     var log_file: ?std.fs.File = null;
+    const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
     if (enable_logging) {
         const log_info = try createLogFile(allocator);
         log_file = log_info.file;
@@ -223,9 +305,15 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, enable_logging: bool) !void {
     }
 
     const StdServer = Server(@TypeOf(reader), @TypeOf(writer));
-    var server = try StdServer.init(allocator, reader, writer, log_file);
+    var server = try StdServer.init(allocator, reader, writer, log_file, debug);
     defer server.deinit();
     try server.run();
+
+    if (log_file) |file| {
+        if (!debug.transport) {
+            file.close();
+        }
+    }
 }
 
 const LogFileInfo = struct {

@@ -324,7 +324,7 @@ pub const ModuleType = enum {
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{},
+            .lsp => &.{ .compile, .reporting, .build_options, .fs },
         };
     }
 };
