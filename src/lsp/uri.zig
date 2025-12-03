@@ -33,16 +33,18 @@ fn percentEncode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     errdefer out.deinit(allocator);
 
     for (input) |ch| {
-        const needs_escape = ch <= 0x20 or ch == '#' or ch == '%' or ch == '?';
+        // Convert Windows backslashes to forward slashes for URIs
+        const c = if (builtin.os.tag == .windows and ch == '\\') '/' else ch;
+        const needs_escape = c <= 0x20 or c == '#' or c == '%' or c == '?';
         if (needs_escape) {
             var buf: [3]u8 = .{ '%', 0, 0 };
-            const hi = std.fmt.digitToChar((ch >> 4) & 0xF, .upper);
-            const lo = std.fmt.digitToChar(ch & 0xF, .upper);
+            const hi = std.fmt.digitToChar((c >> 4) & 0xF, .upper);
+            const lo = std.fmt.digitToChar(c & 0xF, .upper);
             buf[1] = hi;
             buf[2] = lo;
             try out.appendSlice(allocator, &buf);
         } else {
-            try out.append(allocator, ch);
+            try out.append(allocator, c);
         }
     }
 
@@ -60,9 +62,17 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
     errdefer allocator.free(decoded);
 
     // On Windows URIs start with /C:/..., drop the leading slash
-    if (builtin.os.tag == .windows and decoded.len >= 3 and decoded[0] == '/' and std.ascii.isAlpha(decoded[1]) and decoded[2] == ':') {
-        const trimmed = decoded[1..];
-        decoded = try allocator.dupe(u8, trimmed);
+    if (builtin.os.tag == .windows and decoded.len >= 3 and decoded[0] == '/' and std.ascii.isAlphabetic(decoded[1]) and decoded[2] == ':') {
+        const trimmed = try allocator.dupe(u8, decoded[1..]);
+        allocator.free(decoded);
+        decoded = trimmed;
+    }
+
+    // Convert forward slashes to backslashes on Windows
+    if (builtin.os.tag == .windows) {
+        for (decoded) |*ch| {
+            if (ch.* == '/') ch.* = '\\';
+        }
     }
 
     return decoded;

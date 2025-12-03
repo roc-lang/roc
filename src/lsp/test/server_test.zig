@@ -201,5 +201,5 @@ test "server tracks documents on didOpen/didChange" {
 }
 
 fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "file://{s}", .{path});
+    return @import("../uri.zig").pathToUri(allocator, path);
 }
