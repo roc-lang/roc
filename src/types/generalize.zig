@@ -212,9 +212,11 @@ pub const Generalizer = struct {
                     // Without this, let-generalization would create a fresh copy at each use,
                     // leaving the original as an unconstrained flex var that defaults to Dec.
                     //
-                    // However, inside lambdas (rank > top_level), we DO generalize numeric
-                    // literals so that polymorphic functions like `|a| a + 1` work correctly.
-                    // The numeric literal takes on the type of the function parameter.
+                    // However, at rank > top_level (inside lambdas OR inside nested blocks),
+                    // we DO generalize numeric literals. This allows:
+                    // - Polymorphic functions like `|a| a + 1` to work correctly
+                    // - Numeric literals in blocks like `{ n = 42; use_as_i64(n); use_as_dec(n) }`
+                    //   to be used polymorphically within that block's scope.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Rank unchanged - safe to generalize
