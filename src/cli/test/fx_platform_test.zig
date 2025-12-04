@@ -149,176 +149,115 @@ fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_inp
     };
 }
 
+/// Runs a roc app with --test mode using the given IO spec.
+/// Spec format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
+/// Returns success if the app's IO matches the spec exactly.
+fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) !std.process.Child.RunResult {
+    try ensureRocBinary(allocator);
+    return try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            roc_binary_path,
+            "--no-cache",
+            roc_file,
+            "--",
+            "--test",
+            spec,
+        },
+    });
+}
+
+/// Helper to check if a test mode run succeeded (exit code 0, empty output)
+fn checkTestSuccess(result: std.process.Child.RunResult) !void {
+    switch (result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Test failed with exit code {}\n", .{code});
+                std.debug.print("STDERR: {s}\n", .{result.stderr});
+                return error.TestFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Test terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.TestFailed;
+        },
+    }
+}
+
 test "fx platform effectful functions" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(
+        allocator,
+        "test/fx/app.roc",
+        "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    // Run the app directly with the roc CLI (not build, just run)
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/app.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    // Verify stdout contains expected messages
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 1 to stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 3 to stdout") != null);
-
-    // Verify stderr contains expected messages
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Error from stderr!") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 2 to stderr") != null);
-
-    // Verify stderr messages are NOT in stdout
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Error from stderr!") == null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 2 to stderr") == null);
-
-    // Verify stdout messages are NOT in stderr
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Hello from stdout!") == null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 1 to stdout") == null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform with dotdot starting path" {
+    // Tests that relative paths starting with .. are handled correctly
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(
+        allocator,
+        "test/fx/subdir/app.roc",
+        "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    // Run the app from a subdirectory that uses ../ at the START of its platform path
-    // This tests that relative paths starting with .. are handled correctly
-    // Bug: paths starting with ../ fail with TypeMismatch, while ./path/../ works
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/subdir/app.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    // Verify stdout contains expected messages
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 1 to stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 3 to stdout") != null);
-
-    // Verify stderr contains expected messages
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Error from stderr!") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 2 to stderr") != null);
-
-    // Verify stderr messages are NOT in stdout
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Error from stderr!") == null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 2 to stderr") == null);
-
-    // Verify stdout messages are NOT in stderr
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Hello from stdout!") == null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 1 to stdout") == null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Line 3 to stdout") == null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform stdin to stdout" {
     const allocator = testing.allocator;
 
-    const result = try runRocWithStdin(allocator, "test/fx/stdin_to_stdout.roc", "test input\n");
+    const result = try runRocTest(allocator, "test/fx/stdin_to_stdout.roc", "0<test input|1>test input");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
-        std.debug.print("Test failed with term: {}\n", .{result.term});
-        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
-        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
-        return error.TestFailed;
-    }
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "test input") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform stdin echo" {
     const allocator = testing.allocator;
 
-    const result = try runRocWithStdin(allocator, "test/fx/stdin_echo.roc", "hello world\n");
+    const result = try runRocTest(allocator, "test/fx/stdin_echo.roc", "0<hello world|1>hello world");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
-        std.debug.print("Test failed with term: {}\n", .{result.term});
-        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
-        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
-        return error.TestFailed;
-    }
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "hello world") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform stdin test with output" {
     const allocator = testing.allocator;
 
-    const result = try runRocWithStdin(allocator, "test/fx/stdin_test.roc", "user input\n");
+    const result = try runRocTest(allocator, "test/fx/stdin_test.roc", "1>Before stdin|0<user input|1>After stdin");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
-        std.debug.print("Test failed with term: {}\n", .{result.term});
-        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
-        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
-        return error.TestFailed;
-    }
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "Before stdin") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "After stdin") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform stdin simple" {
+    // stdin_simple reads from stdin and prints to stderr
     const allocator = testing.allocator;
 
-    const result = try runRocWithStdin(allocator, "test/fx/stdin_simple.roc", "simple test\n");
+    const result = try runRocTest(allocator, "test/fx/stdin_simple.roc", "0<simple test|2>simple test");
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term != .Exited or result.term.Exited != 0) {
-        std.debug.print("Test failed with term: {}\n", .{result.term});
-        std.debug.print("STDOUT:\n{s}\n", .{result.stdout});
-        std.debug.print("STDERR:\n{s}\n", .{result.stderr});
-        return error.TestFailed;
-    }
-    // stdin_simple reads from stdin and prints to stderr
-    try testing.expect(std.mem.indexOf(u8, result.stderr, "simple test") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform expect with main" {
@@ -354,32 +293,25 @@ test "fx platform expect with numeric literal" {
 }
 
 test "fx platform match returning string" {
+    // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;
 
-    // Run the app that has a match expression returning a string
-    // This tests that match expressions with string returns work correctly
-    const run_result = try runRoc(allocator, "test/fx/match_str_return.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/match_str_return.roc", "1>0");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-
-    // The app should run successfully and exit with code 0
-    // It outputs "0" from the match expression
-    try testing.expectEqualStrings("0\n", run_result.stdout);
-    try testing.expectEqualStrings("", run_result.stderr);
+    try checkTestSuccess(result);
 }
 
 test "fx platform match with wildcard" {
+    // Tests that wildcard patterns in match expressions work correctly
     const allocator = testing.allocator;
 
-    // Run an app that uses a match expression with a wildcard pattern
-    // This tests that wildcard patterns in match expressions work correctly
-    const run_result = try runRoc(allocator, "test/fx/match_with_wildcard.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/match_with_wildcard.roc", "1>0");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
+    try checkTestSuccess(result);
 }
 
 test "fx platform dbg missing return value" {
@@ -525,17 +457,13 @@ test "fx platform checked directly finds sibling modules" {
 
 test "fx platform opaque type with method" {
     // Regression test: An opaque type with a method attached causes a segfault
-    // when running the app. This test will pass once the bug is fixed.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/opaque_with_method.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/opaque_with_method.roc", "1>My favourite color is Red");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-
-    // Verify the output contains the expected string
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "My favourite color is Red") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform string interpolation type mismatch" {
@@ -630,57 +558,44 @@ test "question mark operator" {
     // Tests the `?` operator for error propagation.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/question_mark_operator.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/question_mark_operator.roc", "1>hello");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    // The ? operator should unwrap Ok values and return "hello"
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
+    try checkTestSuccess(result);
 }
 
 test "numeric fold" {
     // Tests List.fold with numeric accumulators.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/numeric_fold.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/numeric_fold.roc", "1>Sum: 15.0");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    // Verify we get the correct sum: 1+2+3+4+5 = 15
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Sum: 15") != null);
+    try checkTestSuccess(result);
 }
 
 test "List.for_each! with effectful callback" {
     // Tests List.for_each! which iterates over a list and calls an effectful callback
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/list_for_each.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/list_for_each.roc", "1>Item: apple|1>Item: banana|1>Item: cherry");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-
-    // Verify each item is printed
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Item: apple") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Item: banana") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Item: cherry") != null);
+    try checkTestSuccess(result);
 }
 
 test "string literal pattern matching" {
     // Tests pattern matching on string literals in match expressions.
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/string_pattern_matching.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/string_pattern_matching.roc", "1>Hello Alice!|1>Hey Bob!");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-
-    // Verify string patterns match correctly
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello Alice!") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hey Bob!") != null);
+    try checkTestSuccess(result);
 }
 
 test "drop_prefix segfault regression" {
@@ -760,69 +675,61 @@ test "big string equality regression" {
 test "fx platform hello world" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/hello_world.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/hello_world.roc", "1>Hello, world!");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello, world!") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform function wrapper stdout" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/function_wrapper_stdout.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/function_wrapper_stdout.roc", "1>Hello from stdout!");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform function wrapper multiline" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/function_wrapper_multiline.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/function_wrapper_multiline.roc", "1>Hello from stdout!|1>Line 2");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Line 2") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform multiline stdout" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/multiline_stdout.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/multiline_stdout.roc", "1>Hello|1>World");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "World") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform empty_list_get" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/empty_list_get.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/empty_list_get.roc", "1>is err");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "is err") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform str_interp_valid" {
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "test/fx/str_interp_valid.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
+    const result = try runRocTest(allocator, "test/fx/str_interp_valid.roc", "1>Hello, World!");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    try checkSuccess(run_result);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello, World!") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform expect with toplevel numeric" {
@@ -1001,141 +908,41 @@ test "fx platform expect with toplevel numeric" {
 test "fx platform numeric_lookup_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/numeric_lookup_test.roc", "1>done");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/numeric_lookup_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform string_lookup_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/string_lookup_test.roc", "1>hello");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/string_lookup_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform test_direct_string" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/test_direct_string.roc", "1>Hello");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_direct_string.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform test_one_call" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/test_one_call.roc", "1>Hello");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_one_call.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform test_type_mismatch" {
@@ -1177,251 +984,79 @@ test "fx platform test_type_mismatch" {
 test "fx platform test_with_wrapper" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/test_with_wrapper.roc", "1>Hello");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_with_wrapper.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform inspect_compare_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(
+        allocator,
+        "test/fx/inspect_compare_test.roc",
+        "1>With to_inspect: Custom::Red|1>Without to_inspect: ColorWithoutInspect.Red|1>Primitive: 42",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/inspect_compare_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "With to_inspect: Custom::Red") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Without to_inspect: ColorWithoutInspect.Red") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Primitive: 42") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform inspect_custom_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/inspect_custom_test.roc", "1>Color::Red|1>Expected: Color::Red");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/inspect_custom_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Color::Red") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Expected: Color::Red") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform inspect_nested_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(
+        allocator,
+        "test/fx/inspect_nested_test.roc",
+        "1>{ color: Color::Red, count: 42, name: \"test\" }|1>Expected: { color: Color::Red, count: 42, name: \"test\" }",
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/inspect_nested_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "{ color: Color::Red, count: 42, name: \"test\" }") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Expected: { color: Color::Red, count: 42, name: \"test\" }") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform inspect_no_method_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/inspect_no_method_test.roc", "1>Result: Color.Red|1>(Default rendering)");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/inspect_no_method_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Result: Color.Red") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "(Default rendering)") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform inspect_record_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/inspect_record_test.roc", "1>{ count: 42, name: \"test\" }");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/inspect_record_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "{ count: 42, name: \"test\" }") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform inspect_wrong_sig_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    const result = try runRocTest(allocator, "test/fx/inspect_wrong_sig_test.roc", "1>Result: 1");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/inspect_wrong_sig_test.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Result: 1") != null);
+    try checkTestSuccess(result);
 }
 
 test "fx platform issue8433" {
