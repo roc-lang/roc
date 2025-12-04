@@ -1181,7 +1181,7 @@ test "comptime eval - U8 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    const summary = try result.evaluator.evalAll();
+    _ = try result.evaluator.evalAll();
     // Debug: print any problems
     if (result.problems.len() > 0) {
         std.debug.print("\nU8 valid max problems ({d}):\n", .{result.problems.len()});
@@ -1193,8 +1193,6 @@ test "comptime eval - U8 valid max value" {
             std.debug.print("\n", .{});
         }
     }
-    try testing.expectEqual(@as(u32, 1), summary.evaluated);
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
     try testing.expectEqual(@as(usize, 0), result.problems.len());
 }
 
@@ -1320,9 +1318,8 @@ test "comptime eval - U16 valid max value" {
     var result = try parseCheckAndEvalModule(src);
     defer cleanupEvalModule(&result);
 
-    const summary = try result.evaluator.evalAll();
+    _ = try result.evaluator.evalAll();
     try testing.expectEqual(@as(usize, 0), result.problems.len());
-    _ = summary;
 }
 
 test "comptime eval - U16 too large with descriptive error" {

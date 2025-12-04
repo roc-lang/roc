@@ -443,9 +443,8 @@ fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) ca
     }
 }
 
-fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+fn wasmRocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
-    _ = dbg_args;
 }
 
 fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
@@ -1184,8 +1183,7 @@ const ResponseWriter = struct {
         return result;
     }
 
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        _ = splat;
+    fn drain(w: *std.Io.Writer, data: []const []const u8, _: usize) std.Io.Writer.Error!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         var total: usize = 0;
         for (data) |bytes| {
@@ -2079,10 +2077,9 @@ fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
         error.OutOfMemory => "Out of memory",
     };
 
-    const json = std.fmt.bufPrint(response, "{{\"success\":false,\"error\":\"{s}\"}}", .{error_msg}) catch {
+    _ = std.fmt.bufPrint(response, "{{\"success\":false,\"error\":\"{s}\"}}", .{error_msg}) catch {
         return 1; // Response buffer too small
     };
-    _ = json;
     return 2; // Unbundle error
 }
 

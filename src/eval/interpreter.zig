@@ -509,12 +509,10 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn startTrace(self: *Interpreter) void {
-        _ = self;
+    pub fn startTrace(_: *Interpreter) void {
     }
 
-    pub fn endTrace(self: *Interpreter) void {
-        _ = self;
+    pub fn endTrace(_: *Interpreter) void {
     }
 
     pub fn evaluateExpression(
@@ -4763,8 +4761,6 @@ pub const Interpreter = struct {
     fn buildSuccessValRecord(self: *Interpreter, success: bool, val: RocDec) !StackValue {
         // Layout: tuple (Dec, Bool) where element 0 is Dec (16 bytes) and element 1 is Bool (1 byte)
         // Total size with alignment: 24 bytes (16 for Dec + 8 for alignment of Bool field)
-        const dec_layout = Layout.frac(.dec);
-        const bool_layout = Layout.int(.u8);
 
         // We need to create a tuple layout for the result
         // For now, allocate raw bytes and set them directly
@@ -4782,8 +4778,6 @@ pub const Interpreter = struct {
 
         out.is_initialized = true;
         // Layout is set by pushRawBytes as .zst since we're working with raw bytes
-        _ = dec_layout;
-        _ = bool_layout;
         return out;
     }
 
@@ -5179,8 +5173,7 @@ pub const Interpreter = struct {
         return null;
     }
 
-    fn layoutMatchesKind(self: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
-        _ = self;
+    fn layoutMatchesKind(_: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
         if (layout_val.tag != .scalar) return false;
         return switch (kind) {
             .int => layout_val.data.scalar.tag == .int,
@@ -5310,8 +5303,7 @@ pub const Interpreter = struct {
         return out;
     }
 
-    fn stackValueToDecimal(self: *Interpreter, value: StackValue) !RocDec {
-        _ = self;
+    fn stackValueToDecimal(_: *Interpreter, value: StackValue) !RocDec {
         if (value.layout.tag != .scalar) return error.TypeMismatch;
         switch (value.layout.data.scalar.tag) {
             .frac => switch (value.layout.data.scalar.data.frac) {
@@ -5329,8 +5321,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn stackValueToFloat(self: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
-        _ = self;
+    fn stackValueToFloat(_: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
         if (value.layout.tag != .scalar) return error.TypeMismatch;
         switch (value.layout.data.scalar.tag) {
             .int => {
@@ -5372,8 +5363,7 @@ pub const Interpreter = struct {
         dec: RocDec,
     };
 
-    fn isNumericScalar(self: *Interpreter, layout_val: Layout) bool {
-        _ = self;
+    fn isNumericScalar(_: *Interpreter, layout_val: Layout) bool {
         if (layout_val.tag != .scalar) return false;
         return switch (layout_val.data.scalar.tag) {
             .int, .frac => true,
@@ -5381,8 +5371,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn extractNumericValue(self: *Interpreter, value: StackValue) !NumericValue {
-        _ = self;
+    fn extractNumericValue(_: *Interpreter, value: StackValue) !NumericValue {
         if (value.layout.tag != .scalar) return error.NotNumeric;
         const scalar = value.layout.data.scalar;
         return switch (scalar.tag) {
@@ -5423,8 +5412,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderInt(self: *Interpreter, lhs: i128, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderInt(_: *Interpreter, lhs: i128, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => std.math.order(lhs, rhs.int),
             .f32 => {
@@ -5442,8 +5430,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderF32(self: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderF32(_: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
                 const rhs_f: f32 = @floatFromInt(rhs.int);
@@ -5458,8 +5445,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderF64(self: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderF64(_: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
                 const rhs_f: f64 = @floatFromInt(rhs.int);
@@ -5474,8 +5460,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderDec(self: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderDec(_: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
                 const rhs_dec = rhs.int * RocDec.one_point_zero_i128;
