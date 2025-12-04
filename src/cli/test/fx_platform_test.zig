@@ -1538,3 +1538,16 @@ test "fx platform method inspect on string" {
     // Should show MISSING METHOD error
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
 }
+
+test "fx platform if-expression closure capture regression" {
+    // Regression test: Variables bound inside an if-expression's block were
+    // incorrectly being captured as free variables by the enclosing lambda,
+    // causing a crash with "e_closure: failed to resolve capture value".
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/if-closure-capture.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}
