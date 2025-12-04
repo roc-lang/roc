@@ -12878,24 +12878,34 @@ pub const Interpreter = struct {
                         else => null,
                     },
                     // Flex, rigid, and error vars are unresolved type variables (e.g., numeric literals defaulting to Dec,
-                    // or type parameters in generic functions). For is_eq, use structural equality which works
-                    // for all numeric types and generic type parameters with is_eq constraints.
+                    // or type parameters in generic functions). For is_eq, prefer a numeric scalar fast-path when we can
+                    // prove the scalar is numeric; otherwise fall back to structural equality when the type is structural.
                     // Error types can occur during generic instantiation when types couldn't be resolved.
                     .flex, .rigid, .err => blk: {
                         if (ba.method_ident == self.root_env.idents.is_eq) {
-                            // For scalar types (numbers, Dec, etc.), use layout-based scalar comparison.
-                            // This handles cases where rt_var is not available (e.g., closure captures).
+                            // Numeric scalar fast-path:
+                            // Only use layout-based scalar comparison when both sides are scalar *and*
+                            // the scalar tag is numeric (int/frac). This keeps the optimization
+                            // for numeric flex vars while avoiding crashes for non-numeric scalars
+                            // like strings.
                             if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-                                const order = self.compareNumericScalars(lhs, rhs) catch {
-                                    self.triggerCrash("Failed to compare numeric scalars", false, roc_ops);
-                                    return error.Crash;
-                                };
-                                var result = (order == .eq);
-                                // For != operator, negate the result
-                                if (ba.negate_result) result = !result;
-                                const result_val = try self.makeBoolValue(result);
-                                try value_stack.push(result_val);
-                                return true;
+                                const lhs_tag = lhs.layout.data.scalar.tag;
+                                const rhs_tag = rhs.layout.data.scalar.tag;
+
+                                const lhs_is_numeric = lhs_tag == .int or lhs_tag == .frac;
+                                const rhs_is_numeric = rhs_tag == .int or rhs_tag == .frac;
+
+                                if (lhs_is_numeric and rhs_is_numeric) {
+                                    const order = self.compareNumericScalars(lhs, rhs) catch {
+                                        self.triggerCrash("Failed to compare numeric scalars (flex/rigid is_eq numeric scalar fast-path)", false, roc_ops);
+                                        return error.Crash;
+                                    };
+                                    var result = (order == .eq);
+                                    if (ba.negate_result) result = !result;
+                                    const result_val = try self.makeBoolValue(result);
+                                    try value_stack.push(result_val);
+                                    return true;
+                                }
                             }
 
                             // For non-scalar types, we need rt_var to dispatch to the type's is_eq method.
