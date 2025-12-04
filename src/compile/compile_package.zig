@@ -626,28 +626,13 @@ pub const PackageEnv = struct {
             try st.reports.append(self.gpa, report);
         }
 
-        // Extract external imports (qualified imports like "pf.Stdout") from the AST.
-        // These are cross-package imports that won't have module envs during canonicalization.
-        // We pass them to the canonicalizer so it doesn't generate MODULE NOT FOUND errors.
-        var external_imports_map = std.StringHashMapUnmanaged(void){};
-        defer {
-            // Free the allocated string keys before deiniting the map
-            var it = external_imports_map.keyIterator();
-            while (it.next()) |key| {
-                self.gpa.free(key.*);
-            }
-            external_imports_map.deinit(self.gpa);
-        }
-        if (self.resolver != null) {
-            try self.extractExternalImports(&parse_ast, &external_imports_map);
-        }
-
         // canonicalize using the AST
         const canon_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
 
         // Use shared canonicalization function to ensure consistency with snapshot tool
         // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
         // reported prematurely for modules that exist but haven't been loaded yet.
+        // When we have a resolver, skip errors for qualified imports (cross-package deps).
         try canonicalizeModuleWithSiblings(
             self.gpa,
             env,
@@ -655,7 +640,7 @@ pub const PackageEnv = struct {
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
             self.root_dir,
-            if (self.resolver != null) &external_imports_map else null,
+            self.resolver != null, // Skip qualified import errors when resolver handles them
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -853,7 +838,7 @@ pub const PackageEnv = struct {
         );
 
         // Canonicalize
-        var czer = try Can.init(env, parse_ast, module_envs_out, null);
+        var czer = try Can.init(env, parse_ast, module_envs_out, false);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -906,15 +891,15 @@ pub const PackageEnv = struct {
             builtin_indices,
         );
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map, null);
+        var czer = try Can.init(env, parse_ast, &module_envs_map, false);
         try czer.canonicalizeFile();
         czer.deinit();
     }
 
     /// Canonicalization function that also discovers sibling .roc files in the same directory.
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
-    /// If `external_imports` is provided, those module names (e.g., "pf.Stdout") will be treated as
-    /// valid external imports that won't trigger MODULE NOT FOUND during canonicalization.
+    /// If `skip_qualified_import_errors` is true, qualified imports (e.g., "pf.Stdout") won't
+    /// trigger MODULE NOT FOUND during canonicalization - they're handled by the resolver.
     fn canonicalizeModuleWithSiblings(
         gpa: Allocator,
         env: *ModuleEnv,
@@ -922,7 +907,7 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         builtin_indices: can.CIR.BuiltinIndices,
         root_dir: []const u8,
-        external_imports: ?*const std.StringHashMapUnmanaged(void),
+        skip_qualified_import_errors: bool,
     ) !void {
         // Create module_envs map for auto-importing builtin types
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
@@ -940,7 +925,7 @@ pub const PackageEnv = struct {
         // This prevents MODULE NOT FOUND errors for modules that exist but haven't been loaded yet
         var dir = std.fs.cwd().openDir(root_dir, .{ .iterate = true }) catch {
             // If we can't open the directory, just proceed without sibling discovery
-            var czer = try Can.init(env, parse_ast, &module_envs_map, external_imports);
+            var czer = try Can.init(env, parse_ast, &module_envs_map, skip_qualified_import_errors);
             try czer.canonicalizeFile();
             czer.deinit();
             return;
@@ -970,7 +955,7 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map, external_imports);
+        var czer = try Can.init(env, parse_ast, &module_envs_map, skip_qualified_import_errors);
         try czer.canonicalizeFile();
         czer.deinit();
     }
@@ -1156,44 +1141,6 @@ pub const PackageEnv = struct {
             }
         }
         return false;
-    }
-
-    /// Extract external imports (qualified imports like "pf.Stdout") from the parsed AST.
-    /// These are cross-package imports that won't have module envs during canonicalization.
-    /// We pass them to the canonicalizer so it doesn't generate MODULE NOT FOUND errors.
-    fn extractExternalImports(
-        self: *PackageEnv,
-        parse_ast: *const AST,
-        external_modules: *std.StringHashMapUnmanaged(void),
-    ) !void {
-        const file = parse_ast.store.getFile();
-        for (parse_ast.store.statementSlice(file.statements)) |stmt_idx| {
-            const stmt = parse_ast.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .import => |imp| {
-                    // Check if this is a qualified import (has a qualifier like "pf" in "pf.Stdout")
-                    if (imp.qualifier_tok) |qualifier_tok| {
-                        // Build full module name: "qualifier.ModuleName"
-                        const qualifier_str = parse_ast.resolve(qualifier_tok);
-                        const module_name_raw = parse_ast.resolve(imp.module_name_tok);
-
-                        // Strip leading dot from module name if present
-                        const module_name_clean = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
-                            module_name_raw[1..]
-                        else
-                            module_name_raw;
-
-                        // Combine qualifier and module name
-                        const full_module_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ qualifier_str, module_name_clean });
-                        errdefer self.gpa.free(full_module_name);
-
-                        // Add to the external imports set
-                        try external_modules.put(self.gpa, full_module_name, {});
-                    }
-                },
-                else => {},
-            }
-        }
     }
 
     // On-demand DFS to find a path from start -> target along import edges.

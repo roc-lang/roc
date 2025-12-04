@@ -1637,7 +1637,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         try app_module_envs_map.put(resolved_ident, auto_type);
     }
 
-    var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map, null);
+    var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map, false);
     defer app_canonicalizer.deinit();
 
     try app_canonicalizer.canonicalizeFile();
@@ -1857,7 +1857,7 @@ fn compileModuleToSharedMemory(
     }
 
     // Canonicalize (without root_is_platform - we'll run HostedCompiler separately)
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, null);
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map, false);
     defer canonicalizer.deinit();
 
     try canonicalizer.canonicalizeFile();
@@ -3058,7 +3058,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     );
 
     // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, &module_envs, null) catch |err| {
+    var canonicalizer = Can.init(&env, &parse_ast, &module_envs, false) catch |err| {
         try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
         return err;
     };

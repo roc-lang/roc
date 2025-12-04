@@ -71,10 +71,9 @@ var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of module name identifiers to their type information for import validation
 module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
-/// Set of external import names (e.g., "pf.Stdout") that are cross-package imports.
-/// These won't have module envs during canonicalization - they're resolved during type checking.
-/// When non-null, MODULE NOT FOUND and member lookup errors are suppressed for these imports.
-external_imports: ?*const std.StringHashMapUnmanaged(void) = null,
+/// When true, qualified imports (e.g., "pf.Stdout") won't trigger MODULE NOT FOUND errors.
+/// This is set when building with a resolver that handles cross-package dependencies.
+skip_qualified_import_errors: bool = false,
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
 /// Scratch type variables
@@ -213,11 +212,13 @@ pub fn deinit(
 }
 
 /// Options for initializing the canonicalizer.
+/// If `skip_qualified_import_errors` is true, qualified imports (e.g., "pf.Stdout") won't
+/// trigger MODULE NOT FOUND errors - they're assumed to be cross-package imports handled by a resolver.
 pub fn init(
     env: *ModuleEnv,
     parse_ir: *AST,
     module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
-    external_imports: ?*const std.StringHashMapUnmanaged(void),
+    skip_qualified_import_errors: bool,
 ) std.mem.Allocator.Error!Self {
     const gpa = env.gpa;
 
@@ -231,7 +232,7 @@ pub fn init(
         .var_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .module_envs = module_envs,
-        .external_imports = external_imports,
+        .skip_qualified_import_errors = skip_qualified_import_errors,
         .import_indices = std.StringHashMapUnmanaged(Import.Idx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
@@ -3017,16 +3018,15 @@ fn importAliased(
     // 9. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip if this is a known external import (cross-package) - those are resolved during type checking
+    // Also skip if this is a qualified import (e.g., "pf.Stdout") when skip_qualified_import_errors
+    // is set - those are cross-package imports that are resolved during type checking
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            // Check if this is a known external import that will be resolved during type checking
-            const is_external = if (self.external_imports) |ext_imports|
-                ext_imports.contains(module_name_text)
-            else
-                false;
+            // Skip error for qualified imports when we have a resolver handling cross-package deps
+            const is_qualified = std.mem.indexOfScalar(u8, module_name_text, '.') != null;
+            const skip_error = is_qualified and self.skip_qualified_import_errors;
 
-            if (!is_external) {
+            if (!skip_error) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -3153,16 +3153,15 @@ fn importUnaliased(
     // 6. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip if this is a known external import (cross-package) - those are resolved during type checking
+    // Also skip if this is a qualified import (e.g., "pf.Stdout") when skip_qualified_import_errors
+    // is set - those are cross-package imports that are resolved during type checking
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            // Check if this is a known external import that will be resolved during type checking
-            const is_external = if (self.external_imports) |ext_imports|
-                ext_imports.contains(module_name_text)
-            else
-                false;
+            // Skip error for qualified imports when we have a resolver handling cross-package deps
+            const is_qualified = std.mem.indexOfScalar(u8, module_name_text, '.') != null;
+            const skip_error = is_qualified and self.skip_qualified_import_errors;
 
-            if (!is_external) {
+            if (!skip_error) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -4141,15 +4140,12 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
-                                // Check if this is an external import that will be resolved during type checking
-                                // (reuse module_text from outer scope, which is the same value)
-                                const is_external_import = if (self.external_imports) |ext_imports|
-                                    ext_imports.contains(module_text)
-                                else
-                                    false;
-
-                                if (is_external_import) {
-                                    // External import - member resolution happens during type checking
+                                // Check if this is a qualified import (contains a dot, e.g., "pf.Stdout")
+                                // When skip_qualified_import_errors is set, these are cross-package imports
+                                // resolved during type checking
+                                const is_qualified = std.mem.indexOfScalar(u8, module_text, '.') != null;
+                                if (is_qualified and self.skip_qualified_import_errors) {
+                                    // Qualified import with resolver - member resolution happens during type checking
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
                                 }
