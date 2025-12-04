@@ -3,7 +3,6 @@
 //! This module evaluates all top-level declarations after type checking,
 //! converting any crashes into diagnostics that are reported normally.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");

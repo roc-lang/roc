@@ -1,6 +1,5 @@
 //! Stores Layout values by index.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");

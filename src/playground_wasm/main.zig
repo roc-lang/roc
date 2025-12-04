@@ -2,7 +2,6 @@
 //!
 //! This module provides a state machine interface for the Roc compiler.
 //!
-// zig-lint: required-param
 //!
 //! State Machine:
 //! 1. START: Initialize module, return compiler version

@@ -2,7 +2,6 @@
 //!
 //! This module is a wrapper around the interpreter used to simplify evaluating expect expressions.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");

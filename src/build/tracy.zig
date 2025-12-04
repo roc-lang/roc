@@ -5,7 +5,6 @@
 //!  This file is part of zig, which is MIT licensed.
 //!  See http://opensource.org/licenses/MIT
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");

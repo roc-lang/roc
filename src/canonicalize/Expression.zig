@@ -1,6 +1,5 @@
 //! Expression constructs used in Roc's canonicalization phase.
 //!
-// zig-lint: required-param
 //!
 //! This module defines the `Expr` union which represents all possible expressions
 //! in Roc's Canonical Intermediate Representation (CIR). These expressions are

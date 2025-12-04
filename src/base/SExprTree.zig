@@ -1,6 +1,5 @@
 //! A S-expression tree representation
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const testing = std.testing;

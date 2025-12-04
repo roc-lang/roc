@@ -1,6 +1,5 @@
 //! Transforms Abstract Syntax Tree (AST) into Canonical Intermediate Representation (CIR) through desugaring and scope resolution.
 //!
-// zig-lint: required-param
 //!
 //! This module performs semantic analysis, resolves scoping, and transforms high-level language
 //! constructs into a simplified, normalized form suitable for type inference.

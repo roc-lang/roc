@@ -2,7 +2,6 @@
 //! Build with `zig build -Dfuzz -Dsystem-afl=false`.
 //! Result is at `./zig-out/bin/roc`
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 

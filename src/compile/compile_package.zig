@@ -3,7 +3,6 @@
 //! This component manages the concurrent compilation of all modules within a single package,
 //! orchestrating the build phases for each module:
 //!
-// zig-lint: required-param
 //!
 //! - Parsing modules to discover their import dependencies
 //! - Canonicalizing parsed modules into an intermediate representation

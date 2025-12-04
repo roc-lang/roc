@@ -1,6 +1,5 @@
 //! Performs Hindley-Milner type inference with constraint solving and unification on the Canonical Intermediate Representation (CIR).
 //!
-// zig-lint: required-param
 //!
 //! This module implements constraint-based type inference.
 

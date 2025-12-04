@@ -2,7 +2,6 @@
 //!
 //! Modules are built in parallel unless targeting WebAssembly, which doesn't support threads.
 //!
-// zig-lint: required-param
 //!
 //! Errors are reported as soon as they're encountered, with the only exception being that
 //! there is some buffering to make their output order determined by the dependency graph

@@ -1,6 +1,5 @@
 //! Interpreter implementing the type-carrying architecture.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");

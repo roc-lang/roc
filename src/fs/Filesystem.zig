@@ -1,7 +1,6 @@
 //! Abstract filesystem functions so we can mock them out for testing
 //! and also provide an alternative implementation for WASM (webREPL, playground).
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const collections = @import("collections");

@@ -3,7 +3,6 @@
 //! This module provides memory-mapped caching for compiled Roc modules,
 //! allowing fast serialization and deserialization of ModuleEnv and CIR data.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const Can = @import("can");

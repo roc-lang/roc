@@ -1,6 +1,5 @@
 //! Lists that make it easier to avoid incorrect indexing.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 

@@ -1,7 +1,6 @@
 //! Common IR types and utilities
 //! This module contains type definitions and utilities used across the canonicalization IR.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const types_mod = @import("types");

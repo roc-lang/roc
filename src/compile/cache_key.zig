@@ -1,6 +1,5 @@
 //! Cache key generation and management for uniquely identifying cached compilation results.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const fs_mod = @import("fs");

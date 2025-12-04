@@ -1,7 +1,6 @@
 //! The store of solved types
 //! Contains both Slot & Descriptor stores
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");

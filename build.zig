@@ -334,15 +334,12 @@ const CheckUnusedSuppressionStep = struct {
             std.debug.print("=" ** 80 ++ "\n\n", .{});
 
             std.debug.print(
-                \\In this codebase, we do NOT use `_ = variable;` or `_:` to suppress unused warnings.
+                \\In this codebase, we do NOT use `_ = variable;` to suppress unused warnings.
                 \\
                 \\Instead, you should:
                 \\  1. Delete the unused variable, parameter, or argument
                 \\  2. Update all call sites as necessary
                 \\  3. Propagate the change through the codebase until tests pass
-                \\
-                \\If a function parameter is unused, remove it from the function signature
-                \\and update all callers. This keeps the code clean and avoids dead code.
                 \\
                 \\VIOLATIONS FOUND:
                 \\
@@ -359,8 +356,8 @@ const CheckUnusedSuppressionStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} unused variable/argument suppression patterns (`_ = identifier;` or `_:`). " ++
-                    "Delete the unused variables/arguments and update call sites instead.",
+                "Found {d} unused variable suppression patterns (`_ = identifier;`). " ++
+                    "Delete the unused variables and update call sites instead.",
                 .{violations.items.len},
             );
         }
@@ -393,12 +390,6 @@ const CheckUnusedSuppressionStep = struct {
             const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
             defer allocator.free(content);
 
-            // Skip files that contain "// zig-lint: required-param" comment
-            // These are files with implementations that must match external API signatures
-            if (std.mem.indexOf(u8, content, "// zig-lint: required-param")) |_| {
-                continue;
-            }
-
             var line_number: usize = 1;
             var line_start: usize = 0;
 
@@ -410,14 +401,6 @@ const CheckUnusedSuppressionStep = struct {
                     // Check for pattern: _ = identifier;
                     // where identifier is alphanumeric with underscores
                     if (isUnusedSuppression(trimmed)) {
-                        try violations.append(allocator, .{
-                            .file_path = full_path,
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
-                    }
-                    // Also check for _: pattern (unused argument in parameter list)
-                    if (hasUnusedArgumentPattern(trimmed)) {
                         try violations.append(allocator, .{
                             .file_path = full_path,
                             .line_number = line_number,
@@ -453,22 +436,6 @@ const CheckUnusedSuppressionStep = struct {
         }
 
         return true;
-    }
-
-    fn hasUnusedArgumentPattern(line: []const u8) bool {
-        // Pattern: `_:` in function parameter positions
-        // This catches patterns like `fn foo(_: SomeType)` or `_: anytype`
-        // We look for `_:` followed by a space and a type, or just `_:` with a type
-        var i: usize = 0;
-        while (i + 1 < line.len) : (i += 1) {
-            if (line[i] == '_' and line[i + 1] == ':') {
-                // Check that this is preceded by start of line, space, paren, or comma
-                if (i == 0 or line[i - 1] == ' ' or line[i - 1] == '(' or line[i - 1] == ',') {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 };
 

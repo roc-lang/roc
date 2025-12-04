@@ -1,6 +1,5 @@
 //! GNU libc stub generation for test platforms
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 
