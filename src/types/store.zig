@@ -1,6 +1,5 @@
 //! The store of solved types
 //! Contains both Slot & Descriptor stores
-//!
 
 const std = @import("std");
 const base = @import("base");

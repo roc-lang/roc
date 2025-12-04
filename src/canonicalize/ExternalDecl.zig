@@ -1,5 +1,4 @@
 //! Represents an external declaration from another module
-//!
 
 const base = @import("base");
 const collections = @import("collections");

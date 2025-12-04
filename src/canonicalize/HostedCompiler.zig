@@ -1,6 +1,5 @@
 //! Compiler support for hosted functions in platform modules.
 //!
-//!
 //! This module handles the transformation of annotation-only declarations
 //! into hosted lambda expressions that will be provided by the platform at runtime.
 

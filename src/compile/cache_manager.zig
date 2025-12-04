@@ -1,5 +1,4 @@
 //! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
-//!
 
 const std = @import("std");
 const base = @import("base");

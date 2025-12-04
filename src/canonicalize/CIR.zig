@@ -1,6 +1,5 @@
 //! Common IR types and utilities
 //! This module contains type definitions and utilities used across the canonicalization IR.
-//!
 
 const std = @import("std");
 const types_mod = @import("types");

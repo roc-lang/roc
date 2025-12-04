@@ -2338,9 +2338,8 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
 
     const writer = assembly_buf.writer(b.allocator);
     const target_arch = target.result.cpu.arch;
-    const target_abi = target.result.abi;
 
-    glibc_stub_build.generateComprehensiveStub(b.allocator, writer, target_arch, target_abi) catch |err| {
+    glibc_stub_build.generateComprehensiveStub(writer, target_arch) catch |err| {
         std.log.warn("Failed to generate comprehensive stub assembly for {s}: {}, using minimal ELF", .{ target_name, err });
         // Fall back to minimal ELF
         const stub_content = switch (target.result.cpu.arch) {

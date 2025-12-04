@@ -1,5 +1,4 @@
 //! Tests for compile-time evaluation of top-level declarations
-//!
 
 const std = @import("std");
 const parse = @import("parse");

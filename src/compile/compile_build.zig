@@ -2,7 +2,6 @@
 //!
 //! Modules are built in parallel unless targeting WebAssembly, which doesn't support threads.
 //!
-//!
 //! Errors are reported as soon as they're encountered, with the only exception being that
 //! there is some buffering to make their output order determined by the dependency graph
 //! rather than by parallelism races. In other words, if you build the same set of source files

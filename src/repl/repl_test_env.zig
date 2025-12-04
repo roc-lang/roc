@@ -1,5 +1,4 @@
 //! An implementation of RocOps for testing purposes.
-//!
 
 const std = @import("std");
 const builtins = @import("builtins");

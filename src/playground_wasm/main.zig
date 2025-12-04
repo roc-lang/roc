@@ -2,7 +2,6 @@
 //!
 //! This module provides a state machine interface for the Roc compiler.
 //!
-//!
 //! State Machine:
 //! 1. START: Initialize module, return compiler version
 //! 2. READY: Receive Roc source, compile through all stages, return "LOADED" with diagnostics

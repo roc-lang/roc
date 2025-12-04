@@ -1,5 +1,4 @@
 //! Stores Layout values by index.
-//!
 
 const std = @import("std");
 const builtin = @import("builtin");

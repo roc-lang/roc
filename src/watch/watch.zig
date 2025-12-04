@@ -1,6 +1,5 @@
 //! File system watcher for monitoring .roc file changes across platforms.
 //! Provides efficient, cross-platform file watching with recursive directory support.
-//!
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -542,7 +541,6 @@ pub const Watcher = struct {
         _: [*]const FSEventStreamEventFlags,
         _: [*]const FSEventStreamEventId,
     ) callconv(.c) void {
-
         if (clientCallBackInfo == null) return;
 
         const self: *Watcher = @ptrCast(@alignCast(clientCallBackInfo.?));

@@ -1,5 +1,4 @@
 //! Cache key generation and management for uniquely identifying cached compilation results.
-//!
 
 const std = @import("std");
 const fs_mod = @import("fs");

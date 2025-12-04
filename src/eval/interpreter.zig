@@ -1,5 +1,4 @@
 //! Interpreter implementing the type-carrying architecture.
-//!
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -509,11 +508,9 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn startTrace(_: *Interpreter) void {
-    }
+    pub fn startTrace(_: *Interpreter) void {}
 
-    pub fn endTrace(_: *Interpreter) void {
-    }
+    pub fn endTrace(_: *Interpreter) void {}
 
     pub fn evaluateExpression(
         self: *Interpreter,

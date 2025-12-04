@@ -1,5 +1,4 @@
 //! Stores AST nodes and provides scratch arrays for working with nodes.
-//!
 
 const std = @import("std");
 const base = @import("base");
