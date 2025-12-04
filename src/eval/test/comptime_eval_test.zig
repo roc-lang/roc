@@ -1,4 +1,7 @@
 //! Tests for compile-time evaluation of top-level declarations
+//!
+// zig-lint: required-param
+
 const std = @import("std");
 const parse = @import("parse");
 const types = @import("types");
@@ -57,7 +60,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     errdefer builtin_module.deinit();
 
     // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(gpa, module_name);
+    try module_env.initCIRFields(module_name);
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text(module_name)),
         .bool_stmt = builtin_indices.bool_type,
@@ -136,7 +139,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     errdefer builtin_module.deinit();
 
     // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields("test");
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .bool_stmt = builtin_indices.bool_type,

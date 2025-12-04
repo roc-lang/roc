@@ -1,5 +1,7 @@
 //! Tests for e_low_level_lambda runtime evaluation in the interpreter
 //!
+// zig-lint: required-param
+//!
 //! These tests verify that low-level operations (like Str.is_empty, List.concat) that are defined
 //! as e_low_level_lambda nodes correctly dispatch to their builtin implementations
 //! when called at compile-time, producing the correct runtime values.
@@ -52,7 +54,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
     errdefer builtin_module.deinit();
 
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields("test");
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .bool_stmt = builtin_indices.bool_type,

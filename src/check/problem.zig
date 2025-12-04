@@ -454,7 +454,7 @@ pub const ReportBuilder = struct {
         const expected_content = self.snapshots.getContent(types.expected_snapshot);
         const actual_content = self.snapshots.getContent(types.actual_snapshot);
 
-        if (types.from_annotation and self.areBothFunctionSnapshots(expected_content, actual_content)) {
+        if (types.from_annotation and areBothFunctionSnapshots(expected_content, actual_content)) {
             // When we have constraint_origin_var, it indicates this error originated from
             // a specific constraint like a dot access (e.g., str.to_utf8()).
             // In this case, show a specialized argument type mismatch error.
@@ -2436,13 +2436,12 @@ pub const ReportBuilder = struct {
     }
 
     /// Check if both snapshot contents represent function types
-    fn areBothFunctionSnapshots(self: *Self, expected_content: snapshot.SnapshotContent, actual_content: snapshot.SnapshotContent) bool {
-        return self.isSnapshotFunction(expected_content) and self.isSnapshotFunction(actual_content);
+    fn areBothFunctionSnapshots(expected_content: snapshot.SnapshotContent, actual_content: snapshot.SnapshotContent) bool {
+        return isSnapshotFunction(expected_content) and isSnapshotFunction(actual_content);
     }
 
     /// Check if a snapshot content represents a function type
-    fn isSnapshotFunction(self: *Self, content: snapshot.SnapshotContent) bool {
-        _ = self;
+    fn isSnapshotFunction(content: snapshot.SnapshotContent) bool {
         return switch (content) {
             .structure => |structure| switch (structure) {
                 .fn_pure, .fn_effectful, .fn_unbound => true,

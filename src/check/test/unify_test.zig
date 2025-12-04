@@ -82,7 +82,7 @@ const TestEnv = struct {
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
-        try module_env.initCIRFields(gpa, "Test");
+        try module_env.initCIRFields("Test");
         return .{
             .module_env = module_env,
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),

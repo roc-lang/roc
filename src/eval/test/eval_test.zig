@@ -711,7 +711,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     parse_ast.store.emptyScratch();
 
     // Initialize CIR fields in ModuleEnv
-    try original_env.initCIRFields(gpa, "test");
+    try original_env.initCIRFields("test");
 
     // Get Bool and Try statement indices from builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;

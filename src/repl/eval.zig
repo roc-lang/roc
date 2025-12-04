@@ -547,7 +547,7 @@ pub const Repl = struct {
 
         // Create CIR
         const cir = module_env; // CIR is now just ModuleEnv
-        try cir.initCIRFields(self.allocator, "repl");
+        try cir.initCIRFields("repl");
 
         // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
         // These refer to the actual statements in the Builtin module
@@ -749,7 +749,7 @@ pub const Repl = struct {
 
         // Create CIR
         const cir = module_env;
-        try cir.initCIRFields(self.allocator, "repl");
+        try cir.initCIRFields("repl");
 
         // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);

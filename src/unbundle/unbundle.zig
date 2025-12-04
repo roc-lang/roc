@@ -65,7 +65,7 @@ pub const ExtractWriter = struct {
 
     pub const VTable = struct {
         createFile: *const fn (ptr: *anyopaque, path: []const u8) CreateFileError!*std.Io.Writer,
-        finishFile: *const fn (ptr: *anyopaque, writer: *std.Io.Writer) void,
+        finishFile: *const fn (ptr: *anyopaque) void,
         makeDir: *const fn (ptr: *anyopaque, path: []const u8) MakeDirError!void,
     };
 
@@ -82,8 +82,8 @@ pub const ExtractWriter = struct {
         return self.vtable.createFile(self.ptr, path);
     }
 
-    pub fn finishFile(self: ExtractWriter, writer: *std.Io.Writer) void {
-        return self.vtable.finishFile(self.ptr, writer);
+    pub fn finishFile(self: ExtractWriter) void {
+        return self.vtable.finishFile(self.ptr);
     }
 
     pub fn makeDir(self: ExtractWriter, path: []const u8) MakeDirError!void {
@@ -162,8 +162,7 @@ pub const DirExtractWriter = struct {
         return &entry.writer.interface;
     }
 
-    fn finishFile(ptr: *anyopaque, writer: *std.Io.Writer) void {
-        _ = writer;
+    fn finishFile(ptr: *anyopaque) void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
         // Close and remove the last file
         if (self.open_files.items.len > 0) {
@@ -236,7 +235,7 @@ pub const BufferExtractWriter = struct {
         return &self.current_file_writer.?.writer;
     }
 
-    fn finishFile(ptr: *anyopaque, _: *std.Io.Writer) void {
+    fn finishFile(ptr: *anyopaque) void {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
         if (self.current_file_writer) |*writer| {
             if (self.current_file_path) |path| {
@@ -591,7 +590,7 @@ pub fn unbundleStream(
             },
             .file => {
                 const file_writer = try extract_writer.createFile(file_path);
-                defer extract_writer.finishFile(file_writer);
+                defer extract_writer.finishFile();
 
                 try tar_iterator.streamRemaining(entry, file_writer);
                 try file_writer.flush();

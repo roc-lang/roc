@@ -1,5 +1,7 @@
 //! Snapshot testing infrastructure for the Roc compiler.
 //!
+// zig-lint: required-param
+//!
 //! This module provides functionality to generate and validate snapshot tests
 //! that capture the compiler's behavior at each stage of compilation. Snapshots
 //! help ensure the compiler continues to behave as expected by showing the
@@ -1129,7 +1131,7 @@ fn processSnapshotContent(
             basename;
     };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(allocator, module_name);
+    try can_ir.initCIRFields(module_name);
 
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
@@ -2918,8 +2920,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     return success;
 }
 
-fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
-    _ = content;
+fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
     try output.begin_section("PROBLEMS");
     try output.md_writer.writer.writeAll("NIL\n");
 
@@ -3151,9 +3152,7 @@ fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
+fn snapshotRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("snapshotRocDbg not implemented yet");
 }
 

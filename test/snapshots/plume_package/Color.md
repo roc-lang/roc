@@ -79,6 +79,7 @@ is_named_color = |str|{
 ~~~
 # EXPECTED
 MODULE HEADER DEPRECATED - Color.md:1:1:8:2
+TYPE REDECLARED - Color.md:10:1:15:2
 UNUSED VARIABLE - Color.md:30:5:30:25
 DOES NOT EXIST - Color.md:50:34:50:44
 DOES NOT EXIST - Color.md:50:52:50:62
@@ -96,8 +97,6 @@ MISSING METHOD - Color.md:38:23:38:43
 MISSING METHOD - Color.md:39:23:39:43
 MISSING METHOD - Color.md:40:23:40:43
 MISSING METHOD - Color.md:62:12:62:26
-MISSING METHOD - Color.md:56:26:56:32
-MISSING METHOD - Color.md:57:32:57:38
 MISSING METHOD - Color.md:58:23:58:29
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
@@ -115,6 +114,32 @@ module [
     rgba,
     hex,
     named,
+]
+```
+
+
+**TYPE REDECLARED**
+The type _Color_ is being redeclared.
+
+The redeclaration is here:
+**Color.md:10:1:15:2:**
+```roc
+Color := [
+    RGB(U8, U8, U8),
+    RGBA(U8, U8, U8, Dec),
+    Named(Str),
+    Hex(Str),
+]
+```
+
+But _Color_ was already declared here:
+**Color.md:10:1:15:2:**
+```roc
+Color := [
+    RGB(U8, U8, U8),
+    RGBA(U8, U8, U8, Dec),
+    Named(Str),
+    Hex(Str),
 ]
 ```
 
@@ -327,34 +352,6 @@ The value's type, which does not have a method named **is_named_color**, is:
 **Hint:** For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **to_str** method is being called on a value whose type doesn't have that method:
-**Color.md:56:26:56:32:**
-```roc
-expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
-```
-                         ^^^^^^
-
-The value's type, which does not have a method named **to_str**, is:
-
-    _Color_
-
-**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **to_str** method is being called on a value whose type doesn't have that method:
-**Color.md:57:32:57:38:**
-```roc
-expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
-```
-                               ^^^^^^
-
-The value's type, which does not have a method named **to_str**, is:
-
-    _Color_
-
-**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
-
-**MISSING METHOD**
 This **map_ok** method is being called on a value whose type doesn't have that method:
 **Color.md:58:23:58:29:**
 ```roc
@@ -364,7 +361,7 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 The value's type, which does not have a method named **map_ok**, is:
 
-    _Try(Color, [InvalidHex(Str)])_
+    _Try(Error, [InvalidHex(Str)])_
 
 **Hint:** For this to work, the type would need to have a method named **map_ok** associated with it in the type's declaration.
 
@@ -1307,20 +1304,20 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "U8, U8, U8 -> Color"))
-		(patt (type "U8, U8, U8, U8 -> Color"))
-		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
-		(patt (type "Color -> Error"))
-		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
+		(patt (type "U8, U8, U8 -> Error"))
+		(patt (type "U8, U8, U8, U8 -> Error"))
+		(patt (type "Str -> Try(Error, [InvalidHex(Str)])"))
+		(patt (type "Error -> Error"))
+		(patt (type "Str -> Try(Error, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "U8, U8, U8 -> Color"))
-		(expr (type "U8, U8, U8, U8 -> Color"))
-		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
-		(expr (type "Color -> Error"))
-		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
+		(expr (type "U8, U8, U8 -> Error"))
+		(expr (type "U8, U8, U8, U8 -> Error"))
+		(expr (type "Str -> Try(Error, [InvalidHex(Str)])"))
+		(expr (type "Error -> Error"))
+		(expr (type "Str -> Try(Error, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))
 ~~~

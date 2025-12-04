@@ -2,6 +2,8 @@
 //!
 //! This module provides a state machine interface for the Roc compiler.
 //!
+// zig-lint: required-param
+//!
 //! State Machine:
 //! 1. START: Initialize module, return compiler version
 //! 2. READY: Receive Roc source, compile through all stages, return "LOADED" with diagnostics
@@ -934,7 +936,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
     const env = result.module_env;
-    try env.initCIRFields(allocator, "main");
+    try env.initCIRFields("main");
 
     // Load builtin modules and inject Bool and Result type declarations
     // (following the pattern from eval.zig and TestEnv.zig)

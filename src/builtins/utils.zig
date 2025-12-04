@@ -3,6 +3,8 @@
 //! This module provides essential infrastructure for builtin operations,
 //! including memory allocation interfaces, overflow detection utilities,
 //! debug functions, and common types used throughout the builtin modules.
+//!
+// zig-lint: required-param
 //! It serves as the foundation layer that other builtin modules depend on
 //! for low-level operations and host interface functions.
 const std = @import("std");
@@ -163,18 +165,11 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-        _ = env;
-        _ = roc_dbg;
-    }
+    fn rocDbgFn(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
 
-    fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-        _ = env;
-        _ = roc_expect;
-    }
+    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-        _ = env;
+    fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
         const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
         @panic(message);
     }
@@ -763,10 +758,9 @@ test "TestEnv basic functionality" {
     // Should start with no allocations
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 
-    // Get ops should work
+    // Get ops should work - verify we can get ops and it points back to our test env
     const ops = test_env.getOps();
-    // Function pointers are non-null by design, just verify we can get ops
-    _ = ops;
+    try std.testing.expectEqual(@as(*anyopaque, @ptrCast(&test_env)), ops.env);
 }
 
 test "TestEnv allocation tracking" {

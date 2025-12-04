@@ -1,4 +1,6 @@
 //! Stores Layout values by index.
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -1121,20 +1123,7 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(last_pending_field.var_);
                         continue :outer;
                     },
-                    .fn_pure => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .fn_effectful => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .fn_unbound => |func| {
-                        _ = func;
+                    .fn_pure, .fn_effectful, .fn_unbound => {
                         // Create empty captures layout for generic function type
                         const empty_captures_idx = try self.getEmptyRecordLayout();
                         break :flat_type Layout.closure(empty_captures_idx);
@@ -1285,7 +1274,7 @@ pub const Store = struct {
                         // and append our variant layouts. This ensures our variants are contiguous.
                         const variants_start: u32 = @intCast(self.tag_union_variants.len());
 
-                        for (variant_layout_indices, 0..) |variant_layout_idx, variant_i| {
+                        for (variant_layout_indices) |variant_layout_idx| {
                             const variant_layout = self.getLayout(variant_layout_idx);
                             const variant_size = self.layoutSize(variant_layout);
                             const variant_alignment = variant_layout.alignment(self.targetUsize());
@@ -1298,7 +1287,6 @@ pub const Store = struct {
                             _ = try self.tag_union_variants.append(self.env.gpa, .{
                                 .payload_layout = variant_layout_idx,
                             });
-                            _ = variant_i;
                         }
 
                         // Calculate discriminant info

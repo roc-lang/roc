@@ -2,6 +2,8 @@
 //!
 //! Modules are built in parallel unless targeting WebAssembly, which doesn't support threads.
 //!
+// zig-lint: required-param
+//!
 //! Errors are reported as soon as they're encountered, with the only exception being that
 //! there is some buffering to make their output order determined by the dependency graph
 //! rather than by parallelism races. In other words, if you build the same set of source files
@@ -294,10 +296,8 @@ const GlobalQueue = struct {
     }
 
     // Hook from ModuleBuild to enqueue newly discovered/scheduled modules
-    pub fn hookOnSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, _path: []const u8, _depth: u32) void {
+    pub fn hookOnSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, _: []const u8, _: u32) void {
         var self: *GlobalQueue = @ptrCast(@alignCast(ctx.?));
-        _ = _path;
-        _ = _depth;
         // Enqueue to global queue - log but don't fail on error
         self.enqueue(package_name, module_name) catch {
             // Continue anyway - the module will still be processed by local scheduler
@@ -411,7 +411,6 @@ pub const BuildEnv = struct {
 
         // Deinit cache manager if present
         if (self.cache_manager) |cm| {
-            cm.deinit();
             self.gpa.destroy(cm);
         }
 
@@ -682,14 +681,8 @@ pub const BuildEnv = struct {
         ws: *BuildEnv,
 
         // Called by ModuleBuild.schedule_hook when a module is discovered/scheduled
-        pub fn onSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, _path: []const u8, _depth: u32) void {
-            const self: *ScheduleCtx = @ptrCast(@alignCast(ctx.?));
-            _ = package_name;
-            _ = module_name;
-            _ = _path;
-            _ = _depth;
+        pub fn onSchedule(_: ?*anyopaque, _: []const u8, _: []const u8, _: []const u8, _: u32) void {
             // Early reports auto-register in OrderedSink.emitReport when they are emitted
-            _ = self;
         }
     };
 
@@ -702,12 +695,6 @@ pub const BuildEnv = struct {
         } else {
             return .{ .qual = import_name, .rest = "" };
         }
-    }
-
-    fn resolverClassify(ctx: ?*anyopaque, _: []const u8, _: []const u8) bool {
-        _ = ctx;
-        // Unused: ModuleBuild determines external vs local from CIR (s_import.qualifier_tok)
-        return false;
     }
 
     fn resolverScheduleExternal(ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void {
@@ -761,8 +748,7 @@ pub const BuildEnv = struct {
         return sched.*.getEnvIfDone(rest);
     }
 
-    fn resolverResolveLocalPath(ctx: ?*anyopaque, _current_package: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
-        _ = _current_package;
+    fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
         var self: *ResolverCtx = @ptrCast(@alignCast(ctx.?));
         return self.ws.dottedToPath(root_dir, import_name) catch import_name;
     }
@@ -774,7 +760,6 @@ pub const BuildEnv = struct {
         ctx.* = .{ .ws = self };
         return .{
             .ctx = ctx,
-            .classify = resolverClassify,
             .scheduleExternal = resolverScheduleExternal,
             .isReady = resolverIsReady,
             .getEnv = resolverGetEnv,

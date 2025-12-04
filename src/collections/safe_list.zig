@@ -1,4 +1,6 @@
 //! Lists that make it easier to avoid incorrect indexing.
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 
@@ -246,6 +248,11 @@ pub fn SafeList(comptime T: type) type {
 
         /// Convert a range to a slice
         pub fn sliceRange(self: *const SafeList(T), range: Range) Slice {
+            // Empty ranges have undefined start, return empty slice directly
+            if (range.count == 0) {
+                return &.{};
+            }
+
             const start: usize = @intFromEnum(range.start);
             const end: usize = start + range.count;
 
@@ -475,6 +482,17 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Convert a range to a slice
         pub fn sliceRange(self: *const SafeMultiList(T), range: Range) Slice {
+            // Empty ranges have undefined start, return empty slice directly
+            if (range.count == 0) {
+                const base = self.items.slice();
+                // Return a zero-length slice based on the existing slice
+                return .{
+                    .ptrs = base.ptrs,
+                    .len = 0,
+                    .capacity = 0,
+                };
+            }
+
             const start: usize = @intFromEnum(range.start);
             const end: usize = start + range.count;
 

@@ -624,7 +624,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     parse_ast.store.emptyScratch();
 
     // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(allocator, "test");
+    try module_env.initCIRFields("test");
 
     // Register Builtin as import so Bool, Try, and Str are available
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");

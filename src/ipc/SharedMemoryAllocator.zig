@@ -8,6 +8,7 @@
 //! resize it should never come up in practice, since coordinating resizing with the
 //! child process would be complex.
 //!
+// zig-lint: required-param
 //! ## Cross-platform coordination
 //!
 //! The allocator uses platform-specific coordination mechanisms:

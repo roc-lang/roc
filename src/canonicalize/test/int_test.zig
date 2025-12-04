@@ -475,7 +475,7 @@ test "hexadecimal integer literals" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
@@ -534,7 +534,7 @@ test "binary integer literals" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
@@ -593,7 +593,7 @@ test "octal integer literals" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
@@ -652,7 +652,7 @@ test "integer literals with uppercase base prefixes" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -685,7 +685,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Create an int literal pattern directly
         const int_pattern = CIR.Pattern{
@@ -708,7 +708,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Create a dec literal pattern directly
         const dec_pattern = CIR.Pattern{
@@ -738,7 +738,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Test i128 max
         const max_pattern = CIR.Pattern{
@@ -768,7 +768,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         const small_dec_pattern = CIR.Pattern{
             .small_dec_literal = .{
@@ -793,7 +793,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         const dec_pattern = CIR.Pattern{
             .dec_literal = .{
@@ -814,7 +814,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Test negative zero (RocDec doesn't distinguish between +0 and -0)
         const neg_zero_pattern = CIR.Pattern{

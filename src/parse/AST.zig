@@ -1000,7 +1000,7 @@ pub const Statement = union(enum) {
                     try tree.pushStaticAtom("exposing");
                     const attrs2 = tree.beginNode();
                     for (ast.store.exposedItemSlice(import.exposes)) |e| {
-                        try ast.store.getExposedItem(e).pushToSExprTree(gpa, env, ast, tree);
+                        try ast.store.getExposedItem(e).pushToSExprTree(env, ast, tree);
                     }
                     try tree.endNode(exposed, attrs2);
                 }
@@ -1662,7 +1662,7 @@ pub const Header = union(enum) {
                 // Could push region info for provides_coll here if desired
                 for (provides_items) |item_idx| {
                     const item = ast.store.getExposedItem(item_idx);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(provides_begin, attrs2);
 
@@ -1698,7 +1698,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1718,7 +1718,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1753,7 +1753,7 @@ pub const Header = union(enum) {
                 // Could push region info for rigids here if desired
                 for (ast.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(rigids_begin, attrs3);
 
@@ -1769,7 +1769,7 @@ pub const Header = union(enum) {
                 const attrs4 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs4);
 
@@ -1814,7 +1814,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1887,9 +1887,7 @@ pub const ExposedItem = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        _ = gpa;
-
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .lower_ident => |i| {
                 const begin = tree.beginNode();

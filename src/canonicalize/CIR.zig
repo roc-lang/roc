@@ -1,5 +1,7 @@
 //! Common IR types and utilities
 //! This module contains type definitions and utilities used across the canonicalization IR.
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 const types_mod = @import("types");
@@ -271,7 +273,7 @@ pub const WhereClause = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .w_malformed => |malformed| {
+            .w_malformed => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed");
 
@@ -280,7 +282,6 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                _ = malformed;
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

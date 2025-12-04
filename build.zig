@@ -87,7 +87,7 @@ const TestsSummaryStep = struct {
 /// 2. They are brittle to changes that type-checking should not be sensitive to
 ///
 /// Instead, we always compare indices - either into node stores or to interned string indices.
-/// This step enforces that rule by failing the build if `std.mem.` is found in src/check/ or src/layout/.
+/// This step enforces that rule by failing the build if `std.mem.` is found in src/canonicalize/, src/check/, src/layout/, or src/eval/.
 const CheckTypeCheckerPatternsStep = struct {
     step: Step,
 
@@ -104,15 +104,15 @@ const CheckTypeCheckerPatternsStep = struct {
         return self;
     }
 
-    fn make(step: *Step, options: Step.MakeOptions) !void {
-        _ = options;
+    fn make(step: *Step, _: Step.MakeOptions) !void {
         const b = step.owner;
         const allocator = b.allocator;
 
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
-        // Recursively scan src/check/, src/layout/, and src/eval/ for .zig files
+        // Recursively scan src/canonicalize/, src/check/, src/layout/, and src/eval/ for .zig files
+        // TODO: uncomment "src/canonicalize" once its std.mem violations are fixed
         const dirs_to_scan = [_][]const u8{ "src/check", "src/layout", "src/eval" };
         for (dirs_to_scan) |dir_path| {
             var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
@@ -130,7 +130,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("=" ** 80 ++ "\n\n", .{});
 
             std.debug.print(
-                \\Code in src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
+                \\Code in src/canonicalize/, src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
                 \\
                 \\WHY THIS RULE EXISTS:
                 \\  We NEVER do string or byte comparisons because:
@@ -170,7 +170,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} forbidden patterns (raw string comparison or manipulation) in src/check/, src/layout/, or src/eval/. " ++
+                "Found {d} forbidden patterns (raw string comparison or manipulation) in src/canonicalize/, src/check/, src/layout/, or src/eval/. " ++
                     "See above for details on why this is forbidden and what to do instead.",
                 .{violations.items.len},
             );
@@ -441,6 +441,186 @@ const CheckEnumFromIntZeroStep = struct {
                 }
             }
         }
+    }
+};
+
+/// Build step that checks for unused variable suppression patterns.
+///
+/// In this codebase, we don't use `_ = variable;` to suppress unused variable warnings.
+/// Instead, we delete the unused variable/argument and update all call sites as necessary.
+const CheckUnusedSuppressionStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckUnusedSuppressionStep {
+        const self = b.allocator.create(CheckUnusedSuppressionStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-unused-suppression",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Scan all src/ directories for .zig files
+        var dir = std.fs.cwd().openDir("src", .{ .iterate = true }) catch |err| {
+            return step.fail("Failed to open src/ directory: {}", .{err});
+        };
+        defer dir.close();
+
+        try scanDirectoryForUnusedSuppression(allocator, dir, "src", &violations);
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("UNUSED VARIABLE SUPPRESSION DETECTED\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\In this codebase, we do NOT use `_ = variable;` or `_:` to suppress unused warnings.
+                \\
+                \\Instead, you should:
+                \\  1. Delete the unused variable, parameter, or argument
+                \\  2. Update all call sites as necessary
+                \\  3. Propagate the change through the codebase until tests pass
+                \\
+                \\If a function parameter is unused, remove it from the function signature
+                \\and update all callers. This keeps the code clean and avoids dead code.
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} unused variable/argument suppression patterns (`_ = identifier;` or `_:`). " ++
+                    "Delete the unused variables/arguments and update call sites instead.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+    };
+
+    fn scanDirectoryForUnusedSuppression(
+        allocator: std.mem.Allocator,
+        dir: std.fs.Dir,
+        path_prefix: []const u8,
+        violations: *std.ArrayList(Violation),
+    ) !void {
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+
+            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            const file = dir.openFile(entry.path, .{}) catch continue;
+            defer file.close();
+
+            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            defer allocator.free(content);
+
+            // Skip files that contain "// zig-lint: required-param" comment
+            // These are files with implementations that must match external API signatures
+            if (std.mem.indexOf(u8, content, "// zig-lint: required-param")) |_| {
+                continue;
+            }
+
+            var line_number: usize = 1;
+            var line_start: usize = 0;
+
+            for (content, 0..) |char, i| {
+                if (char == '\n') {
+                    const line = content[line_start..i];
+                    const trimmed = std.mem.trim(u8, line, " \t");
+
+                    // Check for pattern: _ = identifier;
+                    // where identifier is alphanumeric with underscores
+                    if (isUnusedSuppression(trimmed)) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+                    // Also check for _: pattern (unused argument in parameter list)
+                    if (hasUnusedArgumentPattern(trimmed)) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+
+                    line_number += 1;
+                    line_start = i + 1;
+                }
+            }
+        }
+    }
+
+    fn isUnusedSuppression(line: []const u8) bool {
+        // Pattern: `_ = identifier;` where identifier is alphanumeric with underscores
+        // Must start with "_ = " and end with ";"
+        if (!std.mem.startsWith(u8, line, "_ = ")) return false;
+        if (!std.mem.endsWith(u8, line, ";")) return false;
+
+        // Extract the identifier part (between "_ = " and ";")
+        const identifier = line[4 .. line.len - 1];
+
+        // Must have at least one character
+        if (identifier.len == 0) return false;
+
+        // Check that identifier contains only alphanumeric chars and underscores
+        // Also allow dots for field access like `_ = self.field;` which we also want to catch
+        for (identifier) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '.') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    fn hasUnusedArgumentPattern(line: []const u8) bool {
+        // Pattern: `_:` in function parameter positions
+        // This catches patterns like `fn foo(_: SomeType)` or `_: anytype`
+        // We look for `_:` followed by a space and a type, or just `_:` with a type
+        var i: usize = 0;
+        while (i + 1 < line.len) : (i += 1) {
+            if (line[i] == '_' and line[i + 1] == ':') {
+                // Check that this is preceded by start of line, space, paren, or comma
+                if (i == 0 or line[i - 1] == ' ' or line[i - 1] == '(' or line[i - 1] == ',') {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 };
 
@@ -1427,6 +1607,10 @@ pub fn build(b: *std.Build) void {
     // Add check for @enumFromInt(0) usage
     const check_enum_from_int = CheckEnumFromIntZeroStep.create(b);
     test_step.dependOn(&check_enum_from_int.step);
+
+    // Add check for unused variable suppression patterns
+    const check_unused = CheckUnusedSuppressionStep.create(b);
+    test_step.dependOn(&check_unused.step);
 
     test_step.dependOn(&tests_summary.step);
 

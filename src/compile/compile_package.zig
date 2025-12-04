@@ -3,6 +3,8 @@
 //! This component manages the concurrent compilation of all modules within a single package,
 //! orchestrating the build phases for each module:
 //!
+// zig-lint: required-param
+//!
 //! - Parsing modules to discover their import dependencies
 //! - Canonicalizing parsed modules into an intermediate representation
 //! - Type-checking modules once their dependencies are ready
@@ -83,8 +85,6 @@ pub const ScheduleHook = struct {
 /// Resolver for handling imports across package boundaries
 pub const ImportResolver = struct {
     ctx: ?*anyopaque,
-    /// Return true if the import_name refers to an external package (e.g. "cli.Stdout")
-    classify: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) bool,
     /// Ensure the external import is scheduled for building in its owning package
     scheduleExternal: *const fn (ctx: ?*anyopaque, current_package: []const u8, import_name: []const u8) void,
     /// Return true if the external import is fully type-checked and its ModuleEnv is ready
@@ -579,7 +579,7 @@ pub const PackageEnv = struct {
 
         var env = try ModuleEnv.init(self.gpa, src);
         // init CIR fields
-        try env.initCIRFields(self.gpa, st.name);
+        try env.initCIRFields(st.name);
 
         try env.common.calcLineStarts(self.gpa);
 

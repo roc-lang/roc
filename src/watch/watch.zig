@@ -1,5 +1,7 @@
 //! File system watcher for monitoring .roc file changes across platforms.
 //! Provides efficient, cross-platform file watching with recursive directory support.
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");

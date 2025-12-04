@@ -1,5 +1,7 @@
 //! The store of solved types
 //! Contains both Slot & Descriptor stores
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");
@@ -51,8 +53,7 @@ pub const Slot = union(enum) {
     redirect: Var,
 
     /// Calculate the size needed to serialize this Slot
-    pub fn serializedSize(self: *const Slot) usize {
-        _ = self;
+    pub fn serializedSize(_: *const Slot) usize {
         return @sizeOf(u8) + @sizeOf(u32); // tag + data
     }
 

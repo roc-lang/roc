@@ -1265,6 +1265,17 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(d.expr);
             },
+            .inspect => |i| {
+                try fmt.pushAll("inspect");
+                const expr_node = fmt.nodeRegion(@intFromEnum(i.expr));
+                if (multiline and try fmt.flushCommentsBefore(expr_node.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(i.expr);
+            },
             .block => |b| {
                 try fmt.formatBlock(b);
             },
