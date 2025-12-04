@@ -63,5 +63,8 @@ test "IterationGuard does not panic for normal iteration counts" {
     while (i < 1000) : (i += 1) {
         guard.tick();
     }
-    try std.testing.expectEqual(@as(u32, 1000), guard.getCount());
+    // In release builds, tick() is a no-op so count stays at 0.
+    // In debug builds, count should be 1000.
+    const expected: u32 = if (builtin.mode == .Debug) 1000 else 0;
+    try std.testing.expectEqual(expected, guard.getCount());
 }
