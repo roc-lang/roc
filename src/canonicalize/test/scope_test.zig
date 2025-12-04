@@ -23,7 +23,7 @@ const ScopeTestContext = struct {
         // heap allocate ModuleEnv for testing
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, "");
-        try module_env.initCIRFields(gpa, "test");
+        try module_env.initCIRFields("test");
 
         return ScopeTestContext{
             .self = try Can.init(module_env, undefined, null),

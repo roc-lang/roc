@@ -14521,12 +14521,12 @@ test "interpreter: cross-module method resolution should find methods in origin 
     // Set up Module A (the imported module where the type and method are defined)
     var module_a = try can.ModuleEnv.init(gpa, module_a_name);
     defer module_a.deinit();
-    try module_a.initCIRFields(gpa, module_a_name);
+    try module_a.initCIRFields(module_a_name);
 
     // Set up Module B (the current module that imports Module A)
     var module_b = try can.ModuleEnv.init(gpa, module_b_name);
     defer module_b.deinit();
-    try module_b.initCIRFields(gpa, module_b_name);
+    try module_b.initCIRFields(module_b_name);
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
@@ -14573,15 +14573,15 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     // Set up three modules: A (current) imports B, B imports C
     var module_a = try can.ModuleEnv.init(gpa, module_a_name);
     defer module_a.deinit();
-    try module_a.initCIRFields(gpa, module_a_name);
+    try module_a.initCIRFields(module_a_name);
 
     var module_b = try can.ModuleEnv.init(gpa, module_b_name);
     defer module_b.deinit();
-    try module_b.initCIRFields(gpa, module_b_name);
+    try module_b.initCIRFields(module_b_name);
 
     var module_c = try can.ModuleEnv.init(gpa, module_c_name);
     defer module_c.deinit();
-    try module_c.initCIRFields(gpa, module_c_name);
+    try module_c.initCIRFields(module_c_name);
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";

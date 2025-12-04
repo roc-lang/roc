@@ -1579,7 +1579,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     defer app_parse_ast.deinit(allocs.gpa);
     app_parse_ast.store.emptyScratch();
 
-    try app_env.initCIRFields(shm_allocator, app_module_name);
+    try app_env.initCIRFields(app_module_name);
 
     var app_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
     defer app_module_envs_map.deinit();
@@ -1826,7 +1826,7 @@ fn compileModuleToSharedMemory(
     parse_ast.store.emptyScratch();
 
     // Initialize CIR
-    try env.initCIRFields(shm_allocator, module_name_copy);
+    try env.initCIRFields(module_name_copy);
 
     // Create module_envs map
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
@@ -3047,7 +3047,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     parse_ast.store.emptyScratch();
 
     // Initialize CIR fields in ModuleEnv
-    try env.initCIRFields(allocs.gpa, module_name);
+    try env.initCIRFields(module_name);
 
     // Populate module_envs with Bool, Try, Dict, Set using shared function
     try Can.populateModuleEnvs(

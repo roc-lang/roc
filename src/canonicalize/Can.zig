@@ -10290,7 +10290,7 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
 
     switch (result) {
         .success => {},
-        .shadowing_warning => |shadowed_info| {
+        .shadowing_warning => {
             // Create diagnostic for module alias shadowing
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
@@ -10299,11 +10299,9 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
                     .original_region = Region.zero(),
                 },
             });
-            _ = shadowed_info; // Suppress unused variable warning
         },
-        .already_in_scope => |existing_info| {
+        .already_in_scope => {
             // Module alias already exists in current scope
-            // For now, just issue a diagnostic
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
                     .ident = alias_name,
@@ -10311,7 +10309,6 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
                     .original_region = Region.zero(),
                 },
             });
-            _ = existing_info; // Suppress unused variable warning
         },
     }
 }

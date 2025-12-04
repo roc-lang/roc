@@ -934,7 +934,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
     const env = result.module_env;
-    try env.initCIRFields(allocator, "main");
+    try env.initCIRFields("main");
 
     // Load builtin modules and inject Bool and Result type declarations
     // (following the pattern from eval.zig and TestEnv.zig)

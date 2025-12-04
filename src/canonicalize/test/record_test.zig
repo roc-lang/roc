@@ -21,7 +21,7 @@ test "record literal uses record_unbound" {
         var env = try ModuleEnv.init(gpa, source);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -52,7 +52,7 @@ test "record literal uses record_unbound" {
         var env = try ModuleEnv.init(gpa, source2);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -83,7 +83,7 @@ test "record literal uses record_unbound" {
         var env = try ModuleEnv.init(gpa, source3);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -124,7 +124,7 @@ test "record_unbound basic functionality" {
     var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
-    try env.initCIRFields(gpa, "test");
+    try env.initCIRFields("test");
 
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
@@ -165,7 +165,7 @@ test "record_unbound with multiple fields" {
     var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
-    try env.initCIRFields(gpa, "test");
+    try env.initCIRFields("test");
 
     // Create record_unbound with multiple fields
     var ast = try parse.parseExpr(&env.common, gpa);

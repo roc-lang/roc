@@ -48,7 +48,7 @@ pub fn init(source: []const u8) !TestEnv {
 
     parse_ast.store.emptyScratch();
 
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields("test");
 
     can.* = try Can.init(module_env, parse_ast, null);
 

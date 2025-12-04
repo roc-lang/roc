@@ -34,7 +34,7 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try original.common.line_starts.append(gpa, 20);
 
     // Initialize CIR fields to ensure imports are available
-    try original.initCIRFields(gpa, "TestModule");
+    try original.initCIRFields("TestModule");
 
     // Add some imports to test serialization/deserialization
     const import1 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
@@ -193,7 +193,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     defer original.deinit();
 
 //     // Initialize CIR fields
-//     try original.initCIRFields(gpa, "test.Types");
+//     try original.initCIRFields("test.Types");
 
 //     // Add some type variables
 //     const var1 = try original.types.freshFromContent(.err);
@@ -358,7 +358,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     defer original.deinit();
 
 //     // Initialize CIR fields
-//     try original.initCIRFields(gpa, "test.Hello");
+//     try original.initCIRFields("test.Hello");
 
 //     // Create arena allocator for serialization
 //     var arena = std.heap.ArenaAllocator.init(gpa);

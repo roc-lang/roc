@@ -579,7 +579,7 @@ pub const PackageEnv = struct {
 
         var env = try ModuleEnv.init(self.gpa, src);
         // init CIR fields
-        try env.initCIRFields(self.gpa, st.name);
+        try env.initCIRFields(st.name);
 
         try env.common.calcLineStarts(self.gpa);
 

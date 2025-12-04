@@ -1129,7 +1129,7 @@ fn processSnapshotContent(
             basename;
     };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(allocator, module_name);
+    try can_ir.initCIRFields(module_name);
 
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),

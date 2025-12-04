@@ -437,8 +437,7 @@ pub fn relocate(self: *Self, offset: isize) void {
 }
 
 /// Initialize the compilation fields in an existing ModuleEnv
-pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
-    _ = gpa; // unused since we don't create new allocations
+pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.module_kind = .deprecated_module; // default until canonicalization sets the actual kind
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
@@ -454,8 +453,8 @@ pub fn initCIRFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
-pub fn initModuleEnvFields(self: *Self, gpa: std.mem.Allocator, module_name: []const u8) !void {
-    return self.initCIRFields(gpa, module_name);
+pub fn initModuleEnvFields(self: *Self, module_name: []const u8) !void {
+    return self.initCIRFields(module_name);
 }
 
 /// Initialize the module environment.
