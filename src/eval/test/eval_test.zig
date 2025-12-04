@@ -1369,6 +1369,12 @@ test "list equality - nested lists - regression" {
     try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
 }
 
+test "list equality - single string element list - regression" {
+    // Regression test for crash trying to compare numeric scalars instead of string scalars
+    // Bug report: `main! = || { _bool = [""] == [""] }`
+    try runExpectBool("[\"\"] == [\"\"]", true, .no_trace);
+}
+
 test "if block with local bindings - regression" {
     // Regression test for segfault in if block with local variable bindings
     // Bug report: `main! = || { if True { x = 0 _y = x } }`
