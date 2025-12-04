@@ -5321,6 +5321,11 @@ pub fn canonicalizeExpr(
         .if_then_else => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+            // Use scratch_captures as intermediate buffer for collecting free vars
+            // This avoids capturing intermediate data from nested block canonicalization
+            const captures_top = self.scratch_captures.top();
+            defer self.scratch_captures.clearFrom(captures_top);
+
             const free_vars_start = self.scratch_free_vars.top();
 
             // Start collecting if-branches
@@ -5341,6 +5346,14 @@ pub fn canonicalizeExpr(
                     return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                 };
 
+                // Collect free variables from the condition into scratch_captures
+                const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_cond.free_vars);
+                for (cond_free_vars_slice) |fv| {
+                    if (!self.scratch_captures.contains(fv)) {
+                        try self.scratch_captures.append(fv);
+                    }
+                }
+
                 const can_then = try self.canonicalizeExpr(current_if.then) orelse {
                     const ast_then = self.parse_ir.store.getExpr(current_if.then);
                     const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
@@ -5349,6 +5362,14 @@ pub fn canonicalizeExpr(
                     });
                     return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                 };
+
+                // Collect free variables from the then-branch into scratch_captures
+                const then_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_then.free_vars);
+                for (then_free_vars_slice) |fv| {
+                    if (!self.scratch_captures.contains(fv)) {
+                        try self.scratch_captures.append(fv);
+                    }
+                }
 
                 // Add this condition/then pair as an if-branch
                 const if_branch = Expr.IfBranch{
@@ -5371,6 +5392,15 @@ pub fn canonicalizeExpr(
                         });
                         return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                     };
+
+                    // Collect free variables from the else-branch into scratch_captures
+                    const else_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_else.free_vars);
+                    for (else_free_vars_slice) |fv| {
+                        if (!self.scratch_captures.contains(fv)) {
+                            try self.scratch_captures.append(fv);
+                        }
+                    }
+
                     final_else = can_else.idx;
                     break;
                 }
@@ -5390,7 +5420,16 @@ pub fn canonicalizeExpr(
                 },
             }, region);
 
-            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            // Clear intermediate data from scratch_free_vars
+            self.scratch_free_vars.clearFrom(free_vars_start);
+
+            // Copy collected free vars from scratch_captures to scratch_free_vars
+            const if_free_vars_start = self.scratch_free_vars.top();
+            const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+            for (captures_slice) |fv| {
+                try self.scratch_free_vars.append(fv);
+            }
+            const free_vars_span = self.scratch_free_vars.spanFrom(if_free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
         },
         .if_without_else => |e| {
@@ -5409,6 +5448,11 @@ pub fn canonicalizeExpr(
             // Desugar to if-then-else with empty record {} as the final else
             // Type checking will ensure the then-branch also has type {}
 
+            // Use scratch_captures as intermediate buffer for collecting free vars
+            // This avoids capturing intermediate data from nested block canonicalization
+            const captures_top = self.scratch_captures.top();
+            defer self.scratch_captures.clearFrom(captures_top);
+
             const free_vars_start = self.scratch_free_vars.top();
 
             // Canonicalize condition
@@ -5421,6 +5465,14 @@ pub fn canonicalizeExpr(
                 return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
             };
 
+            // Collect free variables from the condition into scratch_captures
+            const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_cond.free_vars);
+            for (cond_free_vars_slice) |fv| {
+                if (!self.scratch_captures.contains(fv)) {
+                    try self.scratch_captures.append(fv);
+                }
+            }
+
             // Canonicalize then branch
             const can_then = try self.canonicalizeExpr(e.then) orelse {
                 const ast_then = self.parse_ir.store.getExpr(e.then);
@@ -5430,6 +5482,14 @@ pub fn canonicalizeExpr(
                 });
                 return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
             };
+
+            // Collect free variables from the then-branch into scratch_captures
+            const then_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_then.free_vars);
+            for (then_free_vars_slice) |fv| {
+                if (!self.scratch_captures.contains(fv)) {
+                    try self.scratch_captures.append(fv);
+                }
+            }
 
             // Create an empty record {} as the implicit else
             const empty_record_idx = try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, region);
@@ -5452,7 +5512,16 @@ pub fn canonicalizeExpr(
                 },
             }, region);
 
-            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+            // Clear intermediate data from scratch_free_vars
+            self.scratch_free_vars.clearFrom(free_vars_start);
+
+            // Copy collected free vars from scratch_captures to scratch_free_vars
+            const if_free_vars_start = self.scratch_free_vars.top();
+            const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+            for (captures_slice) |fv| {
+                try self.scratch_free_vars.append(fv);
+            }
+            const free_vars_span = self.scratch_free_vars.spanFrom(if_free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
         },
         .match => |m| {
