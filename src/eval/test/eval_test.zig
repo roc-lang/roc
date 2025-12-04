@@ -1366,9 +1366,7 @@ test "list equality - single element list - regression" {
 test "list equality - nested lists - regression" {
     // Regression test for segfault when comparing nested lists
     // Bug report: `_bool = [[1],[2]] == [[1],[2]]`
-    // TODO: Fix element type extraction in list_get_unsafe for nested lists with ranges branch
-    return error.SkipZigTest;
-    // try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
+    try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
 }
 
 test "if block with local bindings - regression" {

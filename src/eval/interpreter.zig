@@ -2150,27 +2150,89 @@ pub const Interpreter = struct {
                 // Null pointer from list_get_unsafe is a compiler bug - bounds should have been checked
                 std.debug.assert(elem_ptr != null);
 
-                // Get element runtime type.
-                // Priority: return_rt_var (from call site), then extract from list's rt_var,
-                // finally fall back to fresh type.
+                // Get element runtime type from the list's attached type.
+                // Priority: extract from list's concrete type first, as it has actual type info.
+                // Only fall back to return_rt_var if it's concrete and list type is polymorphic.
                 const elem_rt_var: types.Var = blk: {
-                    // First try return_rt_var (the declared return type from call site)
-                    if (return_rt_var) |rv| {
-                        break :blk rv;
-                    }
-                    // Try extracting from the list's attached type
+                    // First try extracting from the list's attached type - this has concrete type info
                     const list_resolved = self.runtime_types.resolveVar(list_arg.rt_var);
                     if (list_resolved.desc.content == .structure) {
                         if (list_resolved.desc.content.structure == .nominal_type) {
                             const nom = list_resolved.desc.content.structure.nominal_type;
                             const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                            // vars[0] is backing var, vars[1] is element type
-                            if (vars.len >= 2) {
-                                break :blk vars[1];
+                            // For List(elem), vars[0] is backing, vars[1] is element type
+                            if (vars.len == 2) {
+                                const elem_var = vars[1];
+                                // Follow aliases to check if underlying type is concrete
+                                var elem_resolved = self.runtime_types.resolveVar(elem_var);
+                                var unwrap_count: u32 = 0;
+                                while (elem_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
+                                    const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                    elem_resolved = self.runtime_types.resolveVar(backing);
+                                }
+                                // If element type is concrete (structure or alias to structure), create a fresh copy
+                                // to avoid corruption from later unifications during equality checking
+                                if (elem_resolved.desc.content == .structure) {
+                                    const fresh_var = try self.runtime_types.freshFromContent(elem_resolved.desc.content);
+                                    break :blk fresh_var;
+                                }
+                                // If element type got corrupted (content is .err), skip to fallbacks
+                                // instead of using the corrupted type
+                                if (elem_resolved.desc.content != .err) {
+                                    // If element type is a flex var, try flex_type_context for mapped type
+                                    if (elem_resolved.desc.content == .flex and self.flex_type_context.count() > 0) {
+                                        var it = self.flex_type_context.iterator();
+                                        while (it.next()) |entry| {
+                                            const mapped_var = entry.value_ptr.*;
+                                            const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                                            if (mapped_resolved.desc.content == .structure) {
+                                                const fresh_var = try self.runtime_types.freshFromContent(mapped_resolved.desc.content);
+                                                break :blk fresh_var;
+                                            }
+                                        }
+                                    }
+                                    // Element type is not concrete but we have it from the list
+                                    // Still create a fresh copy to avoid corruption
+                                    const fresh_var = try self.runtime_types.freshFromContent(elem_resolved.desc.content);
+                                    break :blk fresh_var;
+                                }
+                                // Element type is corrupted (.err) - fall through to other fallbacks
                             }
                         }
                     }
-                    break :blk try self.runtime_types.fresh();
+                    // List came from polymorphic context - try return_rt_var if it's concrete
+                    if (return_rt_var) |rv| {
+                        var rv_resolved = self.runtime_types.resolveVar(rv);
+                        var unwrap_count: u32 = 0;
+                        while (rv_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
+                            const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                            rv_resolved = self.runtime_types.resolveVar(backing);
+                        }
+                        if (rv_resolved.desc.content == .structure) {
+                            break :blk rv;
+                        }
+                    }
+                    // Check flex_type_context for concrete type
+                    if ((list_resolved.desc.content == .flex or list_resolved.desc.content == .rigid) and
+                        self.flex_type_context.count() > 0)
+                    {
+                        var it = self.flex_type_context.iterator();
+                        while (it.next()) |entry| {
+                            const mapped_var = entry.value_ptr.*;
+                            const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                            if (mapped_resolved.desc.content == .structure and
+                                mapped_resolved.desc.content.structure == .nominal_type)
+                            {
+                                const nom = mapped_resolved.desc.content.structure.nominal_type;
+                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                if (vars.len == 2) {
+                                    break :blk vars[1];
+                                }
+                            }
+                        }
+                    }
+                    // Final fallback: create type from layout (handles corrupted types)
+                    break :blk try self.createTypeFromLayout(elem_layout);
                 };
 
                 // Create StackValue pointing to the element
@@ -7458,6 +7520,107 @@ pub const Interpreter = struct {
         return try self.runtime_types.freshFromContent(list_content);
     }
 
+    /// Create List(element_type) for runtime type propagation.
+    /// Used when a list's type variable resolved to flex and we need a proper nominal type.
+    fn createListTypeWithElement(self: *Interpreter, element_rt_var: types.Var) !types.Var {
+        const origin_module_id = self.root_env.idents.builtin_module;
+
+        // Create Builtin.List type with the given element type
+        const list_type_name = "Builtin.List";
+        const list_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(list_type_name));
+        const list_type_ident = types.TypeIdent{ .ident_idx = list_type_name_ident };
+
+        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+        const empty_tag_union = types.TagUnion{
+            .tags = types.Tag.SafeMultiList.Range.empty(),
+            .ext = ext_var,
+        };
+        const list_backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+        const list_backing_var = try self.runtime_types.freshFromContent(list_backing_content);
+
+        // Create a fresh copy of the element type to avoid corruption from later unifications.
+        // If we use the original element_rt_var directly, it can be unified with other types
+        // during evaluation (e.g., during equality checking), corrupting this list type.
+        const elem_resolved = self.runtime_types.resolveVar(element_rt_var);
+        const fresh_elem_var = try self.runtime_types.freshFromContent(elem_resolved.desc.content);
+
+        // List has one type argument (element type)
+        const type_args: [1]types.Var = .{fresh_elem_var};
+        const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id, false);
+        return try self.runtime_types.freshFromContent(list_content);
+    }
+
+    /// Create a type variable from a layout. Used as a fallback when type info is corrupted.
+    /// Recursively handles nested types (e.g., List(List(Dec))).
+    fn createTypeFromLayout(self: *Interpreter, lay: layout.Layout) !types.Var {
+        return switch (lay.tag) {
+            .list, .list_of_zst => blk: {
+                // Get element layout and recursively create element type
+                const elem_layout = self.runtime_layout_store.getLayout(lay.data.list);
+                const elem_type = try self.createTypeFromLayout(elem_layout);
+                // Create List type with element type
+                break :blk try self.createListTypeWithElement(elem_type);
+            },
+            .scalar => blk: {
+                const scalar = lay.data.scalar;
+                switch (scalar.tag) {
+                    .int => {
+                        const type_name = switch (scalar.data.int) {
+                            .i8 => "I8",
+                            .i16 => "I16",
+                            .i32 => "I32",
+                            .i64 => "I64",
+                            .i128 => "I128",
+                            .u8 => "U8",
+                            .u16 => "U16",
+                            .u32 => "U32",
+                            .u64 => "U64",
+                            .u128 => "U128",
+                        };
+                        const content = try self.mkNumberTypeContentRuntime(type_name);
+                        break :blk try self.runtime_types.freshFromContent(content);
+                    },
+                    .frac => {
+                        const type_name = switch (scalar.data.frac) {
+                            .dec => "Dec",
+                            .f32 => "F32",
+                            .f64 => "F64",
+                        };
+                        const content = try self.mkNumberTypeContentRuntime(type_name);
+                        break :blk try self.runtime_types.freshFromContent(content);
+                    },
+                    .str => {
+                        // Create Str type
+                        const origin_module_id = self.root_env.idents.builtin_module;
+                        const str_type_name = "Builtin.Str";
+                        const str_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(str_type_name));
+                        const str_type_ident = types.TypeIdent{ .ident_idx = str_type_name_ident };
+                        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
+                        const ext_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
+                        const empty_tag_union = types.TagUnion{
+                            .tags = types.Tag.SafeMultiList.Range.empty(),
+                            .ext = ext_var,
+                        };
+                        const str_backing_content = types.Content{ .structure = .{ .tag_union = empty_tag_union } };
+                        const str_backing_var = try self.runtime_types.freshFromContent(str_backing_content);
+                        const no_type_args: []const types.Var = &.{};
+                        const str_content = try self.runtime_types.mkNominal(str_type_ident, str_backing_var, no_type_args, origin_module_id, false);
+                        break :blk try self.runtime_types.freshFromContent(str_content);
+                    },
+                    else => {
+                        // Default to fresh var for unknown scalar types
+                        break :blk try self.runtime_types.fresh();
+                    },
+                }
+            },
+            else => {
+                // For other layouts, create a fresh var (fallback)
+                return try self.runtime_types.fresh();
+            },
+        };
+    }
+
     /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
     fn mkNumberTypeContentRuntime(self: *Interpreter, type_name: []const u8) !types.Content {
         // Use root_env.idents for consistent module reference
@@ -10619,6 +10782,7 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
+
         var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // If the layout isn't a numeric type (e.g., ZST from unconstrained flex/rigid),
@@ -10663,6 +10827,40 @@ pub const Interpreter = struct {
             else => return error.TypeMismatch,
         }
         value.is_initialized = true;
+
+        // If the rt_var is still flex but we evaluated to a numeric type,
+        // update the rt_var to a concrete numeric type for method dispatch.
+        // This is needed because getRuntimeLayout defaults flex vars to Dec layout
+        // but doesn't update the rt_var itself.
+        const rt_resolved = self.runtime_types.resolveVar(value.rt_var);
+        if (rt_resolved.desc.content == .flex) {
+            // Create concrete type based on the layout we used
+            const concrete_rt_var = switch (layout_val.tag) {
+                .scalar => switch (layout_val.data.scalar.tag) {
+                    .int => switch (layout_val.data.scalar.data.int) {
+                        .i8 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I8")),
+                        .i16 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I16")),
+                        .i32 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I32")),
+                        .i64 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I64")),
+                        .i128 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("I128")),
+                        .u8 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U8")),
+                        .u16 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U16")),
+                        .u32 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U32")),
+                        .u64 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U64")),
+                        .u128 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("U128")),
+                    },
+                    .frac => switch (layout_val.data.scalar.data.frac) {
+                        .f32 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("F32")),
+                        .f64 => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("F64")),
+                        .dec => try self.runtime_types.freshFromContent(try self.mkNumberTypeContentRuntime("Dec")),
+                    },
+                    else => value.rt_var,
+                },
+                else => value.rt_var,
+            };
+            value.rt_var = concrete_rt_var;
+        }
+
         return value;
     }
 
@@ -12064,9 +12262,19 @@ pub const Interpreter = struct {
                         .elem_rt_var = lc.elem_rt_var,
                         .list_rt_var = lc.list_rt_var,
                     } } });
+                    // Only pass expected_rt_var if it's concrete (not flex/rigid).
+                    // This ensures nested lists compute their own concrete types
+                    // instead of inheriting a polymorphic type from the outer list.
+                    const elem_expected_rt_var: ?types.Var = blk: {
+                        const elem_resolved = self.runtime_types.resolveVar(lc.elem_rt_var);
+                        if (elem_resolved.desc.content == .flex or elem_resolved.desc.content == .rigid) {
+                            break :blk null;
+                        }
+                        break :blk lc.elem_rt_var;
+                    };
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = lc.remaining_elems[0],
-                        .expected_rt_var = lc.elem_rt_var,
+                        .expected_rt_var = elem_expected_rt_var,
                     } });
                 } else {
                     // All elements evaluated - finalize the list
@@ -12143,9 +12351,21 @@ pub const Interpreter = struct {
                             val.decref(&self.runtime_layout_store, roc_ops);
                         }
 
-                        // Set the runtime type variable so method dispatch works correctly
+                        // Set the runtime type variable so method dispatch works correctly.
+                        // Always use the actual element's rt_var to construct the list type,
+                        // since it reflects the concrete types from evaluation.
+                        var final_list_rt_var = lc.list_rt_var;
+                        const first_elem_rt_resolved = self.runtime_types.resolveVar(values[0].rt_var);
+
+                        // If actual element has a concrete type (not flex), create a new List type
+                        // with the concrete element type. Always use createListTypeWithElement to
+                        // ensure fresh backing vars are created (reusing backing vars causes corruption).
+                        if (first_elem_rt_resolved.desc.content != .flex) {
+                            final_list_rt_var = try self.createListTypeWithElement(values[0].rt_var);
+                        }
+
                         var result = dest;
-                        result.rt_var = lc.list_rt_var;
+                        result.rt_var = final_list_rt_var;
                         try value_stack.push(result);
                     }
                 }
