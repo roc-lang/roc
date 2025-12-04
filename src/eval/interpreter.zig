@@ -614,7 +614,7 @@ pub const Interpreter = struct {
                     self.early_return_value = null;
                     defer return_val.decref(&self.runtime_layout_store, roc_ops);
                     if (try self.shouldCopyResult(return_val, ret_ptr, roc_ops)) {
-                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr);
                     }
                     return;
                 }
@@ -624,7 +624,7 @@ pub const Interpreter = struct {
 
             // Only copy result if the result type is compatible with ret_ptr
             if (try self.shouldCopyResult(result_value, ret_ptr, roc_ops)) {
-                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr);
             }
             return;
         }
@@ -634,7 +634,7 @@ pub const Interpreter = struct {
 
         // Only copy result if the result type is compatible with ret_ptr
         if (try self.shouldCopyResult(result, ret_ptr, roc_ops)) {
-            try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            try result.copyToPtr(&self.runtime_layout_store, ret_ptr);
         }
     }
 
@@ -781,7 +781,7 @@ pub const Interpreter = struct {
         // Preserve rt_var for constant folding
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
         if (size > 0 and src.ptr != null and ptr != null) {
-            try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
+            try src.copyToPtr(&self.runtime_layout_store, ptr.?);
         }
         return dest;
     }
@@ -6210,7 +6210,7 @@ pub const Interpreter = struct {
                 const data_ptr = utils.allocateWithRefcount(elem_size, elem_alignment_u32, false, roc_ops);
 
                 if (elem_size > 0 and payload.ptr != null) {
-                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr);
                 }
 
                 if (out.ptr) |ptr| {
@@ -11514,7 +11514,7 @@ pub const Interpreter = struct {
                             if (runtime_list.bytes) |buffer| {
                                 for (values, 0..) |val, idx| {
                                     const dest_ptr = buffer + idx * elem_size;
-                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr);
                                 }
                             }
                         }
@@ -11784,7 +11784,7 @@ pub const Interpreter = struct {
                         const payload_field = try acc.getFieldByIndex(payload_field_idx);
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
-                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
                             } else {
                                 // Multiple args - create tuple payload
                                 var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -11848,7 +11848,7 @@ pub const Interpreter = struct {
                                     // Write payload
                                     const proper_payload_field = try proper_acc.getElement(0);
                                     if (proper_payload_field.ptr) |proper_ptr| {
-                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr);
                                     }
 
                                     for (values) |val| {
@@ -11859,7 +11859,7 @@ pub const Interpreter = struct {
                                     return true;
                                 }
 
-                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
                             } else {
                                 // Multiple args - create tuple payload
                                 var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -11926,7 +11926,7 @@ pub const Interpreter = struct {
                                 // Write payload (element 0)
                                 const proper_payload_field = try proper_acc.getElement(0);
                                 if (proper_payload_field.ptr) |proper_ptr| {
-                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr);
                                 }
 
                                 for (values) |val| {
@@ -11954,7 +11954,7 @@ pub const Interpreter = struct {
                         // Write payload at offset 0
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
                         } else {
                             // Multiple args - create tuple payload at offset 0
                             var elem_layouts = try self.allocator.alloc(Layout, total_count);

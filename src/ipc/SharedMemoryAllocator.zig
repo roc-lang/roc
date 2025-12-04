@@ -9,7 +9,6 @@
 //! child process would be complex.
 //!
 // zig-lint: required-param
-//!
 //! ## Cross-platform coordination
 //!
 //! The allocator uses platform-specific coordination mechanisms:

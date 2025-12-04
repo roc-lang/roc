@@ -411,7 +411,6 @@ pub const BuildEnv = struct {
 
         // Deinit cache manager if present
         if (self.cache_manager) |cm| {
-            cm.deinit();
             self.gpa.destroy(cm);
         }
 

@@ -3,8 +3,6 @@
 //! This module provides the core implementation of Roc's Str type, including
 //! operations for string manipulation, Unicode handling, formatting, and
 //! memory management. It defines the RocStr structure and associated functions
-//!
-// zig-lint: required-param
 //! that are called from compiled Roc code to handle string operations efficiently.
 //!
 //! ## Ownership Semantics
@@ -635,16 +633,6 @@ pub fn strSplitOn(
     }
 
     return list;
-}
-
-fn initFromSmallStr(
-    slice_bytes: [*]u8,
-    len: usize,
-    _: usize,
-    // TODO we probable don't need this here
-    roc_ops: *RocOps,
-) RocStr {
-    return RocStr.init(slice_bytes, len, roc_ops);
 }
 
 /// TODO

@@ -1,6 +1,5 @@
 //! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");
@@ -65,11 +64,6 @@ pub const CacheManager = struct {
             .allocator = allocator,
             .stats = CacheStats{},
         };
-    }
-
-    /// Deinitialize the cache manager.
-    pub fn deinit(_: *Self) void {
-        // Nothing to deinit currently
     }
 
     /// Load a cached module based on its content and compiler version.
