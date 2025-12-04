@@ -342,7 +342,7 @@ fn createHardlink(allocs: *Allocators, source: []const u8, dest: []const u8) !vo
                 lpFileName: [*:0]const u16,
                 lpExistingFileName: [*:0]const u16,
                 lpSecurityAttributes: ?*anyopaque,
-            ) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+            ) callconv(.winapi) std.os.windows.BOOL;
         };
 
         if (kernel32.CreateHardLinkW(dest_w, source_w, null) == 0) {
