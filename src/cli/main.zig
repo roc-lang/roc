@@ -986,7 +986,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        runWithPosixFdInheritance(allocs, exe_path, shm_handle, &cache_manager, args.app_args) catch |err| {
+        runWithPosixFdInheritance(allocs, exe_path, shm_handle, args.app_args) catch |err| {
             return err;
         };
     }
@@ -1132,25 +1132,12 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
-fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_manager: *CacheManager, app_args: []const []const u8) !void {
-    // Get cache directory for temporary files
-    const temp_cache_dir = cache_manager.config.getTempDir(allocs.arena) catch |err| {
-        std.log.err("Failed to get temp cache directory: {}", .{err});
-        return err;
-    };
-
-    // Ensure temp cache directory exists
-    std.fs.cwd().makePath(temp_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => {
-            std.log.err("Failed to create temp cache directory: {}", .{err});
-            return err;
-        },
-    };
-
+fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) !void {
     // Create temporary directory structure for fd communication
+    // Use system temp directory (not roc cache) to avoid race conditions when
+    // cache is cleared while child process is running
     std.log.debug("Creating temporary directory structure for fd communication", .{});
-    const temp_exe_path = createTempDirStructure(allocs, exe_path, shm_handle, temp_cache_dir) catch |err| {
+    const temp_exe_path = createTempDirStructure(allocs, exe_path, shm_handle, null) catch |err| {
         std.log.err("Failed to create temp dir structure: {}", .{err});
         return err;
     };
