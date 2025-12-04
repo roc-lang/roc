@@ -73,9 +73,6 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
-/// Set of module name idents that are package-qualified imports (e.g., "pf.Stdout")
-/// Used to skip MODULE NOT FOUND errors for cross-package imports resolved by the workspace
-package_qualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -206,7 +203,6 @@ pub fn deinit(
     self.scratch_record_fields.deinit();
     self.scratch_seen_record_fields.deinit();
     self.import_indices.deinit(gpa);
-    self.package_qualified_imports.deinit(gpa);
     self.scratch_tags.deinit();
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
@@ -2984,8 +2980,8 @@ fn importAliased(
     // 2. Resolve the alias
     const alias = try self.resolveModuleAlias(alias_tok, module_name) orelse return null;
 
-    // 3. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
+    // 3. Add to scope: alias -> module_name mapping (includes is_package_qualified flag)
+    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span, is_package_qualified);
 
     // 4. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -3013,12 +3009,7 @@ fn importAliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 9. Track package-qualified imports for later member resolution
-    if (is_package_qualified) {
-        try self.package_qualified_imports.put(self.env.gpa, module_name, {});
-    }
-
-    // 10. Check that this module actually exists, and if not report an error
+    // 9. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
     // Skip for package-qualified imports (e.g., "pf.Stdout") - those are cross-package
@@ -3150,12 +3141,7 @@ fn importUnaliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 6. Track package-qualified imports for later member resolution
-    if (is_package_qualified) {
-        try self.package_qualified_imports.put(self.env.gpa, module_name, {});
-    }
-
-    // 7. Check that this module actually exists, and if not report an error
+    // 6. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
     // Skip for package-qualified imports (e.g., "pf.Stdout") - those are cross-package
@@ -3962,17 +3948,21 @@ pub fn canonicalizeExpr(
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
                         // Check if this is a module alias, or an auto-imported module
-                        const module_name = self.scopeLookupModule(module_alias) orelse blk: {
+                        const module_info: ?Scope.ModuleAliasInfo = self.scopeLookupModule(module_alias) orelse blk: {
                             // Not in scope, check if it's an auto-imported module
                             if (self.module_envs) |envs_map| {
                                 if (envs_map.contains(module_alias)) {
                                     // This is an auto-imported module like Bool or Try
-                                    // Use the module_alias directly as the module_name
-                                    break :blk module_alias;
+                                    // Use the module_alias directly as the module_name (not package-qualified)
+                                    break :blk Scope.ModuleAliasInfo{
+                                        .module_name = module_alias,
+                                        .is_package_qualified = false,
+                                    };
                                 }
                             }
                             break :blk null;
-                        } orelse {
+                        };
+                        const module_name = if (module_info) |info| info.module_name else {
                             // Not a module alias and not an auto-imported module
                             // Check if the qualifier is a type - if so, try to lookup associated items
                             const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
@@ -4146,7 +4136,8 @@ pub fn canonicalizeExpr(
 
                                 // Check if this is a package-qualified import (e.g., "pf.Stdout")
                                 // These are cross-package imports resolved by the workspace resolver
-                                if (self.package_qualified_imports.contains(module_name)) {
+                                const is_pkg_qualified = if (module_info) |info| info.is_package_qualified else false;
+                                if (is_pkg_qualified) {
                                     // Package-qualified import - member resolution happens via the resolver
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
@@ -6074,7 +6065,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // For Imported.Foo.Bar.X: module=Imported, type=Foo.Bar, tag=X
         // qualifiers=[Imported, Foo, Bar], so type name is built from qualifiers[1..]
 
-        const module_name = self.scopeLookupModule(first_tok_ident).?; // Already checked above
+        const module_info = self.scopeLookupModule(first_tok_ident).?; // Already checked above
+        const module_name = module_info.module_name;
         const module_name_text = self.env.getIdent(module_name);
 
         // Check if this is imported in the current scope
@@ -6801,13 +6793,14 @@ fn canonicalizePattern(
                 const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
 
                 // Check if this is a module alias
-                const module_name = self.scopeLookupModule(module_alias) orelse {
+                const module_info = self.scopeLookupModule(module_alias) orelse {
                     // Module is not in current scope
                     return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .module_not_imported = .{
                         .module_name = module_alias,
                         .region = region,
                     } });
                 };
+                const module_name = module_info.module_name;
                 const module_name_text = self.env.getIdent(module_name);
 
                 // Check if this module is imported in the current scope
@@ -8037,7 +8030,7 @@ fn canonicalizeTypeAnnoBasicType(
         const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
 
         // Check if this is a module alias
-        const module_name = self.scopeLookupModule(module_alias) orelse {
+        const module_info = self.scopeLookupModule(module_alias) orelse {
             // Module is not in current scope - but check if it's a type name first
             if (self.scopeLookupTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
@@ -8054,6 +8047,7 @@ fn canonicalizeTypeAnnoBasicType(
                 .region = region,
             } });
         };
+        const module_name = module_info.module_name;
         const module_name_text = self.env.getIdent(module_name);
 
         // Check if this module is imported in the current scope
@@ -10234,7 +10228,7 @@ fn scopeLookupTypeBindingConst(self: *const Self, ident_idx: Ident.Idx) ?TypeBin
 }
 
 /// Look up a module alias in the scope hierarchy
-fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
+fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
     while (i > 0) {
@@ -10242,7 +10236,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
         const scope = &self.scopes.items[i];
 
         switch (scope.lookupModuleAlias(alias_name)) {
-            .found => |module_name| return module_name,
+            .found => |module_info| return module_info,
             .not_found => continue,
         }
     }
@@ -10251,7 +10245,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
 }
 
 /// Introduce a module alias into scope
-fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span) std.mem.Allocator.Error!void {
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span, is_package_qualified: bool) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -10292,11 +10286,11 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
     }
 
     // Simplified introduction without parent lookup for now
-    const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, null);
+    const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, is_package_qualified, null);
 
     switch (result) {
         .success => {},
-        .shadowing_warning => |shadowed_module| {
+        .shadowing_warning => |shadowed_info| {
             // Create diagnostic for module alias shadowing
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
@@ -10305,9 +10299,9 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
                     .original_region = Region.zero(),
                 },
             });
-            _ = shadowed_module; // Suppress unused variable warning
+            _ = shadowed_info; // Suppress unused variable warning
         },
-        .already_in_scope => |existing_module| {
+        .already_in_scope => |existing_info| {
             // Module alias already exists in current scope
             // For now, just issue a diagnostic
             try self.env.pushDiagnostic(Diagnostic{
@@ -10317,13 +10311,13 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
                     .original_region = Region.zero(),
                 },
             });
-            _ = existing_module; // Suppress unused variable warning
+            _ = existing_info; // Suppress unused variable warning
         },
     }
 }
 
 /// Helper function to look up module aliases in parent scopes only
-fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
+fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
     // Search from second-innermost to outermost scope (excluding current scope)
     if (self.scopes.items.len <= 1) return null;
 
@@ -10332,8 +10326,8 @@ fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Id
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupModuleAlias(&self.env.idents, alias_name)) {
-            .found => |module_name| return module_name,
+        switch (scope.lookupModuleAlias(alias_name)) {
+            .found => |module_info| return module_info,
             .not_found => continue,
         }
     }
@@ -10775,12 +10769,13 @@ fn createAnnotationFromTypeAnno(
 /// we create external declarations that will be resolved later when
 /// we have access to the other module's IR after it has been type checked.
 fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx) std.mem.Allocator.Error!void {
-    // Set up the module alias for qualified lookups
+    // Set up the module alias for qualified lookups (type imports are not package-qualified)
     const scope = self.currentScope();
     _ = try scope.introduceModuleAlias(
         self.env.gpa,
         alias_name,
         module_name,
+        false, // Type imports are not package-qualified
         null, // No parent lookup function for now
     );
 }
@@ -10800,7 +10795,8 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
 
     // Check if this is a module alias
-    const module_name = self.scopeLookupModule(module_alias) orelse return null;
+    const module_info = self.scopeLookupModule(module_alias) orelse return null;
+    const module_name = module_info.module_name;
     const module_text = self.env.getIdent(module_name);
 
     // Check if this module is imported in the current scope
