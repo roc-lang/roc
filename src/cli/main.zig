@@ -1554,43 +1554,11 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         const module_env_ptr = try compileModuleToSharedMemory(
             allocs,
             module_path,
-            module_filename,
+            module_name, // Use just "Stdout" (not "Stdout.roc") so type-module detection works
             shm_allocator,
             &builtin_modules,
             &.{},
         );
-
-        // Add exposed item aliases with "pf." prefix for import resolution
-        // The canonicalizer builds lookup names like "Stdout.roc.pf.Stdout.line!"
-        // because the import "pf.Stdout" creates an alias Stdout -> pf.Stdout,
-        // and scopeLookupModule returns "pf.Stdout" which becomes part of the qualified name.
-        // We need to add aliases that match this pattern.
-        module_env_ptr.common.exposed_items.ensureSorted(shm_allocator);
-        const exposed_entries = module_env_ptr.common.exposed_items.items.entries.items;
-        for (exposed_entries) |entry| {
-            const key_ident: base.Ident.Idx = @bitCast(entry.key);
-            const key_text = module_env_ptr.common.getIdent(key_ident);
-
-            // Check if this is a qualified name like "Stdout.roc.Stdout.line!"
-            // We want to create an alias "Stdout.roc.pf.Stdout.line!"
-            // The pattern is: "{module}.roc.{Type}.{method}"
-            // We want to create: "{module}.roc.pf.{Type}.{method}"
-            if (std.mem.indexOf(u8, key_text, ".roc.")) |roc_pos| {
-                const prefix = key_text[0 .. roc_pos + 5]; // "Stdout.roc."
-                const suffix = key_text[roc_pos + 5 ..]; // "Stdout.line!"
-
-                // Create the aliased name "Stdout.roc.pf.Stdout.line!"
-                const aliased_name = try std.fmt.allocPrint(shm_allocator, "{s}pf.{s}", .{ prefix, suffix });
-                // Note: We don't defer free because this is allocated in shm_allocator (shared memory)
-
-                // Insert the aliased name into the platform env's ident table
-                const aliased_ident = try module_env_ptr.insertIdent(base.Ident.for_text(aliased_name));
-
-                // First add to exposed items, then set node index
-                try module_env_ptr.common.exposed_items.addExposedById(shm_allocator, @bitCast(aliased_ident));
-                try module_env_ptr.common.exposed_items.setNodeIndexById(shm_allocator, @bitCast(aliased_ident), entry.value);
-            }
-        }
 
         // Store platform modules at indices 0..N-2, app will be at N-1
         module_env_offsets_ptr[i] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
@@ -1737,19 +1705,29 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Two keys are needed for each platform module:
     // 1. "pf.Stdout" - used during import validation (import pf.Stdout)
     // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
-    // Also set statement_idx to a non-null value to trigger qualified name lookup,
-    // since associated items are stored as "Stdout.roc.Stdout.line!", not just "line!".
+    // Also set statement_idx to the actual type node index, which is needed for
+    // creating e_nominal_external and e_lookup_external expressions.
     for (exposed_modules.items, 0..) |module_name, i| {
         const platform_env = platform_env_ptrs[i];
-        // For platform modules, the qualified type name is "ModuleName.roc.ModuleName"
-        // This matches how associated items are stored (e.g., "Stdout.roc.Stdout.line!")
+        // For platform modules (type modules), the qualified type name is just the type name.
+        // Type modules like Stdout.roc store associated items as "Stdout.line!" (not "Stdout.roc.Stdout.line!")
+        // because processTypeDeclFirstPass uses parent_name=null for top-level types.
         // Insert into app_env (calling module) since Ident.Idx values are not transferable between stores.
-        const qualified_type_name = try std.fmt.allocPrint(allocs.gpa, "{s}.roc.{s}", .{ module_name, module_name });
-        defer allocs.gpa.free(qualified_type_name);
-        const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_type_name));
+        const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+
+        // Look up the type in the platform module's exposed_items to get the actual node index
+        const type_ident_in_platform = platform_env.common.findIdent(module_name) orelse {
+            std.log.err("Platform module '{s}' does not expose a type named '{s}'", .{ module_name, module_name });
+            return error.MissingTypeInPlatformModule;
+        };
+        const type_node_idx = platform_env.getExposedNodeIndexById(type_ident_in_platform) orelse {
+            std.log.err("Platform module type '{s}' has no node index in exposed_items", .{module_name});
+            return error.MissingNodeIndexForPlatformType;
+        };
+
         const auto_type = Can.AutoImportedType{
             .env = platform_env,
-            .statement_idx = undefined, // non-null triggers qualified name building; actual index isn't read
+            .statement_idx = @enumFromInt(type_node_idx), // actual type node index for e_lookup_external
             .qualified_type_ident = type_qualified_ident,
         };
 

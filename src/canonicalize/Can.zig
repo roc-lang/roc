@@ -1212,7 +1212,6 @@ fn processAssociatedItemsSecondPass(
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
                     const qualified_idx = try self.env.insertQualifiedIdent(parent_text, name_text);
-
                     // Create anno-only def with the qualified name
                     const def_idx = try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
@@ -4120,15 +4119,6 @@ pub fn canonicalizeExpr(
 
                                 if (!module_exists) {
                                     // Module import failed, don't generate redundant error
-                                    // Fall through to normal identifier lookup
-                                    break :blk_qualified;
-                                }
-
-                                // Check if this is a package-qualified import (e.g., "pf.Stdout")
-                                // These are cross-package imports resolved by the workspace resolver
-                                const is_pkg_qualified = if (module_info) |info| info.is_package_qualified else false;
-                                if (is_pkg_qualified) {
-                                    // Package-qualified import - member resolution happens via the resolver
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
                                 }
@@ -10826,14 +10816,143 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         return null;
     };
 
-    // This is a module-qualified lookup
+    // This IS a module-qualified lookup - we must handle it completely here.
+    // After this point, returning null would cause incorrect fallback to regular field access.
     const right_expr = self.parse_ir.store.getExpr(field_access.right);
-    if (right_expr != .ident) return null;
+    const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+
+    // Handle method calls on module-qualified types (e.g., Stdout.line!(...))
+    if (right_expr == .apply) {
+        const apply = right_expr.apply;
+        const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
+        if (method_expr != .ident) {
+            // Module-qualified call with non-ident function (e.g., Module.(complex_expr)(...))
+            // This is malformed - report error
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+        }
+
+        const method_ident = method_expr.ident;
+        const method_name = self.parse_ir.tokens.resolveIdentifier(method_ident.token) orelse {
+            // Couldn't resolve method name token
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+        };
+
+        // Check if this is a type module (like Stdout) - we need to create a method call on the nominal type
+        if (self.module_envs) |envs_map| {
+            if (envs_map.get(module_name)) |auto_imported_type| {
+                if (auto_imported_type.statement_idx) |stmt_idx| {
+                    // This is an imported type module - create an e_dot_access for the method call
+                    const module_name_text = auto_imported_type.env.module_name;
+                    const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
+
+                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                        std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                    };
+
+                    // Create the receiver - a reference to the nominal type
+                    const receiver_idx = try self.env.addExpr(CIR.Expr{
+                        .e_lookup_external = .{
+                            .module_idx = auto_import_idx,
+                            .target_node_idx = target_node_idx,
+                            .region = self.parse_ir.tokenizedRegionToRegion(method_ident.region),
+                        },
+                    }, self.parse_ir.tokenizedRegionToRegion(method_ident.region));
+
+                    // Canonicalize the arguments
+                    const scratch_top = self.env.store.scratchExprTop();
+                    for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+                        if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
+                            try self.env.store.addScratchExpr(canonicalized.get_idx());
+                        }
+                        // Note: if arg canonicalization fails, it will have pushed its own diagnostic
+                    }
+                    const args = try self.env.store.exprSpanFrom(scratch_top);
+
+                    // Create the method call expression
+                    const method_region = self.parse_ir.tokenizedRegionToRegion(method_ident.region);
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_dot_access = .{
+                            .receiver = receiver_idx,
+                            .field_name = method_name,
+                            .field_name_region = method_region,
+                            .args = args,
+                        },
+                    }, region);
+                    return expr_idx;
+                }
+            }
+        }
+
+        // Module exists but is not a type module with a statement_idx - it's a regular module
+        // This means it's something like `SomeModule.someFunc(args)` where someFunc is a regular export
+        // We need to look up the function and create a call
+        const field_text = self.env.getIdent(method_name);
+        const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
+            if (envs_map.get(module_name)) |auto_imported_type| {
+                const module_env = auto_imported_type.env;
+                if (module_env.common.findIdent(field_text)) |target_ident| {
+                    break :blk module_env.getExposedNodeIndexById(target_ident);
+                } else {
+                    break :blk null;
+                }
+            } else {
+                break :blk null;
+            }
+        } else null;
+
+        if (target_node_idx_opt) |target_node_idx| {
+            // Found the function - create a lookup and call it
+            const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                .module_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .region = region,
+            } }, region);
+
+            // Canonicalize the arguments
+            const scratch_top = self.env.store.scratchExprTop();
+            for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+                if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
+                    try self.env.store.addScratchExpr(canonicalized.get_idx());
+                }
+            }
+            const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+            // Create the call expression
+            const call_expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_call = .{
+                    .func = func_expr_idx,
+                    .args = args_span,
+                    .called_via = CalledVia.apply,
+                },
+            }, region);
+            return call_expr_idx;
+        } else {
+            // Function not found in module
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+                .ident = method_name,
+                .region = region,
+            } });
+        }
+    }
+
+    // Handle simple field access (not a method call)
+    if (right_expr != .ident) {
+        // Module-qualified access with non-ident, non-apply right side - malformed
+        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+            .region = region,
+        } });
+    }
 
     const right_ident = right_expr.ident;
-    const field_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse return null;
-
-    const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+    const field_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse {
+        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+            .region = region,
+        } });
+    };
 
     // Check if this is a tag access on an auto-imported nominal type (e.g., Bool.True)
     if (self.module_envs) |envs_map| {
@@ -10890,8 +11009,13 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         }
     } else null;
 
-    // If we didn't find a valid node index, return null to fall through to error handling
-    const target_node_idx = target_node_idx_opt orelse return null;
+    // If we didn't find a valid node index, report an error (don't fall back)
+    const target_node_idx = target_node_idx_opt orelse {
+        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .qualified_ident_does_not_exist = .{
+            .ident = field_name,
+            .region = region,
+        } });
+    };
 
     // Create the e_lookup_external expression with Import.Idx
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
