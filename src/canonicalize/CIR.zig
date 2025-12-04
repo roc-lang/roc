@@ -271,7 +271,7 @@ pub const WhereClause = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .w_malformed => |malformed| {
+            .w_malformed => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed");
 
@@ -280,7 +280,6 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                _ = malformed;
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

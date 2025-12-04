@@ -13,5 +13,5 @@ pub const encode = base58.encode;
 pub const decode = base58.decode;
 
 test {
-    _ = base58;
+    @import("std").testing.refAllDecls(@This());
 }

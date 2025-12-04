@@ -1322,10 +1322,8 @@ fn processAssociatedItemsSecondPass(
 fn registerUserFacingName(
     self: *Self,
     fully_qualified_idx: Ident.Idx,
-    item_name_idx: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
 ) std.mem.Allocator.Error!void {
-    _ = item_name_idx;
 
     // Get the fully qualified text and strip the module prefix
     const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
@@ -1656,7 +1654,7 @@ fn processAssociatedItemsFirstPass(
                         // - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
                         // - Foo's scope gets "Bar.baz" (partially qualified)
                         // - Bar's scope gets "baz" (unqualified)
-                        try self.registerUserFacingName(qualified_idx, decl_ident, placeholder_pattern_idx);
+                        try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
                     }
                 }
             },
@@ -1684,7 +1682,7 @@ fn processAssociatedItemsFirstPass(
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
 
                     // Register progressively qualified names at each scope level per the plan
-                    try self.registerUserFacingName(qualified_idx, anno_ident, placeholder_pattern_idx);
+                    try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
                 }
             },
             else => {
@@ -2280,9 +2278,8 @@ pub fn canonicalizeFile(
                     }
                 }
             },
-            .malformed => |malformed| {
+            .malformed => {
                 // We won't touch this since it's already a parse error.
-                _ = malformed;
             },
         }
     }
@@ -2687,9 +2684,8 @@ fn addToExposedScope(
                     try self.exposed_type_texts.put(gpa, type_text, region);
                 }
             },
-            .malformed => |malformed| {
+            .malformed => {
                 // Malformed exposed items are already captured as diagnostics during parsing
-                _ = malformed;
             },
         }
     }
@@ -2895,20 +2891,14 @@ fn bringImportIntoScope(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-
                 // TODO handle `as` here using an Alias
-
-                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
-                    _ = ident_idx;
-
-                    // TODO Introduce our import
-
+                // TODO Introduce our import
+                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |_| {
                     // _ = self.scope.levels.introduce(gpa, &self.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
                 }
             },
-            .upper_ident => |imported_type| {
-                _ = imported_type;
-                // const alias = Alias{
+            .upper_ident => {
+                // TODO: const alias = Alias{
                 //     .name = imported_type.name,
                 //     .region = ir.env.tag_names.getRegion(imported_type.name),
                 //     .is_builtin = false,
@@ -2921,9 +2911,7 @@ fn bringImportIntoScope(
                 //     .alias = alias_idx,
                 // });
             },
-            .upper_ident_star => |ident| {
-                _ = ident;
-            },
+            .upper_ident_star => {},
         }
     }
 }
@@ -2965,6 +2953,7 @@ fn importAliased(
     alias_tok: ?Token.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
+    is_package_qualified: bool,
 ) std.mem.Allocator.Error!?Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
@@ -2979,8 +2968,8 @@ fn importAliased(
     // 2. Resolve the alias
     const alias = try self.resolveModuleAlias(alias_tok, module_name) orelse return null;
 
-    // 3. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
+    // 3. Add to scope: alias -> module_name mapping (includes is_package_qualified flag)
+    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span, is_package_qualified);
 
     // 4. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -3011,12 +3000,16 @@ fn importAliased(
     // 9. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
+    // Skip for package-qualified imports (e.g., "pf.Stdout") - those are cross-package
+    // imports that are resolved by the workspace resolver
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
+            if (!is_package_qualified) {
+                try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                    .module_name = module_name,
+                    .region = import_region,
+                } });
+            }
         }
     }
 
@@ -3101,6 +3094,7 @@ fn importUnaliased(
     module_name: Ident.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
+    is_package_qualified: bool,
 ) std.mem.Allocator.Error!Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
@@ -3138,12 +3132,16 @@ fn importUnaliased(
     // 6. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
+    // Skip for package-qualified imports (e.g., "pf.Stdout") - those are cross-package
+    // imports that are resolved by the workspace resolver
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
+            if (!is_package_qualified) {
+                try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
+                    .module_name = module_name,
+                    .region = import_region,
+                } });
+            }
         }
     }
 
@@ -3224,11 +3222,14 @@ fn canonicalizeImportStatement(
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
 
-    // 3. Dispatch to the appropriate handler based on whether this is a nested import
+    // 3. Check if this is a package-qualified import (has a qualifier like "pf" in "pf.Stdout")
+    const is_package_qualified = import_stmt.qualifier_tok != null;
+
+    // 4. Dispatch to the appropriate handler based on whether this is a nested import
     return if (import_stmt.nested_import)
-        try self.importUnaliased(module_name, cir_exposes, import_region)
+        try self.importUnaliased(module_name, cir_exposes, import_region, is_package_qualified)
     else
-        try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region);
+        try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region, is_package_qualified);
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -3935,17 +3936,21 @@ pub fn canonicalizeExpr(
                     const qualifier_tok = @as(Token.Idx, @intCast(qualifier_tokens[0]));
                     if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok)) |module_alias| {
                         // Check if this is a module alias, or an auto-imported module
-                        const module_name = self.scopeLookupModule(module_alias) orelse blk: {
+                        const module_info: ?Scope.ModuleAliasInfo = self.scopeLookupModule(module_alias) orelse blk: {
                             // Not in scope, check if it's an auto-imported module
                             if (self.module_envs) |envs_map| {
                                 if (envs_map.contains(module_alias)) {
                                     // This is an auto-imported module like Bool or Try
-                                    // Use the module_alias directly as the module_name
-                                    break :blk module_alias;
+                                    // Use the module_alias directly as the module_name (not package-qualified)
+                                    break :blk Scope.ModuleAliasInfo{
+                                        .module_name = module_alias,
+                                        .is_package_qualified = false,
+                                    };
                                 }
                             }
                             break :blk null;
-                        } orelse {
+                        };
+                        const module_name = if (module_info) |info| info.module_name else {
                             // Not a module alias and not an auto-imported module
                             // Check if the qualifier is a type - if so, try to lookup associated items
                             const is_type_in_scope = self.scopeLookupTypeBinding(module_alias) != null;
@@ -4113,6 +4118,15 @@ pub fn canonicalizeExpr(
 
                                 if (!module_exists) {
                                     // Module import failed, don't generate redundant error
+                                    // Fall through to normal identifier lookup
+                                    break :blk_qualified;
+                                }
+
+                                // Check if this is a package-qualified import (e.g., "pf.Stdout")
+                                // These are cross-package imports resolved by the workspace resolver
+                                const is_pkg_qualified = if (module_info) |info| info.is_package_qualified else false;
+                                if (is_pkg_qualified) {
+                                    // Package-qualified import - member resolution happens via the resolver
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
                                 }
@@ -5636,7 +5650,7 @@ pub fn canonicalizeExpr(
         },
         .for_expr => |for_expr| {
             const region = self.parse_ir.tokenizedRegionToRegion(for_expr.region);
-            const result = try self.canonicalizeForLoop(for_expr.patt, for_expr.expr, for_expr.body, region);
+            const result = try self.canonicalizeForLoop(for_expr.patt, for_expr.expr, for_expr.body);
 
             const for_expr_idx = try self.env.addExpr(Expr{
                 .e_for = .{
@@ -5648,9 +5662,8 @@ pub fn canonicalizeExpr(
 
             return CanonicalizedExpr{ .idx = for_expr_idx, .free_vars = result.free_vars };
         },
-        .malformed => |malformed| {
+        .malformed => {
             // We won't touch this since it's already a parse error.
-            _ = malformed;
             return null;
         },
     }
@@ -5686,9 +5699,7 @@ fn canonicalizeForLoop(
     ast_patt: AST.Pattern.Idx,
     ast_list_expr: AST.Expr.Idx,
     ast_body: AST.Expr.Idx,
-    region: base.Region,
 ) std.mem.Allocator.Error!CanonicalizedForLoop {
-    _ = region;
 
     // Tmp state to capture free vars from both expr & body
     // This is stored as a map to avoid duplicate captures
@@ -6039,7 +6050,8 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
         // For Imported.Foo.Bar.X: module=Imported, type=Foo.Bar, tag=X
         // qualifiers=[Imported, Foo, Bar], so type name is built from qualifiers[1..]
 
-        const module_name = self.scopeLookupModule(first_tok_ident).?; // Already checked above
+        const module_info = self.scopeLookupModule(first_tok_ident).?; // Already checked above
+        const module_name = module_info.module_name;
         const module_name_text = self.env.getIdent(module_name);
 
         // Check if this is imported in the current scope
@@ -6766,13 +6778,14 @@ fn canonicalizePattern(
                 const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
 
                 // Check if this is a module alias
-                const module_name = self.scopeLookupModule(module_alias) orelse {
+                const module_info = self.scopeLookupModule(module_alias) orelse {
                     // Module is not in current scope
                     return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .module_not_imported = .{
                         .module_name = module_alias,
                         .region = region,
                     } });
                 };
+                const module_name = module_info.module_name;
                 const module_name_text = self.env.getIdent(module_name);
 
                 // Check if this module is imported in the current scope
@@ -7151,9 +7164,8 @@ fn canonicalizePattern(
                 return pattern_idx;
             }
         },
-        .malformed => |malformed| {
+        .malformed => {
             // We won't touch this since it's already a parse error.
-            _ = malformed;
             return null;
         },
     }
@@ -8002,7 +8014,7 @@ fn canonicalizeTypeAnnoBasicType(
         const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
 
         // Check if this is a module alias
-        const module_name = self.scopeLookupModule(module_alias) orelse {
+        const module_info = self.scopeLookupModule(module_alias) orelse {
             // Module is not in current scope - but check if it's a type name first
             if (self.scopeLookupTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
@@ -8019,6 +8031,7 @@ fn canonicalizeTypeAnnoBasicType(
                 .region = region,
             } });
         };
+        const module_name = module_info.module_name;
         const module_name_text = self.env.getIdent(module_name);
 
         // Check if this module is imported in the current scope
@@ -9227,7 +9240,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
         .@"for" => |for_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
-            const result = try self.canonicalizeForLoop(for_stmt.patt, for_stmt.expr, for_stmt.body, region);
+            const result = try self.canonicalizeForLoop(for_stmt.patt, for_stmt.expr, for_stmt.body);
 
             const stmt_idx = try self.env.addStatement(Statement{
                 .s_for = .{
@@ -10199,7 +10212,7 @@ fn scopeLookupTypeBindingConst(self: *const Self, ident_idx: Ident.Idx) ?TypeBin
 }
 
 /// Look up a module alias in the scope hierarchy
-fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
+fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
     while (i > 0) {
@@ -10207,7 +10220,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
         const scope = &self.scopes.items[i];
 
         switch (scope.lookupModuleAlias(alias_name)) {
-            .found => |module_name| return module_name,
+            .found => |module_info| return module_info,
             .not_found => continue,
         }
     }
@@ -10216,7 +10229,7 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
 }
 
 /// Introduce a module alias into scope
-fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span) std.mem.Allocator.Error!void {
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span, is_package_qualified: bool) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -10257,11 +10270,11 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
     }
 
     // Simplified introduction without parent lookup for now
-    const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, null);
+    const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, is_package_qualified, null);
 
     switch (result) {
         .success => {},
-        .shadowing_warning => |shadowed_module| {
+        .shadowing_warning => {
             // Create diagnostic for module alias shadowing
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
@@ -10270,11 +10283,9 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
                     .original_region = Region.zero(),
                 },
             });
-            _ = shadowed_module; // Suppress unused variable warning
         },
-        .already_in_scope => |existing_module| {
+        .already_in_scope => {
             // Module alias already exists in current scope
-            // For now, just issue a diagnostic
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
                     .ident = alias_name,
@@ -10282,13 +10293,12 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
                     .original_region = Region.zero(),
                 },
             });
-            _ = existing_module; // Suppress unused variable warning
         },
     }
 }
 
 /// Helper function to look up module aliases in parent scopes only
-fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Ident.Idx {
+fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
     // Search from second-innermost to outermost scope (excluding current scope)
     if (self.scopes.items.len <= 1) return null;
 
@@ -10297,8 +10307,8 @@ fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Id
         i -= 1;
         const scope = &self.scopes.items[i];
 
-        switch (scope.lookupModuleAlias(&self.env.idents, alias_name)) {
-            .found => |module_name| return module_name,
+        switch (scope.lookupModuleAlias(alias_name)) {
+            .found => |module_info| return module_info,
             .not_found => continue,
         }
     }
@@ -10740,12 +10750,13 @@ fn createAnnotationFromTypeAnno(
 /// we create external declarations that will be resolved later when
 /// we have access to the other module's IR after it has been type checked.
 fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx) std.mem.Allocator.Error!void {
-    // Set up the module alias for qualified lookups
+    // Set up the module alias for qualified lookups (type imports are not package-qualified)
     const scope = self.currentScope();
     _ = try scope.introduceModuleAlias(
         self.env.gpa,
         alias_name,
         module_name,
+        false, // Type imports are not package-qualified
         null, // No parent lookup function for now
     );
 }
@@ -10765,7 +10776,8 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
 
     // Check if this is a module alias
-    const module_name = self.scopeLookupModule(module_alias) orelse return null;
+    const module_info = self.scopeLookupModule(module_alias) orelse return null;
+    const module_name = module_info.module_name;
     const module_text = self.env.getIdent(module_name);
 
     // Check if this module is imported in the current scope

@@ -44,7 +44,7 @@ is_initialized: bool = false,
 rt_var: ?types.Var = null,
 
 /// Copy this stack value to a destination pointer with bounds checking
-pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, _: *RocOps) !void {
+pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
@@ -752,9 +752,9 @@ pub const TupleAccessor = struct {
     }
 
     /// Set an element by copying from a source StackValue
-    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
+    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue) !void {
         const dest_element = try self.getElement(index);
-        try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+        try source.copyToPtr(self.layout_cache, dest_element.ptr.?);
     }
 
     /// Find the sorted element index corresponding to an original tuple position
@@ -1030,9 +1030,9 @@ pub const RecordAccessor = struct {
     }
 
     /// Set a field by copying from a source StackValue
-    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
+    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue) !void {
         const dest_field = try self.getFieldByIndex(index);
-        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+        try source.copyToPtr(self.layout_cache, dest_field.ptr.?);
     }
 
     /// Get the number of fields in this record

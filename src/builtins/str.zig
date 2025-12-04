@@ -635,16 +635,6 @@ pub fn strSplitOn(
     return list;
 }
 
-fn initFromSmallStr(
-    slice_bytes: [*]u8,
-    len: usize,
-    _: usize,
-    // TODO we probable don't need this here
-    roc_ops: *RocOps,
-) RocStr {
-    return RocStr.init(slice_bytes, len, roc_ops);
-}
-
 /// TODO
 pub fn strSplitOnHelp(
     array: [*]RocStr,

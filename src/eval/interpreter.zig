@@ -508,13 +508,9 @@ pub const Interpreter = struct {
         }
     }
 
-    pub fn startTrace(self: *Interpreter) void {
-        _ = self;
-    }
+    pub fn startTrace(_: *Interpreter) void {}
 
-    pub fn endTrace(self: *Interpreter) void {
-        _ = self;
-    }
+    pub fn endTrace(_: *Interpreter) void {}
 
     pub fn evaluateExpression(
         self: *Interpreter,
@@ -612,7 +608,7 @@ pub const Interpreter = struct {
                     self.early_return_value = null;
                     defer return_val.decref(&self.runtime_layout_store, roc_ops);
                     if (try self.shouldCopyResult(return_val, ret_ptr, roc_ops)) {
-                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr);
                     }
                     return;
                 }
@@ -622,7 +618,7 @@ pub const Interpreter = struct {
 
             // Only copy result if the result type is compatible with ret_ptr
             if (try self.shouldCopyResult(result_value, ret_ptr, roc_ops)) {
-                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr);
             }
             return;
         }
@@ -632,7 +628,7 @@ pub const Interpreter = struct {
 
         // Only copy result if the result type is compatible with ret_ptr
         if (try self.shouldCopyResult(result, ret_ptr, roc_ops)) {
-            try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
+            try result.copyToPtr(&self.runtime_layout_store, ret_ptr);
         }
     }
 
@@ -767,7 +763,7 @@ pub const Interpreter = struct {
         return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = ptr, .is_initialized = true };
     }
 
-    pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
+    pub fn pushCopy(self: *Interpreter, src: StackValue) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
@@ -779,7 +775,7 @@ pub const Interpreter = struct {
         // Preserve rt_var for constant folding
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
         if (size > 0 and src.ptr != null and ptr != null) {
-            try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
+            try src.copyToPtr(&self.runtime_layout_store, ptr.?);
         }
         return dest;
     }
@@ -870,8 +866,8 @@ pub const Interpreter = struct {
         };
 
         // Copy elements for comparison (compare_fn will consume them)
-        const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
-        const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
+        const arg0 = try self.pushCopy(elem1_value); // element being inserted
+        const arg1 = try self.pushCopy(elem0_value); // element to compare against
 
         // Push continuation to handle comparison result
         try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
@@ -2131,7 +2127,7 @@ pub const Interpreter = struct {
                 };
 
                 // Copy to new location and increment refcount
-                var result = try self.pushCopy(elem_value, roc_ops);
+                var result = try self.pushCopy(elem_value);
                 result.rt_var = elem_rt_var; // Ensure rt_var is preserved after copy
                 return result;
             },
@@ -2193,14 +2189,14 @@ pub const Interpreter = struct {
                 if (list_a.len() == 0) {
                     list_a_arg.decref(&self.runtime_layout_store, roc_ops);
                     // list_b ownership is transferred to the result (pushCopy increfs)
-                    const result = try self.pushCopy(list_b_arg, roc_ops);
+                    const result = try self.pushCopy(list_b_arg);
                     list_b_arg.decref(&self.runtime_layout_store, roc_ops);
                     return result;
                 }
                 if (list_b.len() == 0) {
                     list_b_arg.decref(&self.runtime_layout_store, roc_ops);
                     // list_a ownership is transferred to the result (pushCopy increfs)
-                    const result = try self.pushCopy(list_a_arg, roc_ops);
+                    const result = try self.pushCopy(list_a_arg);
                     list_a_arg.decref(&self.runtime_layout_store, roc_ops);
                     return result;
                 }
@@ -4762,8 +4758,6 @@ pub const Interpreter = struct {
     fn buildSuccessValRecord(self: *Interpreter, success: bool, val: RocDec) !StackValue {
         // Layout: tuple (Dec, Bool) where element 0 is Dec (16 bytes) and element 1 is Bool (1 byte)
         // Total size with alignment: 24 bytes (16 for Dec + 8 for alignment of Bool field)
-        const dec_layout = Layout.frac(.dec);
-        const bool_layout = Layout.int(.u8);
 
         // We need to create a tuple layout for the result
         // For now, allocate raw bytes and set them directly
@@ -4781,8 +4775,6 @@ pub const Interpreter = struct {
 
         out.is_initialized = true;
         // Layout is set by pushRawBytes as .zst since we're working with raw bytes
-        _ = dec_layout;
-        _ = bool_layout;
         return out;
     }
 
@@ -5178,8 +5170,7 @@ pub const Interpreter = struct {
         return null;
     }
 
-    fn layoutMatchesKind(self: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
-        _ = self;
+    fn layoutMatchesKind(_: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
         if (layout_val.tag != .scalar) return false;
         return switch (kind) {
             .int => layout_val.data.scalar.tag == .int,
@@ -5309,8 +5300,7 @@ pub const Interpreter = struct {
         return out;
     }
 
-    fn stackValueToDecimal(self: *Interpreter, value: StackValue) !RocDec {
-        _ = self;
+    fn stackValueToDecimal(_: *Interpreter, value: StackValue) !RocDec {
         if (value.layout.tag != .scalar) return error.TypeMismatch;
         switch (value.layout.data.scalar.tag) {
             .frac => switch (value.layout.data.scalar.data.frac) {
@@ -5328,8 +5318,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn stackValueToFloat(self: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
-        _ = self;
+    fn stackValueToFloat(_: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
         if (value.layout.tag != .scalar) return error.TypeMismatch;
         switch (value.layout.data.scalar.tag) {
             .int => {
@@ -5371,8 +5360,7 @@ pub const Interpreter = struct {
         dec: RocDec,
     };
 
-    fn isNumericScalar(self: *Interpreter, layout_val: Layout) bool {
-        _ = self;
+    fn isNumericScalar(_: *Interpreter, layout_val: Layout) bool {
         if (layout_val.tag != .scalar) return false;
         return switch (layout_val.data.scalar.tag) {
             .int, .frac => true,
@@ -5380,8 +5368,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn extractNumericValue(self: *Interpreter, value: StackValue) !NumericValue {
-        _ = self;
+    fn extractNumericValue(_: *Interpreter, value: StackValue) !NumericValue {
         if (value.layout.tag != .scalar) return error.NotNumeric;
         const scalar = value.layout.data.scalar;
         return switch (scalar.tag) {
@@ -5422,8 +5409,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderInt(self: *Interpreter, lhs: i128, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderInt(_: *Interpreter, lhs: i128, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => std.math.order(lhs, rhs.int),
             .f32 => {
@@ -5441,8 +5427,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderF32(self: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderF32(_: *Interpreter, lhs: f32, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
                 const rhs_f: f32 = @floatFromInt(rhs.int);
@@ -5457,8 +5442,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderF64(self: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderF64(_: *Interpreter, lhs: f64, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
                 const rhs_f: f64 = @floatFromInt(rhs.int);
@@ -5473,8 +5457,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn orderDec(self: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
-        _ = self;
+    fn orderDec(_: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
                 const rhs_dec = rhs.int * RocDec.one_point_zero_i128;
@@ -6208,7 +6191,7 @@ pub const Interpreter = struct {
                 const data_ptr = utils.allocateWithRefcount(elem_size, elem_alignment_u32, false, roc_ops);
 
                 if (elem_size > 0 and payload.ptr != null) {
-                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr);
                 }
 
                 if (out.ptr) |ptr| {
@@ -6295,7 +6278,7 @@ pub const Interpreter = struct {
         }
 
         // Copy the value to pass to the method
-        const copied_value = self.pushCopy(value, roc_ops) catch return null;
+        const copied_value = self.pushCopy(value) catch return null;
 
         // Bind the parameter
         self.bindings.append(.{
@@ -6460,7 +6443,7 @@ pub const Interpreter = struct {
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
-                const copied = try self.pushCopy(value, roc_ops);
+                const copied = try self.pushCopy(value);
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -6471,7 +6454,7 @@ pub const Interpreter = struct {
                     return false;
                 }
 
-                const alias_value = try self.pushCopy(value, roc_ops);
+                const alias_value = try self.pushCopy(value);
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -10629,7 +10612,7 @@ pub const Interpreter = struct {
                     self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
                     return error.Crash;
                 };
-                try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
+                try accessor.setFieldByIndex(idx_opt, cap_val);
             }
         }
         return value;
@@ -10762,7 +10745,7 @@ pub const Interpreter = struct {
                         }
                     }
                 }
-                const copy_result = try self.pushCopy(b.value, roc_ops);
+                const copy_result = try self.pushCopy(b.value);
                 return copy_result;
             }
         }
@@ -10792,7 +10775,7 @@ pub const Interpreter = struct {
                             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
                             if (accessor.findFieldIndex(var_ident)) |fidx| {
                                 const field_val = try accessor.getFieldByIndex(fidx);
-                                return try self.pushCopy(field_val, roc_ops);
+                                return try self.pushCopy(field_val);
                             }
                         }
                     }
@@ -10815,7 +10798,7 @@ pub const Interpreter = struct {
                 });
                 // Return a copy to give the caller ownership while the binding retains ownership too.
                 // This is consistent with the pushCopy call above for already-bound values.
-                return try self.pushCopy(result, roc_ops);
+                return try self.pushCopy(result);
             }
         }
 
@@ -11422,7 +11405,7 @@ pub const Interpreter = struct {
 
                         // Set all elements
                         for (0..total_count) |idx| {
-                            try accessor.setElement(idx, values[idx], roc_ops);
+                            try accessor.setElement(idx, values[idx]);
                         }
 
                         // Decref temporary values after they've been copied into the tuple
@@ -11512,7 +11495,7 @@ pub const Interpreter = struct {
                             if (runtime_list.bytes) |buffer| {
                                 for (values, 0..) |val, idx| {
                                     const dest_ptr = buffer + idx * elem_size;
-                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr);
                                 }
                             }
                         }
@@ -11644,7 +11627,7 @@ pub const Interpreter = struct {
                             const info = base_accessor.field_layouts.get(idx);
                             const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
                             const base_field_value = try base_accessor.getFieldByIndex(idx);
-                            try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
+                            try accessor.setFieldByIndex(dest_field_idx, base_field_value);
                         }
                     }
 
@@ -11666,7 +11649,7 @@ pub const Interpreter = struct {
                             }
                         }
 
-                        try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
+                        try accessor.setFieldByIndex(dest_field_idx, val);
                     }
 
                     // Decref base value and field values after they've been copied
@@ -11782,7 +11765,7 @@ pub const Interpreter = struct {
                         const payload_field = try acc.getFieldByIndex(payload_field_idx);
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
-                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
                             } else {
                                 // Multiple args - create tuple payload
                                 var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -11795,7 +11778,7 @@ pub const Interpreter = struct {
                                 var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
                                 var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                                 for (values, 0..) |val, idx| {
-                                    try tup_acc.setElement(idx, val, roc_ops);
+                                    try tup_acc.setElement(idx, val);
                                 }
                             }
                         }
@@ -11846,7 +11829,7 @@ pub const Interpreter = struct {
                                     // Write payload
                                     const proper_payload_field = try proper_acc.getElement(0);
                                     if (proper_payload_field.ptr) |proper_ptr| {
-                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr);
                                     }
 
                                     for (values) |val| {
@@ -11857,7 +11840,7 @@ pub const Interpreter = struct {
                                     return true;
                                 }
 
-                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
                             } else {
                                 // Multiple args - create tuple payload
                                 var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -11870,7 +11853,7 @@ pub const Interpreter = struct {
                                 var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
                                 var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                                 for (values, 0..) |val, idx| {
-                                    try tup_acc.setElement(idx, val, roc_ops);
+                                    try tup_acc.setElement(idx, val);
                                 }
                             }
                         }
@@ -11924,7 +11907,7 @@ pub const Interpreter = struct {
                                 // Write payload (element 0)
                                 const proper_payload_field = try proper_acc.getElement(0);
                                 if (proper_payload_field.ptr) |proper_ptr| {
-                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr);
                                 }
 
                                 for (values) |val| {
@@ -11952,7 +11935,7 @@ pub const Interpreter = struct {
                         // Write payload at offset 0
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
                         } else {
                             // Multiple args - create tuple payload at offset 0
                             var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -11965,7 +11948,7 @@ pub const Interpreter = struct {
                             var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true };
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                             for (values, 0..) |val, idx| {
-                                try tup_acc.setElement(idx, val, roc_ops);
+                                try tup_acc.setElement(idx, val);
                             }
                         }
 
@@ -11983,7 +11966,7 @@ pub const Interpreter = struct {
                 // Scrutinee is on value stack - get it but keep it there for potential later use
                 const scrutinee_temp = value_stack.pop() orelse return error.Crash;
                 // Make a copy to protect from corruption
-                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
+                const scrutinee = try self.pushCopy(scrutinee_temp);
                 scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
 
                 // Try branches starting from current_branch
@@ -13131,7 +13114,7 @@ pub const Interpreter = struct {
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
                     const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
                     const field_value = try accessor.getFieldByIndex(field_idx);
-                    const result = try self.pushCopy(field_value, roc_ops);
+                    const result = try self.pushCopy(field_value);
                     try value_stack.push(result);
                     return true;
                 }
@@ -14025,8 +14008,8 @@ pub const Interpreter = struct {
                         };
 
                         // Copy elements for comparison
-                        const arg0 = try self.pushCopy(elem_current_value, roc_ops);
-                        const arg1 = try self.pushCopy(elem_inner_value, roc_ops);
+                        const arg0 = try self.pushCopy(elem_current_value);
+                        const arg1 = try self.pushCopy(elem_inner_value);
 
                         // Push continuation for next comparison
                         // After swap, the element we're inserting is now at sc.inner_index
@@ -14106,8 +14089,8 @@ pub const Interpreter = struct {
                     };
 
                     // Copy elements for comparison
-                    const arg0 = try self.pushCopy(elem_outer_value, roc_ops);
-                    const arg1 = try self.pushCopy(elem_prev_value, roc_ops);
+                    const arg0 = try self.pushCopy(elem_outer_value);
+                    const arg1 = try self.pushCopy(elem_prev_value);
 
                     // Push continuation for next comparison
                     try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
@@ -14521,12 +14504,12 @@ test "interpreter: cross-module method resolution should find methods in origin 
     // Set up Module A (the imported module where the type and method are defined)
     var module_a = try can.ModuleEnv.init(gpa, module_a_name);
     defer module_a.deinit();
-    try module_a.initCIRFields(gpa, module_a_name);
+    try module_a.initCIRFields(module_a_name);
 
     // Set up Module B (the current module that imports Module A)
     var module_b = try can.ModuleEnv.init(gpa, module_b_name);
     defer module_b.deinit();
-    try module_b.initCIRFields(gpa, module_b_name);
+    try module_b.initCIRFields(module_b_name);
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";
@@ -14573,15 +14556,15 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     // Set up three modules: A (current) imports B, B imports C
     var module_a = try can.ModuleEnv.init(gpa, module_a_name);
     defer module_a.deinit();
-    try module_a.initCIRFields(gpa, module_a_name);
+    try module_a.initCIRFields(module_a_name);
 
     var module_b = try can.ModuleEnv.init(gpa, module_b_name);
     defer module_b.deinit();
-    try module_b.initCIRFields(gpa, module_b_name);
+    try module_b.initCIRFields(module_b_name);
 
     var module_c = try can.ModuleEnv.init(gpa, module_c_name);
     defer module_c.deinit();
-    try module_c.initCIRFields(gpa, module_c_name);
+    try module_c.initCIRFields(module_c_name);
 
     const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
     const bool_source = "Bool := [True, False].{}\n";

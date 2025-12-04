@@ -36,7 +36,7 @@ fn parseAndCanonicalizeSource(
     ast.* = try parse.parse(&parse_env.common, allocator);
 
     // Initialize CIR fields
-    try parse_env.initCIRFields(allocator, "Test");
+    try parse_env.initCIRFields("Test");
 
     const can = try allocator.create(Can);
     can.* = try Can.init(parse_env, ast, module_envs);
@@ -114,7 +114,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     var ast = try parse.parse(&parse_env.common, allocator);
     defer ast.deinit(allocator);
     // Initialize CIR fields
-    try parse_env.initCIRFields(allocator, "Test");
+    try parse_env.initCIRFields("Test");
 
     // Now create module_envs using parse_env's ident store
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
@@ -199,7 +199,7 @@ test "import validation - no module_envs provided" {
     var ast = try parse.parse(&parse_env.common, allocator);
     defer ast.deinit(allocator);
     // Initialize CIR fields
-    try parse_env.initCIRFields(allocator, "Test");
+    try parse_env.initCIRFields("Test");
     // Create czer
     //  with null module_envs
     var can = try Can.init(parse_env, &ast, null);
@@ -618,7 +618,7 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exactly maxInt(u16) exports
     var env1 = try ModuleEnv.init(allocator, "");
     defer env1.deinit();
-    try env1.initCIRFields(allocator, "Test");
+    try env1.initCIRFields("Test");
     const diag_at_limit = CIR.Diagnostic{
         .too_many_exports = .{
             .count = 65535, // Exactly at the limit
@@ -636,7 +636,7 @@ test "export count safety - ensures safe u16 casting" {
     // Test the diagnostic for exceeding the limit
     var env2 = try ModuleEnv.init(allocator, "");
     defer env2.deinit();
-    try env2.initCIRFields(allocator, "Test");
+    try env2.initCIRFields("Test");
     const diag_over_limit = CIR.Diagnostic{
         .too_many_exports = .{
             .count = 70000, // Well over the limit

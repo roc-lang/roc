@@ -1963,8 +1963,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
         // Sort by alignment descending, then name ascending
         std.mem.sort(FieldInfo, &field_infos, {}, struct {
-            fn lessThan(ctx: void, lhs: FieldInfo, rhs: FieldInfo) bool {
-                _ = ctx;
+            fn lessThan(_: void, lhs: FieldInfo, rhs: FieldInfo) bool {
                 if (lhs.alignment != rhs.alignment) {
                     return lhs.alignment > rhs.alignment;
                 }

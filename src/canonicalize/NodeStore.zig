@@ -1126,9 +1126,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 }
 
 /// Retrieves a pattern record field from the store.
-pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
-    _ = store;
-    _ = patternRecordField;
+pub fn getPatternRecordField(_: *NodeStore, _: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
     // Return empty placeholder since PatternRecordField has no fields yet
     return CIR.PatternRecordField{};
 }
@@ -2140,10 +2138,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
 }
 
 /// Adds a pattern record field to the store.
-pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField) Allocator.Error!CIR.PatternRecordField.Idx {
-    _ = store;
-    _ = patternRecordField;
-
+pub fn addPatternRecordField(_: *NodeStore, _: CIR.PatternRecordField) Allocator.Error!CIR.PatternRecordField.Idx {
     return @enumFromInt(0);
 }
 

@@ -121,7 +121,7 @@ fn benchParseOrTokenize(comptime is_parse: bool, gpa: Allocator, path: []const u
 
                 var tokenizer = try tokenize.Tokenizer.init(&env.?.common, gpa, roc_file.content, msg_slice);
                 try tokenizer.tokenize(gpa);
-                var result = tokenizer.finishAndDeinit(gpa);
+                var result = tokenizer.finishAndDeinit();
                 iteration_tokens += result.tokens.tokens.len;
                 result.tokens.deinit(gpa);
             }

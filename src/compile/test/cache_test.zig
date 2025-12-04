@@ -325,7 +325,7 @@
 //     var module_env = try ModuleEnv.init(gpa, source);
 //     defer module_env.deinit();
 
-//     try module_env.initCIRFields(gpa, "TestModule");
+//     try module_env.initCIRFields("TestModule");
 //     // CIR is now just an alias for ModuleEnv, so use module_env directly
 //     const cir = &module_env;
 
@@ -401,7 +401,7 @@
 // //     var module_env = try ModuleEnv.init(gpa, source);
 // //     defer module_env.deinit();
 
-// //     try module_env.initCIRFields(gpa, "TestModule");
+// //     try module_env.initCIRFields("TestModule");
 // //     // CIR is now just an alias for ModuleEnv, so use module_env directly
 // //     const cir = &module_env;
 

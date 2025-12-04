@@ -1,4 +1,5 @@
 //! This module implements Hindley-Milner style type unification with extensions for:
+//!
 //! * flex/rigid variables
 //! * type aliases
 //! * tuples

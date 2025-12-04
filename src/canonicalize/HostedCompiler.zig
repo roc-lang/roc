@@ -122,10 +122,6 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
                 env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
 
-                // Verify the def still has its annotation after modification
-                const modified_def = env.store.getDef(def_idx);
-                _ = modified_def;
-
                 // Track this modified def index
                 try modified_def_indices.append(gpa, def_idx);
             }

@@ -97,9 +97,6 @@ fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.c) void {
     allocator.free(slice);
 }
 
-fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.c) void {
-    _ = c_ptr;
-    _ = tag_id;
-
+fn testing_roc_panic(_: *anyopaque, _: u32) callconv(.c) void {
     @panic("Roc panicked");
 }

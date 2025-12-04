@@ -11,20 +11,8 @@ red : CE
 red = ... # not implemented
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_import_long_package.md:1:1:1:52
 UNDECLARED TYPE - nominal_import_long_package.md:3:7:3:9
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `design.Styles.Color` was not found in this Roc project.
-
-You're attempting to use this module here:
-**nominal_import_long_package.md:1:1:1:52:**
-```roc
-import design.Styles.Color exposing [Encoder as CE]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDECLARED TYPE**
 The type _CE_ is not declared in this scope.
 
