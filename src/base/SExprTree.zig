@@ -1,6 +1,4 @@
 //! A S-expression tree representation
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const testing = std.testing;
@@ -49,21 +47,15 @@ fn PlainTextSExprWriter(comptime WriterType: type) type {
             try self.writer.print(fmt, args);
         }
 
-        pub fn setColor(self: *@This(), color: Color) !void {
-            _ = self;
-            _ = color;
+        pub fn setColor(_: *@This(), _: Color) !void {
             // No-op for plain text
         }
 
-        pub fn beginSourceRange(self: *@This(), start_byte: u32, end_byte: u32) !void {
-            _ = self;
-            _ = start_byte;
-            _ = end_byte;
+        pub fn beginSourceRange(_: *@This(), _: u32, _: u32) !void {
             // No-op for plain text
         }
 
-        pub fn endSourceRange(self: *@This()) !void {
-            _ = self;
+        pub fn endSourceRange(_: *@This()) !void {
             // No-op for plain text
         }
 

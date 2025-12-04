@@ -1,6 +1,4 @@
 //! Represents an external declaration from another module
-//!
-// zig-lint: required-param
 
 const base = @import("base");
 const collections = @import("collections");

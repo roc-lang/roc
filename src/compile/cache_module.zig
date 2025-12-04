@@ -2,8 +2,6 @@
 //!
 //! This module provides memory-mapped caching for compiled Roc modules,
 //! allowing fast serialization and deserialization of ModuleEnv and CIR data.
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const Can = @import("can");
@@ -201,16 +199,6 @@ pub const CacheModule = struct {
         if (self.data.len != self.header.data_size) {
             return error.DataSizeMismatch;
         }
-    }
-
-    /// Convenience functions for reading/writing cache files
-    pub fn writeToFile(
-        _: Allocator,
-        cache_data: []const u8,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) !void {
-        try filesystem.writeFile(file_path, cache_data);
     }
 
     /// Convenience function for reading cache files

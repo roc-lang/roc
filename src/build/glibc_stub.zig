@@ -1,19 +1,12 @@
 //! GNU libc stub generation for test platforms
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 
 /// Generate assembly stub with essential libc symbols
 pub fn generateComprehensiveStub(
-    allocator: std.mem.Allocator,
     writer: anytype,
     target_arch: std.Target.Cpu.Arch,
-    target_abi: std.Target.Abi,
 ) !void {
-    _ = allocator;
-    _ = target_abi;
-
     const ptr_width: u32 = switch (target_arch) {
         .x86_64, .aarch64 => 8,
         else => 4,

@@ -1,6 +1,4 @@
 //! An implementation of RocOps for testing purposes.
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const builtins = @import("builtins");

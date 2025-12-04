@@ -2,8 +2,6 @@
 //!
 //! This module evaluates all top-level declarations after type checking,
 //! converting any crashes into diagnostics that are reported normally.
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");
@@ -56,10 +54,8 @@ fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     alloc_args.answer = base_ptr;
 }
 
-fn comptimeRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void {
+fn comptimeRocDealloc(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
     // No-op: arena allocator frees all memory at once when evaluation completes
-    _ = dealloc_args;
-    _ = env;
 }
 
 fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void {
@@ -95,8 +91,7 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     realloc_args.answer = new_ptr;
 }
 
-fn comptimeRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
+fn comptimeRocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
     var stderr_buffer: [256]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
@@ -1396,9 +1391,8 @@ pub const ComptimeEvaluator = struct {
     fn extractInvalidNumeralMessage(
         self: *ComptimeEvaluator,
         try_accessor: eval_mod.StackValue.RecordAccessor,
-        region: base.Region,
+        _: base.Region,
     ) ![]const u8 {
-        _ = region;
 
         // Get the payload field from the Try record
         // Use layout store's env for field lookups

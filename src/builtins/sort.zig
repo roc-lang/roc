@@ -3,8 +3,6 @@
 //! This module provides efficient sorting implementations for Roc's List type,
 //! including comparison-based sorting with custom compare functions. It handles
 //! both direct sorting for small lists and indirect pointer-based sorting for
-//!
-// zig-lint: required-param
 //! larger lists to optimize memory usage and cache performance.
 const std = @import("std");
 

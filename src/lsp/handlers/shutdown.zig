@@ -1,5 +1,3 @@
-// zig-lint: required-param
-
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 

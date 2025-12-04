@@ -1,7 +1,5 @@
 //! Tests for e_low_level_lambda runtime evaluation in the interpreter
 //!
-// zig-lint: required-param
-//!
 //! These tests verify that low-level operations (like Str.is_empty, List.concat) that are defined
 //! as e_low_level_lambda nodes correctly dispatch to their builtin implementations
 //! when called at compile-time, producing the correct runtime values.

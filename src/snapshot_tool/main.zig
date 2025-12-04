@@ -1,7 +1,5 @@
 //! Snapshot testing infrastructure for the Roc compiler.
 //!
-// zig-lint: required-param
-//!
 //! This module provides functionality to generate and validate snapshot tests
 //! that capture the compiler's behavior at each stage of compilation. Snapshots
 //! help ensure the compiler continues to behave as expected by showing the

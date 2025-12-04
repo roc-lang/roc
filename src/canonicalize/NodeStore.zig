@@ -1,6 +1,4 @@
 //! Stores AST nodes and provides scratch arrays for working with nodes.
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const base = @import("base");

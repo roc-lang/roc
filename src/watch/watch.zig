@@ -1,7 +1,5 @@
 //! File system watcher for monitoring .roc file changes across platforms.
 //! Provides efficient, cross-platform file watching with recursive directory support.
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -108,8 +106,8 @@ const macos_externs = if (use_real_fsevents) struct {
 // Stub implementations for cross-compilation
 const macos_stubs = struct {
     fn FSEventStreamCreate(
-        allocator: CFAllocatorRef,
-        callback: *const fn (
+        _: CFAllocatorRef,
+        _: *const fn (
             streamRef: FSEventStreamRef,
             clientCallBackInfo: ?*anyopaque,
             numEvents: usize,
@@ -117,58 +115,36 @@ const macos_stubs = struct {
             eventFlags: [*]const FSEventStreamEventFlags,
             eventIds: [*]const FSEventStreamEventId,
         ) callconv(.c) void,
-        context: ?*FSEventStreamContext,
-        pathsToWatch: CFArrayRef,
-        sinceWhen: FSEventStreamEventId,
-        latency: CFAbsoluteTime,
-        flags: FSEventStreamCreateFlags,
+        _: ?*FSEventStreamContext,
+        _: CFArrayRef,
+        _: FSEventStreamEventId,
+        _: CFAbsoluteTime,
+        _: FSEventStreamCreateFlags,
     ) ?FSEventStreamRef {
-        _ = allocator;
-        _ = callback;
-        _ = context;
-        _ = pathsToWatch;
-        _ = sinceWhen;
-        _ = latency;
-        _ = flags;
         return null;
     }
 
     fn FSEventStreamScheduleWithRunLoop(
-        streamRef: FSEventStreamRef,
-        runLoop: CFRunLoopRef,
-        runLoopMode: CFStringRef,
-    ) void {
-        _ = streamRef;
-        _ = runLoop;
-        _ = runLoopMode;
-    }
+        _: FSEventStreamRef,
+        _: CFRunLoopRef,
+        _: CFStringRef,
+    ) void {}
 
-    fn FSEventStreamStart(streamRef: FSEventStreamRef) bool {
-        _ = streamRef;
+    fn FSEventStreamStart(_: FSEventStreamRef) bool {
         return false;
     }
 
-    fn FSEventStreamStop(streamRef: FSEventStreamRef) void {
-        _ = streamRef;
-    }
+    fn FSEventStreamStop(_: FSEventStreamRef) void {}
 
     fn FSEventStreamUnscheduleFromRunLoop(
-        streamRef: FSEventStreamRef,
-        runLoop: CFRunLoopRef,
-        runLoopMode: CFStringRef,
-    ) void {
-        _ = streamRef;
-        _ = runLoop;
-        _ = runLoopMode;
-    }
+        _: FSEventStreamRef,
+        _: CFRunLoopRef,
+        _: CFStringRef,
+    ) void {}
 
-    fn FSEventStreamInvalidate(streamRef: FSEventStreamRef) void {
-        _ = streamRef;
-    }
+    fn FSEventStreamInvalidate(_: FSEventStreamRef) void {}
 
-    fn FSEventStreamRelease(streamRef: FSEventStreamRef) void {
-        _ = streamRef;
-    }
+    fn FSEventStreamRelease(_: FSEventStreamRef) void {}
 
     fn CFRunLoopGetCurrent() CFRunLoopRef {
         return @ptrFromInt(1);
@@ -176,44 +152,30 @@ const macos_stubs = struct {
 
     fn CFRunLoopRun() void {}
 
-    fn CFRunLoopRunInMode(mode: CFStringRef, seconds: CFAbsoluteTime, returnAfterSourceHandled: bool) i32 {
-        _ = mode;
-        _ = seconds;
-        _ = returnAfterSourceHandled;
+    fn CFRunLoopRunInMode(_: CFStringRef, _: CFAbsoluteTime, _: bool) i32 {
         return 0;
     }
 
-    fn CFRunLoopStop(rl: CFRunLoopRef) void {
-        _ = rl;
-    }
+    fn CFRunLoopStop(_: CFRunLoopRef) void {}
 
     fn CFArrayCreate(
-        allocator: CFAllocatorRef,
-        values: [*]const ?*const anyopaque,
-        numValues: CFIndex,
-        callBacks: ?*const anyopaque,
+        _: CFAllocatorRef,
+        _: [*]const ?*const anyopaque,
+        _: CFIndex,
+        _: ?*const anyopaque,
     ) ?CFArrayRef {
-        _ = allocator;
-        _ = values;
-        _ = numValues;
-        _ = callBacks;
         return null;
     }
 
     fn CFStringCreateWithCString(
-        alloc: CFAllocatorRef,
-        cStr: [*:0]const u8,
-        encoding: u32,
+        _: CFAllocatorRef,
+        _: [*:0]const u8,
+        _: u32,
     ) ?CFStringRef {
-        _ = alloc;
-        _ = cStr;
-        _ = encoding;
         return null;
     }
 
-    fn CFRelease(cf: ?*anyopaque) void {
-        _ = cf;
-    }
+    fn CFRelease(_: ?*anyopaque) void {}
 
     const kCFRunLoopDefaultMode: CFStringRef = @ptrFromInt(1);
 };
@@ -572,17 +534,13 @@ pub const Watcher = struct {
     }
 
     fn fsEventsCallback(
-        streamRef: FSEventStreamRef,
+        _: FSEventStreamRef,
         clientCallBackInfo: ?*anyopaque,
         numEvents: usize,
         eventPaths: *anyopaque,
-        eventFlags: [*]const FSEventStreamEventFlags,
-        eventIds: [*]const FSEventStreamEventId,
+        _: [*]const FSEventStreamEventFlags,
+        _: [*]const FSEventStreamEventId,
     ) callconv(.c) void {
-        _ = streamRef;
-        _ = eventFlags;
-        _ = eventIds;
-
         if (clientCallBackInfo == null) return;
 
         const self: *Watcher = @ptrCast(@alignCast(clientCallBackInfo.?));
@@ -1132,8 +1090,7 @@ test "recursive directory watching" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1169,8 +1126,7 @@ test "multiple directories watching" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1207,8 +1163,7 @@ test "file modification detection" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1240,8 +1195,7 @@ test "rapid file creation" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1286,8 +1240,7 @@ test "directory creation and file addition" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1327,8 +1280,7 @@ test "start stop restart" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1444,8 +1396,7 @@ test "file rename detection" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;
@@ -1562,8 +1513,7 @@ test "windows long path handling" {
     };
 
     const callback = struct {
-        fn cb(event: WatchEvent) void {
-            _ = event;
+        fn cb(_: WatchEvent) void {
             _ = global.event_count.fetchAdd(1, .seq_cst);
         }
     }.cb;

@@ -4,7 +4,6 @@
 //! including memory allocation interfaces, overflow detection utilities,
 //! debug functions, and common types used throughout the builtin modules.
 //!
-// zig-lint: required-param
 //! It serves as the foundation layer that other builtin modules depend on
 //! for low-level operations and host interface functions.
 const std = @import("std");

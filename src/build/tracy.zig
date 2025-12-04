@@ -5,7 +5,6 @@
 //!  This file is part of zig, which is MIT licensed.
 //!  See http://opensource.org/licenses/MIT
 //!
-// zig-lint: required-param
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -48,29 +47,15 @@ const ___tracy_c_zone_context = extern struct {
 /// The tracy context object for tracking zones.
 /// Make sure to defer calling end.
 pub const Ctx = if (enable) ___tracy_c_zone_context else struct {
-    pub inline fn end(self: @This()) void {
-        _ = self;
-    }
+    pub inline fn end(_: @This()) void {}
 
-    pub inline fn addText(self: @This(), text: []const u8) void {
-        _ = self;
-        _ = text;
-    }
+    pub inline fn addText(_: @This(), _: []const u8) void {}
 
-    pub inline fn setName(self: @This(), name: []const u8) void {
-        _ = self;
-        _ = name;
-    }
+    pub inline fn setName(_: @This(), _: []const u8) void {}
 
-    pub inline fn setColor(self: @This(), color: u32) void {
-        _ = self;
-        _ = color;
-    }
+    pub inline fn setColor(_: @This(), _: u32) void {}
 
-    pub inline fn setValue(self: @This(), value: u64) void {
-        _ = self;
-        _ = value;
-    }
+    pub inline fn setValue(_: @This(), _: u64) void {}
 };
 
 /// Creates a source location based tracing zone.

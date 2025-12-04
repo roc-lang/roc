@@ -3,8 +3,6 @@
 //! This module provides a fuzz testing implementation for sorting functions,
 //! featuring memory allocation tracking, sorting verification, and reference-counted
 //! comparison mechanisms.
-//!
-// zig-lint: required-param
 
 const std = @import("std");
 const sort = @import("sort.zig");

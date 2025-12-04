@@ -1,7 +1,5 @@
 //! Performs Hindley-Milner type inference with constraint solving and unification on the Canonical Intermediate Representation (CIR).
 //!
-// zig-lint: required-param
-//!
 //! This module implements constraint-based type inference.
 
 const std = @import("std");
@@ -4946,7 +4944,7 @@ fn handleRecursiveConstraint(
     const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
 
     // Create RecursionInfo to track the recursion metadata
-    const recursion_info = types_mod.RecursionInfo{
+    _ = types_mod.RecursionInfo{
         .recursion_var = recursion_var,
         .depth = depth,
     };
@@ -4954,7 +4952,6 @@ fn handleRecursiveConstraint(
     // Store the recursion info in the deferred constraint
     // Note: This will be enhanced in later implementation to properly
     // update the constraint with the recursion info
-    _ = recursion_info;
 }
 
 /// Check static dispatch constraints

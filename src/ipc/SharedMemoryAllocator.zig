@@ -8,7 +8,6 @@
 //! resize it should never come up in practice, since coordinating resizing with the
 //! child process would be complex.
 //!
-// zig-lint: required-param
 //! ## Cross-platform coordination
 //!
 //! The allocator uses platform-specific coordination mechanisms:
@@ -218,8 +217,7 @@ pub fn allocator(self: *SharedMemoryAllocator) std.mem.Allocator {
     };
 }
 
-fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-    _ = ret_addr;
+fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[*]u8 {
     const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
 
     const alignment = @as(usize, 1) << @intFromEnum(ptr_align);
@@ -249,33 +247,18 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: us
     }
 }
 
-fn resize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-    _ = ctx;
-    _ = buf_align;
-    _ = ret_addr;
-
+fn resize(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
     // Simple bump allocator doesn't support resize
     // Could be implemented by checking if this is the last allocation
     return new_len <= buf.len;
 }
 
-fn free(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
-    _ = ctx;
-    _ = buf;
-    _ = buf_align;
-    _ = ret_addr;
-
+fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
     // Simple bump allocator doesn't support free
     // Memory is only freed when the entire region is unmapped
 }
 
-fn remap(ctx: *anyopaque, old_mem: []u8, old_align: std.mem.Alignment, new_size: usize, ret_addr: usize) ?[*]u8 {
-    _ = ctx;
-    _ = old_mem;
-    _ = old_align;
-    _ = new_size;
-    _ = ret_addr;
-
+fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
     // Simple bump allocator doesn't support remapping
     return null;
 }
