@@ -387,11 +387,101 @@ fn generateRandomSuffix(allocs: *Allocators) ![]u8 {
     return suffix;
 }
 
+/// Create a unique temporary directory with PID-based naming.
+/// Returns the path to the directory (allocated from arena, no need to free).
+/// Uses system temp directory to avoid race conditions when cache is cleared.
+pub fn createUniqueTempDir(allocs: *Allocators) ![]const u8 {
+    // Use system temp directory (not roc cache) to avoid race conditions
+    const temp_dir = if (comptime is_windows)
+        std.process.getEnvVarOwned(allocs.arena, "TEMP") catch
+            std.process.getEnvVarOwned(allocs.arena, "TMP") catch try allocs.arena.dupe(u8, "C:\\Windows\\Temp")
+    else
+        std.process.getEnvVarOwned(allocs.arena, "TMPDIR") catch try allocs.arena.dupe(u8, "/tmp");
+
+    const normalized_temp_dir = if (comptime is_windows)
+        std.mem.trimRight(u8, temp_dir, "/\\")
+    else
+        std.mem.trimRight(u8, temp_dir, "/");
+
+    // Get the current process ID for uniqueness
+    const pid = if (comptime is_windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        std.c.getpid();
+
+    // Try PID-based name first, then fall back to random suffix up to 5 times
+    var attempt: u8 = 0;
+    while (attempt < 6) : (attempt += 1) {
+        const dir_path = if (attempt == 0) blk: {
+            // First attempt: use PID only
+            break :blk if (comptime is_windows)
+                try std.fmt.allocPrint(allocs.arena, "{s}\\roc-{d}", .{ normalized_temp_dir, pid })
+            else
+                try std.fmt.allocPrint(allocs.arena, "{s}/roc-{d}", .{ normalized_temp_dir, pid });
+        } else blk: {
+            // Subsequent attempts: use PID + random 8-char suffix
+            const random_suffix = try generateRandomSuffix(allocs);
+            break :blk if (comptime is_windows)
+                try std.fmt.allocPrint(allocs.arena, "{s}\\roc-{d}-{s}", .{ normalized_temp_dir, pid, random_suffix })
+            else
+                try std.fmt.allocPrint(allocs.arena, "{s}/roc-{d}-{s}", .{ normalized_temp_dir, pid, random_suffix });
+        };
+
+        // Try to create the directory
+        std.fs.cwd().makeDir(dir_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                // Directory already exists, try again with a new random suffix
+                continue;
+            },
+            else => {
+                return err;
+            },
+        };
+
+        return dir_path;
+    }
+
+    // Failed after 6 attempts (1 with PID only, 5 with PID + random suffix)
+    return error.FailedToCreateUniqueTempDir;
+}
+
+/// Write shared memory coordination file (.txt) next to the executable.
+/// This is the file that the child process reads to find the shared memory fd.
+pub fn writeFdCoordinationFile(allocs: *Allocators, temp_exe_path: []const u8, shm_handle: SharedMemoryHandle) !void {
+    // The coordination file is at {temp_dir}.txt where temp_dir is the directory containing the exe
+    const temp_dir = std.fs.path.dirname(temp_exe_path) orelse return error.InvalidPath;
+
+    // Ensure we have no trailing slashes
+    var dir_path = temp_dir;
+    while (dir_path.len > 0 and (dir_path[dir_path.len - 1] == '/' or dir_path[dir_path.len - 1] == '\\')) {
+        dir_path = dir_path[0 .. dir_path.len - 1];
+    }
+
+    const fd_file_path = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{dir_path});
+
+    // Create the file (exclusive - fail if exists to detect collisions)
+    const fd_file = std.fs.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            // File already exists - this is unexpected since we have unique temp dirs
+            std.log.err("Coordination file already exists at '{s}'", .{fd_file_path});
+            return err;
+        },
+        else => return err,
+    };
+    defer fd_file.close();
+
+    // Write shared memory info to file
+    const fd_str = try std.fmt.allocPrint(allocs.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+    try fd_file.writeAll(fd_str);
+    try fd_file.sync();
+}
+
 /// Create the temporary directory structure for fd communication.
 /// Returns the path to the executable in the temp directory (allocated from arena, no need to free).
 /// If a cache directory is provided, it will be used for temporary files; otherwise
 /// falls back to the system temp directory.
-pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, cache_dir: ?[]const u8) ![]const u8 {
+/// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
+pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, cache_dir: ?[]const u8) ![]const u8 {
     // Use provided cache dir or fall back to system temp directory
     const temp_dir = if (cache_dir) |dir|
         try allocs.arena.dupe(u8, dir)
@@ -401,20 +491,34 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, shm_han
     else
         std.process.getEnvVarOwned(allocs.arena, "TMPDIR") catch try allocs.arena.dupe(u8, "/tmp");
 
-    // Try up to 10 times to create a unique directory
-    var attempt: u8 = 0;
-    while (attempt < 10) : (attempt += 1) {
-        const random_suffix = try generateRandomSuffix(allocs);
+    const normalized_temp_dir = if (comptime is_windows)
+        std.mem.trimRight(u8, temp_dir, "/\\")
+    else
+        std.mem.trimRight(u8, temp_dir, "/");
 
-        // Create the full path with .txt suffix first
-        const normalized_temp_dir = if (comptime is_windows)
-            std.mem.trimRight(u8, temp_dir, "/\\")
-        else
-            std.mem.trimRight(u8, temp_dir, "/");
-        const dir_name_with_txt = if (comptime is_windows)
-            try std.fmt.allocPrint(allocs.arena, "{s}\\roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix })
-        else
-            try std.fmt.allocPrint(allocs.arena, "{s}/roc-tmp-{s}.txt", .{ normalized_temp_dir, random_suffix });
+    // Get the current process ID for uniqueness
+    const pid = if (comptime is_windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        std.c.getpid();
+
+    // Try PID-based name first, then fall back to random suffix up to 5 times
+    var attempt: u8 = 0;
+    while (attempt < 6) : (attempt += 1) {
+        const dir_name_with_txt = if (attempt == 0) blk: {
+            // First attempt: use PID only
+            break :blk if (comptime is_windows)
+                try std.fmt.allocPrint(allocs.arena, "{s}\\roc-{d}.txt", .{ normalized_temp_dir, pid })
+            else
+                try std.fmt.allocPrint(allocs.arena, "{s}/roc-{d}.txt", .{ normalized_temp_dir, pid });
+        } else blk: {
+            // Subsequent attempts: use PID + random 8-char suffix
+            const random_suffix = try generateRandomSuffix(allocs);
+            break :blk if (comptime is_windows)
+                try std.fmt.allocPrint(allocs.arena, "{s}\\roc-{d}-{s}.txt", .{ normalized_temp_dir, pid, random_suffix })
+            else
+                try std.fmt.allocPrint(allocs.arena, "{s}/roc-{d}-{s}.txt", .{ normalized_temp_dir, pid, random_suffix });
+        };
 
         // Get the directory path by slicing off the .txt suffix
         const dir_path_len = dir_name_with_txt.len - 4; // Remove ".txt"
@@ -456,9 +560,8 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, shm_han
         try fd_file.sync(); // Ensure data is written to disk
         fd_file.close();
 
-        // Create hardlink to executable in temp directory
-        const exe_basename = std.fs.path.basename(exe_path);
-        const temp_exe_path = try std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_basename });
+        // Create hardlink to executable in temp directory with display name
+        const temp_exe_path = try std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_display_name });
 
         // Try to create a hardlink first (more efficient than copying)
         createHardlink(allocs, exe_path, temp_exe_path) catch {
@@ -470,7 +573,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, shm_han
         return temp_exe_path;
     }
 
-    // Failed after 10 attempts
+    // Failed after 6 attempts (1 with PID only, 5 with PID + random suffix)
     return error.FailedToCreateUniqueTempDir;
 }
 
@@ -724,26 +827,51 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         },
     };
 
-    // Generate executable name based on the roc file path
-    // TODO use something more interesting like a hash from the platform.main or platform/host.a etc
-    const exe_base_name = std.fmt.allocPrint(allocs.arena, "roc_run_{}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        std.log.err("Failed to generate executable name: {}", .{err});
-        return err;
-    };
+    // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
+    const exe_display_name = std.fs.path.basename(args.path);
 
-    // Add .exe extension on Windows
-    const exe_name = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(allocs.arena, "{s}.exe", .{exe_base_name}) catch |err| {
-            std.log.err("Failed to generate executable name with extension: {}", .{err});
+    // Display name for temp directory (what shows in ps)
+    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(allocs.arena, "{s}.exe", .{exe_display_name}) catch |err| {
+            std.log.err("Failed to generate display name with extension: {}", .{err});
             return err;
         }
     else
-        allocs.arena.dupe(u8, exe_base_name) catch |err| {
-            std.log.err("Failed to duplicate executable name: {}", .{err});
+        allocs.arena.dupe(u8, exe_display_name) catch |err| {
+            std.log.err("Failed to duplicate display name: {}", .{err});
             return err;
         };
 
-    const exe_path = std.fs.path.join(allocs.arena, &.{ exe_cache_dir, exe_name }) catch |err| {
+    // Cache executable name uses hash of path (no PID - collision is fine since same content)
+    const exe_cache_name = std.fmt.allocPrint(allocs.arena, "roc_{x}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
+        std.log.err("Failed to generate cache executable name: {}", .{err});
+        return err;
+    };
+
+    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(allocs.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
+            std.log.err("Failed to generate cache name with extension: {}", .{err});
+            return err;
+        }
+    else
+        allocs.arena.dupe(u8, exe_cache_name) catch |err| {
+            std.log.err("Failed to duplicate cache name: {}", .{err});
+            return err;
+        };
+
+    const exe_cache_path = std.fs.path.join(allocs.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
+        std.log.err("Failed to create cache executable path: {}", .{err});
+        return err;
+    };
+
+    // Create unique temp directory for this build (uses PID for uniqueness)
+    const temp_dir_path = createUniqueTempDir(allocs) catch |err| {
+        std.log.err("Failed to create temp directory: {}", .{err});
+        return err;
+    };
+
+    // The executable is built directly in the temp dir with the display name
+    const exe_path = std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
         std.log.err("Failed to create executable path: {}", .{err});
         return err;
     };
@@ -780,15 +908,26 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         return error.NoPlatformSource;
     }
 
-    // Check if the interpreter executable already exists (cached)
-    const exe_exists = if (args.no_cache) false else blk: {
-        std.fs.accessAbsolute(exe_path, .{}) catch {
+    // Check if the interpreter executable already exists in cache
+    const cache_exists = if (args.no_cache) false else blk: {
+        std.fs.accessAbsolute(exe_cache_path, .{}) catch {
             break :blk false;
         };
         break :blk true;
     };
 
-    if (!exe_exists) {
+    if (cache_exists) {
+        // Cached executable exists - hardlink from cache to temp dir
+        std.log.debug("Using cached executable: {s}", .{exe_cache_path});
+        createHardlink(allocs, exe_cache_path, exe_path) catch |err| {
+            // If hardlinking fails, fall back to copying
+            std.log.debug("Hardlink from cache failed, copying: {}", .{err});
+            std.fs.cwd().copyFile(exe_cache_path, std.fs.cwd(), exe_path, .{}) catch |copy_err| {
+                std.log.err("Failed to copy cached executable: {}", .{copy_err});
+                return copy_err;
+            };
+        };
+    } else {
 
         // Check for cached shim library, extract if not present
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
@@ -947,6 +1086,22 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
                 std.log.err("Failed to link executable: {}", .{err});
                 return err;
             },
+        };
+
+        // After building, hardlink to cache for future runs
+        // Force-hardlink (delete existing first) since hash collision means identical content
+        std.log.debug("Caching executable to: {s}", .{exe_cache_path});
+        std.fs.cwd().deleteFile(exe_cache_path) catch |err| switch (err) {
+            error.FileNotFound => {}, // OK, doesn't exist
+            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+        };
+        createHardlink(allocs, exe_path, exe_cache_path) catch |err| {
+            // If hardlinking fails, fall back to copying
+            std.log.debug("Hardlink to cache failed, copying: {}", .{err});
+            std.fs.cwd().copyFile(exe_path, std.fs.cwd(), exe_cache_path, .{}) catch |copy_err| {
+                // Non-fatal - just means future runs won't be cached
+                std.log.debug("Failed to copy to cache: {}", .{copy_err});
+            };
         };
     }
 
@@ -1132,16 +1287,16 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
+/// The exe_path should already be in a unique temp directory created by createUniqueTempDir.
 fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) !void {
-    // Create temporary directory structure for fd communication
-    // Use system temp directory (not roc cache) to avoid race conditions when
-    // cache is cleared while child process is running
-    std.log.debug("Creating temporary directory structure for fd communication", .{});
-    const temp_exe_path = createTempDirStructure(allocs, exe_path, shm_handle, null) catch |err| {
-        std.log.err("Failed to create temp dir structure: {}", .{err});
+    // Write the coordination file (.txt) next to the executable
+    // The executable is already in a unique temp directory
+    std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
+    writeFdCoordinationFile(allocs, exe_path, shm_handle) catch |err| {
+        std.log.err("Failed to write fd coordination file: {}", .{err});
         return err;
     };
-    std.log.debug("Temporary executable created at: {s}", .{temp_exe_path});
+    std.log.debug("Coordination file written successfully", .{});
 
     // Configure fd inheritance
     var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
@@ -1162,7 +1317,7 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
         std.log.err("Failed to allocate argv: {}", .{err});
         return err;
     };
-    argv[0] = temp_exe_path;
+    argv[0] = exe_path;
     for (app_args, 0..) |arg, i| {
         argv[1 + i] = arg;
     }
@@ -1179,10 +1334,10 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     child.stderr_behavior = .Inherit;
 
     // Spawn the child process
-    std.log.debug("Spawning child process: {s} with {} app args", .{ temp_exe_path, app_args.len });
+    std.log.debug("Spawning child process: {s} with {} app args", .{ exe_path, app_args.len });
     std.log.debug("Child process working directory: {s}", .{child.cwd.?});
     child.spawn() catch |err| {
-        std.log.err("Failed to spawn {s}: {}", .{ temp_exe_path, err });
+        std.log.err("Failed to spawn {s}: {}", .{ exe_path, err });
         return err;
     };
     std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
@@ -1200,12 +1355,12 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
                 std.log.debug("Child process completed successfully", .{});
             } else {
                 // Propagate the exit code from the child process to our parent
-                std.log.debug("Child process {s} exited with code: {}", .{ temp_exe_path, exit_code });
+                std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
                 std.process.exit(exit_code);
             }
         },
         .Signal => |signal| {
-            std.log.err("Child process {s} killed by signal: {}", .{ temp_exe_path, signal });
+            std.log.err("Child process {s} killed by signal: {}", .{ exe_path, signal });
             if (signal == 11) { // SIGSEGV
                 std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
             } else if (signal == 6) { // SIGABRT
@@ -1217,11 +1372,11 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
         .Stopped => |signal| {
-            std.log.err("Child process {s} stopped by signal: {}", .{ temp_exe_path, signal });
+            std.log.err("Child process {s} stopped by signal: {}", .{ exe_path, signal });
             return error.ProcessStopped;
         },
         .Unknown => |status| {
-            std.log.err("Child process {s} terminated with unknown status: {}", .{ temp_exe_path, status });
+            std.log.err("Child process {s} terminated with unknown status: {}", .{ exe_path, status });
             return error.ProcessUnknownTermination;
         },
     }
