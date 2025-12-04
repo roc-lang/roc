@@ -215,8 +215,12 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     const str_idx_0 = deserialized.imports.items.items[0];
     const str_idx_1 = deserialized.imports.items.items[1];
 
+    // Named constants for first and second import indices
+    const first_import_idx: Import.Idx = @enumFromInt(0);
+    const second_import_idx: Import.Idx = @enumFromInt(1);
+
     try testing.expect(deserialized.map.contains(str_idx_0));
     try testing.expect(deserialized.map.contains(str_idx_1));
-    try testing.expectEqual(@as(Import.Idx, @enumFromInt(0)), deserialized.map.get(str_idx_0).?);
-    try testing.expectEqual(@as(Import.Idx, @enumFromInt(1)), deserialized.map.get(str_idx_1).?);
+    try testing.expectEqual(first_import_idx, deserialized.map.get(str_idx_0).?);
+    try testing.expectEqual(second_import_idx, deserialized.map.get(str_idx_1).?);
 }

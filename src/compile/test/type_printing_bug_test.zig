@@ -16,6 +16,7 @@ const AST = parse.AST;
 test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    const first_var: types.Var = @enumFromInt(0);
 
     const source =
         \\app [main] { pf: platform "platform.roc" }
@@ -75,7 +76,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
             const ident_text = env.getIdent(ident_idx);
             if (std.mem.eql(u8, ident_text, "map_result")) {
                 // Get the type variable from the first definition - it's the first in the defs list
-                map_result_var = @enumFromInt(0); // First variable
+                map_result_var = first_var;
                 break;
             }
         }

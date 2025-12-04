@@ -130,8 +130,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 const count = tup_acc.getElementCount();
                 if (count > 0) {
                     // Get tag index from the last element
-                    // Use placeholder rt_var for tag discriminant (it's always an integer)
-                    const tag_elem = try tup_acc.getElement(count - 1, @enumFromInt(0));
+                    // rt_var not needed for tag discriminant access (it's always an integer)
+                    const tag_elem = try tup_acc.getElement(count - 1, undefined);
                     if (tag_elem.layout.tag == .scalar and tag_elem.layout.data.scalar.tag == .int) {
                         if (std.math.cast(usize, tag_elem.asI128())) |tag_idx| {
                             tag_index = tag_idx;
@@ -166,8 +166,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             try out.appendSlice(rendered);
                         } else {
                             // Multiple payloads: first element is a nested tuple containing all payload args
-                            // Use placeholder rt_var for the tuple (we have the individual element types)
-                            const payload_elem = try tup_acc.getElement(0, @enumFromInt(0));
+                            // rt_var undefined for tuple access (we have the individual element types)
+                            const payload_elem = try tup_acc.getElement(0, undefined);
                             if (payload_elem.layout.tag == .tuple) {
                                 var payload_tup = try payload_elem.asTuple(ctx.layout_store);
                                 var j: usize = 0;
@@ -195,7 +195,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     const field_rt = try ctx.runtime_types.fresh();
                     const tag_field = try acc.getFieldByIndex(idx, field_rt);
                     if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
-                        const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = @enumFromInt(0) };
+                        const tmp_sv = StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = undefined };
                         // Only treat as tag if value fits in usize (valid tag discriminants are small)
                         if (std.math.cast(usize, tmp_sv.asI128())) |tag_idx| {
                             tag_index = tag_idx;
@@ -243,7 +243,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     .layout = tuple_layout,
                                     .ptr = payload.ptr,
                                     .is_initialized = payload.is_initialized,
-                                    .rt_var = @enumFromInt(0),
+                                    .rt_var = undefined, // not needed - type known from layout
                                 };
                                 if (tuple_size == 0 or payload.ptr == null) {
                                     var j: usize = 0;
@@ -355,7 +355,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                     .layout = tuple_layout,
                                     .ptr = payload_ptr,
                                     .is_initialized = true,
-                                    .rt_var = @enumFromInt(0),
+                                    .rt_var = undefined, // not needed - type known from layout
                                 };
                                 var tup_acc = try tuple_value.asTuple(ctx.layout_store);
                                 var j: usize = 0;
@@ -550,8 +550,8 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         const count = acc.getElementCount();
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            // Use placeholder rt_var (no type info available in this context)
-            const elem = try acc.getElement(i, @enumFromInt(0));
+            // rt_var undefined (no type info available in this context)
+            const elem = try acc.getElement(i, undefined);
             const rendered = try renderValueRoc(ctx, elem);
             defer gpa.free(rendered);
             try out.appendSlice(rendered);
@@ -574,7 +574,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
             while (i < len) : (i += 1) {
                 if (roc_list.bytes) |bytes| {
                     const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
-                    const elem_val = StackValue{ .layout = elem_layout, .ptr = elem_ptr, .is_initialized = true, .rt_var = @enumFromInt(0) };
+                    const elem_val = StackValue{ .layout = elem_layout, .ptr = elem_ptr, .is_initialized = true, .rt_var = undefined };
                     const rendered = try renderValueRoc(ctx, elem_val);
                     defer gpa.free(rendered);
                     try out.appendSlice(rendered);
@@ -615,7 +615,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
             const field_layout = ctx.layout_store.getLayout(fld.layout);
             const base_ptr: [*]u8 = @ptrCast(@alignCast(value.ptr.?));
             const field_ptr: *anyopaque = @ptrCast(base_ptr + offset);
-            const field_val = StackValue{ .layout = field_layout, .ptr = field_ptr, .is_initialized = true, .rt_var = @enumFromInt(0) };
+            const field_val = StackValue{ .layout = field_layout, .ptr = field_ptr, .is_initialized = true, .rt_var = undefined };
             const rendered = try renderValueRoc(ctx, field_val);
             defer gpa.free(rendered);
             try out.appendSlice(rendered);

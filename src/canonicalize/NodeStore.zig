@@ -674,9 +674,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_suffix_single_question,
         .expr_record_builder,
         => {
-            return CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = @enumFromInt(0),
-            } };
+            return CIR.Expr{
+                .e_runtime_error = .{
+                    .diagnostic = undefined, // deserialized runtime errors don't preserve diagnostics
+                },
+            };
         },
         .expr_ellipsis => {
             return CIR.Expr{ .e_ellipsis = .{} };
@@ -1512,7 +1514,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined, // set below in switch
     };
 
     switch (expr) {
@@ -2144,7 +2146,7 @@ pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternR
     _ = store;
     _ = patternRecordField;
 
-    return @enumFromInt(0);
+    @panic("TODO: addPatternRecordField not implemented");
 }
 
 /// Adds a type annotation to the store.
@@ -2156,7 +2158,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined, // set below in switch
     };
 
     switch (typeAnno) {
@@ -2861,7 +2863,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined, // set below in switch
     };
     var region = base.Region.zero();
 
@@ -3742,7 +3744,9 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
-    const retrieved_node = deserialized.nodes.get(@enumFromInt(0));
+    // Named constant for the first node index in the deserialized data
+    const first_node_idx: Node.Idx = @enumFromInt(0);
+    const retrieved_node = deserialized.nodes.get(first_node_idx);
     try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
     try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
 
@@ -3755,7 +3759,9 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
-    const retrieved_region = deserialized.regions.get(@enumFromInt(0));
+    // Named constant for the first region index in the deserialized data
+    const first_region_idx: Region.Idx = @enumFromInt(0);
+    const retrieved_region = deserialized.regions.get(first_region_idx);
     try testing.expectEqual(region.start.offset, retrieved_region.start.offset);
     try testing.expectEqual(region.end.offset, retrieved_region.end.offset);
 }
@@ -3845,19 +3851,24 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
 
+    // Named constants for accessing deserialized nodes at specific indices
+    const first_node_idx: Node.Idx = @enumFromInt(0);
+    const second_node_idx: Node.Idx = @enumFromInt(1);
+    const third_node_idx: Node.Idx = @enumFromInt(2);
+
     // Verify var node
-    const retrieved_var = deserialized.nodes.get(@enumFromInt(0));
+    const retrieved_var = deserialized.nodes.get(first_node_idx);
     try testing.expectEqual(Node.Tag.expr_var, retrieved_var.tag);
     try testing.expectEqual(@as(u32, 5), retrieved_var.data_1);
 
     // Verify list node
-    const retrieved_list = deserialized.nodes.get(@enumFromInt(1));
+    const retrieved_list = deserialized.nodes.get(second_node_idx);
     try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
     try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
     try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
 
     // Verify float node and extra data
-    const retrieved_float = deserialized.nodes.get(@enumFromInt(2));
+    const retrieved_float = deserialized.nodes.get(third_node_idx);
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
     const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
     const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);

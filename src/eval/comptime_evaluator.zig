@@ -466,7 +466,8 @@ pub const ComptimeEvaluator = struct {
 
         // Get variant_var and ext_var
         const variant_var: types_mod.Var = bool_rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
+        // ext_var is a placeholder that will be set if this is a tag_union type
+        var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
             if (resolved.desc.content.structure == .tag_union) {
@@ -517,7 +518,8 @@ pub const ComptimeEvaluator = struct {
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
+        // ext_var is a placeholder that will be set if this is a tag_union type
+        var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
             if (resolved.desc.content.structure == .tag_union) {
@@ -575,7 +577,8 @@ pub const ComptimeEvaluator = struct {
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
+        // ext_var is a placeholder that will be set if this is a tag_union type
+        var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
             if (resolved.desc.content.structure == .tag_union) {
@@ -1133,7 +1136,7 @@ pub const ComptimeEvaluator = struct {
             try self.interpreter.bindings.append(.{
                 .pattern_idx = params[0],
                 .value = num_literal_record,
-                .expr_idx = @enumFromInt(0),
+                .expr_idx = undefined, // No source expression for synthetic binding
                 .source_env = origin_env,
             });
             defer _ = self.interpreter.bindings.pop();
@@ -1193,8 +1196,8 @@ pub const ComptimeEvaluator = struct {
         const list_layout_idx = try self.interpreter.runtime_layout_store.insertList(layout_mod.Idx.u8);
         const list_layout = self.interpreter.runtime_layout_store.getLayout(list_layout_idx);
 
-        // Use placeholder rt_var for U8 list
-        const dest = try self.interpreter.pushRaw(list_layout, 0, @enumFromInt(0));
+        // rt_var not needed for List(U8) construction - only layout matters
+        const dest = try self.interpreter.pushRaw(list_layout, 0, undefined);
         if (dest.ptr == null) return dest;
 
         const header: *builtins.list.RocList = @ptrCast(@alignCast(dest.ptr.?));
@@ -1245,8 +1248,8 @@ pub const ComptimeEvaluator = struct {
         const record_layout_idx = try self.interpreter.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
         const record_layout = self.interpreter.runtime_layout_store.getLayout(record_layout_idx);
 
-        // Use placeholder rt_var for numeral record
-        var dest = try self.interpreter.pushRaw(record_layout, 0, @enumFromInt(0));
+        // rt_var not needed for Numeral record construction - only layout matters
+        var dest = try self.interpreter.pushRaw(record_layout, 0, undefined);
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents

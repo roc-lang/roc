@@ -197,7 +197,7 @@ pub fn parseFile(self: *Parser) Error!void {
 
     self.store.emptyScratch();
     try self.store.addFile(.{
-        .header = @as(AST.Header.Idx, @enumFromInt(0)),
+        .header = undefined, // overwritten below after parseHeader()
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
         .region = AST.TokenizedRegion.empty(),
     });

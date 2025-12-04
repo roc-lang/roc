@@ -407,7 +407,7 @@ pub const Interpreter = struct {
             .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
             .type_writer = try types.TypeWriter.initFromParts(allocator, rt_types_ptr, env.common.getIdentStore(), null),
-            .stack_memory = try stack.Stack.initCapacity(allocator, 8 * 1024 * 1024), // 8MB stack
+            .stack_memory = try stack.Stack.initCapacity(allocator, 64 * 1024 * 1024), // 64 MiB stack
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
             .canonical_bool_rt_var = null,
@@ -597,7 +597,8 @@ pub const Interpreter = struct {
                 while (j < params.len) : (j += 1) {
                     // getElement expects original index and converts to sorted internally
                     const arg_value = try args_accessor.getElement(j, param_rt_vars[j]);
-                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, @enumFromInt(0));
+                    // expr_idx not used in this context - binding happens during function call setup
+                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, undefined);
                     if (!matched) return error.TypeMismatch;
                 }
             }
@@ -921,13 +922,13 @@ pub const Interpreter = struct {
         try self.bindings.append(.{
             .pattern_idx = cmp_params[0],
             .value = arg0,
-            .expr_idx = @enumFromInt(0),
+            .expr_idx = undefined, // expr_idx not used for comparison function parameter bindings
             .source_env = self.env,
         });
         try self.bindings.append(.{
             .pattern_idx = cmp_params[1],
             .value = arg1,
-            .expr_idx = @enumFromInt(0),
+            .expr_idx = undefined, // expr_idx not used for comparison function parameter bindings
             .source_env = self.env,
         });
 
@@ -6688,7 +6689,7 @@ pub const Interpreter = struct {
         self.bindings.append(.{
             .pattern_idx = params[0],
             .value = copied_value,
-            .expr_idx = @enumFromInt(0),
+            .expr_idx = undefined, // expr_idx not used for inspect method parameter bindings
             .source_env = self.env,
         }) catch return null;
 
@@ -11339,7 +11340,7 @@ pub const Interpreter = struct {
             .tag = .closure,
             .data = .{
                 .closure = .{
-                    .captures_layout_idx = @enumFromInt(0),
+                    .captures_layout_idx = undefined, // No captures for hosted functions
                 },
             },
         };
@@ -12879,13 +12880,14 @@ pub const Interpreter = struct {
                             temp_binds.deinit();
                         }
 
+                        // expr_idx not used for match pattern bindings
                         if (!try self.patternMatchesBind(
                             self.env.store.getMatchBranchPattern(bp_idx).pattern,
                             scrutinee,
                             effective_scrutinee_rt_var,
                             roc_ops,
                             &temp_binds,
-                            @enumFromInt(0),
+                            undefined,
                         )) {
                             continue;
                         }
@@ -13091,7 +13093,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
                         .value = value,
-                        .expr_idx = @enumFromInt(0),
+                        .expr_idx = undefined, // expr_idx not used for inspect method parameter bindings
                         .source_env = self.env,
                     });
 
@@ -13483,7 +13485,8 @@ pub const Interpreter = struct {
                         // Use patternMatchesBind to properly handle complex patterns (e.g., list destructuring)
                         // patternMatchesBind borrows the value and creates copies for bindings, so we need to
                         // decref the original arg_value after successful binding
-                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                        // expr_idx not used for function parameter bindings
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, undefined)) {
                             // Pattern match failed - cleanup and error
                             self.env = saved_env;
                             _ = self.active_closures.pop();
@@ -13689,7 +13692,7 @@ pub const Interpreter = struct {
                 try self.bindings.append(.{
                     .pattern_idx = params[0],
                     .value = operand,
-                    .expr_idx = @enumFromInt(0),
+                    .expr_idx = undefined, // expr_idx not used for unary operator method parameter bindings
                     .source_env = self.env,
                 });
 
@@ -14092,14 +14095,15 @@ pub const Interpreter = struct {
                 // of lhs/rhs at the function start will correctly free the originals while
                 // the bindings retain their own references.
                 // Use effective rt_vars from values if available.
-                if (!try self.patternMatchesBind(params[0], lhs, effective_receiver_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                // expr_idx not used for binary operator method parameter bindings
+                if (!try self.patternMatchesBind(params[0], lhs, effective_receiver_rt_var, roc_ops, &self.bindings, undefined)) {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
                     _ = self.active_closures.pop();
                     return error.TypeMismatch;
                 }
-                if (!try self.patternMatchesBind(params[1], rhs, rhs.rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                if (!try self.patternMatchesBind(params[1], rhs, rhs.rt_var, roc_ops, &self.bindings, undefined)) {
                     // Clean up the first binding we added
                     self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                     self.flex_type_context.deinit();
@@ -14284,7 +14288,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
                         .value = receiver_value,
-                        .expr_idx = @enumFromInt(0),
+                        .expr_idx = undefined, // expr_idx not used for field access method parameter bindings
                         .source_env = self.env,
                     });
 
@@ -14516,7 +14520,7 @@ pub const Interpreter = struct {
                 try self.bindings.append(.{
                     .pattern_idx = params[0],
                     .value = receiver_value,
-                    .expr_idx = @enumFromInt(0),
+                    .expr_idx = undefined, // expr_idx not used for method call parameter bindings
                     .source_env = self.env,
                 });
 
@@ -14525,7 +14529,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[1 + idx],
                         .value = arg,
-                        .expr_idx = @enumFromInt(0),
+                        .expr_idx = undefined, // expr_idx not used for method call parameter bindings
                         .source_env = self.env,
                     });
                 }
@@ -14599,7 +14603,8 @@ pub const Interpreter = struct {
 
                 // Bind the pattern
                 const loop_bindings_start = self.bindings.items.len;
-                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                // expr_idx not used for for-loop pattern bindings
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, undefined)) {
                     elem_value.decref(&self.runtime_layout_store, roc_ops);
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
@@ -14667,7 +14672,8 @@ pub const Interpreter = struct {
 
                 // Bind the pattern
                 const new_loop_bindings_start = self.bindings.items.len;
-                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                // expr_idx not used for for-loop pattern bindings
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, undefined)) {
                     elem_value.decref(&self.runtime_layout_store, roc_ops);
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
@@ -14919,7 +14925,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
                         .value = value,
-                        .expr_idx = @enumFromInt(0),
+                        .expr_idx = undefined, // expr_idx not used for inspect method parameter bindings
                         .source_env = self.env,
                     });
 
@@ -15093,13 +15099,13 @@ pub const Interpreter = struct {
                         try self.bindings.append(.{
                             .pattern_idx = cmp_params[0],
                             .value = arg0,
-                            .expr_idx = @enumFromInt(0),
+                            .expr_idx = undefined, // expr_idx not used for comparison function parameter bindings
                             .source_env = self.env,
                         });
                         try self.bindings.append(.{
                             .pattern_idx = cmp_params[1],
                             .value = arg1,
-                            .expr_idx = @enumFromInt(0),
+                            .expr_idx = undefined, // expr_idx not used for comparison function parameter bindings
                             .source_env = self.env,
                         });
 
@@ -15175,13 +15181,13 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = cmp_params[0],
                         .value = arg0,
-                        .expr_idx = @enumFromInt(0),
+                        .expr_idx = undefined, // expr_idx not used for comparison function parameter bindings
                         .source_env = self.env,
                     });
                     try self.bindings.append(.{
                         .pattern_idx = cmp_params[1],
                         .value = arg1,
-                        .expr_idx = @enumFromInt(0),
+                        .expr_idx = undefined, // expr_idx not used for comparison function parameter bindings
                         .source_env = self.env,
                     });
 
@@ -15590,8 +15596,9 @@ test "interpreter: cross-module method resolution should find methods in origin 
     try interp.module_ids.put(interp.allocator, module_a_ident, module_a_id);
 
     // Create an Import.Idx for module A
-    const import_idx: can.CIR.Import.Idx = @enumFromInt(0);
-    try interp.import_envs.put(interp.allocator, import_idx, &module_a);
+    // Using first import index for test purposes
+    const first_import_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    try interp.import_envs.put(interp.allocator, first_import_idx, &module_a);
 
     // Verify we can retrieve module A's environment
     const found_env = interp.getModuleEnvForOrigin(module_a_ident);
@@ -15652,10 +15659,11 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
     try interp.module_ids.put(interp.allocator, module_c_ident, module_c_id);
 
     // Create Import.Idx entries for both modules
-    const import_b_idx: can.CIR.Import.Idx = @enumFromInt(0);
-    const import_c_idx: can.CIR.Import.Idx = @enumFromInt(1);
-    try interp.import_envs.put(interp.allocator, import_b_idx, &module_b);
-    try interp.import_envs.put(interp.allocator, import_c_idx, &module_c);
+    // Using sequential import indices for test purposes
+    const first_import_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    const second_import_idx: can.CIR.Import.Idx = @enumFromInt(1);
+    try interp.import_envs.put(interp.allocator, first_import_idx, &module_b);
+    try interp.import_envs.put(interp.allocator, second_import_idx, &module_c);
 
     // Verify we can retrieve all module environments
     try std.testing.expectEqual(module_b.module_name_idx, interp.getModuleEnvForOrigin(module_b_ident).?.module_name_idx);

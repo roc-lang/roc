@@ -21,6 +21,9 @@ const sexpr = base.sexpr;
 /// packing optional data into u32 fields where 0 would otherwise be ambiguous.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
+/// The root node is always stored at index 0 in the node list.
+pub const root_node_idx: Node.List.Idx = @enumFromInt(0);
+
 const NodeStore = @This();
 
 gpa: std.mem.Allocator,
@@ -166,7 +169,7 @@ pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag,
 /// Adds a file node to the store.
 pub fn addFile(store: *NodeStore, file: AST.File) std.mem.Allocator.Error!void {
     try store.extra_data.append(store.gpa, @intFromEnum(file.header));
-    store.nodes.set(@enumFromInt(0), .{
+    store.nodes.set(root_node_idx, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = file.statements.span.start, .rhs = file.statements.span.len },
@@ -1019,7 +1022,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
 
 /// TODO
 pub fn getFile(store: *const NodeStore) AST.File {
-    const node = store.nodes.get(@enumFromInt(0));
+    const node = store.nodes.get(root_node_idx);
     const header_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
     const header = store.extra_data.items[header_ed_idx];
     return .{

@@ -1747,7 +1747,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_type_name));
         const auto_type = Can.AutoImportedType{
             .env = platform_env,
-            .statement_idx = @enumFromInt(0), // Non-null triggers qualified name building
+            .statement_idx = undefined, // non-null triggers qualified name building; actual index isn't read
             .qualified_type_ident = type_qualified_ident,
         };
 

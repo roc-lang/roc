@@ -3,21 +3,6 @@
 description=Numeric let-generalization inside nested block (rank > top_level)
 type=expr
 ~~~
-
-# NOTES
-This test demonstrates that numeric literals inside nested blocks (rank > top_level)
-ARE let-generalized, allowing the same numeric variable to be used with different
-concrete numeric types within the block.
-
-This is different from top-level behavior where numeric literals stay monomorphic
-so that later usages can constrain them to a specific type.
-
-The key insight is that rank > top_level can occur in two situations:
-1. Inside lambdas (e.g., `|a| a + 1`)
-2. Inside nested blocks (e.g., `{ n = 42; ... }`)
-
-In both cases, numeric literals are generalized.
-
 # SOURCE
 ~~~roc
 {
@@ -31,3 +16,76 @@ In both cases, numeric literals are generalized.
 NIL
 # PROBLEMS
 NIL
+# TOKENS
+~~~zig
+OpenCurly,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
+CloseCurly,
+EndOfFile,
+~~~
+# PARSE
+~~~clojure
+(e-block
+	(statements
+		(s-decl
+			(p-ident (raw "n"))
+			(e-int (raw "42")))
+		(s-decl
+			(p-ident (raw "a"))
+			(e-apply
+				(e-ident (raw "I64.to_str"))
+				(e-ident (raw "n"))))
+		(s-decl
+			(p-ident (raw "b"))
+			(e-apply
+				(e-ident (raw "Dec.to_str"))
+				(e-ident (raw "n"))))
+		(e-apply
+			(e-ident (raw "Str.concat"))
+			(e-ident (raw "a"))
+			(e-ident (raw "b")))))
+~~~
+# FORMATTED
+~~~roc
+{
+	n = 42
+	a = I64.to_str(n)
+	b = Dec.to_str(n)
+	Str.concat(a, b)
+}
+~~~
+# CANONICALIZE
+~~~clojure
+(e-block
+	(s-let
+		(p-assign (ident "n"))
+		(e-num (value "42")))
+	(s-let
+		(p-assign (ident "a"))
+		(e-call
+			(e-lookup-external
+				(builtin))
+			(e-lookup-local
+				(p-assign (ident "n")))))
+	(s-let
+		(p-assign (ident "b"))
+		(e-call
+			(e-lookup-external
+				(builtin))
+			(e-lookup-local
+				(p-assign (ident "n")))))
+	(e-call
+		(e-lookup-external
+			(builtin))
+		(e-lookup-local
+			(p-assign (ident "a")))
+		(e-lookup-local
+			(p-assign (ident "b")))))
+~~~
+# TYPES
+~~~clojure
+(expr (type "Str"))
+~~~

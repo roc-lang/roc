@@ -483,13 +483,13 @@ fn processTypeDeclFirstPass(
                 .alias => Statement{
                     .s_alias_decl = .{
                         .header = final_header_idx,
-                        .anno = @enumFromInt(0), // placeholder - will be replaced below
+                        .anno = undefined, // overwritten below before use
                     },
                 },
                 .nominal, .@"opaque" => Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
-                        .anno = @enumFromInt(0), // placeholder - will be replaced below
+                        .anno = undefined, // overwritten below before use
                         .is_opaque = type_decl.kind == .@"opaque",
                     },
                 },
@@ -503,13 +503,13 @@ fn processTypeDeclFirstPass(
             .alias => Statement{
                 .s_alias_decl = .{
                     .header = final_header_idx,
-                    .anno = @enumFromInt(0), // placeholder - will be replaced
+                    .anno = undefined, // overwritten below before use
                 },
             },
             .nominal, .@"opaque" => Statement{
                 .s_nominal_decl = .{
                     .header = final_header_idx,
-                    .anno = @enumFromInt(0), // placeholder - will be replaced
+                    .anno = undefined, // overwritten below before use
                     .is_opaque = type_decl.kind == .@"opaque",
                 },
             },
@@ -636,13 +636,13 @@ fn introduceTypeNameOnly(
         .alias => Statement{
             .s_alias_decl = .{
                 .header = header_idx,
-                .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+                .anno = undefined, // overwritten in Phase 1.7 before use
             },
         },
         .nominal, .@"opaque" => Statement{
             .s_nominal_decl = .{
                 .header = header_idx,
-                .anno = @enumFromInt(0), // placeholder - will be updated in Phase 1.7
+                .anno = undefined, // overwritten in Phase 1.7 before use
                 .is_opaque = type_decl.kind == .@"opaque",
             },
         },
@@ -2598,8 +2598,8 @@ fn addToExposedScope(
                     // Add to exposed_items for permanent storage (unconditionally)
                     try self.env.addExposedById(ident_idx);
 
-                    // Use a dummy pattern index - we just need to track that it's exposed
-                    const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
+                    // Use undefined pattern index - we just need to track that the ident is exposed
+                    const dummy_idx: Pattern.Idx = undefined;
                     try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
                 }
 
@@ -2631,8 +2631,8 @@ fn addToExposedScope(
                     // Don't add types to exposed_items - types are not values
                     // Only add to type_bindings for type resolution
 
-                    // Use a dummy statement index - we just need to track that it's exposed
-                    const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
+                    // Use undefined statement index - we just need to track that the type is exposed
+                    const dummy_idx: Statement.Idx = undefined;
                     try self.exposed_scope.type_bindings.put(gpa, ident_idx, Scope.TypeBinding{ .local_nominal = dummy_idx });
                 }
 
@@ -2664,8 +2664,8 @@ fn addToExposedScope(
                     // Don't add types to exposed_items - types are not values
                     // Only add to type_bindings for type resolution
 
-                    // Use a dummy statement index - we just need to track that it's exposed
-                    const dummy_idx = @as(Statement.Idx, @enumFromInt(0));
+                    // Use undefined statement index - we just need to track that the type is exposed
+                    const dummy_idx: Statement.Idx = undefined;
                     try self.exposed_scope.type_bindings.put(gpa, ident_idx, Scope.TypeBinding{ .local_nominal = dummy_idx });
                 }
 
@@ -2715,8 +2715,8 @@ fn addPlatformProvidesItems(
             // Add to exposed_items for permanent storage
             try self.env.addExposedById(ident_idx);
 
-            // Add to exposed_scope so it becomes an export
-            const dummy_idx = @as(Pattern.Idx, @enumFromInt(0));
+            // Add to exposed_scope so it becomes an export - undefined since index isn't read
+            const dummy_idx: Pattern.Idx = undefined;
             try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
 
             // Also track in exposed_ident_texts
@@ -5171,7 +5171,7 @@ pub fn canonicalizeExpr(
                         .patterns = ok_branch_pat_span,
                         .value = ok_lookup_idx,
                         .guard = null,
-                        .redundant = @enumFromInt(0),
+                        .redundant = undefined, // set during type checking
                     },
                     region,
                 );
@@ -5245,7 +5245,7 @@ pub fn canonicalizeExpr(
                         .patterns = err_branch_pat_span,
                         .value = return_expr_idx,
                         .guard = null,
-                        .redundant = @enumFromInt(0),
+                        .redundant = undefined, // set during type checking
                     },
                     region,
                 );
@@ -5259,7 +5259,7 @@ pub fn canonicalizeExpr(
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
-                .exhaustive = @enumFromInt(0), // Will be set during type checking
+                .exhaustive = undefined, // set during type checking
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -5567,7 +5567,7 @@ pub fn canonicalizeExpr(
                         .patterns = branch_pat_span,
                         .value = value_idx,
                         .guard = null,
-                        .redundant = @enumFromInt(0), // TODO
+                        .redundant = undefined, // set during type checking
                     },
                     region,
                 );
@@ -5587,7 +5587,7 @@ pub fn canonicalizeExpr(
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
-                .exhaustive = @enumFromInt(0), // Will be set during type checking
+                .exhaustive = undefined, // set during type checking
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -7596,8 +7596,8 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
 
         // Collect problems for this type variable
         const is_single_use = !found_another;
-        // Use a dummy AST annotation index since we don't have the context
-        try collectTypeVarProblems(first_ident, is_single_use, @enumFromInt(0), &self.scratch_type_var_problems);
+        // Use undefined AST annotation index since we don't have the context here
+        try collectTypeVarProblems(first_ident, is_single_use, undefined, &self.scratch_type_var_problems);
     }
 
     // Report any problems we found
