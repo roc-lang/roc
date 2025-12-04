@@ -53,8 +53,10 @@ in_statement_position: bool = true,
 scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
-/// Special scope for tracking exposed items from module header
-exposed_scope: Scope = undefined,
+/// Set of identifiers exposed from this module header (values not used)
+exposed_idents: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
+/// Set of types exposed from this module header (values not used)
+exposed_types: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Track exposed identifiers by text to handle changing indices
 exposed_ident_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// Track exposed types by text to handle changing indices
@@ -182,7 +184,8 @@ pub fn deinit(
     const gpa = self.env.gpa;
 
     self.type_vars_scope.deinit();
-    self.exposed_scope.deinit(gpa);
+    self.exposed_idents.deinit(gpa);
+    self.exposed_types.deinit(gpa);
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
     self.placeholder_idents.deinit(gpa);
@@ -236,7 +239,6 @@ pub fn init(
         .scratch_record_fields = try base.Scratch(types.RecordField).init(gpa),
         .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
         .type_vars_scope = try base.Scratch(TypeVarScope).init(gpa),
-        .exposed_scope = Scope.init(false),
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
@@ -1748,7 +1750,7 @@ pub fn canonicalizeFile(
 
     // canonicalize_header_packages();
 
-    // First, process the header to create exposed_scope and set module_kind
+    // First, process the header to populate exposed_idents/exposed_types and set module_kind
     const header = self.parse_ir.store.getHeader(file.header);
     switch (header) {
         .module => |h| {
@@ -2553,11 +2555,9 @@ fn createExposedScope(
     self: *Self,
     exposes: AST.Collection.Idx,
 ) std.mem.Allocator.Error!void {
-    const gpa = self.env.gpa;
-
-    // Reset exposed_scope (already initialized in init)
-    self.exposed_scope.deinit(gpa);
-    self.exposed_scope = Scope.init(false);
+    // Clear exposed sets (they're already initialized with default values)
+    self.exposed_idents.clearRetainingCapacity();
+    self.exposed_types.clearRetainingCapacity();
 
     try self.addToExposedScope(exposes);
 }
@@ -2596,9 +2596,8 @@ fn addToExposedScope(
                     // Add to exposed_items for permanent storage (unconditionally)
                     try self.env.addExposedById(ident_idx);
 
-                    // Use undefined pattern index - we just need to track that the ident is exposed
-                    const dummy_idx: Pattern.Idx = undefined;
-                    try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+                    // Just track that this identifier is exposed
+                    try self.exposed_idents.put(gpa, ident_idx, {});
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -2629,9 +2628,8 @@ fn addToExposedScope(
                     // Don't add types to exposed_items - types are not values
                     // Only add to type_bindings for type resolution
 
-                    // Use undefined statement index - we just need to track that the type is exposed
-                    const dummy_idx: Statement.Idx = undefined;
-                    try self.exposed_scope.type_bindings.put(gpa, ident_idx, Scope.TypeBinding{ .local_nominal = dummy_idx });
+                    // Just track that this type is exposed
+                    try self.exposed_types.put(gpa, ident_idx, {});
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -2662,9 +2660,8 @@ fn addToExposedScope(
                     // Don't add types to exposed_items - types are not values
                     // Only add to type_bindings for type resolution
 
-                    // Use undefined statement index - we just need to track that the type is exposed
-                    const dummy_idx: Statement.Idx = undefined;
-                    try self.exposed_scope.type_bindings.put(gpa, ident_idx, Scope.TypeBinding{ .local_nominal = dummy_idx });
+                    // Just track that this type is exposed
+                    try self.exposed_types.put(gpa, ident_idx, {});
                 }
 
                 // Store by text in a temporary hash map, since indices may change
@@ -2712,9 +2709,8 @@ fn addPlatformProvidesItems(
             // Add to exposed_items for permanent storage
             try self.env.addExposedById(ident_idx);
 
-            // Add to exposed_scope so it becomes an export - undefined since index isn't read
-            const dummy_idx: Pattern.Idx = undefined;
-            try self.exposed_scope.put(gpa, .ident, ident_idx, dummy_idx);
+            // Track that this identifier is exposed (for exports)
+            try self.exposed_idents.put(gpa, ident_idx, {});
 
             // Also track in exposed_ident_texts
             const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
@@ -2816,7 +2812,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
 
     // Check each definition to see if it corresponds to an exposed item.
-    // We check exposed_scope.idents which only contains items from the exposing clause,
+    // We check exposed_idents which only contains items from the exposing clause,
     // not associated items like "Color.as_str" which are registered separately.
     for (defs_slice) |def_idx| {
         const def = self.env.store.getDef(def_idx);
@@ -2824,7 +2820,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
 
         if (pattern == .assign) {
             // Check if this identifier was explicitly exposed in the module header
-            if (self.exposed_scope.idents.contains(pattern.assign.ident)) {
+            if (self.exposed_idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
             }
         }
@@ -5177,7 +5173,7 @@ pub fn canonicalizeExpr(
                         .patterns = ok_branch_pat_span,
                         .value = ok_lookup_idx,
                         .guard = null,
-                        .redundant = undefined, // set during type checking
+                        .redundant = .zero, // placeholder; set during type checking
                     },
                     region,
                 );
@@ -5251,7 +5247,7 @@ pub fn canonicalizeExpr(
                         .patterns = err_branch_pat_span,
                         .value = return_expr_idx,
                         .guard = null,
-                        .redundant = undefined, // set during type checking
+                        .redundant = .zero, // placeholder; set during type checking
                     },
                     region,
                 );
@@ -5265,7 +5261,7 @@ pub fn canonicalizeExpr(
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
-                .exhaustive = undefined, // set during type checking
+                .exhaustive = .zero, // placeholder; set during type checking
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -5573,7 +5569,7 @@ pub fn canonicalizeExpr(
                         .patterns = branch_pat_span,
                         .value = value_idx,
                         .guard = null,
-                        .redundant = undefined, // set during type checking
+                        .redundant = .zero, // placeholder; set during type checking
                     },
                     region,
                 );
@@ -5593,7 +5589,7 @@ pub fn canonicalizeExpr(
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
-                .exhaustive = undefined, // set during type checking
+                .exhaustive = .zero, // placeholder; set during type checking
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -10841,48 +10837,59 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             } });
         };
 
-        // Check if this is a type module (like Stdout) - we need to create a method call on the nominal type
+        // Check if this is a type module (like Stdout) - look up the qualified method name directly
         if (self.module_envs) |envs_map| {
             if (envs_map.get(module_name)) |auto_imported_type| {
-                if (auto_imported_type.statement_idx) |stmt_idx| {
-                    // This is an imported type module - create an e_dot_access for the method call
-                    const module_name_text = auto_imported_type.env.module_name;
+                if (auto_imported_type.statement_idx != null) {
+                    // This is an imported type module (like Stdout)
+                    // Look up the qualified method name (e.g., "Stdout.line!") in the module's exposed items
+                    const module_env = auto_imported_type.env;
+                    const module_name_text = module_env.module_name;
                     const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-                    const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                        std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
-                    };
+                    // Build the qualified method name: "TypeName.method_name"
+                    const type_name_text = self.env.getIdent(module_name);
+                    const method_name_text = self.env.getIdent(method_name);
+                    const qualified_method_name = try self.env.insertQualifiedIdent(type_name_text, method_name_text);
+                    const qualified_text = self.env.getIdent(qualified_method_name);
 
-                    // Create the receiver - a reference to the nominal type
-                    const receiver_idx = try self.env.addExpr(CIR.Expr{
-                        .e_lookup_external = .{
-                            .module_idx = auto_import_idx,
-                            .target_node_idx = target_node_idx,
-                            .region = self.parse_ir.tokenizedRegionToRegion(method_ident.region),
-                        },
-                    }, self.parse_ir.tokenizedRegionToRegion(method_ident.region));
+                    // Look up the qualified method in the module's exposed items
+                    if (module_env.common.findIdent(qualified_text)) |method_ident_idx| {
+                        if (module_env.getExposedNodeIndexById(method_ident_idx)) |method_node_idx| {
+                            // Found the method! Create e_lookup_external + e_call
+                            const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                .module_idx = auto_import_idx,
+                                .target_node_idx = method_node_idx,
+                                .region = region,
+                            } }, region);
 
-                    // Canonicalize the arguments
-                    const scratch_top = self.env.store.scratchExprTop();
-                    for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
-                        if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
-                            try self.env.store.addScratchExpr(canonicalized.get_idx());
+                            // Canonicalize the arguments
+                            const scratch_top = self.env.store.scratchExprTop();
+                            for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+                                if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
+                                    try self.env.store.addScratchExpr(canonicalized.get_idx());
+                                }
+                            }
+                            const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                            // Create the call expression
+                            const call_expr_idx = try self.env.addExpr(CIR.Expr{
+                                .e_call = .{
+                                    .func = func_expr_idx,
+                                    .args = args_span,
+                                    .called_via = CalledVia.apply,
+                                },
+                            }, region);
+                            return call_expr_idx;
                         }
-                        // Note: if arg canonicalization fails, it will have pushed its own diagnostic
                     }
-                    const args = try self.env.store.exprSpanFrom(scratch_top);
 
-                    // Create the method call expression
-                    const method_region = self.parse_ir.tokenizedRegionToRegion(method_ident.region);
-                    const expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_dot_access = .{
-                            .receiver = receiver_idx,
-                            .field_name = method_name,
-                            .field_name_region = method_region,
-                            .args = args,
-                        },
-                    }, region);
-                    return expr_idx;
+                    // Method not found in module - generate error
+                    return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
+                        .parent_name = module_name,
+                        .nested_name = method_name,
+                        .region = region,
+                    } });
                 }
             }
         }

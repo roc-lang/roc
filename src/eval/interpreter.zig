@@ -5,6 +5,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+
+/// Stack size for the interpreter. WASM targets use a smaller stack to avoid
+/// memory pressure from repeated allocations that can't be efficiently coalesced.
+const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;
 const trace_eval = build_options.trace_eval;
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 const base_pkg = @import("base");
@@ -412,7 +416,7 @@ pub const Interpreter = struct {
             .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
             .type_writer = try types.TypeWriter.initFromParts(allocator, rt_types_ptr, env.common.getIdentStore(), null),
-            .stack_memory = try stack.Stack.initCapacity(allocator, 64 * 1024 * 1024), // 64 MiB stack
+            .stack_memory = try stack.Stack.initCapacity(allocator, stack_size),
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
             .canonical_bool_rt_var = null,
@@ -11338,12 +11342,13 @@ pub const Interpreter = struct {
         const ct_var = can.ModuleEnv.varFrom(expr_idx);
         const rt_var = try self.translateTypeVar(self.env, ct_var);
 
-        // Manually create a closure layout since hosted functions might have flex types
+        // Get a ZST layout for hosted functions (they have no captures)
+        const zst_idx = try self.runtime_layout_store.ensureZstLayout();
         const closure_layout = Layout{
             .tag = .closure,
             .data = .{
                 .closure = .{
-                    .captures_layout_idx = undefined, // No captures for hosted functions
+                    .captures_layout_idx = zst_idx,
                 },
             },
         };
