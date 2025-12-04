@@ -431,11 +431,8 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
         .origin_module = builtin_ident,
         .is_opaque = false,
     };
-    const str_type = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = str_type;
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));

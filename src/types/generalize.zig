@@ -1,5 +1,7 @@
 //! Type generalization for Hindley-Milner type inference.
 //!
+// zig-lint: required-param
+//!
 //! This module implements the generalization phase of Hindley-Milner type inference,
 //! which determines which type variables can be made polymorphic (generalized).
 //!

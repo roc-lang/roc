@@ -468,7 +468,6 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         ident_name: []const u8,
         region_info: base.RegionInfo,
-        original_region_info: base.RegionInfo,
         filename: []const u8,
         source: []const u8,
         line_starts: []const u32,
@@ -489,10 +488,6 @@ pub const Diagnostic = union(enum) {
             source,
             line_starts,
         );
-
-        // we don't need to display the original region info
-        // as this header is in a single location
-        _ = original_region_info;
 
         try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 

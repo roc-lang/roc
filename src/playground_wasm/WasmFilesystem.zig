@@ -1,6 +1,8 @@
 //! WASM-specific filesystem implementation for the playground.
 //! This provides a minimal filesystem interface where source code
 //! can be provided from JavaScript and most other operations return errors.
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 const fs_mod = @import("fs");

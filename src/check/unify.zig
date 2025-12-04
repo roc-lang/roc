@@ -1,4 +1,7 @@
 //! This module implements Hindley-Milner style type unification with extensions for:
+//!
+// zig-lint: required-param
+//!
 //! * flex/rigid variables
 //! * type aliases
 //! * tuples

@@ -1,5 +1,7 @@
 //! Transforms Abstract Syntax Tree (AST) into Canonical Intermediate Representation (CIR) through desugaring and scope resolution.
 //!
+// zig-lint: required-param
+//!
 //! This module performs semantic analysis, resolves scoping, and transforms high-level language
 //! constructs into a simplified, normalized form suitable for type inference.
 
@@ -1322,10 +1324,8 @@ fn processAssociatedItemsSecondPass(
 fn registerUserFacingName(
     self: *Self,
     fully_qualified_idx: Ident.Idx,
-    item_name_idx: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
 ) std.mem.Allocator.Error!void {
-    _ = item_name_idx;
 
     // Get the fully qualified text and strip the module prefix
     const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
@@ -1656,7 +1656,7 @@ fn processAssociatedItemsFirstPass(
                         // - Module scope gets "Foo.Bar.baz" (user-facing fully qualified)
                         // - Foo's scope gets "Bar.baz" (partially qualified)
                         // - Bar's scope gets "baz" (unqualified)
-                        try self.registerUserFacingName(qualified_idx, decl_ident, placeholder_pattern_idx);
+                        try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
                     }
                 }
             },
@@ -1684,7 +1684,7 @@ fn processAssociatedItemsFirstPass(
                     try current_scope.idents.put(self.env.gpa, qualified_idx, placeholder_pattern_idx);
 
                     // Register progressively qualified names at each scope level per the plan
-                    try self.registerUserFacingName(qualified_idx, anno_ident, placeholder_pattern_idx);
+                    try self.registerUserFacingName(qualified_idx, placeholder_pattern_idx);
                 }
             },
             else => {
@@ -2280,9 +2280,8 @@ pub fn canonicalizeFile(
                     }
                 }
             },
-            .malformed => |malformed| {
+            .malformed => {
                 // We won't touch this since it's already a parse error.
-                _ = malformed;
             },
         }
     }
@@ -2687,9 +2686,8 @@ fn addToExposedScope(
                     try self.exposed_type_texts.put(gpa, type_text, region);
                 }
             },
-            .malformed => |malformed| {
+            .malformed => {
                 // Malformed exposed items are already captured as diagnostics during parsing
-                _ = malformed;
             },
         }
     }
@@ -2895,20 +2893,14 @@ fn bringImportIntoScope(
         const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
         switch (exposed) {
             .lower_ident => |ident| {
-
                 // TODO handle `as` here using an Alias
-
-                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
-                    _ = ident_idx;
-
-                    // TODO Introduce our import
-
+                // TODO Introduce our import
+                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |_| {
                     // _ = self.scope.levels.introduce(gpa, &self.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
                 }
             },
-            .upper_ident => |imported_type| {
-                _ = imported_type;
-                // const alias = Alias{
+            .upper_ident => {
+                // TODO: const alias = Alias{
                 //     .name = imported_type.name,
                 //     .region = ir.env.tag_names.getRegion(imported_type.name),
                 //     .is_builtin = false,
@@ -2921,9 +2913,7 @@ fn bringImportIntoScope(
                 //     .alias = alias_idx,
                 // });
             },
-            .upper_ident_star => |ident| {
-                _ = ident;
-            },
+            .upper_ident_star => {},
         }
     }
 }
@@ -5662,7 +5652,7 @@ pub fn canonicalizeExpr(
         },
         .for_expr => |for_expr| {
             const region = self.parse_ir.tokenizedRegionToRegion(for_expr.region);
-            const result = try self.canonicalizeForLoop(for_expr.patt, for_expr.expr, for_expr.body, region);
+            const result = try self.canonicalizeForLoop(for_expr.patt, for_expr.expr, for_expr.body);
 
             const for_expr_idx = try self.env.addExpr(Expr{
                 .e_for = .{
@@ -5674,9 +5664,8 @@ pub fn canonicalizeExpr(
 
             return CanonicalizedExpr{ .idx = for_expr_idx, .free_vars = result.free_vars };
         },
-        .malformed => |malformed| {
+        .malformed => {
             // We won't touch this since it's already a parse error.
-            _ = malformed;
             return null;
         },
     }
@@ -5712,9 +5701,7 @@ fn canonicalizeForLoop(
     ast_patt: AST.Pattern.Idx,
     ast_list_expr: AST.Expr.Idx,
     ast_body: AST.Expr.Idx,
-    region: base.Region,
 ) std.mem.Allocator.Error!CanonicalizedForLoop {
-    _ = region;
 
     // Tmp state to capture free vars from both expr & body
     // This is stored as a map to avoid duplicate captures
@@ -7179,9 +7166,8 @@ fn canonicalizePattern(
                 return pattern_idx;
             }
         },
-        .malformed => |malformed| {
+        .malformed => {
             // We won't touch this since it's already a parse error.
-            _ = malformed;
             return null;
         },
     }
@@ -9256,7 +9242,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
         .@"for" => |for_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
-            const result = try self.canonicalizeForLoop(for_stmt.patt, for_stmt.expr, for_stmt.body, region);
+            const result = try self.canonicalizeForLoop(for_stmt.patt, for_stmt.expr, for_stmt.body);
 
             const stmt_idx = try self.env.addStatement(Statement{
                 .s_for = .{

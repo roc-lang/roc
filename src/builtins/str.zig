@@ -3,6 +3,8 @@
 //! This module provides the core implementation of Roc's Str type, including
 //! operations for string manipulation, Unicode handling, formatting, and
 //! memory management. It defines the RocStr structure and associated functions
+//!
+// zig-lint: required-param
 //! that are called from compiled Roc code to handle string operations efficiently.
 //!
 //! ## Ownership Semantics

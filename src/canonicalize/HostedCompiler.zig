@@ -1,5 +1,7 @@
 //! Compiler support for hosted functions in platform modules.
 //!
+// zig-lint: required-param
+//!
 //! This module handles the transformation of annotation-only declarations
 //! into hosted lambda expressions that will be provided by the platform at runtime.
 
@@ -121,10 +123,6 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 const extra_start = def_node.data_1;
 
                 env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
-
-                // Verify the def still has its annotation after modification
-                const modified_def = env.store.getDef(def_idx);
-                _ = modified_def;
 
                 // Track this modified def index
                 try modified_def_indices.append(gpa, def_idx);

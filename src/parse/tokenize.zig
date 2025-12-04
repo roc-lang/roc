@@ -1,5 +1,7 @@
 //! Tokenization functionality for the Roc parser.
 //!
+// zig-lint: required-param
+//!
 //! This module provides the tokenizer that converts Roc source code into
 //! a stream of tokens for parsing. It handles all Roc language tokens including
 //! keywords, identifiers, literals, operators, and punctuation, representing
@@ -1569,8 +1571,7 @@ pub const Tokenizer = struct {
     }
 
     /// Determines if a character can follow a unary minus (i.e., can start an expression)
-    fn canFollowUnaryMinus(self: *const Tokenizer, c: u8) bool {
-        _ = self;
+    fn canFollowUnaryMinus(_: *const Tokenizer, c: u8) bool {
         return switch (c) {
             // Identifiers
             'a'...'z', 'A'...'Z', '_' => true,

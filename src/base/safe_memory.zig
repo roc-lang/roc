@@ -1,5 +1,7 @@
 //! Memory safety utilities for bounds checking and safe memory operations
 //! Provides helpers to prevent buffer overflows and memory corruption
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 

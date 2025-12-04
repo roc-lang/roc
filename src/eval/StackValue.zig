@@ -1,5 +1,7 @@
 //! Represents a "value" on the Interpreter's stack.
 //!
+// zig-lint: required-param
+//!
 //! This is the public facing interface for interacting with stack values.
 //!
 //! It provides methods for working with the value safely using the layout.

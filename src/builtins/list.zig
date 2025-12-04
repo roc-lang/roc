@@ -3,6 +3,8 @@
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
 //!
+// zig-lint: required-param
+//!
 //! ## Ownership Semantics
 //!
 //! See `OWNERSHIP.md` for the canonical terminology. Functions in this module

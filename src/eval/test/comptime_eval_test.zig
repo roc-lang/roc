@@ -1,4 +1,7 @@
 //! Tests for compile-time evaluation of top-level declarations
+//!
+// zig-lint: required-param
+
 const std = @import("std");
 const parse = @import("parse");
 const types = @import("types");

@@ -1,6 +1,8 @@
 //! Roc command line interface for the new compiler. Entrypoint of the Roc binary.
 //! Build with `zig build -Dfuzz -Dsystem-afl=false`.
 //! Result is at `./zig-out/bin/roc`
+//!
+// zig-lint: required-param
 
 const std = @import("std");
 
@@ -3217,8 +3219,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(allocs: *Allocators) !void {
-    _ = allocs;
+fn rocRepl(_: *Allocators) !void {
     const stderr = stderrWriter();
     defer stderr.flush() catch {};
     stderr.print("repl not implemented\n", .{}) catch {};

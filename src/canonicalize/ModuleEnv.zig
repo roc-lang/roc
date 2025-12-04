@@ -981,7 +981,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .redundant_exposed => |data| blk: {
             const ident_name = self.getIdent(data.ident);
             const region_info = self.calcRegionInfo(data.region);
-            const original_region_info = self.calcRegionInfo(data.original_region);
 
             var report = Report.init(allocator, "REDUNDANT EXPOSED", .warning);
             const owned_ident = try report.addOwnedString(ident_name);
@@ -999,10 +998,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
-
-            // we don't need to display the original region info
-            // as this header is in a single location
-            _ = original_region_info;
 
             try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 
@@ -1205,9 +1200,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .lambda_body_not_canonicalized => |data| blk: {
-            _ = data;
-
+        .lambda_body_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID LAMBDA", .runtime_error);
             try report.document.addReflowingText("The body of this lambda expression is not valid.");
 
@@ -1233,9 +1226,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .var_across_function_boundary => |data| blk: {
-            _ = data;
-
+        .var_across_function_boundary => blk: {
             var report = Report.init(allocator, "VAR REASSIGNMENT ERROR", .runtime_error);
             try report.document.addReflowingText("Cannot reassign a ");
             try report.document.addKeyword("var");
@@ -1247,9 +1238,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .tuple_elem_not_canonicalized => |data| blk: {
-            _ = data;
-
+        .tuple_elem_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID TUPLE ELEMENT", .runtime_error);
             try report.document.addReflowingText("This tuple element is malformed or contains invalid syntax.");
 
@@ -2237,8 +2226,7 @@ pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, re
 
 /// Add a new pattern record field to the node store.
 /// This function asserts that the nodes and regions are in sync.
-pub fn addPatternRecordField(self: *Self, expr: CIR.PatternRecordField, region: Region) std.mem.Allocator.Error!CIR.PatternRecordField.Idx {
-    _ = region;
+pub fn addPatternRecordField(self: *Self, expr: CIR.PatternRecordField) std.mem.Allocator.Error!CIR.PatternRecordField.Idx {
     const expr_idx = try self.store.addPatternRecordField(expr);
     self.debugAssertArraysInSync();
     return expr_idx;
