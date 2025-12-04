@@ -1,7 +1,6 @@
 //! Polymorphism tests for Interpreter focused on closures without captures (Milestone 1).
 //! Each test starts with Roc source (multiline Zig string with `\\`), parses + canonicalizes
 //! with early diagnostics, evaluates with Interpreter, and renders Roc output.
-//!
 
 const std = @import("std");
 const helpers = @import("helpers.zig");

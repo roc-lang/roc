@@ -1,6 +1,5 @@
 //! Memory safety utilities for bounds checking and safe memory operations
 //! Provides helpers to prevent buffer overflows and memory corruption
-//!
 
 const std = @import("std");
 

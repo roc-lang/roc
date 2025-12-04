@@ -1,5 +1,4 @@
 //! A S-expression tree representation
-//!
 
 const std = @import("std");
 const testing = std.testing;

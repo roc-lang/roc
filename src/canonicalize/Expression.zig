@@ -1,6 +1,5 @@
 //! Expression constructs used in Roc's canonicalization phase.
 //!
-//!
 //! This module defines the `Expr` union which represents all possible expressions
 //! in Roc's Canonical Intermediate Representation (CIR). These expressions are
 //! created during the canonicalization phase and represent the semantic meaning

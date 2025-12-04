@@ -1,6 +1,5 @@
 //! A builder for creating sorted arrays with binary search lookups.
 //!
-//!
 //! SortedArrayBuilder provides a way to build key-value mappings that are
 //! optimized for small sizes and deterministic serialization. It maintains
 //! a sorted array internally, enabling efficient binary search lookups.

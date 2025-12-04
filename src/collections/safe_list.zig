@@ -1,5 +1,4 @@
 //! Lists that make it easier to avoid incorrect indexing.
-//!
 
 const std = @import("std");
 
