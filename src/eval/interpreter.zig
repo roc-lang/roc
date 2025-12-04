@@ -1481,13 +1481,15 @@ pub const Interpreter = struct {
                 // Get the result layout - should be List(U8).
                 // If return_rt_var is a flex that would default to a scalar,
                 // we need to ensure we get a proper list layout for correct refcounting.
+                const result_rt_var = return_rt_var orelse {
+                    self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
+                    return error.Crash;
+                };
                 const result_layout = blk: {
-                    if (return_rt_var) |rt_var| {
-                        const maybe_layout = try self.getRuntimeLayout(rt_var);
-                        // If the layout is a list, use it
-                        if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) {
-                            break :blk maybe_layout;
-                        }
+                    const maybe_layout = try self.getRuntimeLayout(result_rt_var);
+                    // If the layout is a list, use it
+                    if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) {
+                        break :blk maybe_layout;
                     }
                     // Fallback: create a proper List(U8) layout
                     const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));

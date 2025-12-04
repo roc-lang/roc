@@ -331,15 +331,15 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(U8, [BadNumStr, ..others])
 
-			## List of integers beginning with this `U8` and ending with the other `U8`.
-			## (Use [until] instead to end with the other `U8` minus one.)
-			## Returns an empty list if this `U8` is greater than the other.
+			# # List of integers beginning with this `U8` and ending with the other `U8`.
+			# # (Use [until] instead to end with the other `U8` minus one.)
+			# # Returns an empty list if this `U8` is greater than the other.
 			to : U8, U8 -> List(U8)
 			to = |start, end| range_to(start, end)
 
-			## List of integers beginning with this `U8` and ending with the other `U8` minus one.
-			## (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
-			## Returns an empty list if this `U8` is greater than or equal to the other.
+			# # List of integers beginning with this `U8` and ending with the other `U8` minus one.
+			# # (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
+			# # Returns an empty list if this `U8` is greater than or equal to the other.
 			until : U8, U8 -> List(U8)
 			until = |start, end| range_until(start, end)
 
@@ -990,25 +990,25 @@ Builtin :: [].{
 }
 
 range_to = |var $current, end| {
-    var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
+	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
 
-    while $current <= end {
-        $answer = $answer.append($current)
-        $current = $current + 1
-    }
+	while $current <= end {
+		$answer = $answer.append($current)
+		$current = $current + 1
+	}
 
-    $answer
+	$answer
 }
 
 range_until = |var $current, end| {
-    var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
+	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
 
-    while $current < end {
-        $answer = $answer.append($current)
-        $current = $current + 1
-    }
+	while $current < end {
+		$answer = $answer.append($current)
+		$current = $current + 1
+	}
 
-    $answer
+	$answer
 }
 
 # Implemented by the compiler, does not perform bounds checks
