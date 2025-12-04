@@ -5516,12 +5516,73 @@ pub const Interpreter = struct {
             }
         }
 
+        // Handle list comparisons based on layout, regardless of type variable state.
+        // This is needed because for nested lists, the element type variable may not
+        // resolve to a structure (e.g., when the type is still a flex/rigid var).
+        if (lhs.layout.tag == .list and rhs.layout.tag == .list) {
+            // Extract element type from the list layout and compare
+            const elem_layout = self.runtime_layout_store.getLayout(lhs.layout.data.list);
+            // Try to get element var from resolved type, but fall back to layout-based comparison
+            const resolved = self.runtime_types.resolveVar(lhs_var);
+            const elem_var: ?types.Var = switch (resolved.desc.content) {
+                .structure => |s| switch (s) {
+                    .nominal_type => |nom| blk: {
+                        // List nominal type - get the element var from the type args
+                        // List has backing var + elem var, the element type is at index 1
+                        const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                        break :blk if (vars.len >= 2) vars[1] else null;
+                    },
+                    else => null,
+                },
+                else => null,
+            };
+            if (elem_var) |ev| {
+                return try self.structuralEqualList(lhs, rhs, ev, roc_ops);
+            }
+            // Fallback: compare using layout-based element type
+            // Create a temporary var for the element if we can determine its type from layout
+            if (elem_layout.tag == .scalar) {
+                // Scalar elements - compare byte by byte
+                const lhs_header = @as(*const builtins.list.RocList, @ptrCast(@alignCast(lhs.ptr.?))).*;
+                const rhs_header = @as(*const builtins.list.RocList, @ptrCast(@alignCast(rhs.ptr.?))).*;
+                if (lhs_header.len() != rhs_header.len()) return false;
+                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                if (elem_size == 0 or lhs_header.len() == 0) return true;
+                if (lhs_header.bytes) |lhs_bytes| {
+                    if (rhs_header.bytes) |rhs_bytes| {
+                        const total_size = elem_size * lhs_header.len();
+                        // Compare bytes directly without using std.mem.eql
+                        var i: usize = 0;
+                        while (i < total_size) : (i += 1) {
+                            if (lhs_bytes[i] != rhs_bytes[i]) return false;
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            }
+            // For non-scalar elements, we need a type var - this shouldn't normally happen
+            @panic("valuesStructurallyEqual: list element type var not found");
+        }
+
+        // Resolve the type variable, but first check for nominal types directly
+        // (before unwrapping them via resolveBaseVar) to dispatch to their is_eq method.
+        const direct_resolved = self.runtime_types.resolveVar(lhs_var);
+        if (direct_resolved.desc.content == .structure) {
+            if (direct_resolved.desc.content.structure == .nominal_type) {
+                const nom = direct_resolved.desc.content.structure.nominal_type;
+                return try self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops);
+            }
+        }
+
         // Ensure runtime vars resolve to the same descriptor before structural comparison.
         const lhs_resolved = self.resolveBaseVar(lhs_var);
         const lhs_content = lhs_resolved.desc.content;
         if (lhs_content != .structure) @panic("valuesStructurallyEqual: lhs is not a structure type");
 
         return switch (lhs_content.structure) {
+            // nominal_type is handled above before resolveBaseVar, but keep case for completeness
+            .nominal_type => |nom| try self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops),
             .tuple => |tuple| {
                 const elem_vars = self.runtime_types.sliceVars(tuple.elems);
                 return try self.structuralEqualTuple(lhs, rhs, elem_vars, roc_ops);
@@ -5534,10 +5595,6 @@ pub const Interpreter = struct {
             },
             .empty_record => true,
             .empty_tag_union => true,
-            .nominal_type => |nom| {
-                // For nominal types, dispatch to their is_eq method
-                return try self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops);
-            },
             .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => @panic("valuesStructurallyEqual: cannot compare functions or unbound records"),
         };
     }
@@ -12835,19 +12892,22 @@ pub const Interpreter = struct {
                 // Provide closure context
                 try self.active_closures.append(method_func);
 
-                // Bind parameters
-                try self.bindings.append(.{
-                    .pattern_idx = params[0],
-                    .value = lhs,
-                    .expr_idx = @enumFromInt(0),
-                    .source_env = self.env,
-                });
-                try self.bindings.append(.{
-                    .pattern_idx = params[1],
-                    .value = rhs,
-                    .expr_idx = @enumFromInt(0),
-                    .source_env = self.env,
-                });
+                // Bind parameters using patternMatchesBind to properly handle ownership.
+                // patternMatchesBind creates copies via pushCopy, so the deferred decrefs
+                // of lhs/rhs at the function start will correctly free the originals while
+                // the bindings retain their own references.
+                if (!try self.patternMatchesBind(params[0], lhs, ba.receiver_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    self.env = saved_env;
+                    _ = self.active_closures.pop();
+                    return error.TypeMismatch;
+                }
+                if (!try self.patternMatchesBind(params[1], rhs, ba.rhs_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    // Clean up the first binding we added
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                    self.env = saved_env;
+                    _ = self.active_closures.pop();
+                    return error.TypeMismatch;
+                }
 
                 // Push cleanup and evaluate body
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
