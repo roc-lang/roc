@@ -67,6 +67,7 @@ fn checkSuccess(result: std.process.Child.RunResult) !void {
 }
 
 /// Helper to check if a run result indicates failure (non-zero exit code)
+/// This verifies the process exited cleanly with a non-zero code, NOT that it crashed.
 fn checkFailure(result: std.process.Child.RunResult) !void {
     switch (result.term) {
         .Exited => |code| {
@@ -74,47 +75,22 @@ fn checkFailure(result: std.process.Child.RunResult) !void {
                 std.debug.print("ERROR: roc succeeded but we expected it to fail\n", .{});
                 return error.UnexpectedSuccess;
             }
+            // Non-zero exit code is expected - this is a clean failure
+        },
+        .Signal => |sig| {
+            // A crash is NOT the same as a clean failure - report it as an error
+            std.debug.print("ERROR: Process crashed with signal {} (expected clean failure with non-zero exit code)\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.SegFault;
         },
         else => {
-            // Non-zero exit is expected
+            std.debug.print("ERROR: Process terminated abnormally: {} (expected clean failure with non-zero exit code)\n", .{result.term});
+            std.debug.print("STDOUT: {s}\n", .{result.stdout});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.RunFailed;
         },
     }
-}
-
-fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_input: []const u8) !std.process.Child.RunResult {
-    var child = std.process.Child.init(&[_][]const u8{ roc_binary_path, roc_file }, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    // Write stdin and close
-    if (child.stdin) |stdin| {
-        try stdin.writeAll(stdin_input);
-        stdin.close();
-        child.stdin = null;
-    }
-
-    // Collect stdout
-    const stdout = if (child.stdout) |stdout_pipe|
-        try stdout_pipe.readToEndAlloc(allocator, std.math.maxInt(usize))
-    else
-        try allocator.dupe(u8, "");
-
-    // Collect stderr
-    const stderr = if (child.stderr) |stderr_pipe|
-        try stderr_pipe.readToEndAlloc(allocator, std.math.maxInt(usize))
-    else
-        try allocator.dupe(u8, "");
-
-    const term = try child.wait();
-
-    return .{
-        .term = term,
-        .stdout = stdout,
-        .stderr = stderr,
-    };
 }
 
 /// Runs a roc app with --test mode using the given IO spec.

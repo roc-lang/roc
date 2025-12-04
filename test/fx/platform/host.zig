@@ -1,4 +1,30 @@
-///! Platform host that tests effectful functions writing to stdout and stderr.
+//! Platform host for testing effectful Roc applications.
+//!
+//! This host provides stdin/stdout/stderr effects and includes a test mode for
+//! verifying IO behavior without performing actual syscalls.
+//!
+//! ## Test Mode
+//!
+//! Run with `--test <spec>` to simulate IO and verify behavior:
+//! ```
+//! ./zig-out/bin/roc app.roc -- --test "1>Hello, world!"
+//! ```
+//!
+//! Spec format uses pipe-separated operations:
+//! - `0<input` - provide "input" as stdin
+//! - `1>output` - expect "output" on stdout
+//! - `2>output` - expect "output" on stderr
+//!
+//! Example with multiple operations:
+//! ```
+//! --test "0<user input|1>Before stdin|1>After stdin"
+//! ```
+//!
+//! Use `--test-verbose <spec>` for detailed output during test execution.
+//!
+//! Exit codes:
+//! - 0: All expectations matched in order
+//! - 1: Test failed (mismatch, missing output, extra output, or invalid spec)
 const std = @import("std");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
@@ -32,6 +58,7 @@ const TestState = struct {
         expected_type: EffectType,
         expected_value: []const u8,
         actual_type: EffectType,
+        actual_value: []const u8,
         spec_line: usize,
     };
 
@@ -47,36 +74,58 @@ const TestState = struct {
     }
 };
 
+/// Parse error for invalid spec format
+const ParseError = error{
+    InvalidSpecFormat,
+    OutOfMemory,
+};
+
 /// Parse test spec string into array of SpecEntry
 /// Format: "0<input|1>output|2>error" (pipe-separated)
-fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ![]SpecEntry {
-    var entries = try std.ArrayList(SpecEntry).initCapacity(allocator, 8);
+/// Returns error if any segment doesn't start with a valid pattern (0<, 1>, 2>)
+fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]SpecEntry {
+    var entries = std.ArrayList(SpecEntry).initCapacity(allocator, 8) catch return ParseError.OutOfMemory;
     errdefer entries.deinit(allocator);
 
     var line_num: usize = 1;
     // Split on pipe character
     var iter = std.mem.splitScalar(u8, spec, '|');
 
-    while (iter.next()) |line| {
+    while (iter.next()) |segment| {
         defer line_num += 1;
 
-        if (line.len < 2) continue; // Skip empty/short lines
+        // Skip empty segments (e.g., trailing pipe)
+        if (segment.len == 0) continue;
+
+        // Check for valid pattern prefix
+        if (segment.len < 2) {
+            const stderr_file: std.fs.File = .stderr();
+            stderr_file.writeAll("Error: Invalid spec segment '") catch {};
+            stderr_file.writeAll(segment) catch {};
+            stderr_file.writeAll("' - must start with 0<, 1>, or 2>\n") catch {};
+            return ParseError.InvalidSpecFormat;
+        }
 
         const effect_type: EffectType = blk: {
-            if (line[0] == '0' and line[1] == '<') break :blk .stdin_input;
-            if (line[0] == '1' and line[1] == '>') break :blk .stdout_expect;
-            if (line[0] == '2' and line[1] == '>') break :blk .stderr_expect;
-            continue; // Skip invalid lines
+            if (segment[0] == '0' and segment[1] == '<') break :blk .stdin_input;
+            if (segment[0] == '1' and segment[1] == '>') break :blk .stdout_expect;
+            if (segment[0] == '2' and segment[1] == '>') break :blk .stderr_expect;
+            // Invalid pattern - report error
+            const stderr_file: std.fs.File = .stderr();
+            stderr_file.writeAll("Error: Invalid spec segment '") catch {};
+            stderr_file.writeAll(segment) catch {};
+            stderr_file.writeAll("' - must start with 0<, 1>, or 2>\n") catch {};
+            return ParseError.InvalidSpecFormat;
         };
 
-        try entries.append(allocator, .{
+        entries.append(allocator, .{
             .effect_type = effect_type,
-            .value = line[2..],
+            .value = segment[2..],
             .spec_line = line_num,
-        });
+        }) catch return ParseError.OutOfMemory;
     }
 
-    return try entries.toOwnedSlice(allocator);
+    return entries.toOwnedSlice(allocator) catch ParseError.OutOfMemory;
 }
 
 /// Host environment - contains GeneralPurposeAllocator for leak detection
@@ -311,12 +360,14 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
                 }
                 return; // Match!
             }
-            // Mismatch
+            // Mismatch - must allocate a copy of the message since the RocStr may be freed
+            const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
             host.test_state.failed = true;
             host.test_state.failure_info = .{
                 .expected_type = entry.effect_type,
                 .expected_value = entry.value,
                 .actual_type = .stderr_expect,
+                .actual_value = actual_copy,
                 .spec_line = entry.spec_line,
             };
             if (host.test_state.verbose) {
@@ -329,8 +380,16 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
                 stderr_file.writeAll("\")\n") catch {};
             }
         } else {
-            // Extra output not in spec
+            // Extra output not in spec - must allocate a copy of the message
+            const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
             host.test_state.failed = true;
+            host.test_state.failure_info = .{
+                .expected_type = .stderr_expect, // We expected nothing
+                .expected_value = "",
+                .actual_type = .stderr_expect,
+                .actual_value = actual_copy,
+                .spec_line = 0,
+            };
             if (host.test_state.verbose) {
                 stderr_file.writeAll("[FAIL] stderr: \"") catch {};
                 stderr_file.writeAll(message) catch {};
@@ -376,6 +435,7 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr
                 .expected_type = entry.effect_type,
                 .expected_value = entry.value,
                 .actual_type = .stdin_input,
+                .actual_value = "(stdin read)",
                 .spec_line = entry.spec_line,
             };
             if (host.test_state.verbose) {
@@ -388,6 +448,13 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr
         } else {
             // Ran out of entries - app tried to read more stdin than provided
             host.test_state.failed = true;
+            host.test_state.failure_info = .{
+                .expected_type = .stdin_input,
+                .expected_value = "",
+                .actual_type = .stdin_input,
+                .actual_value = "(stdin read)",
+                .spec_line = 0,
+            };
             if (host.test_state.verbose) {
                 stderr_file.writeAll("[FAIL] stdin read (unexpected - no more expected operations)\n") catch {};
             }
@@ -456,12 +523,14 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
                 }
                 return; // Match!
             }
-            // Mismatch
+            // Mismatch - must allocate a copy of the message since the RocStr may be freed
+            const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
             host.test_state.failed = true;
             host.test_state.failure_info = .{
                 .expected_type = entry.effect_type,
                 .expected_value = entry.value,
                 .actual_type = .stdout_expect,
+                .actual_value = actual_copy,
                 .spec_line = entry.spec_line,
             };
             if (host.test_state.verbose) {
@@ -474,8 +543,16 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
                 stderr_file.writeAll("\")\n") catch {};
             }
         } else {
-            // Extra output not in spec
+            // Extra output not in spec - must allocate a copy of the message
+            const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
             host.test_state.failed = true;
+            host.test_state.failure_info = .{
+                .expected_type = .stdout_expect, // We expected nothing
+                .expected_value = "",
+                .actual_type = .stdout_expect,
+                .actual_value = actual_copy,
+                .spec_line = 0,
+            };
             if (host.test_state.verbose) {
                 stderr_file.writeAll("[FAIL] stdout: \"") catch {};
                 stderr_file.writeAll(message) catch {};
@@ -514,6 +591,13 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     }
 
     defer {
+        // Free duplicated actual_value if allocated (on test failure)
+        if (host_env.test_state.failure_info) |info| {
+            if (info.actual_value.len > 0) {
+                host_env.gpa.allocator().free(info.actual_value);
+            }
+        }
+
         // Free test entries if allocated
         if (host_env.test_state.entries.len > 0) {
             host_env.gpa.allocator().free(host_env.test_state.entries);
@@ -558,20 +642,46 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
 
             // Print failure info
             if (host_env.test_state.failure_info) |info| {
-                var buf: [512]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "TEST FAILED at spec line {d}:\n  Expected: {s} \"{s}\"\n  Got:      {s}\n", .{
-                    info.spec_line,
-                    effectTypeName(info.expected_type),
-                    info.expected_value,
-                    effectTypeName(info.actual_type),
-                }) catch "TEST FAILED\n";
-                stderr_file.writeAll(msg) catch {};
+                if (info.spec_line == 0) {
+                    // Extra/unexpected output
+                    stderr_file.writeAll("TEST FAILED: Unexpected ") catch {};
+                    stderr_file.writeAll(effectTypeName(info.actual_type)) catch {};
+                    stderr_file.writeAll(" output: \"") catch {};
+                    stderr_file.writeAll(info.actual_value) catch {};
+                    stderr_file.writeAll("\"\n") catch {};
+                } else {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at spec line {d}:\n  Expected: {s} \"{s}\"\n  Got:      {s} \"{s}\"\n", .{
+                        info.spec_line,
+                        effectTypeName(info.expected_type),
+                        info.expected_value,
+                        effectTypeName(info.actual_type),
+                        info.actual_value,
+                    }) catch "TEST FAILED\n";
+                    stderr_file.writeAll(msg) catch {};
+                }
             } else if (host_env.test_state.current_index < host_env.test_state.entries.len) {
-                // Not all entries were consumed
+                // Not all entries were consumed - list what's remaining
                 const remaining = host_env.test_state.entries.len - host_env.test_state.current_index;
                 var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "TEST FAILED: {d} expected IO operation(s) not performed\n", .{remaining}) catch "TEST FAILED: expected IO operations not performed\n";
+                const msg = std.fmt.bufPrint(&buf, "TEST FAILED: {d} expected IO operation(s) not performed:\n", .{remaining}) catch "TEST FAILED: expected IO operations not performed\n";
                 stderr_file.writeAll(msg) catch {};
+
+                // List up to 5 unconsumed entries
+                const max_to_show: usize = 5;
+                var shown: usize = 0;
+                for (host_env.test_state.entries[host_env.test_state.current_index..]) |entry| {
+                    if (shown >= max_to_show) {
+                        stderr_file.writeAll("  ...\n") catch {};
+                        break;
+                    }
+                    stderr_file.writeAll("  - ") catch {};
+                    stderr_file.writeAll(effectTypeName(entry.effect_type)) catch {};
+                    stderr_file.writeAll(": \"") catch {};
+                    stderr_file.writeAll(entry.value) catch {};
+                    stderr_file.writeAll("\"\n") catch {};
+                    shown += 1;
+                }
             } else {
                 stderr_file.writeAll("TEST FAILED\n") catch {};
             }
