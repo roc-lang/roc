@@ -6596,7 +6596,10 @@ pub const Interpreter = struct {
         }
 
         // Copy the value to pass to the method
-        const copied_value = self.pushCopy(value, roc_ops) catch return null;
+        // Important: use the correct rt_var (from the type system) not value.rt_var
+        // (which may be a fresh variable from record field access)
+        var copied_value = self.pushCopy(value, roc_ops) catch return null;
+        copied_value.rt_var = rt_var;
 
         // Bind the parameter
         self.bindings.append(.{

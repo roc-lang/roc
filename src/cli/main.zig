@@ -929,32 +929,23 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         };
     } else {
 
-        // Check for cached shim library, extract if not present
+        // Extract shim library to temp dir to avoid race conditions
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-        const shim_path = std.fs.path.join(allocs.arena, &.{ exe_cache_dir, shim_filename }) catch |err| {
+        const shim_path = std.fs.path.join(allocs.arena, &.{ temp_dir_path, shim_filename }) catch |err| {
             std.log.err("Failed to create shim library path: {}", .{err});
             return err;
         };
 
-        // Extract shim if not cached or if --no-cache is used
-        const shim_exists = if (args.no_cache) false else blk: {
-            std.fs.cwd().access(shim_path, .{}) catch {
-                break :blk false;
-            };
-            break :blk true;
+        // Always extract to temp dir (unique per process, no race condition)
+        extractReadRocFilePathShimLibrary(allocs, shim_path) catch |err| {
+            std.log.err("Failed to extract read roc file path shim library: {}", .{err});
+            return err;
         };
 
-        if (!shim_exists) {
-            // Shim not found in cache or cache disabled, extract it
-            extractReadRocFilePathShimLibrary(allocs, shim_path) catch |err| {
-                std.log.err("Failed to extract read roc file path shim library: {}", .{err});
-                return err;
-            };
-        }
-
         // Generate platform host shim using the detected entrypoints
+        // Use temp dir to avoid race conditions when multiple processes run in parallel
 
-        const platform_shim_path = generatePlatformHostShim(allocs, exe_cache_dir, entrypoints.items, shim_target) catch |err| {
+        const platform_shim_path = generatePlatformHostShim(allocs, temp_dir_path, entrypoints.items, shim_target) catch |err| {
             std.log.err("Failed to generate platform host shim: {}", .{err});
             return err;
         };
