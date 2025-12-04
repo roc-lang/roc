@@ -5516,57 +5516,9 @@ pub const Interpreter = struct {
             }
         }
 
-        // Handle list comparisons based on layout, regardless of type variable state.
-        // This is needed because for nested lists, the element type variable may not
-        // resolve to a structure (e.g., when the type is still a flex/rigid var).
-        if (lhs.layout.tag == .list and rhs.layout.tag == .list) {
-            // Extract element type from the list layout and compare
-            const elem_layout = self.runtime_layout_store.getLayout(lhs.layout.data.list);
-            // Try to get element var from resolved type, but fall back to layout-based comparison
-            const resolved = self.runtime_types.resolveVar(lhs_var);
-            const elem_var: ?types.Var = switch (resolved.desc.content) {
-                .structure => |s| switch (s) {
-                    .nominal_type => |nom| blk: {
-                        // List nominal type - get the element var from the type args
-                        // List has backing var + elem var, the element type is at index 1
-                        const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                        break :blk if (vars.len >= 2) vars[1] else null;
-                    },
-                    else => null,
-                },
-                else => null,
-            };
-            if (elem_var) |ev| {
-                return try self.structuralEqualList(lhs, rhs, ev, roc_ops);
-            }
-            // Fallback: compare using layout-based element type
-            // Create a temporary var for the element if we can determine its type from layout
-            if (elem_layout.tag == .scalar) {
-                // Scalar elements - compare byte by byte
-                const lhs_header = @as(*const builtins.list.RocList, @ptrCast(@alignCast(lhs.ptr.?))).*;
-                const rhs_header = @as(*const builtins.list.RocList, @ptrCast(@alignCast(rhs.ptr.?))).*;
-                if (lhs_header.len() != rhs_header.len()) return false;
-                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-                if (elem_size == 0 or lhs_header.len() == 0) return true;
-                if (lhs_header.bytes) |lhs_bytes| {
-                    if (rhs_header.bytes) |rhs_bytes| {
-                        const total_size = elem_size * lhs_header.len();
-                        // Compare bytes directly without using std.mem.eql
-                        var i: usize = 0;
-                        while (i < total_size) : (i += 1) {
-                            if (lhs_bytes[i] != rhs_bytes[i]) return false;
-                        }
-                        return true;
-                    }
-                }
-                return false;
-            }
-            // For non-scalar elements, we need a type var - this shouldn't normally happen
-            @panic("valuesStructurallyEqual: list element type var not found");
-        }
-
-        // Resolve the type variable, but first check for nominal types directly
-        // (before unwrapping them via resolveBaseVar) to dispatch to their is_eq method.
+        // Check for nominal types FIRST (before resolveBaseVar) to dispatch to their is_eq method.
+        // This is critical because resolveBaseVar follows nominal types to their backing var,
+        // but we need to dispatch to the nominal type's is_eq method instead.
         const direct_resolved = self.runtime_types.resolveVar(lhs_var);
         if (direct_resolved.desc.content == .structure) {
             if (direct_resolved.desc.content.structure == .nominal_type) {
@@ -5575,13 +5527,12 @@ pub const Interpreter = struct {
             }
         }
 
-        // Ensure runtime vars resolve to the same descriptor before structural comparison.
+        // Now use resolveBaseVar for non-nominal structural types
         const lhs_resolved = self.resolveBaseVar(lhs_var);
         const lhs_content = lhs_resolved.desc.content;
         if (lhs_content != .structure) @panic("valuesStructurallyEqual: lhs is not a structure type");
 
         return switch (lhs_content.structure) {
-            // nominal_type is handled above before resolveBaseVar, but keep case for completeness
             .nominal_type => |nom| try self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops),
             .tuple => |tuple| {
                 const elem_vars = self.runtime_types.sliceVars(tuple.elems);
@@ -7406,12 +7357,13 @@ pub const Interpreter = struct {
 
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
-        // Check flex_type_context BEFORE translate_cache for flex types.
-        // This is critical for polymorphic functions: the same compile-time flex var
+        // Check flex_type_context BEFORE translate_cache for flex/rigid types.
+        // This is critical for polymorphic functions: the same compile-time flex/rigid var
         // may need to translate to different runtime types depending on calling context.
         // For example, `sum = |num| 0 + num` called as U64.to_str(sum(2400)) needs
         // the literal 0 to become U64, not the cached Dec default.
-        if (resolved.desc.content == .flex) {
+        // Type parameters in generic functions are often rigid vars.
+        if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
             if (self.flex_type_context.get(key)) |context_rt_var| {
                 return context_rt_var;
             }
@@ -12892,11 +12844,58 @@ pub const Interpreter = struct {
                 // Provide closure context
                 try self.active_closures.append(method_func);
 
+                // Save the current flex_type_context before adding parameter mappings.
+                // This will be restored in call_cleanup.
+                var saved_flex_type_context = try self.flex_type_context.clone();
+                errdefer saved_flex_type_context.deinit();
+
+                // Set up flex_type_context for polymorphic type propagation.
+                // This is critical for generic methods like List.is_eq where the element
+                // type parameter needs to be mapped to the concrete type of the arguments.
+                // We need to map both the parameter type AND any type parameters within it.
+                const arg_rt_vars = [2]types.Var{ ba.receiver_rt_var, ba.rhs_rt_var };
+                for (params, 0..) |param, idx| {
+                    const arg_rt_resolved = self.runtime_types.resolveVar(arg_rt_vars[idx]);
+                    // Only add mapping if the argument has a concrete type (structure)
+                    if (arg_rt_resolved.desc.content == .structure) {
+                        const param_ct_var = can.ModuleEnv.varFrom(param);
+                        const param_resolved = self.env.types.resolveVar(param_ct_var);
+                        const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
+                        try self.flex_type_context.put(flex_key, arg_rt_vars[idx]);
+
+                        // For nominal types (like List), also map the type parameters.
+                        // E.g., for List(item) called with List(List(Dec)), map item → List(Dec)
+                        if (arg_rt_resolved.desc.content.structure == .nominal_type) {
+                            const rt_nom = arg_rt_resolved.desc.content.structure.nominal_type;
+                            const rt_vars = self.runtime_types.sliceVars(rt_nom.vars.nonempty);
+
+                            // Get compile-time type parameters
+                            if (param_resolved.desc.content == .structure) {
+                                if (param_resolved.desc.content.structure == .nominal_type) {
+                                    const ct_nom = param_resolved.desc.content.structure.nominal_type;
+                                    const ct_vars = self.env.types.sliceVars(ct_nom.vars.nonempty);
+
+                                    // Map each CT type parameter to its corresponding RT type
+                                    // vars[0] is the backing var, vars[1..] are the type params
+                                    var i: usize = 1;
+                                    while (i < ct_vars.len and i < rt_vars.len) : (i += 1) {
+                                        const ct_param_resolved = self.env.types.resolveVar(ct_vars[i]);
+                                        const ct_param_key = ModuleVarKey{ .module = self.env, .var_ = ct_param_resolved.var_ };
+                                        try self.flex_type_context.put(ct_param_key, rt_vars[i]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Bind parameters using patternMatchesBind to properly handle ownership.
                 // patternMatchesBind creates copies via pushCopy, so the deferred decrefs
                 // of lhs/rhs at the function start will correctly free the originals while
                 // the bindings retain their own references.
                 if (!try self.patternMatchesBind(params[0], lhs, ba.receiver_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
                     _ = self.active_closures.pop();
                     return error.TypeMismatch;
@@ -12904,6 +12903,8 @@ pub const Interpreter = struct {
                 if (!try self.patternMatchesBind(params[1], rhs, ba.rhs_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
                     // Clean up the first binding we added
                     self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
                     _ = self.active_closures.pop();
                     return error.TypeMismatch;
@@ -12918,7 +12919,7 @@ pub const Interpreter = struct {
                     .did_instantiate = false,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = null,
-                    .saved_flex_type_context = null,
+                    .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
