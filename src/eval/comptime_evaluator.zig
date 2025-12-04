@@ -1016,7 +1016,7 @@ pub const ComptimeEvaluator = struct {
 
         // Build the Numeral record
         // Ownership of before_list and after_list is transferred to this record
-        const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
+        const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list);
         defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Evaluate the from_numeral function to get a closure
@@ -1231,7 +1231,6 @@ pub const ComptimeEvaluator = struct {
         is_negative: eval_mod.StackValue,
         digits_before_pt: eval_mod.StackValue,
         digits_after_pt: eval_mod.StackValue,
-        roc_ops: *RocOps,
     ) !eval_mod.StackValue {
         // Use precomputed idents from self.env for field names
         const field_layouts = [_]layout_mod.Layout{
@@ -1253,13 +1252,13 @@ pub const ComptimeEvaluator = struct {
 
         // Use self.env for field lookups since the record was built with self.env's idents
         const is_neg_idx = accessor.findFieldIndex(self.env.idents.is_negative) orelse return error.OutOfMemory;
-        try accessor.setFieldByIndex(is_neg_idx, is_negative, roc_ops);
+        try accessor.setFieldByIndex(is_neg_idx, is_negative);
 
         const before_pt_idx = accessor.findFieldIndex(self.env.idents.digits_before_pt) orelse return error.OutOfMemory;
-        try accessor.setFieldByIndex(before_pt_idx, digits_before_pt, roc_ops);
+        try accessor.setFieldByIndex(before_pt_idx, digits_before_pt);
 
         const after_pt_idx = accessor.findFieldIndex(self.env.idents.digits_after_pt) orelse return error.OutOfMemory;
-        try accessor.setFieldByIndex(after_pt_idx, digits_after_pt, roc_ops);
+        try accessor.setFieldByIndex(after_pt_idx, digits_after_pt);
 
         return dest;
     }

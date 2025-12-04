@@ -752,7 +752,7 @@ pub const TupleAccessor = struct {
     }
 
     /// Set an element by copying from a source StackValue
-    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
+    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue) !void {
         const dest_element = try self.getElement(index);
         try source.copyToPtr(self.layout_cache, dest_element.ptr.?);
     }
@@ -1030,7 +1030,7 @@ pub const RecordAccessor = struct {
     }
 
     /// Set a field by copying from a source StackValue
-    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
+    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue) !void {
         const dest_field = try self.getFieldByIndex(index);
         try source.copyToPtr(self.layout_cache, dest_field.ptr.?);
     }
