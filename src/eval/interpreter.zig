@@ -8192,6 +8192,9 @@ pub const Interpreter = struct {
         /// Sort - process comparison result and continue insertion sort.
         sort_compare_result: SortCompareResult,
 
+        /// Negate boolean result on value stack (for != operator).
+        negate_bool: void,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -8444,8 +8447,6 @@ pub const Interpreter = struct {
             saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
-            /// Whether to negate boolean result (for != operator)
-            negate_bool_result: bool = false,
         };
 
         /// Unary operation - apply method after operand is evaluated
@@ -12633,12 +12634,6 @@ pub const Interpreter = struct {
                         result.rt_var = rt_var;
                     }
                 }
-                // Apply negation for != operator
-                if (cleanup.negate_bool_result) {
-                    const is_true = self.boolValueEquals(true, result);
-                    result.decref(&self.runtime_layout_store, roc_ops);
-                    result = try self.makeBoolValue(!is_true);
-                }
                 try value_stack.push(result);
                 return true;
             },
@@ -12996,6 +12991,10 @@ pub const Interpreter = struct {
                 }
 
                 // Push cleanup and evaluate body
+                // Push negate_bool first (executed last) if this is != operator
+                if (ba.negate_result) {
+                    try work_stack.push(.{ .apply_continuation = .{ .negate_bool = {} } });
+                }
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                     .saved_env = saved_env,
                     .saved_bindings_len = saved_bindings_len,
@@ -13006,7 +13005,6 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
-                    .negate_bool_result = ba.negate_result,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -14079,6 +14077,18 @@ pub const Interpreter = struct {
                     sc.list_value.rt_var = rt_var;
                 }
                 try value_stack.push(sc.list_value);
+                return true;
+            },
+            .negate_bool => {
+                // Negate the boolean result on top of value stack (for != operator)
+                var result = value_stack.pop() orelse {
+                    self.triggerCrash("negate_bool: expected value on stack", false, roc_ops);
+                    return error.Crash;
+                };
+                const is_true = self.boolValueEquals(true, result);
+                result.decref(&self.runtime_layout_store, roc_ops);
+                const negated = try self.makeBoolValue(!is_true);
+                try value_stack.push(negated);
                 return true;
             },
         }
