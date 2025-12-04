@@ -68,7 +68,7 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
     };
 
     // Create canonicalizer
-    var czer = try Can.init(module_env, &parse_ast, null, false);
+    var czer = try Can.init(module_env, &parse_ast, null);
     defer czer.deinit();
 
     // Canonicalize the module
@@ -162,7 +162,7 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
     try module_envs.put(import_ident, .{ .env = imported_module, .qualified_type_ident = import_qualified_ident });
 
     // Create canonicalizer with imports
-    var czer = try Can.init(module_env, &parse_ast, &module_envs, false);
+    var czer = try Can.init(module_env, &parse_ast, &module_envs);
     defer czer.deinit();
 
     // Canonicalize the module

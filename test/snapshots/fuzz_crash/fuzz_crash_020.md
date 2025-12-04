@@ -141,7 +141,6 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
-MODULE NOT FOUND - fuzz_crash_020.md:4:1:4:34
 MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
 MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
 MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
@@ -349,17 +348,6 @@ This type variable is referenced here:
 Som : { foo : O, bar : g }
 ```
                        ^
-
-
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_020.md:4:1:4:34:**
-```roc
-import pf.Stdout exposing [line!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**

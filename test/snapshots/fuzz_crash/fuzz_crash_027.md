@@ -182,9 +182,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
-MODULE NOT FOUND - fuzz_crash_027.md:4:1:4:38
 MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:10:1:10:46
 MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
 MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
@@ -422,17 +420,6 @@ Func(a) : Maybe(a), a -> Maybe(a)
 
 
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:4:1:4:38:**
-```roc
-import pf.Stdout exposing [line!, e!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
 The module `Stdot` was not found in this Roc project.
 
 You're attempting to use this module here:
@@ -442,17 +429,6 @@ import Stdot
 		exposing [ #tem
 		] # Cose
 ```
-
-
-**MODULE NOT FOUND**
-The module `pkg.S` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:10:1:10:46:**
-```roc
-import pkg.S exposing [func as fry, Custom.*]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**

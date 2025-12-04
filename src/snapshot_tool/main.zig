@@ -1156,7 +1156,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
             defer czer.deinit();
             try czer.canonicalizeFile();
         },
@@ -1173,7 +1173,7 @@ fn processSnapshotContent(
                 try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
             }
 
-            var czer = try Can.init(can_ir, &parse_ast, &module_envs, false);
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
             defer czer.deinit();
 
             switch (content.meta.node_type) {

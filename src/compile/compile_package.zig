@@ -632,7 +632,6 @@ pub const PackageEnv = struct {
         // Use shared canonicalization function to ensure consistency with snapshot tool
         // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
         // reported prematurely for modules that exist but haven't been loaded yet.
-        // When we have a resolver, skip errors for qualified imports (cross-package deps).
         try canonicalizeModuleWithSiblings(
             self.gpa,
             env,
@@ -640,7 +639,6 @@ pub const PackageEnv = struct {
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
             self.root_dir,
-            self.resolver != null, // Skip qualified import errors when resolver handles them
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -838,7 +836,7 @@ pub const PackageEnv = struct {
         );
 
         // Canonicalize
-        var czer = try Can.init(env, parse_ast, module_envs_out, false);
+        var czer = try Can.init(env, parse_ast, module_envs_out);
         try czer.canonicalizeFile();
         try czer.validateForChecking();
         czer.deinit();
@@ -891,15 +889,13 @@ pub const PackageEnv = struct {
             builtin_indices,
         );
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map, false);
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
     }
 
     /// Canonicalization function that also discovers sibling .roc files in the same directory.
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
-    /// If `skip_qualified_import_errors` is true, qualified imports (e.g., "pf.Stdout") won't
-    /// trigger MODULE NOT FOUND during canonicalization - they're handled by the resolver.
     fn canonicalizeModuleWithSiblings(
         gpa: Allocator,
         env: *ModuleEnv,
@@ -907,7 +903,6 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         builtin_indices: can.CIR.BuiltinIndices,
         root_dir: []const u8,
-        skip_qualified_import_errors: bool,
     ) !void {
         // Create module_envs map for auto-importing builtin types
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
@@ -925,7 +920,7 @@ pub const PackageEnv = struct {
         // This prevents MODULE NOT FOUND errors for modules that exist but haven't been loaded yet
         var dir = std.fs.cwd().openDir(root_dir, .{ .iterate = true }) catch {
             // If we can't open the directory, just proceed without sibling discovery
-            var czer = try Can.init(env, parse_ast, &module_envs_map, skip_qualified_import_errors);
+            var czer = try Can.init(env, parse_ast, &module_envs_map);
             try czer.canonicalizeFile();
             czer.deinit();
             return;
@@ -955,7 +950,7 @@ pub const PackageEnv = struct {
             }
         }
 
-        var czer = try Can.init(env, parse_ast, &module_envs_map, skip_qualified_import_errors);
+        var czer = try Can.init(env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
         czer.deinit();
     }

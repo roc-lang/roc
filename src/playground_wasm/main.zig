@@ -1055,7 +1055,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
 
     logDebug("compileSource: Starting canonicalization\n", .{});
-    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map, false);
+    var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
     defer czer.deinit();
 
     czer.canonicalizeFile() catch |err| {

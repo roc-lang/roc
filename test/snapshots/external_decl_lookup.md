@@ -17,33 +17,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - external_decl_lookup.md:3:1:3:17
-MODULE NOT FOUND - external_decl_lookup.md:4:1:4:17
 UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
 UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**external_decl_lookup.md:3:1:3:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**external_decl_lookup.md:4:1:4:17:**
-```roc
-import json.Json
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `utf8` in this scope.
 Is there an `import` or `exposing` missing up-top?

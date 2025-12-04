@@ -60,7 +60,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .builtin_indices = builtin_indices,
     };
 
-    var czer = try Can.init(module_env, &parse_ast, null, false);
+    var czer = try Can.init(module_env, &parse_ast, null);
     defer czer.deinit();
 
     try czer.canonicalizeFile();

@@ -31,9 +31,6 @@ validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_nested_modules.md:1:1:1:26
-MODULE NOT FOUND - can_import_nested_modules.md:2:1:2:36
-MODULE NOT FOUND - can_import_nested_modules.md:3:1:3:46
 MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
 UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
@@ -44,39 +41,6 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
 UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `json.Parser` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_nested_modules.md:1:1:1:26:**
-```roc
-import json.Parser.Config
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `http.Client.Auth` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_nested_modules.md:2:1:2:36:**
-```roc
-import http.Client.Auth as HttpAuth
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `utils.String.Format` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_nested_modules.md:3:1:3:46:**
-```roc
-import utils.String.Format exposing [padLeft]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **MODULE NOT IMPORTED**
 There is no module with the name `Config` imported into this Roc file.
 

@@ -224,10 +224,8 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
 NOT IMPLEMENTED - :0:0:0:0
 MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
 MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
 MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
@@ -385,17 +383,6 @@ This type is referenced here:
 	      ^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:4:1:4:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
@@ -415,17 +402,6 @@ import # Comment after import keyword
 			write!, # Another after exposed item
 		] # Comment after exposing close
 ```
-
-
-**MODULE NOT FOUND**
-The module `pkg.Something` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:14:1:14:82:**
-```roc
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
