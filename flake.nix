@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url =
-      "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
+      "github:nixos/nixpkgs?rev=50a96edd8d0db6cc8db57dab6bb6d6ee1f3dc49a";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
