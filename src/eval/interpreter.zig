@@ -1478,11 +1478,21 @@ pub const Interpreter = struct {
                 const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
                 const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
 
-                const result_rt_var = return_rt_var orelse {
-                    self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
-                    return error.Crash;
+                // Get the result layout - should be List(U8).
+                // If return_rt_var is a flex that would default to a scalar,
+                // we need to ensure we get a proper list layout for correct refcounting.
+                const result_layout = blk: {
+                    if (return_rt_var) |rt_var| {
+                        const maybe_layout = try self.getRuntimeLayout(rt_var);
+                        // If the layout is a list, use it
+                        if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) {
+                            break :blk maybe_layout;
+                        }
+                    }
+                    // Fallback: create a proper List(U8) layout
+                    const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
+                    break :blk Layout.list(u8_layout_idx);
                 };
-                const result_layout = try self.getRuntimeLayout(result_rt_var);
 
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
@@ -8537,10 +8547,6 @@ pub const Interpreter = struct {
                 &self.type_writer,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
-                unify.ModuleEnvLookup{
-                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                },
                 params[i],
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -9726,10 +9732,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 lhs_rt_var,
                                 dec_var,
                             );
@@ -9741,10 +9743,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 rhs_rt_var,
                                 dec_var,
                             );
@@ -9758,10 +9756,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 lhs_rt_var,
                                 rhs_rt_var,
                             );
@@ -9775,10 +9769,6 @@ pub const Interpreter = struct {
                                 &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
-                                unify.ModuleEnvLookup{
-                                    .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                                    .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                                },
                                 rhs_rt_var,
                                 lhs_rt_var,
                             );
@@ -10460,10 +10450,6 @@ pub const Interpreter = struct {
                         &self.type_writer,
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
-                        unify.ModuleEnvLookup{
-                            .interpreter_lookup_ctx = @ptrCast(&self.module_envs),
-                            .interpreter_lookup_fn = interpreterLookupModuleEnv,
-                        },
                         call_ret_rt_var,
                         entry.return_var,
                         unify.Conf{ .ctx = .anon, .constraint_origin_var = null },

@@ -60,7 +60,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **update_strr** method is being called on a value whose type doesn't have that method:
@@ -74,7 +74,7 @@ The value's type, which does not have a method named **update_strr**, is:
 
     _Adv_
 
-**Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **update** method is being called on a value whose type doesn't have that method:
@@ -88,7 +88,7 @@ The value's type, which does not have a method named **update**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -290,10 +290,13 @@ EndOfFile,
 Adv := [Val(U64, Str)].{
 	to_str : Adv -> Str
 	to_str = |Adv.Val(_, s)| s
+
 	to_u64 : Adv -> U64
 	to_u64 = |Adv.Val(u, _)| u
+
 	update_str : Adv, Str -> Adv
 	update_str = |Adv.Val(u64, _), next_str| Adv.Val(u64, next_str)
+
 	update_u64 : Adv, U64 -> Adv
 	update_u64 = |Adv.Val(_, str), next_u64| Adv.Val(next_u64, str)
 }

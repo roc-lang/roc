@@ -8,6 +8,6 @@ str = |s| s
 
 main! = || {
     Stdout.line!(str("Before stdin"))
-    Stdin.line!()
+    temp = Stdin.line!()
     Stdout.line!(str("After stdin"))
 }

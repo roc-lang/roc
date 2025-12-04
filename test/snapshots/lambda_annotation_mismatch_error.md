@@ -30,7 +30,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -44,7 +44,7 @@ The value's type, which does not have a method named **plus**, is:
 
     _Str_
 
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig

@@ -65,7 +65,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

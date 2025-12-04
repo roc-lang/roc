@@ -9622,6 +9622,7 @@ L2 := [Q].{
 	L3 := [R].{
 		val3 = val1 + val2
 	}
+
 	val2 = 20
 }
 
@@ -9638,6 +9639,7 @@ val1 = 30
 
 L2 := [T].{
 	val2 = val1 + 5
+
 	L3 := [U].{
 		val3 = val1 + val2
 	}
@@ -9664,6 +9666,7 @@ L2 := [Z].{
 	L3 := [AA].{
 		l3_secret = 888
 	}
+
 	bad_l2 = l3_secret
 }
 
@@ -9673,6 +9676,7 @@ L2 := [AC].{
 	L3 := [AD].{
 		val3 = val2 * 2
 	}
+
 	val2 = val1 * 3
 }
 
@@ -9690,8 +9694,10 @@ L2 := [AF].{
 		L4 := [AH].{
 			val4 = val1 + val2 + val3
 		}
+
 		val3 = 3
 	}
+
 	val2 = 2
 }
 
@@ -9705,8 +9711,10 @@ val1 = 10
 
 L2 := [AJ].{
 	val2 = val1 + 1
+
 	L3 := [AK].{
 		val3 = val1 + val2
+
 		L4 := [AL].{
 			val4 = val1 + val2 + val3
 		}
@@ -9722,8 +9730,10 @@ L2 := [AN].{
 		L4 := [AP].{
 			val4 = val3 + 1
 		}
+
 		val3 = val2 + 1
 	}
+
 	val2 = val1 + 1
 }
 
@@ -9738,10 +9748,12 @@ val1 = 15
 L2 := [AR].{
 	L3 := [AS].{
 		val3 = val1 + val2
+
 		L4 := [AT].{
 			val4 = val1 + val2 + val3
 		}
 	}
+
 	val2 = val1 + 5
 }
 
@@ -9767,8 +9779,10 @@ L2 := [BF].{
 		L4 := [BH].{
 			val4 = val2 + val3
 		}
+
 		val3 = 8
 	}
+
 	val2 = 4
 }
 
@@ -9781,8 +9795,10 @@ L2 := [BJ].{
 		L4 := [BL].{
 			val4 = val1 + 100
 		}
+
 		val3 = val1 + 50
 	}
+
 	val2 = val1 + 10
 }
 
@@ -9810,6 +9826,7 @@ L2 := [BR].{
 			l4_secret = 333
 		}
 	}
+
 	bad = l4_secret
 }
 
@@ -9820,6 +9837,7 @@ L2 := [BV].{
 		L4 := [BX].{
 			l4_private = 555
 		}
+
 		attempt = l4_private
 	}
 }
@@ -9832,10 +9850,13 @@ L2 := [BZ].{
 			L5 := [CC].{
 				val5 = val1 + val2 + val3 + val4
 			}
+
 			val4 = 4
 		}
+
 		val3 = 3
 	}
+
 	val2 = 2
 }
 
@@ -9849,10 +9870,13 @@ val1 = 100
 
 L2 := [CE].{
 	val2 = val1 + 10
+
 	L3 := [CF].{
 		val3 = val1 + val2
+
 		L4 := [CG].{
 			val4 = val1 + val2 + val3
+
 			L5 := [CH].{
 				val5 = val1 + val2 + val3 + val4
 			}
@@ -9869,13 +9893,16 @@ val1 = 2
 L2 := [CJ].{
 	L3 := [CK].{
 		val3 = val1 + val2
+
 		L4 := [CL].{
 			L5 := [CM].{
 				val5 = val1 + val2 + val3 + val4
 			}
+
 			val4 = val1 + val2 + val3
 		}
 	}
+
 	val2 = val1 + 1
 }
 
@@ -9889,6 +9916,7 @@ L2 := [CO].{
 			L5 := [CR].{
 				val5 = val4 * 5
 			}
+
 			val4 = 6
 		}
 	}
@@ -9904,8 +9932,10 @@ L2 := [CT].{
 			L5 := [CW].{
 				val5 = val3 + val4
 			}
+
 			val4 = 7
 		}
+
 		val3 = 3
 	}
 }
@@ -9916,10 +9946,13 @@ d5_5 = d5_l3_val_after_l4
 
 L2 := [DD].{
 	val2 = val1 + 10
+
 	L3 := [DE].{
 		val3 = val1 + val2
+
 		L4 := [DF].{
 			val4 = val1 + val2 + val3
+
 			L5 := [DG].{
 				val5 = val1 + val2 + val3 + val4
 			}
@@ -9961,6 +9994,7 @@ L2 := [DN].{
 				l5_secret = 9999
 			}
 		}
+
 		bad = l5_secret
 	}
 }
@@ -9973,6 +10007,7 @@ L2 := [DS].{
 			L5 := [DV].{
 				l5_only = 8888
 			}
+
 			bad = l5_only
 		}
 	}

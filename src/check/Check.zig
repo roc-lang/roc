@@ -383,7 +383,6 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         &self.type_writer,
         &self.unify_scratch,
         &self.occurs_scratch,
-        unifier.ModuleEnvLookup{ .auto_imported = self.module_envs },
         a,
         b,
         unifier.Conf{
@@ -789,7 +788,7 @@ fn mkFlexWithFromNumeralConstraint(
             .constraints = constraint_range,
         },
     };
-    try self.types.setVarContent(flex_var, flex_content);
+    try self.unifyWith(flex_var, flex_content, env);
 
     return flex_var;
 }
@@ -2266,7 +2265,7 @@ fn checkPatternHelp(
             try self.unifyWith(pattern_var, tag_union_content, env);
         },
         // nominal //
-        .nominal => |nominal| {
+        .nominal => |nominal| blk: {
             // TODO: Merge this with e_nominal_external
 
             // First, check the type inside the expr
@@ -2279,10 +2278,25 @@ fn checkPatternHelp(
             const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
             if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                const nominal_type = nominal_resolved.structure.nominal_type;
+
+                // If this nominal type is opaque and we're not in the defining module
+                // then report an error
+                if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
+                        .var_ = pattern_var,
+                        .nominal_type_name = nominal_type.ident.ident_idx,
+                    } });
+
+                    // Mark the entire expression as having a type error
+                    try self.unifyWith(pattern_var, .err, env);
+                    break :blk;
+                }
+
                 // Then, we extract the variable of the nominal type
                 // E.g. ConList(a) := [Cons(a, ConstList), Nil]
                 //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+                const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
 
                 // Now we unify what the user wrote with the backing type of the nominal was
                 // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
@@ -2322,7 +2336,7 @@ fn checkPatternHelp(
                 try self.unifyWith(pattern_var, .err, env);
             }
         },
-        .nominal_external => |nominal| {
+        .nominal_external => |nominal| blk: {
             // TODO: Merge this with e_nominal
 
             // First, check the type inside the expr
@@ -2336,10 +2350,25 @@ fn checkPatternHelp(
                 const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
                 if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                    const nominal_type = nominal_resolved.structure.nominal_type;
+
+                    // If this nominal type is opaque and we're not in the defining module
+                    // then report an error
+                    if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+                        _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
+                            .var_ = pattern_var,
+                            .nominal_type_name = nominal_type.ident.ident_idx,
+                        } });
+
+                        // Mark the entire expression as having a type error
+                        try self.unifyWith(pattern_var, .err, env);
+                        break :blk;
+                    }
+
                     // Then, we extract the variable of the nominal type
                     // E.g. ConList(a) := [Cons(a, ConstList), Nil]
                     //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
 
                     // Now we unify what the user wrote with the backing type of the nominal was
                     // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
@@ -2892,7 +2921,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, tag_union_content, env);
         },
         // nominal //
-        .e_nominal => |nominal| {
+        .e_nominal => |nominal| blk: {
             // TODO: Merge this with e_nominal_external
 
             // First, check the type inside the expr
@@ -2906,10 +2935,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
             if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                const nominal_type = nominal_resolved.structure.nominal_type;
+
+                // If this nominal type is opaque and we're not in the defining module
+                // then report an error
+                if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
+                        .var_ = expr_var,
+                        .nominal_type_name = nominal_type.ident.ident_idx,
+                    } });
+
+                    // Mark the entire expression as having a type error
+                    try self.unifyWith(expr_var, .err, env);
+                    break :blk;
+                }
+
                 // Then, we extract the variable of the nominal type
                 // E.g. ConList(a) := [Cons(a, ConstList), Nil]
                 //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+                const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
 
                 // Now we unify what the user wrote with the backing type of the nominal was
                 // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
@@ -2949,7 +2993,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.unifyWith(expr_var, .err, env);
             }
         },
-        .e_nominal_external => |nominal| {
+        .e_nominal_external => |nominal| blk: {
             // TODO: Merge this with e_nominal
 
             // First, check the type inside the expr
@@ -2964,10 +3008,25 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
 
                 if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+                    const nominal_type = nominal_resolved.structure.nominal_type;
+
+                    // If this nominal type is opaque and we're not in the defining module
+                    // then report an error
+                    if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+                        _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
+                            .var_ = expr_var,
+                            .nominal_type_name = nominal_type.ident.ident_idx,
+                        } });
+
+                        // Mark the entire expression as having a type error
+                        try self.unifyWith(expr_var, .err, env);
+                        break :blk;
+                    }
+
                     // Then, we extract the variable of the nominal type
                     // E.g. ConList(a) := [Cons(a, ConstList), Nil]
                     //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_resolved.structure.nominal_type);
+                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
 
                     // Now we unify what the user wrote with the backing type of the nominal was
                     // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
@@ -4440,7 +4499,6 @@ fn checkBinopExpr(
 
                 // The return type is unknown, so create a fresh variable
                 const ret_var = try self.fresh(env, expr_region);
-                try env.var_pool.addVarToRank(ret_var, env.rank());
 
                 // Create the constraint function type
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
@@ -4448,7 +4506,6 @@ fn checkBinopExpr(
                     .ret = ret_var,
                     .needs_instantiation = false,
                 } } }, env, expr_region);
-                try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
                 // Create the static dispatch constraint
                 const constraint = StaticDispatchConstraint{
@@ -4464,7 +4521,6 @@ fn checkBinopExpr(
                     env,
                     expr_region,
                 );
-                try env.var_pool.addVarToRank(constrained_var, env.rank());
 
                 _ = try self.unify(constrained_var, lhs_var, env);
 
@@ -4572,7 +4628,6 @@ fn checkBinopExpr(
                 .ret = is_eq_ret_var,
                 .needs_instantiation = false,
             } } }, env, expr_region);
-            try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
 
             // Create the is_eq constraint
             const is_eq_constraint = StaticDispatchConstraint{
@@ -4588,7 +4643,6 @@ fn checkBinopExpr(
                 env,
                 expr_region,
             );
-            try env.var_pool.addVarToRank(constrained_var, env.rank());
 
             _ = try self.unify(constrained_var, lhs_var, env);
 
@@ -4627,7 +4681,6 @@ fn checkBinopExpr(
                 .ret = not_ret_var,
                 .needs_instantiation = false,
             } } }, env, expr_region);
-            try env.var_pool.addVarToRank(not_fn_var, env.rank());
 
             const not_constraint = StaticDispatchConstraint{
                 .fn_name = self.cir.idents.not,
@@ -4642,7 +4695,6 @@ fn checkBinopExpr(
                 env,
                 expr_region,
             );
-            try env.var_pool.addVarToRank(is_eq_ret_var, env.rank());
 
             // Unify placeholder with the real constrained var so they're the same
             _ = try self.unify(is_eq_ret_placeholder, is_eq_ret_var, env);
@@ -4654,7 +4706,6 @@ fn checkBinopExpr(
                 .ret = is_eq_ret_var,
                 .needs_instantiation = false,
             } } }, env, expr_region);
-            try env.var_pool.addVarToRank(is_eq_fn_var, env.rank());
 
             const is_eq_constraint = StaticDispatchConstraint{
                 .fn_name = self.cir.idents.is_eq,
@@ -4669,7 +4720,6 @@ fn checkBinopExpr(
                 env,
                 expr_region,
             );
-            try env.var_pool.addVarToRank(lhs_constrained_var, env.rank());
             _ = try self.unify(lhs_constrained_var, lhs_var, env);
 
             // The expression type is the return type of not

@@ -34,7 +34,7 @@ match ... {
  ^^^^^
 
 The third pattern has this type:
-    _[Ok(_a), ..[ProvidedByCompiler, .._others]]_
+    _[Ok(_a), .._others]_
 
 But all the previous patterns have this type: 
     _Str_
@@ -55,7 +55,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

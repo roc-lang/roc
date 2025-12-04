@@ -603,6 +603,7 @@ EndOfFile,
 ~~~roc
 # Define a polymorphic container with static dispatch
 Container(a) := [Empty, Value(a)].{
+	# Method with annotation
 	map : Container(a), (a -> b) -> Container(b)
 	map = |container, f| {
 		match container {
@@ -610,12 +611,16 @@ Container(a) := [Empty, Value(a)].{
 			Empty => Empty
 		}
 	}
+
+	# Method without annotation (inferred)
 	get_or = |container, default| {
 		match container {
 			Container.Value(val) => val
 			Container.Empty => default
 		}
 	}
+
+	# Chained method dispatch
 	flat_map : Container(a), (a -> Container(b)) -> Container(b)
 	flat_map = |container, f| {
 		match container {

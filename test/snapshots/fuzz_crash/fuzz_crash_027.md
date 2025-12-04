@@ -940,7 +940,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue, ..[ProvidedByCompiler, .._others2]]_
+    _[Red, Blue, .._others2]_
 
 All patterns in an `match` must have compatible types.
 
@@ -970,7 +970,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red, Blue, ..[ProvidedByCompiler, .._others2]], _arg -> Error_
+    _[Red, Blue, .._others2], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -996,7 +996,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -1010,7 +1010,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -1024,7 +1024,7 @@ The value's type, which does not have a method named **plus**, is:
 
     _Str_
 
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2412,7 +2412,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, Blue, ..[ProvidedByCompiler, .._others2]], _arg -> Error"))
+		(patt (type "[Red, Blue, .._others2], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2449,7 +2449,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, Blue, ..[ProvidedByCompiler, .._others2]], _arg -> Error"))
+		(expr (type "[Red, Blue, .._others2], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

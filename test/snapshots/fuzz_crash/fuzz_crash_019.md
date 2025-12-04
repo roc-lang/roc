@@ -925,7 +925,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue, ..[ProvidedByCompiler, .._others]]_
+    _[Blue, .._others]_
 
 All patterns in an `match` must have compatible types.
 
@@ -955,7 +955,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Blue, ..[ProvidedByCompiler, .._others]], [Tb, .._others2] -> Error_
+    _[Blue, .._others], [Tb, .._others2] -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -992,7 +992,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2073,7 +2073,7 @@ expect {
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue, ..[ProvidedByCompiler, .._others]], [Tb, .._others2] -> Error"))
+		(patt (type "[Blue, .._others], [Tb, .._others2] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2110,7 +2110,7 @@ expect {
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue, ..[ProvidedByCompiler, .._others]], [Tb, .._others2] -> Error"))
+		(expr (type "[Blue, .._others], [Tb, .._others2] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))

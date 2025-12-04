@@ -148,6 +148,7 @@ EndOfFile,
 Basic := [Val(Str)].{
 	to_str : Basic -> Str
 	to_str = |Basic.Val(s)| s
+
 	to_str2 : Basic -> Str
 	to_str2 = |test| test.to_str()
 }

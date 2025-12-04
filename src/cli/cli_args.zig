@@ -68,6 +68,7 @@ pub const RunArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
+    allow_errors: bool = false, // allow execution even if there are type errors
 };
 
 /// Arguments for `roc check`
@@ -130,6 +131,9 @@ pub const DocsArgs = struct {
 /// Arguments for `roc experimental-lsp`
 pub const ExperimentalLspArgs = struct {
     debug_io: bool = false, // log the LSP messages to a temporary log file
+    debug_build: bool = false,
+    debug_syntax: bool = false,
+    debug_server: bool = false,
 };
 
 /// Parse a list of arguments.
@@ -182,6 +186,7 @@ const main_help =
     \\      --opt=<size|speed|dev> Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
     \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache             Force a rebuild of the interpreted host (useful for compiler and platform developers)
+    \\      --allow-errors         Allow execution even if there are type errors (warnings are always allowed)
     \\
 ;
 
@@ -640,6 +645,9 @@ fn parseDocs(args: []const []const u8) CliArgs {
 
 fn parseExperimentalLsp(args: []const []const u8) CliArgs {
     var debug_io = false;
+    var debug_build = false;
+    var debug_syntax = false;
+    var debug_server = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -650,17 +658,31 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --debug-transport  Mirror all JSON-RPC traffic to a temp log file
+            \\      --debug-build      Log build environment actions to the debug log
+            \\      --debug-syntax     Log syntax/type checking steps to the debug log
+            \\      --debug-server     Log server lifecycle details to the debug log
             \\  -h, --help            Print help
             \\
         };
         } else if (mem.eql(u8, arg, "--debug-transport")) {
             debug_io = true;
+        } else if (mem.eql(u8, arg, "--debug-build")) {
+            debug_build = true;
+        } else if (mem.eql(u8, arg, "--debug-syntax")) {
+            debug_syntax = true;
+        } else if (mem.eql(u8, arg, "--debug-server")) {
+            debug_server = true;
         } else {
             return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "experimental-lsp", .arg = arg } } };
         }
     }
 
-    return CliArgs{ .experimental_lsp = .{ .debug_io = debug_io } };
+    return CliArgs{ .experimental_lsp = .{
+        .debug_io = debug_io,
+        .debug_build = debug_build,
+        .debug_syntax = debug_syntax,
+        .debug_server = debug_server,
+    } };
 }
 
 fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -668,6 +690,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var opt: OptLevel = .dev;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
+    var allow_errors: bool = false;
     var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var past_double_dash = false;
 
@@ -713,6 +736,8 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
+        } else if (mem.eql(u8, arg, "--allow-errors")) {
+            allow_errors = true;
         } else {
             if (path != null) {
                 try app_args.append(arg);
@@ -721,7 +746,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
