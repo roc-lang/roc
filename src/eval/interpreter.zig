@@ -6130,42 +6130,17 @@ pub const Interpreter = struct {
     pub fn getCanonicalStrRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_str_rt_var) |cached| return cached;
         // Use the dynamic str_stmt index (from the Str module)
-        const str_decl_idx = self.builtins.str_stmt;
-
-        // Get the statement from the Str module
-        const str_stmt = self.builtins.str_env.store.getStatement(str_decl_idx);
-
-        // For nominal type declarations, we need to get the backing type, not the nominal wrapper
-        const ct_var = switch (str_stmt) {
-            .s_nominal_decl => blk: {
-                // The type of the declaration is the nominal type, but we want its backing
-                const nom_var = can.ModuleEnv.varFrom(str_decl_idx);
-                const nom_resolved = self.builtins.str_env.types.resolveVar(nom_var);
-                if (nom_resolved.desc.content == .structure) {
-                    if (nom_resolved.desc.content.structure == .nominal_type) {
-                        const nt = nom_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.builtins.str_env.types.getNominalBackingVar(nt);
-                        break :blk backing_var;
-                    }
-                }
-                break :blk nom_var;
-            },
-            else => can.ModuleEnv.varFrom(str_decl_idx),
-        };
+        // We need the nominal type itself (not the backing type) so that method dispatch
+        // can look up methods like split_on, drop_prefix, etc.
+        const ct_var = can.ModuleEnv.varFrom(self.builtins.str_stmt);
 
         // Use str_env to translate since str_stmt is from the Str module
         // Cast away const - translateTypeVar doesn't actually mutate the module
         const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.str_env), ct_var);
-        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-        const backing_rt_var = switch (nominal_resolved.desc.content) {
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                else => nominal_rt_var,
-            },
-            else => nominal_rt_var,
-        };
-        self.canonical_str_rt_var = backing_rt_var;
-        return backing_rt_var;
+        // Return the nominal type, not the backing type - method dispatch needs the nominal
+        // type to look up methods like split_on, drop_prefix, etc.
+        self.canonical_str_rt_var = nominal_rt_var;
+        return nominal_rt_var;
     }
 
     fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
@@ -13680,6 +13655,60 @@ pub const Interpreter = struct {
                 };
 
                 if (nominal_info == null) {
+                    // Before failing, check if this is a numeric operation we can handle directly
+                    if (is_numeric_layout) {
+                        // Handle numeric arithmetic via type-aware evalNumericBinop as fallback
+                        if (ba.method_ident == self.root_env.idents.plus) {
+                            const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.minus) {
+                            const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.times) {
+                            const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.div_by) {
+                            const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                            const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                            const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_gt) {
+                            const result = try self.compareNumericValues(lhs, rhs, .gt);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                            const result = try self.compareNumericValues(lhs, rhs, .gte);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                            const result = try self.compareNumericValues(lhs, rhs, .lt);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                            const result = try self.compareNumericValues(lhs, rhs, .lte);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                            const result = try self.compareNumericValues(lhs, rhs, .eq);
+                            const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                            try value_stack.push(result_val);
+                            return true;
+                        }
+                    }
                     return error.InvalidMethodReceiver;
                 }
 
