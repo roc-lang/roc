@@ -15,45 +15,9 @@ NominalType2(_a, b) := b
 NominalType3(a, _b) := a
 ~~~
 # EXPECTED
-TYPE REDECLARED - underscore_prefixed_param_in_nominal_type.md:5:1:5:25
-TYPE REDECLARED - underscore_prefixed_param_in_nominal_type.md:8:1:8:25
+NIL
 # PROBLEMS
-**TYPE REDECLARED**
-The type _NominalType2_ is being redeclared.
-
-The redeclaration is here:
-**underscore_prefixed_param_in_nominal_type.md:5:1:5:25:**
-```roc
-NominalType2(_a, b) := b
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _NominalType2_ was already declared here:
-**underscore_prefixed_param_in_nominal_type.md:5:1:5:25:**
-```roc
-NominalType2(_a, b) := b
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _NominalType3_ is being redeclared.
-
-The redeclaration is here:
-**underscore_prefixed_param_in_nominal_type.md:8:1:8:25:**
-```roc
-NominalType3(a, _b) := a
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _NominalType3_ was already declared here:
-**underscore_prefixed_param_in_nominal_type.md:8:1:8:25:**
-```roc
-NominalType3(a, _b) := a
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,NamedUnderscore,CloseRound,OpColonEqual,UpperIdent,

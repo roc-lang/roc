@@ -14,7 +14,7 @@ value = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - test_error_propagation.md:1:1:1:1
-TYPE REDECLARED - test_error_propagation.md:3:1:3:21
+TYPE MISMATCH - test_error_propagation.md:6:9:6:15
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -27,23 +27,19 @@ BadBase := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _GoodAlias_ is being redeclared.
-
-The redeclaration is here:
-**test_error_propagation.md:3:1:3:21:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**test_error_propagation.md:6:9:6:15:**
 ```roc
-GoodAlias := BadBase
+value = "test"
 ```
-^^^^^^^^^^^^^^^^^^^^
+        ^^^^^^
 
-But _GoodAlias_ was already declared here:
-**test_error_propagation.md:3:1:3:21:**
-```roc
-GoodAlias := BadBase
-```
-^^^^^^^^^^^^^^^^^^^^
+It has the type:
+    _Str_
 
+But the type annotation says it should have the type:
+    _GoodAlias_
 
 # TOKENS
 ~~~zig
@@ -97,12 +93,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str")))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "BadBase")
 			(ty-header (name "BadBase")))
 		(nominal (type "GoodAlias")
 			(ty-header (name "GoodAlias"))))
 	(expressions
-		(expr (type "Str"))))
+		(expr (type "Error"))))
 ~~~

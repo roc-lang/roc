@@ -32,17 +32,17 @@ quux = ("hello", 42)
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-TYPE REDECLARED - underscore_error_type.md:6:1:6:19
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:6:17:6:17
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:6:12:6:16
-TYPE REDECLARED - underscore_error_type.md:11:1:11:38
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-TYPE REDECLARED - underscore_error_type.md:16:1:16:22
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-TYPE REDECLARED - underscore_error_type.md:21:1:21:21
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
 MISSING METHOD - underscore_error_type.md:4:7:4:9
+TYPE MISMATCH - underscore_error_type.md:9:7:9:16
+TYPE MISMATCH - underscore_error_type.md:14:7:14:32
+TYPE MISMATCH - underscore_error_type.md:19:7:19:12
+TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -54,24 +54,6 @@ BadType := _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE REDECLARED**
-The type _BadList_ is being redeclared.
-
-The redeclaration is here:
-**underscore_error_type.md:6:1:6:19:**
-```roc
-BadList := List(_)
-```
-^^^^^^^^^^^^^^^^^^
-
-But _BadList_ was already declared here:
-**underscore_error_type.md:6:1:6:19:**
-```roc
-BadList := List(_)
-```
-^^^^^^^^^^^^^^^^^^
-
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -95,53 +77,6 @@ BadList := List(_)
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _BadRecord_ is being redeclared.
-
-The redeclaration is here:
-**underscore_error_type.md:11:1:11:38:**
-```roc
-BadRecord := { field: _, other: U32 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _BadRecord_ was already declared here:
-**underscore_error_type.md:11:1:11:38:**
-```roc
-BadRecord := { field: _, other: U32 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_error_type.md:1:1:1:1:**
-```roc
-BadType := _
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE REDECLARED**
-The type _BadFunction_ is being redeclared.
-
-The redeclaration is here:
-**underscore_error_type.md:16:1:16:22:**
-```roc
-BadFunction := _ -> _
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-But _BadFunction_ was already declared here:
-**underscore_error_type.md:16:1:16:22:**
-```roc
-BadFunction := _ -> _
-```
-^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -164,23 +99,16 @@ BadType := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _BadTuple_ is being redeclared.
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-The redeclaration is here:
-**underscore_error_type.md:21:1:21:21:**
+**underscore_error_type.md:1:1:1:1:**
 ```roc
-BadTuple := (_, U32)
+BadType := _
 ```
-^^^^^^^^^^^^^^^^^^^^
+^
 
-But _BadTuple_ was already declared here:
-**underscore_error_type.md:21:1:21:21:**
-```roc
-BadTuple := (_, U32)
-```
-^^^^^^^^^^^^^^^^^^^^
-
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -206,6 +134,62 @@ The value's type, which does not have a method named **from_numeral**, is:
     _BadType_
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:9:7:9:16:**
+```roc
+bar = [1, 2, 3]
+```
+      ^^^^^^^^^
+
+It has the type:
+    _List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+But the type annotation says it should have the type:
+    _BadList_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:14:7:14:32:**
+```roc
+baz = { field: "hi", other: 5 }
+```
+      ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+    _{ field: Str, other: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+But the type annotation says it should have the type:
+    _BadRecord_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:19:7:19:12:**
+```roc
+qux = |x| x
+```
+      ^^^^^
+
+It has the type:
+    _a -> a_
+
+But the type annotation says it should have the type:
+    _BadFunction_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_type.md:24:8:24:21:**
+```roc
+quux = ("hello", 42)
+```
+       ^^^^^^^^^^^^^
+
+It has the type:
+    _(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+But the type annotation says it should have the type:
+    _BadTuple_
 
 # TOKENS
 ~~~zig
@@ -404,10 +388,10 @@ quux = ("hello", 42)
 (inferred-types
 	(defs
 		(patt (type "BadType"))
-		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ field: Str, other: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a -> a"))
-		(patt (type "(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "BadType")
 			(ty-header (name "BadType")))
@@ -421,8 +405,8 @@ quux = ("hello", 42)
 			(ty-header (name "BadTuple"))))
 	(expressions
 		(expr (type "BadType"))
-		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ field: Str, other: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> a"))
-		(expr (type "(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

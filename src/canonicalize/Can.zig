@@ -460,8 +460,8 @@ fn processTypeDeclFirstPass(
         // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
         const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
         const is_placeholder = switch (existing_stmt) {
-            .s_alias_decl => |alias| @intFromEnum(alias.anno) == 0,
-            .s_nominal_decl => |nominal| @intFromEnum(nominal.anno) == 0,
+            .s_alias_decl => |alias| alias.anno == .placeholder,
+            .s_nominal_decl => |nominal| nominal.anno == .placeholder,
             else => false,
         };
 
@@ -485,13 +485,13 @@ fn processTypeDeclFirstPass(
                 .alias => Statement{
                     .s_alias_decl = .{
                         .header = final_header_idx,
-                        .anno = undefined, // overwritten below before use
+                        .anno = .placeholder, // placeholder, will be overwritten
                     },
                 },
                 .nominal, .@"opaque" => Statement{
                     .s_nominal_decl = .{
                         .header = final_header_idx,
-                        .anno = undefined, // overwritten below before use
+                        .anno = .placeholder, // placeholder, will be overwritten
                         .is_opaque = type_decl.kind == .@"opaque",
                     },
                 },
@@ -505,13 +505,13 @@ fn processTypeDeclFirstPass(
             .alias => Statement{
                 .s_alias_decl = .{
                     .header = final_header_idx,
-                    .anno = undefined, // overwritten below before use
+                    .anno = .placeholder, // placeholder, will be overwritten
                 },
             },
             .nominal, .@"opaque" => Statement{
                 .s_nominal_decl = .{
                     .header = final_header_idx,
-                    .anno = undefined, // overwritten below before use
+                    .anno = .placeholder, // placeholder, will be overwritten
                     .is_opaque = type_decl.kind == .@"opaque",
                 },
             },
@@ -638,13 +638,13 @@ fn introduceTypeNameOnly(
         .alias => Statement{
             .s_alias_decl = .{
                 .header = header_idx,
-                .anno = undefined, // overwritten in Phase 1.7 before use
+                .anno = .placeholder, // placeholder, overwritten in Phase 1.7
             },
         },
         .nominal, .@"opaque" => Statement{
             .s_nominal_decl = .{
                 .header = header_idx,
-                .anno = undefined, // overwritten in Phase 1.7 before use
+                .anno = .placeholder, // placeholder, overwritten in Phase 1.7
                 .is_opaque = type_decl.kind == .@"opaque",
             },
         },

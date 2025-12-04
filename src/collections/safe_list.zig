@@ -101,6 +101,8 @@ pub fn SafeList(comptime T: type) type {
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) {
+            /// The first valid index in the list.
+            zero = 0,
             _,
 
             /// Get the raw u32 value for storage
@@ -372,11 +374,10 @@ pub fn SafeList(comptime T: type) type {
 
         /// Iterate over all items in this list.
         pub fn iter(self: *const SafeList(T)) Iterator {
-            const first_idx: Idx = @enumFromInt(0);
             return Iterator{
                 .array = self,
                 .len = self.len(),
-                .current = first_idx,
+                .current = .zero,
             };
         }
     };
@@ -980,10 +981,9 @@ test "SafeList edge cases serialization" {
         const serialized_ptr = @as(*Container.Serialized, @ptrCast(@alignCast(buffer.ptr)));
         const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-        const first_idx: SafeList(u8).Idx = @enumFromInt(0);
         try testing.expectEqual(@as(usize, 0), deserialized.list_u32.len());
         try testing.expectEqual(@as(usize, 1), deserialized.list_u8.len());
-        try testing.expectEqual(@as(u8, 123), deserialized.list_u8.get(first_idx).*);
+        try testing.expectEqual(@as(u8, 123), deserialized.list_u8.get(.zero).*);
     }
 }
 
@@ -1068,15 +1068,12 @@ test "SafeList CompactWriter complete roundtrip example" {
     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Step 8: Verify data is accessible and correct
-    const first_idx: SafeList(u32).Idx = @enumFromInt(0);
-    const second_idx: SafeList(u32).Idx = @enumFromInt(1);
-    const third_idx: SafeList(u32).Idx = @enumFromInt(2);
-    const fourth_idx: SafeList(u32).Idx = @enumFromInt(3);
+    const Idx = SafeList(u32).Idx;
     try testing.expectEqual(@as(usize, 4), deserialized.len());
-    try testing.expectEqual(@as(u32, 100), deserialized.get(first_idx).*);
-    try testing.expectEqual(@as(u32, 200), deserialized.get(second_idx).*);
-    try testing.expectEqual(@as(u32, 300), deserialized.get(third_idx).*);
-    try testing.expectEqual(@as(u32, 400), deserialized.get(fourth_idx).*);
+    try testing.expectEqual(@as(u32, 100), deserialized.get(.zero).*);
+    try testing.expectEqual(@as(u32, 200), deserialized.get(@as(Idx, @enumFromInt(1))).*);
+    try testing.expectEqual(@as(u32, 300), deserialized.get(@as(Idx, @enumFromInt(2))).*);
+    try testing.expectEqual(@as(u32, 400), deserialized.get(@as(Idx, @enumFromInt(3))).*);
 }
 
 test "SafeList CompactWriter multiple lists with different alignments" {
@@ -1179,13 +1176,11 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
     offset += 3 * @sizeOf(u8);
 
-    const u8_first_idx: SafeList(u8).Idx = @enumFromInt(0);
-    const u8_second_idx: SafeList(u8).Idx = @enumFromInt(1);
-    const u8_third_idx: SafeList(u8).Idx = @enumFromInt(2);
+    const U8Idx = SafeList(u8).Idx;
     try testing.expectEqual(@as(usize, 3), deser_u8.len());
-    try testing.expectEqual(@as(u8, 10), deser_u8.get(u8_first_idx).*);
-    try testing.expectEqual(@as(u8, 20), deser_u8.get(u8_second_idx).*);
-    try testing.expectEqual(@as(u8, 30), deser_u8.get(u8_third_idx).*);
+    try testing.expectEqual(@as(u8, 10), deser_u8.get(.zero).*);
+    try testing.expectEqual(@as(u8, 20), deser_u8.get(@as(U8Idx, @enumFromInt(1))).*);
+    try testing.expectEqual(@as(u8, 30), deser_u8.get(@as(U8Idx, @enumFromInt(2))).*);
 
     // 2. Deserialize u16 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
@@ -1196,11 +1191,10 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
     offset += 2 * @sizeOf(u16);
 
-    const u16_first_idx: SafeList(u16).Idx = @enumFromInt(0);
-    const u16_second_idx: SafeList(u16).Idx = @enumFromInt(1);
+    const U16Idx = SafeList(u16).Idx;
     try testing.expectEqual(@as(usize, 2), deser_u16.len());
-    try testing.expectEqual(@as(u16, 1000), deser_u16.get(u16_first_idx).*);
-    try testing.expectEqual(@as(u16, 2000), deser_u16.get(u16_second_idx).*);
+    try testing.expectEqual(@as(u16, 1000), deser_u16.get(.zero).*);
+    try testing.expectEqual(@as(u16, 2000), deser_u16.get(@as(U16Idx, @enumFromInt(1))).*);
 
     // 3. Deserialize u32 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
@@ -1211,15 +1205,12 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u32));
     offset += 4 * @sizeOf(u32);
 
-    const u32_first_idx: SafeList(u32).Idx = @enumFromInt(0);
-    const u32_second_idx: SafeList(u32).Idx = @enumFromInt(1);
-    const u32_third_idx: SafeList(u32).Idx = @enumFromInt(2);
-    const u32_fourth_idx: SafeList(u32).Idx = @enumFromInt(3);
+    const U32Idx = SafeList(u32).Idx;
     try testing.expectEqual(@as(usize, 4), deser_u32.len());
-    try testing.expectEqual(@as(u32, 100_000), deser_u32.get(u32_first_idx).*);
-    try testing.expectEqual(@as(u32, 200_000), deser_u32.get(u32_second_idx).*);
-    try testing.expectEqual(@as(u32, 300_000), deser_u32.get(u32_third_idx).*);
-    try testing.expectEqual(@as(u32, 400_000), deser_u32.get(u32_fourth_idx).*);
+    try testing.expectEqual(@as(u32, 100_000), deser_u32.get(.zero).*);
+    try testing.expectEqual(@as(u32, 200_000), deser_u32.get(@as(U32Idx, @enumFromInt(1))).*);
+    try testing.expectEqual(@as(u32, 300_000), deser_u32.get(@as(U32Idx, @enumFromInt(2))).*);
+    try testing.expectEqual(@as(u32, 400_000), deser_u32.get(@as(U32Idx, @enumFromInt(3))).*);
 
     // 4. Deserialize u64 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
@@ -1230,26 +1221,24 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
     offset += 2 * @sizeOf(u64);
 
-    const u64_first_idx: SafeList(u64).Idx = @enumFromInt(0);
-    const u64_second_idx: SafeList(u64).Idx = @enumFromInt(1);
+    const U64Idx = SafeList(u64).Idx;
     try testing.expectEqual(@as(usize, 2), deser_u64.len());
-    try testing.expectEqual(@as(u64, 10_000_000_000), deser_u64.get(u64_first_idx).*);
-    try testing.expectEqual(@as(u64, 20_000_000_000), deser_u64.get(u64_second_idx).*);
+    try testing.expectEqual(@as(u64, 10_000_000_000), deser_u64.get(.zero).*);
+    try testing.expectEqual(@as(u64, 20_000_000_000), deser_u64.get(@as(U64Idx, @enumFromInt(1))).*);
 
     // 5. Deserialize struct list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(AlignedStruct).Serialized));
     const s_struct = @as(*SafeList(AlignedStruct).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
     const deser_struct = s_struct.deserialize(@as(i64, @intCast(base_addr)));
 
-    const struct_first_idx: SafeList(AlignedStruct).Idx = @enumFromInt(0);
-    const struct_second_idx: SafeList(AlignedStruct).Idx = @enumFromInt(1);
+    const StructIdx = SafeList(AlignedStruct).Idx;
     try testing.expectEqual(@as(usize, 2), deser_struct.len());
-    const item0 = deser_struct.get(struct_first_idx);
+    const item0 = deser_struct.get(.zero);
     try testing.expectEqual(@as(u32, 42), item0.x);
     try testing.expectEqual(@as(u64, 1337), item0.y);
     try testing.expectEqual(@as(u8, 255), item0.z);
 
-    const item1 = deser_struct.get(struct_second_idx);
+    const item1 = deser_struct.get(@as(StructIdx, @enumFromInt(1)));
     try testing.expectEqual(@as(u32, 99), item1.x);
     try testing.expectEqual(@as(u64, 9999), item1.y);
     try testing.expectEqual(@as(u8, 128), item1.z);
@@ -1355,13 +1344,11 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
     offset += 3; // 3 u8 elements
 
-    const d1_first_idx: SafeList(u8).Idx = @enumFromInt(0);
-    const d1_second_idx: SafeList(u8).Idx = @enumFromInt(1);
-    const d1_third_idx: SafeList(u8).Idx = @enumFromInt(2);
+    const D1Idx = SafeList(u8).Idx;
     try testing.expectEqual(@as(usize, 3), d1.len());
-    try testing.expectEqual(@as(u8, 1), d1.get(d1_first_idx).*);
-    try testing.expectEqual(@as(u8, 2), d1.get(d1_second_idx).*);
-    try testing.expectEqual(@as(u8, 3), d1.get(d1_third_idx).*);
+    try testing.expectEqual(@as(u8, 1), d1.get(.zero).*);
+    try testing.expectEqual(@as(u8, 2), d1.get(@as(D1Idx, @enumFromInt(1))).*);
+    try testing.expectEqual(@as(u8, 3), d1.get(@as(D1Idx, @enumFromInt(2))).*);
 
     // 2. Second list - u64
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
@@ -1371,11 +1358,10 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
     offset += 2 * @sizeOf(u64); // 2 u64 elements
 
-    const d2_first_idx: SafeList(u64).Idx = @enumFromInt(0);
-    const d2_second_idx: SafeList(u64).Idx = @enumFromInt(1);
+    const D2Idx = SafeList(u64).Idx;
     try testing.expectEqual(@as(usize, 2), d2.len());
-    try testing.expectEqual(@as(u64, 1_000_000), d2.get(d2_first_idx).*);
-    try testing.expectEqual(@as(u64, 2_000_000), d2.get(d2_second_idx).*);
+    try testing.expectEqual(@as(u64, 1_000_000), d2.get(.zero).*);
+    try testing.expectEqual(@as(u64, 2_000_000), d2.get(@as(D2Idx, @enumFromInt(1))).*);
 
     // 3. Third list - u16
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
@@ -1385,24 +1371,20 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
     offset += 4 * @sizeOf(u16); // 4 u16 elements
 
-    const d3_first_idx: SafeList(u16).Idx = @enumFromInt(0);
-    const d3_second_idx: SafeList(u16).Idx = @enumFromInt(1);
-    const d3_third_idx: SafeList(u16).Idx = @enumFromInt(2);
-    const d3_fourth_idx: SafeList(u16).Idx = @enumFromInt(3);
+    const D3Idx = SafeList(u16).Idx;
     try testing.expectEqual(@as(usize, 4), d3.len());
-    try testing.expectEqual(@as(u16, 100), d3.get(d3_first_idx).*);
-    try testing.expectEqual(@as(u16, 200), d3.get(d3_second_idx).*);
-    try testing.expectEqual(@as(u16, 300), d3.get(d3_third_idx).*);
-    try testing.expectEqual(@as(u16, 400), d3.get(d3_fourth_idx).*);
+    try testing.expectEqual(@as(u16, 100), d3.get(.zero).*);
+    try testing.expectEqual(@as(u16, 200), d3.get(@as(D3Idx, @enumFromInt(1))).*);
+    try testing.expectEqual(@as(u16, 300), d3.get(@as(D3Idx, @enumFromInt(2))).*);
+    try testing.expectEqual(@as(u16, 400), d3.get(@as(D3Idx, @enumFromInt(3))).*);
 
     // 4. Fourth list - u32
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
     const s4 = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
     const d4 = s4.deserialize(@as(i64, @intCast(base)));
 
-    const d4_first_idx: SafeList(u32).Idx = @enumFromInt(0);
     try testing.expectEqual(@as(usize, 1), d4.len());
-    try testing.expectEqual(@as(u32, 42), d4.get(d4_first_idx).*);
+    try testing.expectEqual(@as(u32, 42), d4.get(.zero).*);
 }
 
 test "SafeList CompactWriter brute-force alignment verification" {
@@ -1522,9 +1504,8 @@ test "SafeList CompactWriter brute-force alignment verification" {
             offset = std.mem.alignForward(usize, offset, @alignOf(u8));
             offset += 1; // 1 u8 element
 
-            const u8_first_idx: SafeList(u8).Idx = @enumFromInt(0);
             try testing.expectEqual(@as(usize, 1), d_u8.len());
-            try testing.expectEqual(@as(u8, 42), d_u8.get(u8_first_idx).*);
+            try testing.expectEqual(@as(u8, 42), d_u8.get(.zero).*);
 
             // Second list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(T).Serialized));
@@ -1599,28 +1580,28 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
     // Verify the data
-    const first_idx: SafeMultiList(TestStruct).Idx = @enumFromInt(0);
-    const second_idx: SafeMultiList(TestStruct).Idx = @enumFromInt(1);
-    const third_idx: SafeMultiList(TestStruct).Idx = @enumFromInt(2);
-    const fourth_idx: SafeMultiList(TestStruct).Idx = @enumFromInt(3);
+    const Idx = SafeMultiList(TestStruct).Idx;
     try testing.expectEqual(@as(usize, 4), deserialized.len());
 
     // Verify all the data
-    try testing.expectEqual(@as(u32, 100), deserialized.get(first_idx).id);
-    try testing.expectEqual(@as(u64, 1000), deserialized.get(first_idx).value);
-    try testing.expectEqual(true, deserialized.get(first_idx).flag);
-    try testing.expectEqual(@as(u8, 10), deserialized.get(first_idx).data);
+    try testing.expectEqual(@as(u32, 100), deserialized.get(.zero).id);
+    try testing.expectEqual(@as(u64, 1000), deserialized.get(.zero).value);
+    try testing.expectEqual(true, deserialized.get(.zero).flag);
+    try testing.expectEqual(@as(u8, 10), deserialized.get(.zero).data);
 
+    const second_idx: Idx = @enumFromInt(1);
     try testing.expectEqual(@as(u32, 200), deserialized.get(second_idx).id);
     try testing.expectEqual(@as(u64, 2000), deserialized.get(second_idx).value);
     try testing.expectEqual(false, deserialized.get(second_idx).flag);
     try testing.expectEqual(@as(u8, 20), deserialized.get(second_idx).data);
 
+    const third_idx: Idx = @enumFromInt(2);
     try testing.expectEqual(@as(u32, 300), deserialized.get(third_idx).id);
     try testing.expectEqual(@as(u64, 3000), deserialized.get(third_idx).value);
     try testing.expectEqual(true, deserialized.get(third_idx).flag);
     try testing.expectEqual(@as(u8, 30), deserialized.get(third_idx).data);
 
+    const fourth_idx: Idx = @enumFromInt(3);
     try testing.expectEqual(@as(u32, 400), deserialized.get(fourth_idx).id);
     try testing.expectEqual(@as(u64, 4000), deserialized.get(fourth_idx).value);
     try testing.expectEqual(false, deserialized.get(fourth_idx).flag);
@@ -1754,35 +1735,31 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
     const base = @as(i64, @intCast(@intFromPtr(buffer.ptr)));
 
     // Deserialize list1 (at offset1)
-    const d1_first_idx: SafeMultiList(Type1).Idx = @enumFromInt(0);
-    const d1_second_idx: SafeMultiList(Type1).Idx = @enumFromInt(1);
-    const d1_third_idx: SafeMultiList(Type1).Idx = @enumFromInt(2);
+    const D1Idx = SafeMultiList(Type1).Idx;
     const d1_serialized = @as(*SafeMultiList(Type1).Serialized, @ptrCast(@alignCast(buffer.ptr + offset1)));
     const d1 = d1_serialized.deserialize(base);
     try testing.expectEqual(@as(usize, 3), d1.len());
-    try testing.expectEqual(@as(u8, 10), d1.get(d1_first_idx).a);
-    try testing.expectEqual(@as(u16, 100), d1.get(d1_first_idx).b);
-    try testing.expectEqual(@as(u8, 20), d1.get(d1_second_idx).a);
-    try testing.expectEqual(@as(u16, 200), d1.get(d1_second_idx).b);
-    try testing.expectEqual(@as(u8, 30), d1.get(d1_third_idx).a);
-    try testing.expectEqual(@as(u16, 300), d1.get(d1_third_idx).b);
+    try testing.expectEqual(@as(u8, 10), d1.get(.zero).a);
+    try testing.expectEqual(@as(u16, 100), d1.get(.zero).b);
+    try testing.expectEqual(@as(u8, 20), d1.get(@as(D1Idx, @enumFromInt(1))).a);
+    try testing.expectEqual(@as(u16, 200), d1.get(@as(D1Idx, @enumFromInt(1))).b);
+    try testing.expectEqual(@as(u8, 30), d1.get(@as(D1Idx, @enumFromInt(2))).a);
+    try testing.expectEqual(@as(u16, 300), d1.get(@as(D1Idx, @enumFromInt(2))).b);
 
     // Deserialize list2 (at offset2)
-    const d2_first_idx: SafeMultiList(Type2).Idx = @enumFromInt(0);
     const d2_serialized = @as(*SafeMultiList(Type2).Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
     const d2 = d2_serialized.deserialize(base);
     try testing.expectEqual(@as(usize, 2), d2.len());
-    try testing.expectEqual(@as(u32, 1000), d2.get(d2_first_idx).x);
-    try testing.expectEqual(@as(u64, 10000), d2.get(d2_first_idx).y);
+    try testing.expectEqual(@as(u32, 1000), d2.get(.zero).x);
+    try testing.expectEqual(@as(u64, 10000), d2.get(.zero).y);
 
     // Deserialize list3 (at offset3)
-    const d3_first_idx: SafeMultiList(Type3).Idx = @enumFromInt(0);
     const d3_serialized = @as(*SafeMultiList(Type3).Serialized, @ptrCast(@alignCast(buffer.ptr + offset3)));
     const d3 = d3_serialized.deserialize(base);
     try testing.expectEqual(@as(usize, 2), d3.len());
-    try testing.expectEqual(@as(u64, 999), d3.get(d3_first_idx).id);
-    try testing.expectEqual(@as(u8, 42), d3.get(d3_first_idx).data);
-    try testing.expectEqual(true, d3.get(d3_first_idx).flag);
+    try testing.expectEqual(@as(u64, 999), d3.get(.zero).id);
+    try testing.expectEqual(@as(u8, 42), d3.get(.zero).data);
+    try testing.expectEqual(true, d3.get(.zero).flag);
 }
 
 test "SafeMultiList CompactWriter brute-force alignment verification" {
@@ -1872,7 +1849,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
         const d2_serialized = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr + offset2)));
         const d2 = d2_serialized.deserialize(base);
         if (length > 0) {
-            const d2_first_idx: SafeMultiList(TestType).Idx = @enumFromInt(0);
+            const d2_first_idx: SafeMultiList(TestType).Idx = .zero;
             try testing.expectEqual(@as(usize, 1), d2.len());
             try testing.expectEqual(@as(u8, 255), d2.get(d2_first_idx).a);
             try testing.expectEqual(@as(u32, 999999), d2.get(d2_first_idx).b);
@@ -2345,7 +2322,7 @@ test "SafeMultiList.Serialized roundtrip" {
     try testing.expectEqual(@as(u8, 64), c_values[2]);
 
     // Check get() method
-    const first_idx: SafeMultiList(TestStruct).Idx = @enumFromInt(0);
+    const first_idx: SafeMultiList(TestStruct).Idx = .zero;
     const item1 = list.get(first_idx);
     try testing.expectEqual(@as(u32, 100), item1.a);
     try testing.expectEqual(@as(f32, 1.5), item1.b);

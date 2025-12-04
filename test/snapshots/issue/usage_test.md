@@ -14,8 +14,8 @@ value = 42
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
-TYPE REDECLARED - usage_test.md:3:1:3:14
 UNDERSCORE IN TYPE ALIAS - usage_test.md:1:1:1:1
+MISSING METHOD - usage_test.md:6:9:6:11
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -28,24 +28,6 @@ UnusedType := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _UsedType_ is being redeclared.
-
-The redeclaration is here:
-**usage_test.md:3:1:3:14:**
-```roc
-UsedType := _
-```
-^^^^^^^^^^^^^
-
-But _UsedType_ was already declared here:
-**usage_test.md:3:1:3:14:**
-```roc
-UsedType := _
-```
-^^^^^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -56,6 +38,20 @@ UnusedType := _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**usage_test.md:6:9:6:11:**
+```roc
+value = 42
+```
+        ^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    _UsedType_
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -107,12 +103,12 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "UsedType")))
 	(type_decls
 		(nominal (type "UnusedType")
 			(ty-header (name "UnusedType")))
 		(nominal (type "UsedType")
 			(ty-header (name "UsedType"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "UsedType"))))
 ~~~

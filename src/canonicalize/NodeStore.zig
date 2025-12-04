@@ -3742,7 +3742,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
     // Named constant for the first node index in the deserialized data
-    const first_node_idx: Node.Idx = @enumFromInt(0);
+    const first_node_idx: Node.Idx = .zero;
     const retrieved_node = deserialized.nodes.get(first_node_idx);
     try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
     try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
@@ -3757,7 +3757,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
     // Named constant for the first region index in the deserialized data
-    const first_region_idx: Region.Idx = @enumFromInt(0);
+    const first_region_idx: Region.Idx = .zero;
     const retrieved_region = deserialized.regions.get(first_region_idx);
     try testing.expectEqual(region.start.offset, retrieved_region.start.offset);
     try testing.expectEqual(region.end.offset, retrieved_region.end.offset);
@@ -3849,7 +3849,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
 
     // Named constants for accessing deserialized nodes at specific indices
-    const first_node_idx: Node.Idx = @enumFromInt(0);
+    const first_node_idx: Node.Idx = .zero;
     const second_node_idx: Node.Idx = @enumFromInt(1);
     const third_node_idx: Node.Idx = @enumFromInt(2);
 

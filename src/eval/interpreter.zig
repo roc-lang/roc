@@ -185,16 +185,13 @@ pub const Interpreter = struct {
     const Binding = struct {
         pattern_idx: can.CIR.Pattern.Idx,
         value: StackValue,
-        expr_idx: can.CIR.Expr.Idx,
+        /// Optional expression index. Null for bindings that don't have an associated
+        /// expression (e.g., function parameters, method parameters, etc. where the
+        /// binding comes from a pattern match rather than a def expression).
+        expr_idx: ?can.CIR.Expr.Idx,
         /// The source module environment where this binding was created.
         /// Used to distinguish bindings from different modules with the same pattern_idx.
         source_env: *const can.ModuleEnv,
-
-        /// Sentinel value for bindings that don't have an associated expression.
-        /// Used for function parameters, method parameters, etc. where the binding
-        /// comes from a pattern match rather than a def expression.
-        /// The code in evalLookupLocal checks for this to skip expr-based logic.
-        const no_expr_idx: can.CIR.Expr.Idx = @enumFromInt(0);
     };
     const DefInProgress = struct {
         pattern_idx: can.CIR.Pattern.Idx,
@@ -606,7 +603,7 @@ pub const Interpreter = struct {
                     // getElement expects original index and converts to sorted internally
                     const arg_value = try args_accessor.getElement(j, param_rt_vars[j]);
                     // expr_idx not used in this context - binding happens during function call setup
-                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, Binding.no_expr_idx);
+                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, null);
                     if (!matched) return error.TypeMismatch;
                 }
             }
@@ -930,13 +927,13 @@ pub const Interpreter = struct {
         try self.bindings.append(.{
             .pattern_idx = cmp_params[0],
             .value = arg0,
-            .expr_idx = Binding.no_expr_idx, // expr_idx not used for comparison function parameter bindings
+            .expr_idx = null, // expr_idx not used for comparison function parameter bindings
             .source_env = self.env,
         });
         try self.bindings.append(.{
             .pattern_idx = cmp_params[1],
             .value = arg1,
-            .expr_idx = Binding.no_expr_idx, // expr_idx not used for comparison function parameter bindings
+            .expr_idx = null, // expr_idx not used for comparison function parameter bindings
             .source_env = self.env,
         });
 
@@ -6697,7 +6694,7 @@ pub const Interpreter = struct {
         self.bindings.append(.{
             .pattern_idx = params[0],
             .value = copied_value,
-            .expr_idx = Binding.no_expr_idx, // expr_idx not used for inspect method parameter bindings
+            .expr_idx = null, // expr_idx not used for inspect method parameter bindings
             .source_env = self.env,
         }) catch return null;
 
@@ -6851,7 +6848,7 @@ pub const Interpreter = struct {
         value_rt_var: types.Var,
         roc_ops: *RocOps,
         out_binds: *std.array_list.AlignedManaged(Binding, null),
-        expr_idx: can.CIR.Expr.Idx,
+        expr_idx: ?can.CIR.Expr.Idx,
     ) !bool {
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
@@ -9542,9 +9539,8 @@ pub const Interpreter = struct {
                     const b = self.bindings.items[i];
                     if (b.pattern_idx == lookup.pattern_idx) {
                         // Found the binding - recursively check what it points to
-                        const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
-                        if (expr_idx_int != 0) {
-                            return self.findRootNumericLiteral(b.expr_idx, b.source_env);
+                        if (b.expr_idx) |binding_expr_idx| {
+                            return self.findRootNumericLiteral(binding_expr_idx, b.source_env);
                         }
                         return null;
                     }
@@ -9594,9 +9590,8 @@ pub const Interpreter = struct {
                     i -= 1;
                     const b = self.bindings.items[i];
                     if (b.pattern_idx == lookup.pattern_idx) {
-                        const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
-                        if (expr_idx_int != 0) {
-                            try self.setupFlexContextForNumericExpr(b.expr_idx, b.source_env, target_rt_var);
+                        if (b.expr_idx) |binding_expr_idx| {
+                            try self.setupFlexContextForNumericExpr(binding_expr_idx, b.source_env, target_rt_var);
                         }
                         return;
                     }
@@ -11531,9 +11526,8 @@ pub const Interpreter = struct {
                 (b.source_env.module_name_idx == self.env.module_name_idx);
             if (b.pattern_idx == lookup.pattern_idx and same_module) {
                 // Check if this binding came from an e_anno_only expression
-                const expr_idx_int: u32 = @intFromEnum(b.expr_idx);
-                if (expr_idx_int != 0) {
-                    const binding_expr = self.env.store.getExpr(b.expr_idx);
+                if (b.expr_idx) |expr_idx| {
+                    const binding_expr = self.env.store.getExpr(expr_idx);
                     if (binding_expr == .e_anno_only and b.value.layout.tag != .closure) {
                         self.triggerCrash("This value has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
@@ -11555,7 +11549,7 @@ pub const Interpreter = struct {
                             const layouts_differ = !cached_layout.eql(expected_layout);
                             if (layouts_differ) {
                                 // Check if the binding expression is a numeric literal (direct or via lookup)
-                                const root_numeric_expr = self.findRootNumericLiteral(b.expr_idx, b.source_env);
+                                const root_numeric_expr = self.findRootNumericLiteral(expr_idx, b.source_env);
                                 if (root_numeric_expr) |root_expr_idx| {
                                     // Re-evaluate the numeric expression with the expected type.
                                     // Set up flex_type_context so flex vars in the expression
@@ -13101,7 +13095,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
                         .value = value,
-                        .expr_idx = Binding.no_expr_idx, // expr_idx not used for inspect method parameter bindings
+                        .expr_idx = null, // expr_idx not used for inspect method parameter bindings
                         .source_env = self.env,
                     });
 
@@ -13494,7 +13488,7 @@ pub const Interpreter = struct {
                         // patternMatchesBind borrows the value and creates copies for bindings, so we need to
                         // decref the original arg_value after successful binding
                         // expr_idx not used for function parameter bindings
-                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, Binding.no_expr_idx)) {
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
                             // Pattern match failed - cleanup and error
                             self.env = saved_env;
                             _ = self.active_closures.pop();
@@ -13700,7 +13694,7 @@ pub const Interpreter = struct {
                 try self.bindings.append(.{
                     .pattern_idx = params[0],
                     .value = operand,
-                    .expr_idx = Binding.no_expr_idx, // expr_idx not used for unary operator method parameter bindings
+                    .expr_idx = null, // expr_idx not used for unary operator method parameter bindings
                     .source_env = self.env,
                 });
 
@@ -14104,14 +14098,14 @@ pub const Interpreter = struct {
                 // the bindings retain their own references.
                 // Use effective rt_vars from values if available.
                 // expr_idx not used for binary operator method parameter bindings
-                if (!try self.patternMatchesBind(params[0], lhs, effective_receiver_rt_var, roc_ops, &self.bindings, Binding.no_expr_idx)) {
+                if (!try self.patternMatchesBind(params[0], lhs, effective_receiver_rt_var, roc_ops, &self.bindings, null)) {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
                     _ = self.active_closures.pop();
                     return error.TypeMismatch;
                 }
-                if (!try self.patternMatchesBind(params[1], rhs, rhs.rt_var, roc_ops, &self.bindings, Binding.no_expr_idx)) {
+                if (!try self.patternMatchesBind(params[1], rhs, rhs.rt_var, roc_ops, &self.bindings, null)) {
                     // Clean up the first binding we added
                     self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                     self.flex_type_context.deinit();
@@ -14296,7 +14290,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
                         .value = receiver_value,
-                        .expr_idx = Binding.no_expr_idx, // expr_idx not used for field access method parameter bindings
+                        .expr_idx = null, // expr_idx not used for field access method parameter bindings
                         .source_env = self.env,
                     });
 
@@ -14528,7 +14522,7 @@ pub const Interpreter = struct {
                 try self.bindings.append(.{
                     .pattern_idx = params[0],
                     .value = receiver_value,
-                    .expr_idx = Binding.no_expr_idx, // expr_idx not used for method call parameter bindings
+                    .expr_idx = null, // expr_idx not used for method call parameter bindings
                     .source_env = self.env,
                 });
 
@@ -14537,7 +14531,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[1 + idx],
                         .value = arg,
-                        .expr_idx = Binding.no_expr_idx, // expr_idx not used for method call parameter bindings
+                        .expr_idx = null, // expr_idx not used for method call parameter bindings
                         .source_env = self.env,
                     });
                 }
@@ -14612,7 +14606,7 @@ pub const Interpreter = struct {
                 // Bind the pattern
                 const loop_bindings_start = self.bindings.items.len;
                 // expr_idx not used for for-loop pattern bindings
-                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, Binding.no_expr_idx)) {
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, null)) {
                     elem_value.decref(&self.runtime_layout_store, roc_ops);
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
@@ -14681,7 +14675,7 @@ pub const Interpreter = struct {
                 // Bind the pattern
                 const new_loop_bindings_start = self.bindings.items.len;
                 // expr_idx not used for for-loop pattern bindings
-                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, Binding.no_expr_idx)) {
+                if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, null)) {
                     elem_value.decref(&self.runtime_layout_store, roc_ops);
                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
@@ -14933,7 +14927,7 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
                         .value = value,
-                        .expr_idx = Binding.no_expr_idx, // expr_idx not used for inspect method parameter bindings
+                        .expr_idx = null, // expr_idx not used for inspect method parameter bindings
                         .source_env = self.env,
                     });
 
@@ -15107,13 +15101,13 @@ pub const Interpreter = struct {
                         try self.bindings.append(.{
                             .pattern_idx = cmp_params[0],
                             .value = arg0,
-                            .expr_idx = Binding.no_expr_idx, // expr_idx not used for comparison function parameter bindings
+                            .expr_idx = null, // expr_idx not used for comparison function parameter bindings
                             .source_env = self.env,
                         });
                         try self.bindings.append(.{
                             .pattern_idx = cmp_params[1],
                             .value = arg1,
-                            .expr_idx = Binding.no_expr_idx, // expr_idx not used for comparison function parameter bindings
+                            .expr_idx = null, // expr_idx not used for comparison function parameter bindings
                             .source_env = self.env,
                         });
 
@@ -15189,13 +15183,13 @@ pub const Interpreter = struct {
                     try self.bindings.append(.{
                         .pattern_idx = cmp_params[0],
                         .value = arg0,
-                        .expr_idx = Binding.no_expr_idx, // expr_idx not used for comparison function parameter bindings
+                        .expr_idx = null, // expr_idx not used for comparison function parameter bindings
                         .source_env = self.env,
                     });
                     try self.bindings.append(.{
                         .pattern_idx = cmp_params[1],
                         .value = arg1,
-                        .expr_idx = Binding.no_expr_idx, // expr_idx not used for comparison function parameter bindings
+                        .expr_idx = null, // expr_idx not used for comparison function parameter bindings
                         .source_env = self.env,
                     });
 
@@ -15605,7 +15599,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
 
     // Create an Import.Idx for module A
     // Using first import index for test purposes
-    const first_import_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    const first_import_idx: can.CIR.Import.Idx = .zero;
     try interp.import_envs.put(interp.allocator, first_import_idx, &module_a);
 
     // Verify we can retrieve module A's environment
@@ -15668,7 +15662,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     // Create Import.Idx entries for both modules
     // Using sequential import indices for test purposes
-    const first_import_idx: can.CIR.Import.Idx = @enumFromInt(0);
+    const first_import_idx: can.CIR.Import.Idx = .zero;
     const second_import_idx: can.CIR.Import.Idx = @enumFromInt(1);
     try interp.import_envs.put(interp.allocator, first_import_idx, &module_b);
     try interp.import_envs.put(interp.allocator, second_import_idx, &module_c);

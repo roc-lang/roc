@@ -1013,7 +1013,10 @@ const SlotStore = struct {
     }
 
     /// A type-safe index into the store
-    const Idx = enum(u32) { _ };
+    const Idx = enum(u32) {
+        zero = 0,
+        _,
+    };
 };
 
 /// Represents a store of descriptors
@@ -1116,7 +1119,10 @@ const DescStore = struct {
 
     /// A type-safe index into the store
     /// This type is made public below
-    const Idx = enum(u32) { _ };
+    const Idx = enum(u32) {
+        zero = 0,
+        _,
+    };
 };
 
 /// An index into the desc store
@@ -1394,9 +1400,9 @@ test "SlotStore.Serialized roundtrip" {
 
     // Named indices for test clarity
     const desc_idx_100: DescStore.Idx = @enumFromInt(100);
-    const var_0: Var = @enumFromInt(0);
+    const var_0: Var = .zero;
     const desc_idx_200: DescStore.Idx = @enumFromInt(200);
-    const slot_idx_0: SlotStore.Idx = @enumFromInt(0);
+    const slot_idx_0: SlotStore.Idx = .zero;
     const slot_idx_1: SlotStore.Idx = @enumFromInt(1);
     const slot_idx_2: SlotStore.Idx = @enumFromInt(2);
 
@@ -1451,7 +1457,7 @@ test "DescStore.Serialized roundtrip" {
     const CompactWriter = collections.CompactWriter;
 
     // Named indices for test clarity
-    const desc_idx_0: DescStore.Idx = @enumFromInt(0);
+    const desc_idx_0: DescStore.Idx = .zero;
     const desc_idx_1: DescStore.Idx = @enumFromInt(1);
 
     var desc_store = try DescStore.init(gpa, 4);

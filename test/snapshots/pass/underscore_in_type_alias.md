@@ -21,20 +21,14 @@ TagType := [Some(_), None]
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-TYPE REDECLARED - underscore_in_type_alias.md:3:1:3:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-TYPE REDECLARED - underscore_in_type_alias.md:5:1:5:23
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:5:21:5:21
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:5:16:5:20
-TYPE REDECLARED - underscore_in_type_alias.md:7:1:7:39
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-TYPE REDECLARED - underscore_in_type_alias.md:9:1:9:23
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-TYPE REDECLARED - underscore_in_type_alias.md:11:1:11:25
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:11:15:11:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-TYPE REDECLARED - underscore_in_type_alias.md:13:1:13:27
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
@@ -48,24 +42,6 @@ MyType : _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _OtherType_ is being redeclared.
-
-The redeclaration is here:
-**underscore_in_type_alias.md:3:1:3:15:**
-```roc
-OtherType := _
-```
-^^^^^^^^^^^^^^
-
-But _OtherType_ was already declared here:
-**underscore_in_type_alias.md:3:1:3:15:**
-```roc
-OtherType := _
-```
-^^^^^^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -76,24 +52,6 @@ MyType : _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE REDECLARED**
-The type _ComplexType_ is being redeclared.
-
-The redeclaration is here:
-**underscore_in_type_alias.md:5:1:5:23:**
-```roc
-ComplexType := List(_)
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-But _ComplexType_ was already declared here:
-**underscore_in_type_alias.md:5:1:5:23:**
-```roc
-ComplexType := List(_)
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -117,53 +75,6 @@ ComplexType := List(_)
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _RecordType_ is being redeclared.
-
-The redeclaration is here:
-**underscore_in_type_alias.md:7:1:7:39:**
-```roc
-RecordType := { field: _, other: U32 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _RecordType_ was already declared here:
-**underscore_in_type_alias.md:7:1:7:39:**
-```roc
-RecordType := { field: _, other: U32 }
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**UNDERSCORE IN TYPE ALIAS**
-Underscores are not allowed in type alias declarations.
-
-**underscore_in_type_alias.md:1:1:1:1:**
-```roc
-MyType : _
-```
-^
-
-Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE REDECLARED**
-The type _FunctionType_ is being redeclared.
-
-The redeclaration is here:
-**underscore_in_type_alias.md:9:1:9:23:**
-```roc
-FunctionType := _ -> _
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-But _FunctionType_ was already declared here:
-**underscore_in_type_alias.md:9:1:9:23:**
-```roc
-FunctionType := _ -> _
-```
-^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
 
@@ -186,23 +97,16 @@ MyType : _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _TupleType_ is being redeclared.
+**UNDERSCORE IN TYPE ALIAS**
+Underscores are not allowed in type alias declarations.
 
-The redeclaration is here:
-**underscore_in_type_alias.md:11:1:11:25:**
+**underscore_in_type_alias.md:1:1:1:1:**
 ```roc
-TupleType := (_, U32, _)
+MyType : _
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^
+^
 
-But _TupleType_ was already declared here:
-**underscore_in_type_alias.md:11:1:11:25:**
-```roc
-TupleType := (_, U32, _)
-```
-^^^^^^^^^^^^^^^^^^^^^^^^
-
+Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -225,24 +129,6 @@ MyType : _
 ^
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
-
-**TYPE REDECLARED**
-The type _TagType_ is being redeclared.
-
-The redeclaration is here:
-**underscore_in_type_alias.md:13:1:13:27:**
-```roc
-TagType := [Some(_), None]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But _TagType_ was already declared here:
-**underscore_in_type_alias.md:13:1:13:27:**
-```roc
-TagType := [Some(_), None]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
 
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.

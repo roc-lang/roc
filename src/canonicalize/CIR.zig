@@ -721,7 +721,10 @@ pub fn fromF64(f: f64) ?RocDec {
 
 /// Represents an import statement in a module
 pub const Import = struct {
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        zero = 0,
+        _,
+    };
 
     /// Sentinel value indicating unresolved import (max u32)
     pub const UNRESOLVED_MODULE: u32 = std.math.maxInt(u32);

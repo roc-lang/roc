@@ -15,45 +15,9 @@ OpaqueType2(_a, b) :: b
 OpaqueType3(a, _b) :: a
 ~~~
 # EXPECTED
-TYPE REDECLARED - underscore_prefixed_param_in_opaque_type.md:5:1:5:24
-TYPE REDECLARED - underscore_prefixed_param_in_opaque_type.md:8:1:8:24
+NIL
 # PROBLEMS
-**TYPE REDECLARED**
-The type _OpaqueType2_ is being redeclared.
-
-The redeclaration is here:
-**underscore_prefixed_param_in_opaque_type.md:5:1:5:24:**
-```roc
-OpaqueType2(_a, b) :: b
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But _OpaqueType2_ was already declared here:
-**underscore_prefixed_param_in_opaque_type.md:5:1:5:24:**
-```roc
-OpaqueType2(_a, b) :: b
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _OpaqueType3_ is being redeclared.
-
-The redeclaration is here:
-**underscore_prefixed_param_in_opaque_type.md:8:1:8:24:**
-```roc
-OpaqueType3(a, _b) :: a
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But _OpaqueType3_ was already declared here:
-**underscore_prefixed_param_in_opaque_type.md:8:1:8:24:**
-```roc
-OpaqueType3(a, _b) :: a
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,NamedUnderscore,CloseRound,OpDoubleColon,UpperIdent,

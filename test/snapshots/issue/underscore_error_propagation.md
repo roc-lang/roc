@@ -21,9 +21,8 @@ goodValue = "test"
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - underscore_error_propagation.md:1:1:1:1
-TYPE REDECLARED - underscore_error_propagation.md:3:1:3:22
-TYPE REDECLARED - underscore_error_propagation.md:8:1:8:16
-TYPE REDECLARED - underscore_error_propagation.md:10:1:10:24
+TYPE MISMATCH - underscore_error_propagation.md:6:9:6:15
+TYPE MISMATCH - underscore_error_propagation.md:13:13:13:19
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -36,59 +35,33 @@ BadBase := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE REDECLARED**
-The type _BadDerived_ is being redeclared.
-
-The redeclaration is here:
-**underscore_error_propagation.md:3:1:3:22:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_propagation.md:6:9:6:15:**
 ```roc
-BadDerived := BadBase
+value = "test"
 ```
-^^^^^^^^^^^^^^^^^^^^^
+        ^^^^^^
 
-But _BadDerived_ was already declared here:
-**underscore_error_propagation.md:3:1:3:22:**
+It has the type:
+    _Str_
+
+But the type annotation says it should have the type:
+    _BadDerived_
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**underscore_error_propagation.md:13:13:13:19:**
 ```roc
-BadDerived := BadBase
+goodValue = "test"
 ```
-^^^^^^^^^^^^^^^^^^^^^
+            ^^^^^^
 
+It has the type:
+    _Str_
 
-**TYPE REDECLARED**
-The type _GoodBase_ is being redeclared.
-
-The redeclaration is here:
-**underscore_error_propagation.md:8:1:8:16:**
-```roc
-GoodBase := Str
-```
-^^^^^^^^^^^^^^^
-
-But _GoodBase_ was already declared here:
-**underscore_error_propagation.md:8:1:8:16:**
-```roc
-GoodBase := Str
-```
-^^^^^^^^^^^^^^^
-
-
-**TYPE REDECLARED**
-The type _GoodDerived_ is being redeclared.
-
-The redeclaration is here:
-**underscore_error_propagation.md:10:1:10:24:**
-```roc
-GoodDerived := GoodBase
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But _GoodDerived_ was already declared here:
-**underscore_error_propagation.md:10:1:10:24:**
-```roc
-GoodDerived := GoodBase
-```
-^^^^^^^^^^^^^^^^^^^^^^^
-
+But the type annotation says it should have the type:
+    _GoodDerived_
 
 # TOKENS
 ~~~zig
@@ -172,8 +145,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str"))
-		(patt (type "Str")))
+		(patt (type "Error"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "BadBase")
 			(ty-header (name "BadBase")))
@@ -184,6 +157,6 @@ NO CHANGE
 		(nominal (type "GoodDerived")
 			(ty-header (name "GoodDerived"))))
 	(expressions
-		(expr (type "Str"))
-		(expr (type "Str"))))
+		(expr (type "Error"))
+		(expr (type "Error"))))
 ~~~

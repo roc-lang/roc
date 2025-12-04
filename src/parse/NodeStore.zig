@@ -22,7 +22,7 @@ const sexpr = base.sexpr;
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
 /// The root node is always stored at index 0 in the node list.
-pub const root_node_idx: Node.List.Idx = @enumFromInt(0);
+pub const root_node_idx: Node.List.Idx = .zero;
 
 const NodeStore = @This();
 

@@ -33,6 +33,7 @@ test {
 
 /// A type variable
 pub const Var = enum(u32) {
+    zero = 0,
     _,
 
     /// A safe list of type variables
