@@ -87,7 +87,7 @@ const TestsSummaryStep = struct {
 /// 2. They are brittle to changes that type-checking should not be sensitive to
 ///
 /// Instead, we always compare indices - either into node stores or to interned string indices.
-/// This step enforces that rule by failing the build if `std.mem.` is found in src/check/ or src/layout/.
+/// This step enforces that rule by failing the build if `std.mem.` is found in src/canonicalize/, src/check/, src/layout/, or src/eval/.
 const CheckTypeCheckerPatternsStep = struct {
     step: Step,
 
@@ -112,8 +112,8 @@ const CheckTypeCheckerPatternsStep = struct {
         var violations = std.ArrayList(Violation).empty;
         defer violations.deinit(allocator);
 
-        // Recursively scan src/check/, src/layout/, and src/eval/ for .zig files
-        const dirs_to_scan = [_][]const u8{ "src/check", "src/layout", "src/eval" };
+        // Recursively scan src/canonicalize/, src/check/, src/layout/, and src/eval/ for .zig files
+        const dirs_to_scan = [_][]const u8{ "src/canonicalize", "src/check", "src/layout", "src/eval" };
         for (dirs_to_scan) |dir_path| {
             var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
                 return step.fail("Failed to open {s} directory: {}", .{ dir_path, err });
@@ -130,7 +130,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("=" ** 80 ++ "\n\n", .{});
 
             std.debug.print(
-                \\Code in src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
+                \\Code in src/canonicalize/, src/check/, src/layout/, and src/eval/ must NOT do raw string comparison or manipulation.
                 \\
                 \\WHY THIS RULE EXISTS:
                 \\  We NEVER do string or byte comparisons because:
@@ -170,7 +170,7 @@ const CheckTypeCheckerPatternsStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} forbidden patterns (raw string comparison or manipulation) in src/check/, src/layout/, or src/eval/. " ++
+                "Found {d} forbidden patterns (raw string comparison or manipulation) in src/canonicalize/, src/check/, src/layout/, or src/eval/. " ++
                     "See above for details on why this is forbidden and what to do instead.",
                 .{violations.items.len},
             );
