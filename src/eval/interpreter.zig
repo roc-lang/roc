@@ -12422,8 +12422,10 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                        // Only set rt_var if the result doesn't already have one.
-                        // Built-in functions may return values with more specific rt_var.
+                        // Preserve rt_var from the builtin if set, otherwise use call site's expected type.
+                        // Builtins like list_get_unsafe set rt_var to the element's concrete type,
+                        // which is more specific than the call site's polymorphic type and needed
+                        // for correct method dispatch on the result.
                         if (result.rt_var == null) {
                             result.rt_var = ci.call_ret_rt_var;
                         }
@@ -12623,9 +12625,9 @@ pub const Interpreter = struct {
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
-                // Only set rt_var from call_ret_rt_var if the result doesn't already have one.
-                // Built-in functions like list_get_unsafe may return values with more specific
-                // rt_var information that should be preserved.
+                // Preserve rt_var from the function if set, otherwise use call site's expected type.
+                // Functions may return values with concrete rt_var (e.g., list element types)
+                // that is more specific than the call site's polymorphic type.
                 if (result.rt_var == null) {
                     if (cleanup.call_ret_rt_var) |rt_var| {
                         result.rt_var = rt_var;
