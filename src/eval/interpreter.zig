@@ -2095,15 +2095,45 @@ pub const Interpreter = struct {
                 // Null pointer from list_get_unsafe is a compiler bug - bounds should have been checked
                 std.debug.assert(elem_ptr != null);
 
+                // Try to get the element's runtime type from the list's type.
+                // This is needed for polymorphic dispatch on list elements.
+                const elem_rt_var: ?types.Var = blk: {
+                    // First try return_rt_var (the declared return type)
+                    if (return_rt_var) |rv| {
+                        const resolved = self.runtime_types.resolveVar(rv);
+                        if (resolved.desc.content == .structure) break :blk rv;
+                    }
+                    // Fall back to extracting from the list's attached type
+                    if (list_arg.rt_var) |list_rt_var| {
+                        const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                        if (list_resolved.desc.content == .structure) {
+                            if (list_resolved.desc.content.structure == .nominal_type) {
+                                const nom = list_resolved.desc.content.structure.nominal_type;
+                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                // vars[0] is backing var, vars[1] is element type
+                                if (vars.len >= 2) {
+                                    const elem_var = vars[1];
+                                    _ = self.runtime_types.resolveVar(elem_var);
+                                    break :blk elem_var;
+                                }
+                            }
+                        }
+                    }
+                    break :blk return_rt_var;
+                };
+
                 // Create StackValue pointing to the element
                 const elem_value = StackValue{
                     .layout = elem_layout,
                     .ptr = @ptrCast(elem_ptr.?),
                     .is_initialized = true,
+                    .rt_var = elem_rt_var,
                 };
 
                 // Copy to new location and increment refcount
-                return try self.pushCopy(elem_value, roc_ops);
+                var result = try self.pushCopy(elem_value, roc_ops);
+                result.rt_var = elem_rt_var; // Ensure rt_var is preserved after copy
+                return result;
             },
             .list_sort_with => {
                 // list_sort_with is handled specially in call_invoke_closure continuation
@@ -5768,16 +5798,7 @@ pub const Interpreter = struct {
             };
         }
 
-        // Structural comparison of the backing type
-        // This handles nominal types like Try that wrap tag unions
-        const backing_var = self.runtime_types.getNominalBackingVar(nom);
-        const backing_resolved = self.runtime_types.resolveVar(backing_var);
-
-        if (backing_resolved.desc.content == .structure) {
-            return self.valuesStructurallyEqual(lhs, backing_var, rhs, backing_var, roc_ops);
-        }
-
-        // For other cases, fall back to attempting scalar comparison
+        // For scalar types, fall back to attempting scalar comparison
         // This handles cases like Bool which wraps a tag union but is represented as a scalar
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const order = self.compareNumericScalars(lhs, rhs) catch @panic("dispatchNominalIsEq: failed to compare scalars");
@@ -7357,13 +7378,12 @@ pub const Interpreter = struct {
 
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
-        // Check flex_type_context BEFORE translate_cache for flex/rigid types.
-        // This is critical for polymorphic functions: the same compile-time flex/rigid var
+        // Check flex_type_context BEFORE translate_cache for flex types.
+        // This is critical for polymorphic functions: the same compile-time flex var
         // may need to translate to different runtime types depending on calling context.
         // For example, `sum = |num| 0 + num` called as U64.to_str(sum(2400)) needs
         // the literal 0 to become U64, not the cached Dec default.
-        // Type parameters in generic functions are often rigid vars.
-        if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+        if (resolved.desc.content == .flex) {
             if (self.flex_type_context.get(key)) |context_rt_var| {
                 return context_rt_var;
             }
@@ -8424,6 +8444,8 @@ pub const Interpreter = struct {
             saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
+            /// Whether to negate boolean result (for != operator)
+            negate_bool_result: bool = false,
         };
 
         /// Unary operation - apply method after operand is evaluated
@@ -11338,7 +11360,8 @@ pub const Interpreter = struct {
                     if (total_count == 0) {
                         // Empty list (shouldn't happen as it's handled directly)
                         const list_layout = try self.getRuntimeLayout(lc.list_rt_var);
-                        const dest = try self.pushRaw(list_layout, 0);
+                        var dest = try self.pushRaw(list_layout, 0);
+                        dest.rt_var = lc.list_rt_var;
                         if (dest.ptr != null) {
                             const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
                             header.* = RocList.empty();
@@ -11363,7 +11386,8 @@ pub const Interpreter = struct {
                         const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
                         const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
 
-                        const dest = try self.pushRaw(actual_list_layout, 0);
+                        var dest = try self.pushRaw(actual_list_layout, 0);
+                        dest.rt_var = lc.list_rt_var;
                         if (dest.ptr == null) {
                             // Decref all values before returning
                             for (values) |val| {
@@ -12398,7 +12422,11 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                        result.rt_var = ci.call_ret_rt_var;
+                        // Only set rt_var if the result doesn't already have one.
+                        // Built-in functions may return values with more specific rt_var.
+                        if (result.rt_var == null) {
+                            result.rt_var = ci.call_ret_rt_var;
+                        }
                         try value_stack.push(result);
                         return true;
                     }
@@ -12422,7 +12450,10 @@ pub const Interpreter = struct {
                         self.env = saved_env;
                         func_val.decref(&self.runtime_layout_store, roc_ops);
                         if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
-                        result.rt_var = ret_rt_var;
+                        // Only set rt_var if the result doesn't already have one.
+                        if (result.rt_var == null) {
+                            result.rt_var = ret_rt_var;
+                        }
                         try value_stack.push(result);
                         return true;
                     }
@@ -12526,8 +12557,11 @@ pub const Interpreter = struct {
                     self.early_return_value = null;
                     var return_val = return_val_in;
 
-                    if (cleanup.call_ret_rt_var) |rt_var| {
-                        return_val.rt_var = rt_var;
+                    // Only set rt_var from call_ret_rt_var if the result doesn't already have one.
+                    if (return_val.rt_var == null) {
+                        if (cleanup.call_ret_rt_var) |rt_var| {
+                            return_val.rt_var = rt_var;
+                        }
                     }
 
                     // Pop active closure if needed
@@ -12589,8 +12623,19 @@ pub const Interpreter = struct {
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
-                if (cleanup.call_ret_rt_var) |rt_var| {
-                    result.rt_var = rt_var;
+                // Only set rt_var from call_ret_rt_var if the result doesn't already have one.
+                // Built-in functions like list_get_unsafe may return values with more specific
+                // rt_var information that should be preserved.
+                if (result.rt_var == null) {
+                    if (cleanup.call_ret_rt_var) |rt_var| {
+                        result.rt_var = rt_var;
+                    }
+                }
+                // Apply negation for != operator
+                if (cleanup.negate_bool_result) {
+                    const is_true = self.boolValueEquals(true, result);
+                    result.decref(&self.runtime_layout_store, roc_ops);
+                    result = try self.makeBoolValue(!is_true);
                 }
                 try value_stack.push(result);
                 return true;
@@ -12762,7 +12807,40 @@ pub const Interpreter = struct {
                     // Error types can occur during generic instantiation when types couldn't be resolved.
                     .flex, .rigid, .err => blk: {
                         if (ba.method_ident == self.root_env.idents.is_eq) {
-                            var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
+                            // Try to use the concrete type from the value if available.
+                            // This handles the case where the compile-time type is a generic parameter
+                            // but the runtime value has a known concrete type (e.g., List elements).
+                            const effective_lhs_var = if (lhs.rt_var) |v| v else ba.receiver_rt_var;
+                            const effective_rhs_var = if (rhs.rt_var) |v| v else ba.rhs_rt_var;
+
+                            // Check if the effective type is now a nominal type that we should dispatch to
+                            const effective_resolved = self.runtime_types.resolveVar(effective_lhs_var);
+                            if (effective_resolved.desc.content == .structure) {
+                                if (effective_resolved.desc.content.structure == .nominal_type) {
+                                    // Return nominal_info to use the normal method call flow
+                                    const nom = effective_resolved.desc.content.structure.nominal_type;
+                                    break :blk .{
+                                        .origin = nom.origin_module,
+                                        .ident = nom.ident.ident_idx,
+                                    };
+                                }
+                            }
+
+                            // For scalar types (numbers, Dec, etc.), use scalar comparison
+                            if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
+                                const order = self.compareNumericScalars(lhs, rhs) catch {
+                                    self.triggerCrash("Failed to compare numeric scalars", false, roc_ops);
+                                    return error.Crash;
+                                };
+                                var result = (order == .eq);
+                                // For != operator, negate the result
+                                if (ba.negate_result) result = !result;
+                                const result_val = try self.makeBoolValue(result);
+                                try value_stack.push(result_val);
+                                return true;
+                            }
+
+                            var result = self.valuesStructurallyEqual(lhs, effective_lhs_var, rhs, effective_rhs_var, roc_ops) catch |err| {
                                 if (err == error.NotImplemented) {
                                     self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                     return error.Crash;
@@ -12853,7 +12931,11 @@ pub const Interpreter = struct {
                 // This is critical for generic methods like List.is_eq where the element
                 // type parameter needs to be mapped to the concrete type of the arguments.
                 // We need to map both the parameter type AND any type parameters within it.
-                const arg_rt_vars = [2]types.Var{ ba.receiver_rt_var, ba.rhs_rt_var };
+                // Use effective rt_vars from values if available (important for flex/rigid types
+                // where the compile-time type is generic but the runtime value has a concrete type).
+                const effective_receiver_rt_var = if (lhs.rt_var) |v| v else ba.receiver_rt_var;
+                const effective_rhs_rt_var = if (rhs.rt_var) |v| v else ba.rhs_rt_var;
+                const arg_rt_vars = [2]types.Var{ effective_receiver_rt_var, effective_rhs_rt_var };
                 for (params, 0..) |param, idx| {
                     const arg_rt_resolved = self.runtime_types.resolveVar(arg_rt_vars[idx]);
                     // Only add mapping if the argument has a concrete type (structure)
@@ -12893,14 +12975,15 @@ pub const Interpreter = struct {
                 // patternMatchesBind creates copies via pushCopy, so the deferred decrefs
                 // of lhs/rhs at the function start will correctly free the originals while
                 // the bindings retain their own references.
-                if (!try self.patternMatchesBind(params[0], lhs, ba.receiver_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                // Use effective rt_vars from values if available.
+                if (!try self.patternMatchesBind(params[0], lhs, effective_receiver_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
                     _ = self.active_closures.pop();
                     return error.TypeMismatch;
                 }
-                if (!try self.patternMatchesBind(params[1], rhs, ba.rhs_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
+                if (!try self.patternMatchesBind(params[1], rhs, effective_rhs_rt_var, roc_ops, &self.bindings, @enumFromInt(0))) {
                     // Clean up the first binding we added
                     self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                     self.flex_type_context.deinit();
@@ -12921,6 +13004,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .negate_bool_result = ba.negate_result,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
