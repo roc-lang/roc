@@ -73,6 +73,9 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
 /// Map from module name string to Import.Idx for tracking unique imports
 import_indices: std.StringHashMapUnmanaged(Import.Idx),
+/// Set of module name idents that are package-qualified imports (e.g., "pf.Stdout")
+/// Used to skip MODULE NOT FOUND errors for cross-package imports resolved by the workspace
+package_qualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void) = .{},
 /// Scratch type variables
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
@@ -203,6 +206,7 @@ pub fn deinit(
     self.scratch_record_fields.deinit();
     self.scratch_seen_record_fields.deinit();
     self.import_indices.deinit(gpa);
+    self.package_qualified_imports.deinit(gpa);
     self.scratch_tags.deinit();
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
@@ -2965,6 +2969,7 @@ fn importAliased(
     alias_tok: ?Token.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
+    is_package_qualified: bool,
 ) std.mem.Allocator.Error!?Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
@@ -3008,17 +3013,19 @@ fn importAliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 9. Check that this module actually exists, and if not report an error
+    // 9. Track package-qualified imports for later member resolution
+    if (is_package_qualified) {
+        try self.package_qualified_imports.put(self.env.gpa, module_name, {});
+    }
+
+    // 10. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip if this is a qualified import (e.g., "pf.Stdout") - those are cross-package
+    // Skip for package-qualified imports (e.g., "pf.Stdout") - those are cross-package
     // imports that are resolved by the workspace resolver
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            // Qualified imports (containing a dot) are cross-package imports handled by the resolver
-            const is_qualified = std.mem.indexOfScalar(u8, module_name_text, '.') != null;
-
-            if (!is_qualified) {
+            if (!is_package_qualified) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -3108,6 +3115,7 @@ fn importUnaliased(
     module_name: Ident.Idx,
     exposed_items_span: CIR.ExposedItem.Span,
     import_region: Region,
+    is_package_qualified: bool,
 ) std.mem.Allocator.Error!Statement.Idx {
     const module_name_text = self.env.getIdent(module_name);
 
@@ -3142,17 +3150,19 @@ fn importUnaliased(
     const current_scope = self.currentScope();
     _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
 
-    // 6. Check that this module actually exists, and if not report an error
+    // 6. Track package-qualified imports for later member resolution
+    if (is_package_qualified) {
+        try self.package_qualified_imports.put(self.env.gpa, module_name, {});
+    }
+
+    // 7. Check that this module actually exists, and if not report an error
     // Only check if module_envs is provided - when it's null, we don't know what modules
     // exist yet (e.g., during standalone module canonicalization without full project context)
-    // Also skip if this is a qualified import (e.g., "pf.Stdout") - those are cross-package
+    // Skip for package-qualified imports (e.g., "pf.Stdout") - those are cross-package
     // imports that are resolved by the workspace resolver
     if (self.module_envs) |envs_map| {
         if (!envs_map.contains(module_name)) {
-            // Qualified imports (containing a dot) are cross-package imports handled by the resolver
-            const is_qualified = std.mem.indexOfScalar(u8, module_name_text, '.') != null;
-
-            if (!is_qualified) {
+            if (!is_package_qualified) {
                 try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
                     .module_name = module_name,
                     .region = import_region,
@@ -3238,11 +3248,14 @@ fn canonicalizeImportStatement(
     const cir_exposes = try self.env.store.exposedItemSpanFrom(scratch_start);
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
 
-    // 3. Dispatch to the appropriate handler based on whether this is a nested import
+    // 3. Check if this is a package-qualified import (has a qualifier like "pf" in "pf.Stdout")
+    const is_package_qualified = import_stmt.qualifier_tok != null;
+
+    // 4. Dispatch to the appropriate handler based on whether this is a nested import
     return if (import_stmt.nested_import)
-        try self.importUnaliased(module_name, cir_exposes, import_region)
+        try self.importUnaliased(module_name, cir_exposes, import_region, is_package_qualified)
     else
-        try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region);
+        try self.importAliased(module_name, import_stmt.alias_tok, cir_exposes, import_region, is_package_qualified);
 }
 
 /// Resolve the module alias name from either explicit alias or module name
@@ -4131,10 +4144,10 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
-                                // Check if this is a qualified import (contains a dot, e.g., "pf.Stdout")
+                                // Check if this is a package-qualified import (e.g., "pf.Stdout")
                                 // These are cross-package imports resolved by the workspace resolver
-                                if (std.mem.indexOfScalar(u8, module_text, '.') != null) {
-                                    // Qualified import - member resolution happens via the resolver
+                                if (self.package_qualified_imports.contains(module_name)) {
+                                    // Package-qualified import - member resolution happens via the resolver
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
                                 }

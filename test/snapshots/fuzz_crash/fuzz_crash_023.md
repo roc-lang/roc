@@ -230,7 +230,6 @@ UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
 UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
 UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
 NOT IMPLEMENTED - :0:0:0:0
-MODULE NOT FOUND - fuzz_crash_023.md:6:1:12:4
 MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
 MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
@@ -452,22 +451,6 @@ This type is referenced here:
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**MODULE NOT FOUND**
-The module `MALFORMED_IMPORT` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:6:1:12:4:**
-```roc
-import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
-		exposing [ # Comment after exposing open
-			line!, # Comment after exposed item
-			write!, # Another after exposed item
-		] # Comment after exposing close
-```
-
 
 **MODULE NOT FOUND**
 The module `BadName` was not found in this Roc project.
