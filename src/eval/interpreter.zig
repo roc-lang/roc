@@ -10036,11 +10036,31 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         num_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_num),
     ) Error!StackValue {
-        const rt_var = expected_rt_var orelse blk: {
+        // Get the layout type variable - use expected_rt_var if provided for layout determination
+        const layout_rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(rt_var);
+        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // For rt_var, use expected_rt_var if provided (it comes from call site which may have better info).
+        // Only set rt_var if the type is concrete (not flex/rigid), otherwise leave it null
+        // so that callers like dot_access_resolve can apply their own defaulting logic.
+        const rt_var: ?types.Var = if (expected_rt_var) |exp| blk: {
+            const resolved = self.runtime_types.resolveVar(exp);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk exp;
+        } else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            const translated = try self.translateTypeVar(self.env, ct_var);
+            const resolved = self.runtime_types.resolveVar(translated);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk translated;
+        };
 
         var value = try self.pushRaw(layout_val, 0);
         value.is_initialized = false;
@@ -10076,6 +10096,7 @@ pub const Interpreter = struct {
             else => return error.TypeMismatch,
         }
         value.is_initialized = true;
+        value.rt_var = rt_var;
         return value;
     }
 
@@ -10086,16 +10107,35 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         lit: @TypeOf(@as(can.CIR.Expr, undefined).e_frac_f32),
     ) Error!StackValue {
-        const rt_var = expected_rt_var orelse blk: {
+        const layout_rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(rt_var);
-        const value = try self.pushRaw(layout_val, 0);
+        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Only set rt_var if the type is concrete (not flex/rigid)
+        const rt_var: ?types.Var = if (expected_rt_var) |exp| blk: {
+            const resolved = self.runtime_types.resolveVar(exp);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk exp;
+        } else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            const translated = try self.translateTypeVar(self.env, ct_var);
+            const resolved = self.runtime_types.resolveVar(translated);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk translated;
+        };
+
+        var value = try self.pushRaw(layout_val, 0);
         if (value.ptr) |ptr| {
             const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
             typed_ptr.* = lit.value;
         }
+        value.rt_var = rt_var;
         return value;
     }
 
@@ -10106,16 +10146,35 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         lit: @TypeOf(@as(can.CIR.Expr, undefined).e_frac_f64),
     ) Error!StackValue {
-        const rt_var = expected_rt_var orelse blk: {
+        const layout_rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(rt_var);
-        const value = try self.pushRaw(layout_val, 0);
+        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Only set rt_var if the type is concrete (not flex/rigid)
+        const rt_var: ?types.Var = if (expected_rt_var) |exp| blk: {
+            const resolved = self.runtime_types.resolveVar(exp);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk exp;
+        } else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            const translated = try self.translateTypeVar(self.env, ct_var);
+            const resolved = self.runtime_types.resolveVar(translated);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk translated;
+        };
+
+        var value = try self.pushRaw(layout_val, 0);
         if (value.ptr) |ptr| {
             const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
             typed_ptr.* = lit.value;
         }
+        value.rt_var = rt_var;
         return value;
     }
 
@@ -10126,16 +10185,35 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         dec_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_dec),
     ) Error!StackValue {
-        const rt_var = expected_rt_var orelse blk: {
+        const layout_rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(rt_var);
-        const value = try self.pushRaw(layout_val, 0);
+        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Only set rt_var if the type is concrete (not flex/rigid)
+        const rt_var: ?types.Var = if (expected_rt_var) |exp| blk: {
+            const resolved = self.runtime_types.resolveVar(exp);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk exp;
+        } else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            const translated = try self.translateTypeVar(self.env, ct_var);
+            const resolved = self.runtime_types.resolveVar(translated);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk translated;
+        };
+
+        var value = try self.pushRaw(layout_val, 0);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
             typed_ptr.* = dec_lit.value;
         }
+        value.rt_var = rt_var;
         return value;
     }
 
@@ -10146,11 +10224,28 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         small: @TypeOf(@as(can.CIR.Expr, undefined).e_dec_small),
     ) Error!StackValue {
-        const rt_var = expected_rt_var orelse blk: {
+        const layout_rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(rt_var);
+        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Only set rt_var if the type is concrete (not flex/rigid)
+        const rt_var: ?types.Var = if (expected_rt_var) |exp| blk: {
+            const resolved = self.runtime_types.resolveVar(exp);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk exp;
+        } else blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            const translated = try self.translateTypeVar(self.env, ct_var);
+            const resolved = self.runtime_types.resolveVar(translated);
+            if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
+                break :blk null;
+            }
+            break :blk translated;
+        };
 
         // Dec literals require Dec-compatible layout. If we reach here with a different layout
         // (e.g., U8 integer), it means validation should have caught this and skipped evaluation.
@@ -10158,13 +10253,14 @@ pub const Interpreter = struct {
             layout_val.data.scalar.tag == .frac and
             layout_val.data.scalar.data.frac == .dec);
 
-        const value = try self.pushRaw(layout_val, 0);
+        var value = try self.pushRaw(layout_val, 0);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
             const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
             const scaled = @as(i128, small.value.numerator) * scale_factor;
             typed_ptr.* = RocDec{ .num = scaled };
         }
+        value.rt_var = rt_var;
         return value;
     }
 
@@ -12804,26 +12900,8 @@ pub const Interpreter = struct {
                     // Error types can occur during generic instantiation when types couldn't be resolved.
                     .flex, .rigid, .err => blk: {
                         if (ba.method_ident == self.root_env.idents.is_eq) {
-                            // Try to use the concrete type from the value if available.
-                            // This handles the case where the compile-time type is a generic parameter
-                            // but the runtime value has a known concrete type (e.g., List elements).
-                            const effective_lhs_var = if (lhs.rt_var) |v| v else ba.receiver_rt_var;
-                            const effective_rhs_var = if (rhs.rt_var) |v| v else ba.rhs_rt_var;
-
-                            // Check if the effective type is now a nominal type that we should dispatch to
-                            const effective_resolved = self.runtime_types.resolveVar(effective_lhs_var);
-                            if (effective_resolved.desc.content == .structure) {
-                                if (effective_resolved.desc.content.structure == .nominal_type) {
-                                    // Return nominal_info to use the normal method call flow
-                                    const nom = effective_resolved.desc.content.structure.nominal_type;
-                                    break :blk .{
-                                        .origin = nom.origin_module,
-                                        .ident = nom.ident.ident_idx,
-                                    };
-                                }
-                            }
-
-                            // For scalar types (numbers, Dec, etc.), use scalar comparison
+                            // For scalar types (numbers, Dec, etc.), use layout-based scalar comparison.
+                            // This handles cases where rt_var is not available (e.g., closure captures).
                             if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
                                 const order = self.compareNumericScalars(lhs, rhs) catch {
                                     self.triggerCrash("Failed to compare numeric scalars", false, roc_ops);
@@ -12837,7 +12915,24 @@ pub const Interpreter = struct {
                                 return true;
                             }
 
-                            var result = self.valuesStructurallyEqual(lhs, effective_lhs_var, rhs, effective_rhs_var, roc_ops) catch |err| {
+                            // For non-scalar types, we need rt_var to dispatch to the type's is_eq method.
+                            // Values must have rt_var set by the code that created them.
+                            if (lhs.rt_var) |lhs_rt_var_inner| {
+                                const resolved = self.runtime_types.resolveVar(lhs_rt_var_inner);
+                                if (resolved.desc.content == .structure) {
+                                    if (resolved.desc.content.structure == .nominal_type) {
+                                        const nom = resolved.desc.content.structure.nominal_type;
+                                        break :blk .{
+                                            .origin = nom.origin_module,
+                                            .ident = nom.ident.ident_idx,
+                                        };
+                                    }
+                                }
+                            }
+
+                            // Structural equality using the call-site types (ba.receiver_rt_var and ba.rhs_rt_var)
+                            // which are the canonical sources for method dispatch.
+                            var result = self.valuesStructurallyEqual(lhs, ba.receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
                                 if (err == error.NotImplemented) {
                                     self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                     return error.Crash;
@@ -12850,6 +12945,10 @@ pub const Interpreter = struct {
                             try value_stack.push(result_val);
                             return true;
                         }
+
+                        // For non-is_eq binary ops on flex types, we cannot dispatch without
+                        // a concrete type. The binary op setup code (e_binop handling) should have
+                        // already unified flex vars with Dec before reaching here.
                         break :blk null;
                     },
                     else => null,
