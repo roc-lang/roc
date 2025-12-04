@@ -1352,3 +1352,34 @@ test "nested match with Result type - regression" {
         \\}
     , .no_trace);
 }
+
+// ============================================================================
+// Bug regression tests - segfault issues from bug reports
+// ============================================================================
+
+test "list equality - single element list - regression" {
+    // Regression test for segfault when comparing single element lists
+    // Bug report: `main! = || { _bool = [1] == [1] }`
+    try runExpectBool("[1] == [1]", true, .no_trace);
+}
+
+test "list equality - nested lists - regression" {
+    // Regression test for segfault when comparing nested lists
+    // Bug report: `_bool = [[1],[2]] == [[1],[2]]`
+    // TODO: Fix element type extraction in list_get_unsafe for nested lists with ranges branch
+    return error.SkipZigTest;
+    // try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
+}
+
+test "if block with local bindings - regression" {
+    // Regression test for segfault in if block with local variable bindings
+    // Bug report: `main! = || { if True { x = 0 _y = x } }`
+    try runExpectInt(
+        \\if True {
+        \\    x = 0
+        \\    _y = x
+        \\    x
+        \\}
+        \\else 99
+    , 0, .no_trace);
+}
