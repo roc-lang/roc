@@ -12875,7 +12875,7 @@ pub const Interpreter = struct {
                             effective_scrutinee_rt_var,
                             roc_ops,
                             &temp_binds,
-                            undefined,
+                            null,
                         )) {
                             continue;
                         }
