@@ -485,11 +485,9 @@ pub const ComptimeEvaluator = struct {
     /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
     fn foldTagUnionScalar(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         _ = def_idx; // unused now that we get rt_var from stack_value
-        // The value is the tag index directly (scalar integer)
-        // Verify the layout is actually a scalar int before extracting
-        if (stack_value.layout.tag != .scalar or stack_value.layout.data.scalar.tag != .int) {
-            return error.NotImplemented;
-        }
+        // The value is the tag index directly (scalar integer).
+        // The caller already verified layout.tag == .scalar, and scalar tag unions are always ints.
+        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
         const tag_index: usize = @intCast(stack_value.asI128());
 
         // Get the runtime type variable from the StackValue
@@ -500,17 +498,14 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
-        if (tag_index >= tag_list.items.len) {
-            return error.NotImplemented;
-        }
+        // Tag index from the value must be valid
+        std.debug.assert(tag_index < tag_list.items.len);
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
 
-        // Only fold zero-argument tags (like True, False)
-        if (arg_vars.len != 0) {
-            return error.NotImplemented;
-        }
+        // Scalar tag unions don't have payloads, so arg_vars must be empty
+        std.debug.assert(arg_vars.len == 0);
 
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
