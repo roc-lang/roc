@@ -463,7 +463,7 @@ pub const ComptimeEvaluator = struct {
 
         // Get variant_var and ext_var
         const variant_var: types_mod.Var = bool_rt_var;
-        // ext_var is a placeholder that will be set if this is a tag_union type
+        // ext_var will be set if this is a tag_union type
         var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
@@ -515,7 +515,7 @@ pub const ComptimeEvaluator = struct {
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        // ext_var is a placeholder that will be set if this is a tag_union type
+        // ext_var will be set if this is a tag_union type
         var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
@@ -574,7 +574,7 @@ pub const ComptimeEvaluator = struct {
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        // ext_var is a placeholder that will be set if this is a tag_union type
+        // ext_var will be set if this is a tag_union type
         var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {

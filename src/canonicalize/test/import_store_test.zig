@@ -102,10 +102,12 @@ test "Import.Store basic CompactWriter roundtrip" {
     const idx2 = try original.getOrPut(gpa, mock_env.strings, "core.List");
     const idx3 = try original.getOrPut(gpa, mock_env.strings, "my.Module");
 
-    // Verify indices
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(idx1));
-    try testing.expectEqual(@as(u32, 1), @intFromEnum(idx2));
-    try testing.expectEqual(@as(u32, 2), @intFromEnum(idx3));
+    // Verify indices are distinct and in order
+    try testing.expect(idx1 != idx2);
+    try testing.expect(idx2 != idx3);
+    try testing.expect(idx1 != idx3);
+    try testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
+    try testing.expect(@intFromEnum(idx2) < @intFromEnum(idx3));
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -136,10 +138,10 @@ test "Import.Store basic CompactWriter roundtrip" {
     // Verify the imports are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.imports.len());
 
-    // Verify the interned string IDs are stored correctly
-    const str_idx1 = deserialized.imports.items.items[0];
-    const str_idx2 = deserialized.imports.items.items[1];
-    const str_idx3 = deserialized.imports.items.items[2];
+    // Verify the interned string IDs are stored correctly by using the indices we got
+    const str_idx1 = deserialized.imports.items.items[@intFromEnum(idx1)];
+    const str_idx2 = deserialized.imports.items.items[@intFromEnum(idx2)];
+    const str_idx3 = deserialized.imports.items.items[@intFromEnum(idx3)];
 
     try testing.expectEqualStrings("json.Json", string_store.get(str_idx1));
     try testing.expectEqualStrings("core.List", string_store.get(str_idx2));
@@ -201,7 +203,7 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     // Verify correct number of imports
     try testing.expectEqual(@as(usize, 2), deserialized.imports.len());
 
-    // Get the string IDs and verify the strings
+    // Get the string IDs using the indices we captured and verify the strings
     const str_idx1 = deserialized.imports.items.items[@intFromEnum(idx1)];
     const str_idx2 = deserialized.imports.items.items[@intFromEnum(idx2)];
 
@@ -212,15 +214,8 @@ test "Import.Store duplicate imports CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 2), deserialized.map.count());
 
     // Check that the map has correct entries for the string indices that were deserialized
-    const str_idx_0 = deserialized.imports.items.items[0];
-    const str_idx_1 = deserialized.imports.items.items[1];
-
-    // Named constants for first and second import indices
-    const first_import_idx: Import.Idx = .first;
-    const second_import_idx: Import.Idx = @enumFromInt(1);
-
-    try testing.expect(deserialized.map.contains(str_idx_0));
-    try testing.expect(deserialized.map.contains(str_idx_1));
-    try testing.expectEqual(first_import_idx, deserialized.map.get(str_idx_0).?);
-    try testing.expectEqual(second_import_idx, deserialized.map.get(str_idx_1).?);
+    try testing.expect(deserialized.map.contains(str_idx1));
+    try testing.expect(deserialized.map.contains(str_idx2));
+    try testing.expectEqual(idx1, deserialized.map.get(str_idx1).?);
+    try testing.expectEqual(idx2, deserialized.map.get(str_idx2).?);
 }

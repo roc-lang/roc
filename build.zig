@@ -373,7 +373,10 @@ const CheckEnumFromIntZeroStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} uses of @enumFromInt(0). Use `undefined` instead with a comment explaining why. " ++
+                "Found {d} uses of @enumFromInt(0). Using placeholder values like this has consistently led to bugs in this code base. " ++
+                    "Do not use @enumFromInt(0) and also do not uncritically replace it with another placeholder like .first or something like that. " ++
+                    "If you want it to be uninitialized and are very confident it will be overwritten before it is ever read, then use `undefined`. " ++
+                    "Otherwise, take a step back and rethink how this code works; there should be a way to implement this in a way that does not use hardcoded placeholder indices like 0! " ++
                     "See above for details.",
                 .{violations.items.len},
             );
@@ -398,11 +401,6 @@ const CheckEnumFromIntZeroStep = struct {
         while (try walker.next()) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
-
-            // Skip test files - they may legitimately need @enumFromInt(0) for test indices
-            if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
-            if (std.mem.indexOf(u8, entry.path, "test/") != null) continue;
-            if (std.mem.startsWith(u8, entry.path, "test")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
