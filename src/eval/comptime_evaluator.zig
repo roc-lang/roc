@@ -1128,7 +1128,7 @@ pub const ComptimeEvaluator = struct {
             try self.interpreter.bindings.append(.{
                 .pattern_idx = params[0],
                 .value = num_literal_record,
-                .expr_idx = undefined, // No source expression for synthetic binding
+                .expr_idx = null, // No source expression for synthetic binding
                 .source_env = origin_env,
             });
             defer _ = self.interpreter.bindings.pop();
