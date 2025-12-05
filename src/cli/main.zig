@@ -1660,7 +1660,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const platform_env = platform_main_env orelse {
         const is_absolute = std.fs.path.isAbsolute(platform_spec);
         if (is_absolute) {
-            std.log.err("No platform found. Absolute paths are not allowed for platform specification: \"{s}\"", .{platform_spec});
+            std.log.err("No platform found. Absolute paths are not allowed for platform specification: \"{s}\". Please use a relative path like `./path/to/platform` or a URL.", .{platform_spec});
         } else {
             std.log.err("No platform found. Every Roc app requires a platform.", .{});
         }
