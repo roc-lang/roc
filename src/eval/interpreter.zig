@@ -15598,7 +15598,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
 
     // Create an Import.Idx for module A
     // Using first import index for test purposes
-    const first_import_idx: can.CIR.Import.Idx = .zero;
+    const first_import_idx: can.CIR.Import.Idx = .first;
     try interp.import_envs.put(interp.allocator, first_import_idx, &module_a);
 
     // Verify we can retrieve module A's environment
@@ -15661,7 +15661,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     // Create Import.Idx entries for both modules
     // Using sequential import indices for test purposes
-    const first_import_idx: can.CIR.Import.Idx = .zero;
+    const first_import_idx: can.CIR.Import.Idx = .first;
     const second_import_idx: can.CIR.Import.Idx = @enumFromInt(1);
     try interp.import_envs.put(interp.allocator, first_import_idx, &module_b);
     try interp.import_envs.put(interp.allocator, second_import_idx, &module_c);

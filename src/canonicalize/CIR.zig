@@ -720,7 +720,7 @@ pub fn fromF64(f: f64) ?RocDec {
 /// Represents an import statement in a module
 pub const Import = struct {
     pub const Idx = enum(u32) {
-        zero = 0,
+        first = 0,
         _,
     };
 

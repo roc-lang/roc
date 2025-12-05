@@ -1012,7 +1012,7 @@ const SlotStore = struct {
 
     /// A type-safe index into the store
     const Idx = enum(u32) {
-        zero = 0,
+        first = 0,
         _,
     };
 };
@@ -1118,7 +1118,7 @@ const DescStore = struct {
     /// A type-safe index into the store
     /// This type is made public below
     const Idx = enum(u32) {
-        zero = 0,
+        first = 0,
         _,
     };
 };
@@ -1396,21 +1396,27 @@ test "SlotStore.Serialized roundtrip" {
     const gpa = std.testing.allocator;
     const CompactWriter = collections.CompactWriter;
 
-    // Named indices for test clarity
-    const desc_idx_100: DescStore.Idx = @enumFromInt(100);
-    const var_0: Var = .zero;
-    const desc_idx_200: DescStore.Idx = @enumFromInt(200);
-    const slot_idx_0: SlotStore.Idx = .zero;
-    const slot_idx_1: SlotStore.Idx = @enumFromInt(1);
-    const slot_idx_2: SlotStore.Idx = @enumFromInt(2);
+    // Use a real Store to get real Var and DescStore.Idx values
+    var store = try Store.init(gpa);
+    defer store.deinit();
 
+    // Create real type variables - fresh() creates a flex var with a root slot
+    const var_a = try store.fresh();
+    const var_b = try store.fresh();
+    const var_c = try store.fresh();
+
+    // Get the DescStore.Idx from the root slots
+    const desc_idx_a = store.getSlot(var_a).root;
+    const desc_idx_c = store.getSlot(var_c).root;
+
+    // Create a separate SlotStore for serialization testing
     var slot_store = try SlotStore.init(gpa, 4);
     defer slot_store.deinit(gpa);
 
-    // Add some slots
-    _ = try slot_store.insert(gpa, .{ .root = desc_idx_100 });
-    _ = try slot_store.insert(gpa, .{ .redirect = var_0 });
-    _ = try slot_store.insert(gpa, .{ .root = desc_idx_200 });
+    // Add slots and capture returned indices
+    const slot_a = try slot_store.insert(gpa, .{ .root = desc_idx_a });
+    const slot_b = try slot_store.insert(gpa, .{ .redirect = var_b });
+    const slot_c = try slot_store.insert(gpa, .{ .root = desc_idx_c });
 
     // Create temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1443,25 +1449,21 @@ test "SlotStore.Serialized roundtrip" {
     const deser_ptr = @as(*SlotStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
     const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
 
-    // Verify
+    // Verify using captured indices
     try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
-    try std.testing.expectEqual(Slot{ .root = desc_idx_100 }, deserialized.get(slot_idx_0));
-    try std.testing.expectEqual(Slot{ .redirect = var_0 }, deserialized.get(slot_idx_1));
-    try std.testing.expectEqual(Slot{ .root = desc_idx_200 }, deserialized.get(slot_idx_2));
+    try std.testing.expectEqual(Slot{ .root = desc_idx_a }, deserialized.get(slot_a));
+    try std.testing.expectEqual(Slot{ .redirect = var_b }, deserialized.get(slot_b));
+    try std.testing.expectEqual(Slot{ .root = desc_idx_c }, deserialized.get(slot_c));
 }
 
 test "DescStore.Serialized roundtrip" {
     const gpa = std.testing.allocator;
     const CompactWriter = collections.CompactWriter;
 
-    // Named indices for test clarity
-    const desc_idx_0: DescStore.Idx = .zero;
-    const desc_idx_1: DescStore.Idx = @enumFromInt(1);
-
     var desc_store = try DescStore.init(gpa, 4);
     defer desc_store.deinit(gpa);
 
-    // Add some descriptors
+    // Add some descriptors and capture returned indices
     const desc1 = Descriptor{
         .content = Content{ .flex = Flex.init() },
         .rank = Rank.generalized,
@@ -1473,8 +1475,8 @@ test "DescStore.Serialized roundtrip" {
         .mark = Mark.visited,
     };
 
-    _ = try desc_store.insert(gpa, desc1);
-    _ = try desc_store.insert(gpa, desc2);
+    const desc_idx_1 = try desc_store.insert(gpa, desc1);
+    const desc_idx_2 = try desc_store.insert(gpa, desc2);
 
     // Create temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1512,10 +1514,10 @@ test "DescStore.Serialized roundtrip" {
     const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
     // Note: deserialize already handles relocation, don't call relocate again
 
-    // Verify
+    // Verify using captured indices
     try std.testing.expectEqual(@as(usize, 2), deserialized.backing.items.len);
-    try std.testing.expectEqual(desc1, deserialized.get(desc_idx_0));
-    try std.testing.expectEqual(desc2, deserialized.get(desc_idx_1));
+    try std.testing.expectEqual(desc1, deserialized.get(desc_idx_1));
+    try std.testing.expectEqual(desc2, deserialized.get(desc_idx_2));
 }
 
 test "Store.Serialized roundtrip" {

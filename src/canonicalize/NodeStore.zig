@@ -3691,7 +3691,7 @@ test "NodeStore basic CompactWriter roundtrip" {
         .data_2 = 0,
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, node1);
+    const node1_idx = try original.nodes.append(gpa, node1);
 
     // Add integer value to extra_data (i128 as 4 u32s)
     const value: i128 = 42;
@@ -3706,7 +3706,7 @@ test "NodeStore basic CompactWriter roundtrip" {
         .start = .{ .offset = 0 },
         .end = .{ .offset = 5 },
     };
-    _ = try original.regions.append(gpa, region);
+    const region1_idx = try original.regions.append(gpa, region);
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -3739,9 +3739,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
-    // Named constant for the first node index in the deserialized data
-    const first_node_idx: Node.Idx = .zero;
-    const retrieved_node = deserialized.nodes.get(first_node_idx);
+    const retrieved_node = deserialized.nodes.get(node1_idx);
     try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
     try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
 
@@ -3754,9 +3752,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
-    // Named constant for the first region index in the deserialized data
-    const first_region_idx: Region.Idx = .zero;
-    const retrieved_region = deserialized.regions.get(first_region_idx);
+    const retrieved_region = deserialized.regions.get(region1_idx);
     try testing.expectEqual(region.start.offset, retrieved_region.start.offset);
     try testing.expectEqual(region.end.offset, retrieved_region.end.offset);
 }
@@ -3776,7 +3772,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .data_2 = 0,
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, var_node);
+    const var_node_idx = try original.nodes.append(gpa, var_node);
 
     // Add expression list node
     const list_node = Node{
@@ -3785,7 +3781,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .data_2 = 3, // elems len
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, list_node);
+    const list_node_idx = try original.nodes.append(gpa, list_node);
 
     // Add float node with extra data
     const float_node = Node{
@@ -3794,7 +3790,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .data_2 = 0,
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, float_node);
+    const float_node_idx = try original.nodes.append(gpa, float_node);
 
     // Add float value to extra_data
     const float_value: f64 = 3.14159;
@@ -3805,14 +3801,12 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     }
 
     // Add regions for each node
-    const regions = [_]Region{
-        .{ .start = .{ .offset = 0 }, .end = .{ .offset = 5 } },
-        .{ .start = .{ .offset = 10 }, .end = .{ .offset = 20 } },
-        .{ .start = .{ .offset = 25 }, .end = .{ .offset = 32 } },
-    };
-    for (regions) |region| {
-        _ = try original.regions.append(gpa, region);
-    }
+    const region1 = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 5 } };
+    const region2 = Region{ .start = .{ .offset = 10 }, .end = .{ .offset = 20 } };
+    const region3 = Region{ .start = .{ .offset = 25 }, .end = .{ .offset = 32 } };
+    const region1_idx = try original.regions.append(gpa, region1);
+    const region2_idx = try original.regions.append(gpa, region2);
+    const region3_idx = try original.regions.append(gpa, region3);
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -3846,37 +3840,36 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
 
-    // Named constants for accessing deserialized nodes at specific indices
-    const first_node_idx: Node.Idx = .zero;
-    const second_node_idx: Node.Idx = @enumFromInt(1);
-    const third_node_idx: Node.Idx = @enumFromInt(2);
-
-    // Verify var node
-    const retrieved_var = deserialized.nodes.get(first_node_idx);
+    // Verify var node using captured index
+    const retrieved_var = deserialized.nodes.get(var_node_idx);
     try testing.expectEqual(Node.Tag.expr_var, retrieved_var.tag);
     try testing.expectEqual(@as(u32, 5), retrieved_var.data_1);
 
-    // Verify list node
-    const retrieved_list = deserialized.nodes.get(second_node_idx);
+    // Verify list node using captured index
+    const retrieved_list = deserialized.nodes.get(list_node_idx);
     try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
     try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
     try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
 
-    // Verify float node and extra data
-    const retrieved_float = deserialized.nodes.get(third_node_idx);
+    // Verify float node and extra data using captured index
+    const retrieved_float = deserialized.nodes.get(float_node_idx);
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
     const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
     const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);
     const retrieved_float_value: f64 = @bitCast(retrieved_float_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
 
-    // Verify regions
+    // Verify regions using captured indices
     try testing.expectEqual(@as(usize, 3), deserialized.regions.len());
-    for (regions, 0..) |expected_region, i| {
-        const retrieved_region = deserialized.regions.get(@enumFromInt(i));
-        try testing.expectEqual(expected_region.start.offset, retrieved_region.start.offset);
-        try testing.expectEqual(expected_region.end.offset, retrieved_region.end.offset);
-    }
+    const retrieved_region1 = deserialized.regions.get(region1_idx);
+    try testing.expectEqual(region1.start.offset, retrieved_region1.start.offset);
+    try testing.expectEqual(region1.end.offset, retrieved_region1.end.offset);
+    const retrieved_region2 = deserialized.regions.get(region2_idx);
+    try testing.expectEqual(region2.start.offset, retrieved_region2.start.offset);
+    try testing.expectEqual(region2.end.offset, retrieved_region2.end.offset);
+    const retrieved_region3 = deserialized.regions.get(region3_idx);
+    try testing.expectEqual(region3.start.offset, retrieved_region3.start.offset);
+    try testing.expectEqual(region3.end.offset, retrieved_region3.end.offset);
 
     // Verify scratch is null (deserialized NodeStores don't allocate scratch)
     try testing.expect(deserialized.scratch == null);
