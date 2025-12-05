@@ -9,6 +9,7 @@ const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types.zig");
 const import_mapping_mod = @import("import_mapping.zig");
+const debug = @import("debug.zig");
 
 const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
@@ -610,7 +611,9 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
     }
 
     var ext = initial_ext;
+    var guard = debug.IterationGuard.init("TypeWriter.gatherRecordFields");
     while (true) {
+        guard.tick();
         const resolved = self.types.resolveVar(ext);
         switch (resolved.desc.content) {
             .flex => |flex| {

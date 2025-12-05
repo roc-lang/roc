@@ -348,16 +348,8 @@ pub const ComptimeEvaluator = struct {
         // Convert StackValue to CIR expression based on layout
         const layout = stack_value.layout;
 
-        // Get the runtime type variable from the StackValue first, or fall back to expression type
-        const rt_var: types_mod.Var = if (stack_value.rt_var) |sv_rt_var|
-            sv_rt_var
-        else blk: {
-            // Fall back to expression type variable
-            const ct_var = ModuleEnv.varFrom(def.expr);
-            break :blk self.interpreter.translateTypeVar(self.env, ct_var) catch {
-                return error.NotImplemented;
-            };
-        };
+        // Get the runtime type variable from the StackValue
+        const rt_var = stack_value.rt_var;
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
 
         // Check if it's a tag union type
@@ -471,7 +463,8 @@ pub const ComptimeEvaluator = struct {
 
         // Get variant_var and ext_var
         const variant_var: types_mod.Var = bool_rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
+        // ext_var will be set if this is a tag_union type
+        var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
             if (resolved.desc.content.structure == .tag_union) {
@@ -492,33 +485,33 @@ pub const ComptimeEvaluator = struct {
     /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
     fn foldTagUnionScalar(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         _ = def_idx; // unused now that we get rt_var from stack_value
-        // The value is the tag index directly (scalar integer)
+        // The value is the tag index directly (scalar integer).
+        // The caller already verified layout.tag == .scalar, and scalar tag unions are always ints.
+        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
         const tag_index: usize = @intCast(stack_value.asI128());
 
-        // Get the runtime type variable from the StackValue (already validated in tryFoldConstant)
-        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
+        // Get the runtime type variable from the StackValue
+        const rt_var = stack_value.rt_var;
 
         // Get the list of tags for this union type
         var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
-        if (tag_index >= tag_list.items.len) {
-            return error.NotImplemented;
-        }
+        // Tag index from the value must be valid
+        std.debug.assert(tag_index < tag_list.items.len);
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
 
-        // Only fold zero-argument tags (like True, False)
-        if (arg_vars.len != 0) {
-            return error.NotImplemented;
-        }
+        // Scalar tag unions don't have payloads, so arg_vars must be empty
+        std.debug.assert(arg_vars.len == 0);
 
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
+        // ext_var will be set if this is a tag_union type
+        var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
             if (resolved.desc.content.structure == .tag_union) {
@@ -543,17 +536,18 @@ pub const ComptimeEvaluator = struct {
         var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
 
         // Element 1 is the tag discriminant - getElement takes original index directly
-        const tag_field = try acc.getElement(1);
+        const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
+        const tag_field = try acc.getElement(1, tag_elem_rt_var);
 
         // Extract tag index
         if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
             return error.NotImplemented;
         }
-        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true };
+        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
         const tag_index: usize = @intCast(tmp_sv.asI128());
 
-        // Get the runtime type variable from the StackValue (already validated in tryFoldConstant)
-        const rt_var = stack_value.rt_var orelse return error.NotImplemented;
+        // Get the runtime type variable from the StackValue
+        const rt_var = stack_value.rt_var;
 
         // Get the list of tags for this union type
         var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
@@ -575,7 +569,8 @@ pub const ComptimeEvaluator = struct {
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        var ext_var: types_mod.Var = @enumFromInt(0);
+        // ext_var will be set if this is a tag_union type
+        var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
             if (resolved.desc.content.structure == .tag_union) {
@@ -996,7 +991,8 @@ pub const ComptimeEvaluator = struct {
         }
 
         // Build is_negative Bool
-        const is_neg_value = try self.interpreter.pushRaw(layout_mod.Layout.int(.u8), 0);
+        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
+        const is_neg_value = try self.interpreter.pushRaw(layout_mod.Layout.int(.u8), 0, bool_rt_var);
         if (is_neg_value.ptr) |ptr| {
             @as(*u8, @ptrCast(@alignCast(ptr))).* = @intFromBool(num_lit_info.is_negative);
         }
@@ -1132,7 +1128,7 @@ pub const ComptimeEvaluator = struct {
             try self.interpreter.bindings.append(.{
                 .pattern_idx = params[0],
                 .value = num_literal_record,
-                .expr_idx = @enumFromInt(0),
+                .expr_idx = null, // No source expression for synthetic binding
                 .source_env = origin_env,
             });
             defer _ = self.interpreter.bindings.pop();
@@ -1192,7 +1188,8 @@ pub const ComptimeEvaluator = struct {
         const list_layout_idx = try self.interpreter.runtime_layout_store.insertList(layout_mod.Idx.u8);
         const list_layout = self.interpreter.runtime_layout_store.getLayout(list_layout_idx);
 
-        const dest = try self.interpreter.pushRaw(list_layout, 0);
+        // rt_var not needed for List(U8) construction - only layout matters
+        const dest = try self.interpreter.pushRaw(list_layout, 0, undefined);
         if (dest.ptr == null) return dest;
 
         const header: *builtins.list.RocList = @ptrCast(@alignCast(dest.ptr.?));
@@ -1242,7 +1239,8 @@ pub const ComptimeEvaluator = struct {
         const record_layout_idx = try self.interpreter.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
         const record_layout = self.interpreter.runtime_layout_store.getLayout(record_layout_idx);
 
-        var dest = try self.interpreter.pushRaw(record_layout, 0);
+        // rt_var not needed for Numeral record construction - only layout matters
+        var dest = try self.interpreter.pushRaw(record_layout, 0, undefined);
         var accessor = try dest.asRecord(&self.interpreter.runtime_layout_store);
 
         // Use self.env for field lookups since the record was built with self.env's idents
@@ -1315,7 +1313,8 @@ pub const ComptimeEvaluator = struct {
             // Use layout store's env for field lookups since records use that env's idents
             const layout_env = self.interpreter.runtime_layout_store.env;
             const tag_idx = accessor.findFieldIndex(layout_env.idents.tag) orelse return true;
-            const tag_field = accessor.getFieldByIndex(tag_idx) catch return true;
+            const tag_rt_var = self.interpreter.runtime_types.fresh() catch return true;
+            const tag_field = accessor.getFieldByIndex(tag_idx, tag_rt_var) catch return true;
 
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 const tag_value = tag_field.asI128();
@@ -1343,7 +1342,8 @@ pub const ComptimeEvaluator = struct {
             var accessor = result.asTuple(&self.interpreter.runtime_layout_store) catch return true;
 
             // Element 1 is tag discriminant - getElement takes original index directly
-            const tag_field = accessor.getElement(1) catch return true;
+            const tag_elem_rt_var = self.interpreter.runtime_types.fresh() catch return true;
+            const tag_field = accessor.getElement(1, tag_elem_rt_var) catch return true;
 
             if (tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int) {
                 const tag_value = tag_field.asI128();
@@ -1396,7 +1396,10 @@ pub const ComptimeEvaluator = struct {
             // This should never happen - Try type must have a payload field
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (missing payload field)", .{});
         };
-        const payload_field = try_accessor.getFieldByIndex(payload_idx) catch {
+        const payload_rt_var = self.interpreter.runtime_types.fresh() catch {
+            return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not create rt_var)", .{});
+        };
+        const payload_field = try_accessor.getFieldByIndex(payload_idx, payload_rt_var) catch {
             return try std.fmt.allocPrint(self.allocator, "Internal error: from_numeral returned malformed Try value (could not access payload)", .{});
         };
 
@@ -1411,7 +1414,10 @@ pub const ComptimeEvaluator = struct {
             // Check if this has a payload field (for the Str)
             // Single-tag unions might not have a "tag" field, so we look for payload first
             if (err_accessor.findFieldIndex(layout_env.idents.payload)) |err_payload_idx| {
-                const err_payload = err_accessor.getFieldByIndex(err_payload_idx) catch {
+                const err_payload_rt_var = self.interpreter.runtime_types.fresh() catch {
+                    return try std.fmt.allocPrint(self.allocator, "Internal error: could not create rt_var for InvalidNumeral payload", .{});
+                };
+                const err_payload = err_accessor.getFieldByIndex(err_payload_idx, err_payload_rt_var) catch {
                     return try std.fmt.allocPrint(self.allocator, "Internal error: could not access InvalidNumeral payload", .{});
                 };
                 return try self.extractStrFromValue(err_payload);
@@ -1421,7 +1427,8 @@ pub const ComptimeEvaluator = struct {
             // Iterate through fields looking for a Str
             var field_idx: usize = 0;
             while (true) : (field_idx += 1) {
-                const field = err_accessor.getFieldByIndex(field_idx) catch break;
+                const iter_field_rt_var = self.interpreter.runtime_types.fresh() catch break;
+                const field = err_accessor.getFieldByIndex(field_idx, iter_field_rt_var) catch break;
                 if (field.layout.tag == .scalar and field.layout.data.scalar.tag == .str) {
                     return try self.extractStrFromValue(field);
                 }

@@ -96,7 +96,12 @@ pub const TypeAnno = union(enum) {
         diagnostic: CIR.Diagnostic.Idx, // The error that occurred
     },
 
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        /// Placeholder value indicating the anno hasn't been set yet.
+        /// Used during forward reference resolution.
+        placeholder = 0,
+        _,
+    };
     pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {

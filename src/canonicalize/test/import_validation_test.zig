@@ -254,7 +254,7 @@ test "import interner - Import.Idx functionality" {
     // Check that we have the correct number of unique imports (duplicates are deduplicated)
     // Expected: List, Dict, Json, Set (4 unique)
     try expectEqual(@as(usize, 4), result.parse_env.imports.imports.len());
-    // Verify each unique module has an Import.Idx
+    // Verify each unique module has an Import.Idx by checking the imports list
     var found_list = false;
     var found_dict = false;
     var found_json_decode = false;
@@ -276,16 +276,6 @@ test "import interner - Import.Idx functionality" {
     try expectEqual(true, found_dict);
     try expectEqual(true, found_json_decode);
     try expectEqual(true, found_set);
-    // Test the lookup functionality
-    // Get the Import.Idx for "List" (should be used twice)
-    var list_import_idx: ?CIR.Import.Idx = null;
-    for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
-        if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "List")) {
-            list_import_idx = @enumFromInt(idx);
-            break;
-        }
-    }
-    try testing.expect(list_import_idx != null);
 }
 
 test "import interner - comprehensive usage example" {
@@ -325,46 +315,24 @@ test "import interner - comprehensive usage example" {
     // Check that we have the correct number of unique imports
     // Expected: List, Dict, Try (3 unique)
     try expectEqual(@as(usize, 3), result.parse_env.imports.imports.len());
-    // Verify each unique module has an Import.Idx
+    // Verify each unique module was imported
     var found_list = false;
     var found_dict = false;
     var found_result = false;
-    for (result.parse_env.imports.imports.items.items, 0..) |import_string_idx, idx| {
-        if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "List")) {
+    for (result.parse_env.imports.imports.items.items) |import_string_idx| {
+        const module_name = result.parse_env.getString(import_string_idx);
+        if (std.mem.eql(u8, module_name, "List")) {
             found_list = true;
-            // Note: We can't verify exposed items count here as Import.Store only stores module names
-        } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Dict")) {
+        } else if (std.mem.eql(u8, module_name, "Dict")) {
             found_dict = true;
-        } else if (std.mem.eql(u8, result.parse_env.getString(import_string_idx), "Try")) {
+        } else if (std.mem.eql(u8, module_name, "Try")) {
             found_result = true;
         }
-        // Verify Import.Idx can be created from the index
-        const import_idx: CIR.Import.Idx = @enumFromInt(idx);
-        _ = import_idx; // Just verify it compiles
     }
     // Verify all expected modules were found
     try expectEqual(true, found_list);
     try expectEqual(true, found_dict);
     try expectEqual(true, found_result);
-}
-
-test "Import.Idx is u32" {
-
-    // Verify that Import.Idx is indeed a u32 enum
-    // Import.Idx is defined as: pub const Idx = enum(u32) { _ };
-    // So we know it's backed by u32
-    // Verify we can create Import.Idx values from u32
-    const test_idx: u32 = 42;
-    const import_idx = @as(CIR.Import.Idx, @enumFromInt(test_idx));
-    const back_to_u32 = @intFromEnum(import_idx);
-    try testing.expectEqual(test_idx, back_to_u32);
-    // Test that we can create valid Import.Idx values
-    const idx1: CIR.Import.Idx = @enumFromInt(0);
-    const idx2: CIR.Import.Idx = @enumFromInt(4294967295); // max u32 value
-    // Verify they are distinct
-    try testing.expect(idx1 != idx2);
-    // Verify the size in memory
-    try testing.expectEqual(@sizeOf(u32), @sizeOf(CIR.Import.Idx));
 }
 
 test "module scopes - imports work in module scope" {
@@ -436,18 +404,9 @@ test "module-qualified lookups with e_lookup_external" {
         allocator.destroy(result.parse_env);
     }
     _ = try result.can.canonicalizeFile();
-    // Count e_lookup_external expressions
-    var external_lookup_count: u32 = 0;
-    var found_list_map = false;
-    var found_list_len = false;
-    var found_dict_insert = false;
-    var found_dict_empty = false;
-    // For this test, we're checking that module-qualified lookups work
-    // In the new CIR, we'd need to traverse the expression tree from the root
-    // For now, let's verify that the imports were registered correctly
+    // Verify the module names are correct
     const imports_list = result.parse_env.imports.imports;
     try testing.expect(imports_list.len() >= 2); // List and Dict
-    // Verify the module names are correct
     var has_list = false;
     var has_dict = false;
     for (imports_list.items.items) |import_string_idx| {
@@ -457,19 +416,6 @@ test "module-qualified lookups with e_lookup_external" {
     }
     try testing.expect(has_list);
     try testing.expect(has_dict);
-    // TODO: Once we have proper expression traversal, verify the e_lookup_external nodes
-    // For now, we'll skip counting the actual lookup expressions
-    external_lookup_count = 4; // Expected count
-    found_list_map = true;
-    found_list_len = true;
-    found_dict_insert = true;
-    found_dict_empty = true;
-    // Verify we found all expected external lookups
-    try expectEqual(@as(u32, 4), external_lookup_count);
-    try expectEqual(true, found_list_map);
-    try expectEqual(true, found_list_len);
-    try expectEqual(true, found_dict_insert);
-    try expectEqual(true, found_dict_empty);
 }
 
 test "exposed_items - tracking CIR node indices for exposed items" {
@@ -492,7 +438,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         math_env.deinit();
         allocator.destroy(math_env);
     }
-    // Add exposed items and set their node indices
+    // Add exposed items
     const Ident = base.Ident;
     const add_idx = try math_env.common.idents.insert(allocator, Ident.for_text("add"));
     try math_env.addExposedById(add_idx);
@@ -500,11 +446,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try math_env.addExposedById(multiply_idx);
     const pi_idx = try math_env.common.idents.insert(allocator, Ident.for_text("PI"));
     try math_env.addExposedById(pi_idx);
-    // Simulate having CIR node indices for these exposed items
-    // In real usage, these would be set during canonicalization of MathUtils
-    try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(add_idx), 100);
-    try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(multiply_idx), 200);
-    try math_env.common.exposed_items.setNodeIndexById(allocator, @bitCast(pi_idx), 300);
+
     const math_utils_ident = try temp_idents.insert(allocator, Ident.for_text("MathUtils"));
     const math_utils_qualified_ident = try math_env.common.insertIdent(math_env.gpa, Ident.for_text("MathUtils"));
     try module_envs.put(math_utils_ident, .{ .env = math_env, .qualified_type_ident = math_utils_qualified_ident });
@@ -531,12 +473,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         allocator.destroy(result.parse_env);
     }
     _ = try result.can.canonicalizeFile();
-    // Verify that e_lookup_external expressions have the correct target_node_idx values
-    var found_add_with_idx_100 = false;
-    var found_multiply_with_idx_200 = false;
-    var found_pi_with_idx_300 = false;
-    // In the new CIR, we'd need to traverse the expression tree properly
-    // For now, let's verify the imports were registered
+    // Verify the MathUtils import was registered
     const imports_list = result.parse_env.imports.imports;
     var has_mathutils = false;
     for (imports_list.items.items) |import_string_idx| {
@@ -547,62 +484,6 @@ test "exposed_items - tracking CIR node indices for exposed items" {
         }
     }
     try testing.expect(has_mathutils);
-    // TODO: Once we have proper expression traversal, verify the target_node_idx values
-    // For now, we'll assume they work correctly
-    found_add_with_idx_100 = true;
-    found_multiply_with_idx_200 = true;
-    found_pi_with_idx_300 = true;
-    // Verify all lookups have the correct target node indices
-    try expectEqual(true, found_add_with_idx_100);
-    try expectEqual(true, found_multiply_with_idx_200);
-    try expectEqual(true, found_pi_with_idx_300);
-    // Test case where node index is not populated (should get 0)
-    const empty_env = try allocator.create(ModuleEnv);
-    empty_env.* = try ModuleEnv.init(allocator, "");
-    defer {
-        empty_env.deinit();
-        allocator.destroy(empty_env);
-    }
-    const undefined_idx = try empty_env.common.idents.insert(allocator, Ident.for_text("undefined"));
-    try empty_env.addExposedById(undefined_idx);
-    // Don't set node index - should default to 0
-    const empty_module_ident = try temp_idents.insert(allocator, Ident.for_text("EmptyModule"));
-    const empty_qualified_ident = try empty_env.common.insertIdent(empty_env.gpa, Ident.for_text("EmptyModule"));
-    try module_envs.put(empty_module_ident, .{ .env = empty_env, .qualified_type_ident = empty_qualified_ident });
-    const source2 =
-        \\module [test]
-        \\
-        \\import EmptyModule exposing [undefined]
-        \\
-        \\test = undefined
-    ;
-    var result2 = try parseAndCanonicalizeSource(allocator, source2, &module_envs);
-    defer {
-        result2.can.deinit();
-        allocator.destroy(result2.can);
-        result2.ast.deinit(allocator);
-        allocator.destroy(result2.ast);
-        result2.parse_env.deinit();
-        allocator.destroy(result2.parse_env);
-    }
-    _ = try result2.can.canonicalizeFile();
-    // Verify that undefined gets target_node_idx = 0 (not found)
-    var found_undefined_with_idx_0 = false;
-    // Verify EmptyModule was imported
-    const imports_list2 = result2.parse_env.imports.imports;
-    var has_empty_module = false;
-    for (imports_list2.items.items) |import_string_idx| {
-        const import_name = result2.parse_env.getString(import_string_idx);
-        if (std.mem.eql(u8, import_name, "EmptyModule")) {
-            has_empty_module = true;
-            break;
-        }
-    }
-    try testing.expect(has_empty_module);
-    // TODO: Once we have proper expression traversal, verify target_node_idx = 0
-    // For now, we'll assume it works correctly
-    found_undefined_with_idx_0 = true;
-    try expectEqual(true, found_undefined_with_idx_0);
 }
 
 test "export count safety - ensures safe u16 casting" {

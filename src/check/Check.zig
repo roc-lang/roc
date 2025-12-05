@@ -3169,7 +3169,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Here, we unwrap the function, following aliases, to get
                     // the actual function we want to check against
                     var var_ = expected_var;
+                    var guard = types_mod.debug.IterationGuard.init("checkExpr.lambda.unwrapExpectedFunc");
                     while (true) {
+                        guard.tick();
                         switch (self.types.resolveVar(var_).desc.content) {
                             .structure => |flat_type| {
                                 switch (flat_type) {
@@ -3364,7 +3366,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Here, we unwrap the function, following aliases, to get
                             // the actual function we want to check against
                             var var_ = func_var;
+                            var guard = types_mod.debug.IterationGuard.init("checkExpr.call.unwrapFuncVar");
                             while (true) {
+                                guard.tick();
                                 switch (self.types.resolveVar(var_).desc.content) {
                                     .structure => |flat_type| {
                                         switch (flat_type) {

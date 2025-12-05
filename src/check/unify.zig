@@ -1511,7 +1511,9 @@ const Unifier = struct {
 
         // then recursiv
         var ext = record_ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
         while (true) {
+            guard.tick();
             switch (ext) {
                 .unbound => {
                     return .{ .ext = ext, .range = range };
@@ -1961,7 +1963,9 @@ const Unifier = struct {
 
         // then loop gathering extensible tags
         var ext_var = tag_union.ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherTagUnionTags");
         while (true) {
+            guard.tick();
             switch (self.types_store.resolveVar(ext_var).desc.content) {
                 .flex => {
                     return .{ .ext = ext_var, .range = range };

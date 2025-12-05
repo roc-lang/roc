@@ -292,6 +292,156 @@ const CheckTypeCheckerPatternsStep = struct {
     }
 };
 
+/// Build step that checks for @enumFromInt(0) usage in all .zig files.
+///
+/// We forbid @enumFromInt(0) because it hides bugs and makes them harder to debug.
+/// If we need a placeholder value that we believe will never be read, we should
+/// use `undefined` instead - that way our intent is clear, and it can fail in a
+/// more obvious way if our assumption is incorrect.
+const CheckEnumFromIntZeroStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckEnumFromIntZeroStep {
+        const self = b.allocator.create(CheckEnumFromIntZeroStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-enum-from-int-zero",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Recursively scan src/ for .zig files
+        var dir = std.fs.cwd().openDir("src", .{ .iterate = true }) catch |err| {
+            return step.fail("Failed to open src directory: {}", .{err});
+        };
+        defer dir.close();
+
+        try scanDirectoryForEnumFromIntZero(allocator, dir, "src", &violations);
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("FORBIDDEN PATTERN: @enumFromInt(0)\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\Using @enumFromInt(0) is forbidden in this codebase.
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  @enumFromInt(0) hides bugs and makes them harder to debug. It creates
+                \\  a "valid-looking" value that can silently propagate through the code
+                \\  when something goes wrong.
+                \\
+                \\WHAT TO DO INSTEAD:
+                \\  If you need a placeholder value that you believe will never be read,
+                \\  use `undefined` instead. This makes your intent clear, and if your
+                \\  assumption is wrong and the value IS read, it will fail more obviously.
+                \\
+                \\  When using `undefined`, add a comment explaining why it's correct there
+                \\  (e.g., where it will be overwritten before being read).
+                \\
+                \\  Example - WRONG:
+                \\    .anno = @enumFromInt(0), // placeholder - will be replaced
+                \\
+                \\  Example - RIGHT:
+                \\    .anno = undefined, // overwritten in Phase 1.7 before use
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} uses of @enumFromInt(0). Using placeholder values like this has consistently led to bugs in this code base. " ++
+                    "Do not use @enumFromInt(0) and also do not uncritically replace it with another placeholder like .first or something like that. " ++
+                    "If you want it to be uninitialized and are very confident it will be overwritten before it is ever read, then use `undefined`. " ++
+                    "Otherwise, take a step back and rethink how this code works; there should be a way to implement this in a way that does not use hardcoded placeholder indices like 0! " ++
+                    "See above for details.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+    };
+
+    fn scanDirectoryForEnumFromIntZero(
+        allocator: std.mem.Allocator,
+        dir: std.fs.Dir,
+        path_prefix: []const u8,
+        violations: *std.ArrayList(Violation),
+    ) !void {
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+
+            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            const file = dir.openFile(entry.path, .{}) catch continue;
+            defer file.close();
+
+            const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch continue;
+            defer allocator.free(content);
+
+            var line_number: usize = 1;
+            var line_start: usize = 0;
+
+            for (content, 0..) |char, i| {
+                if (char == '\n') {
+                    const line = content[line_start..i];
+
+                    const trimmed = std.mem.trim(u8, line, " \t");
+                    // Skip comments
+                    if (std.mem.startsWith(u8, trimmed, "//")) {
+                        line_number += 1;
+                        line_start = i + 1;
+                        continue;
+                    }
+
+                    // Check for @enumFromInt(0) usage
+                    if (std.mem.indexOf(u8, line, "@enumFromInt(0)") != null) {
+                        try violations.append(allocator, .{
+                            .file_path = full_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+
+                    line_number += 1;
+                    line_start = i + 1;
+                }
+            }
+        }
+    }
+};
+
 /// Build step that checks for unused variable suppression patterns.
 ///
 /// In this codebase, we don't use `_ = variable;` to suppress unused variable warnings.
@@ -1418,6 +1568,10 @@ pub fn build(b: *std.Build) void {
     // Add check for forbidden patterns in type checker code
     const check_patterns = CheckTypeCheckerPatternsStep.create(b);
     test_step.dependOn(&check_patterns.step);
+
+    // Add check for @enumFromInt(0) usage
+    const check_enum_from_int = CheckEnumFromIntZeroStep.create(b);
+    test_step.dependOn(&check_enum_from_int.step);
 
     // Add check for unused variable suppression patterns
     const check_unused = CheckUnusedSuppressionStep.create(b);
