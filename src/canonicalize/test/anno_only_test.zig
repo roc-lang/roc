@@ -23,15 +23,15 @@ test "e_anno_only can be used in statements" {
     // used as part of s_decl statements, which is how standalone
     // type annotations are represented after canonicalization.
 
-    // Use named constants to make the intent clear - these represent the first indices
-    const first_pattern_idx: CIR.Pattern.Idx = @enumFromInt(0);
-    const first_expr_idx: CIR.Expr.Idx = @enumFromInt(0);
-    const first_anno_idx: CIR.Annotation.Idx = @enumFromInt(0);
+    // Use arbitrary non-zero indices for construction test
+    const pattern_idx: CIR.Pattern.Idx = @enumFromInt(42);
+    const expr_idx: CIR.Expr.Idx = @enumFromInt(42);
+    const anno_idx: CIR.Annotation.Idx = @enumFromInt(42);
 
     const stmt = CIR.Statement{ .s_decl = .{
-        .pattern = first_pattern_idx,
-        .expr = first_expr_idx,
-        .anno = first_anno_idx,
+        .pattern = pattern_idx,
+        .expr = expr_idx,
+        .anno = anno_idx,
     } };
 
     // Verify the statement was created correctly

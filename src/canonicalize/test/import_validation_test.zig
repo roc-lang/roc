@@ -359,7 +359,7 @@ test "Import.Idx is u32" {
     const back_to_u32 = @intFromEnum(import_idx);
     try testing.expectEqual(test_idx, back_to_u32);
     // Test that we can create valid Import.Idx values
-    const first_import_idx: CIR.Import.Idx = @enumFromInt(0);
+    const first_import_idx: CIR.Import.Idx = .first;
     const max_import_idx: CIR.Import.Idx = @enumFromInt(4294967295); // max u32 value
     // Verify they are distinct
     try testing.expect(first_import_idx != max_import_idx);

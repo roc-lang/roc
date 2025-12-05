@@ -790,10 +790,10 @@ test "partitionFields - same record" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const field_x = try env.mkRecordField("field_x", placeholder_var_0);
-    const field_y = try env.mkRecordField("field_y", placeholder_var_1);
+    const var_x = try env.module_env.types.fresh();
+    const var_y = try env.module_env.types.fresh();
+    const field_x = try env.mkRecordField("field_x", var_x);
+    const field_y = try env.mkRecordField("field_y", var_y);
 
     const range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
@@ -815,12 +815,12 @@ test "partitionFields - disjoint fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const placeholder_var_2: Var = @enumFromInt(2);
-    const a1 = try env.mkRecordField("a1", placeholder_var_0);
-    const a2 = try env.mkRecordField("a2", placeholder_var_1);
-    const b1 = try env.mkRecordField("b1", placeholder_var_2);
+    const var_a1 = try env.module_env.types.fresh();
+    const var_a2 = try env.module_env.types.fresh();
+    const var_b1 = try env.module_env.types.fresh();
+    const a1 = try env.mkRecordField("a1", var_a1);
+    const a2 = try env.mkRecordField("a2", var_a2);
+    const b1 = try env.mkRecordField("b1", var_b1);
 
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
@@ -844,12 +844,12 @@ test "partitionFields - overlapping fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const placeholder_var_2: Var = @enumFromInt(2);
-    const a1 = try env.mkRecordField("a1", placeholder_var_0);
-    const both = try env.mkRecordField("both", placeholder_var_1);
-    const b1 = try env.mkRecordField("b1", placeholder_var_2);
+    const var_a1 = try env.module_env.types.fresh();
+    const var_both = try env.module_env.types.fresh();
+    const var_b1 = try env.module_env.types.fresh();
+    const a1 = try env.mkRecordField("a1", var_a1);
+    const both = try env.mkRecordField("both", var_both);
+    const b1 = try env.mkRecordField("b1", var_b1);
 
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
@@ -876,12 +876,12 @@ test "partitionFields - reordering is normalized" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const placeholder_var_2: Var = @enumFromInt(2);
-    const f1 = try env.mkRecordField("f1", placeholder_var_0);
-    const f2 = try env.mkRecordField("f2", placeholder_var_1);
-    const f3 = try env.mkRecordField("f3", placeholder_var_2);
+    const var_f1 = try env.module_env.types.fresh();
+    const var_f2 = try env.module_env.types.fresh();
+    const var_f3 = try env.module_env.types.fresh();
+    const f1 = try env.mkRecordField("f1", var_f1);
+    const f2 = try env.mkRecordField("f2", var_f2);
+    const f3 = try env.mkRecordField("f3", var_f3);
 
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
@@ -1038,10 +1038,10 @@ test "partitionTags - same tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const tag_x = try env.mkTag("X", &[_]Var{placeholder_var_0});
-    const tag_y = try env.mkTag("Y", &[_]Var{placeholder_var_1});
+    const var_x = try env.module_env.types.fresh();
+    const var_y = try env.module_env.types.fresh();
+    const tag_x = try env.mkTag("X", &[_]Var{var_x});
+    const tag_y = try env.mkTag("Y", &[_]Var{var_y});
 
     const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
@@ -1063,12 +1063,12 @@ test "partitionTags - disjoint fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const placeholder_var_2: Var = @enumFromInt(2);
-    const a1 = try env.mkTag("A1", &[_]Var{placeholder_var_0});
-    const a2 = try env.mkTag("A2", &[_]Var{placeholder_var_1});
-    const b1 = try env.mkTag("B1", &[_]Var{placeholder_var_2});
+    const var_a1 = try env.module_env.types.fresh();
+    const var_a2 = try env.module_env.types.fresh();
+    const var_b1 = try env.module_env.types.fresh();
+    const a1 = try env.mkTag("A1", &[_]Var{var_a1});
+    const a2 = try env.mkTag("A2", &[_]Var{var_a2});
+    const b1 = try env.mkTag("B1", &[_]Var{var_b1});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
@@ -1092,12 +1092,12 @@ test "partitionTags - overlapping tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const placeholder_var_2: Var = @enumFromInt(2);
-    const a1 = try env.mkTag("A", &[_]Var{placeholder_var_0});
-    const both = try env.mkTag("Both", &[_]Var{placeholder_var_1});
-    const b1 = try env.mkTag("B", &[_]Var{placeholder_var_2});
+    const var_a = try env.module_env.types.fresh();
+    const var_both = try env.module_env.types.fresh();
+    const var_b = try env.module_env.types.fresh();
+    const a1 = try env.mkTag("A", &[_]Var{var_a});
+    const both = try env.mkTag("Both", &[_]Var{var_both});
+    const b1 = try env.mkTag("B", &[_]Var{var_b});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
@@ -1124,12 +1124,12 @@ test "partitionTags - reordering is normalized" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const placeholder_var_0: Var = @enumFromInt(0);
-    const placeholder_var_1: Var = @enumFromInt(1);
-    const placeholder_var_2: Var = @enumFromInt(2);
-    const f1 = try env.mkTag("F1", &[_]Var{placeholder_var_0});
-    const f2 = try env.mkTag("F2", &[_]Var{placeholder_var_1});
-    const f3 = try env.mkTag("F3", &[_]Var{placeholder_var_2});
+    const var_f1 = try env.module_env.types.fresh();
+    const var_f2 = try env.module_env.types.fresh();
+    const var_f3 = try env.module_env.types.fresh();
+    const f1 = try env.mkTag("F1", &[_]Var{var_f1});
+    const f2 = try env.mkTag("F2", &[_]Var{var_f2});
+    const f3 = try env.mkTag("F3", &[_]Var{var_f3});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
@@ -1509,8 +1509,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const first_constraint_idx: unify_mod.DeferredConstraintCheck.SafeList.Idx = @enumFromInt(0);
-    const deferred = env.scratch.deferred_constraints.get(first_constraint_idx).*;
+    const deferred = env.scratch.deferred_constraints.get(.first).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(structure_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1545,8 +1544,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const first_constraint_idx: unify_mod.DeferredConstraintCheck.SafeList.Idx = @enumFromInt(0);
-    const deferred = env.scratch.deferred_constraints.get(first_constraint_idx).*;
+    const deferred = env.scratch.deferred_constraints.get(.first).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(flex_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1599,8 +1597,7 @@ test "unify - flex vs nominal type captures constraint" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const first_constraint_idx: unify_mod.DeferredConstraintCheck.SafeList.Idx = @enumFromInt(0);
-    const deferred = env.scratch.deferred_constraints.get(first_constraint_idx).*;
+    const deferred = env.scratch.deferred_constraints.get(.first).*;
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(nominal_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
