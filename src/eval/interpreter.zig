@@ -7659,12 +7659,12 @@ pub const Interpreter = struct {
 
         // Apply rigid variable substitution if this is a rigid variable
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Use a counter to prevent infinite loops from cyclic substitutions
+        // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
         var count: u32 = 0;
         while (resolved.desc.content == .rigid) {
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 count += 1;
-                if (count > 1000) break; // Prevent infinite loops
+                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -8453,12 +8453,12 @@ pub const Interpreter = struct {
         // Check if this variable has a substitution active (for generic function instantiation)
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
             // Follow the substitution chain to find the final variable
-            // Use a counter to prevent infinite loops from cyclic substitutions
+            // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
             var current = substituted;
             var count: u32 = 0;
             while (self.rigid_subst.get(current)) |next_subst| {
                 count += 1;
-                if (count > 1000) break; // Prevent infinite loops
+                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 current = next_subst;
             }
             break :blk current;
