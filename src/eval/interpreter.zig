@@ -8050,18 +8050,33 @@ pub const Interpreter = struct {
             }
         }
 
-        // Skip translate_cache for flex/rigid vars when inside a polymorphic function.
-        // The cache may have stale mappings from a different calling context where the
-        // flex var defaulted to Dec, but we now have a concrete type from flex_type_context.
-        // We check if flex_type_context has ANY entries as a proxy for "inside polymorphic call".
+        // Check translate_cache. We have two concerns:
+        // 1. Breaking cycles: Always check if we're already translating this type (placeholder)
+        // 2. Stale mappings: Skip cached results for flex/rigid vars in polymorphic contexts
+        //    where the cache might have stale mappings from a different calling context
         const in_polymorphic_context = self.flex_type_context.count() > 0;
-        const skip_cache_for_this_var = in_polymorphic_context and
+        const skip_stale_cached_result = in_polymorphic_context and
             (resolved.desc.content == .flex or resolved.desc.content == .rigid);
 
-        if (!skip_cache_for_this_var) {
-            if (self.translate_cache.get(key)) |found| {
+        if (self.translate_cache.get(key)) |found| {
+            // Always return cached results to break cycles (placeholder mechanism).
+            // For flex/rigid in polymorphic context, we're only skipping potentially
+            // stale COMPLETE translations. The placeholder is inserted during THIS
+            // translation, so returning it is safe and necessary to prevent infinite recursion.
+            if (!skip_stale_cached_result) {
                 return found;
             }
+            // Check if this is a placeholder (cycle detection) vs stale complete translation.
+            // Placeholders are fresh flex vars with no constraints.
+            const found_resolved = self.runtime_types.resolveVar(found);
+            if (found_resolved.desc.content == .flex) {
+                const flex = found_resolved.desc.content.flex;
+                if (flex.name == null and flex.constraints.len() == 0) {
+                    // This is a placeholder - return it to break the cycle
+                    return found;
+                }
+            }
+            // Otherwise it's a potentially stale mapping - skip it and re-translate
         }
 
         // Insert a placeholder to break cycles during recursive type translation.

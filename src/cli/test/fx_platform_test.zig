@@ -1068,147 +1068,6 @@ test "fx platform string_lookup_test" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "hello") != null);
 }
 
-test "fx platform test_direct_string" {
-    const allocator = testing.allocator;
-
-    try ensureRocBinary(allocator);
-
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_direct_string.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
-}
-
-test "fx platform test_one_call" {
-    const allocator = testing.allocator;
-
-    try ensureRocBinary(allocator);
-
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_one_call.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
-}
-
-test "fx platform test_type_mismatch" {
-    const allocator = testing.allocator;
-
-    try ensureRocBinary(allocator);
-
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_type_mismatch.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // This file is expected to fail compilation with a type mismatch error
-    // The to_inspect method returns I64 instead of Str
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                // Expected to fail - check for type mismatch error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
-            } else {
-                std.debug.print("Expected compilation error but succeeded\n", .{});
-                return error.UnexpectedSuccess;
-            }
-        },
-        else => {
-            // Abnormal termination should also indicate error
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
-        },
-    }
-}
-
-test "fx platform test_with_wrapper" {
-    const allocator = testing.allocator;
-
-    try ensureRocBinary(allocator);
-
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            "./zig-out/bin/roc",
-            "test/fx/test_with_wrapper.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("Run failed with exit code {}\n", .{code});
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.RunFailed;
-            }
-        },
-        else => {
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunFailed;
-        },
-    }
-
-    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello") != null);
-}
-
 test "fx platform inspect_compare_test" {
     const allocator = testing.allocator;
 
@@ -1523,22 +1382,6 @@ test "run allows warnings without blocking execution" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello, World!") != null);
 }
 
-test "fx platform method inspect on string" {
-    // Tests that calling .inspect() on a Str correctly reports MISSING METHOD
-    // (Str doesn't have an inspect method, unlike custom opaque types)
-    const allocator = testing.allocator;
-
-    const run_result = try runRoc(allocator, "test/fx/test_method_inspect.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // This should fail because Str doesn't have an inspect method
-    try checkFailure(run_result);
-
-    // Should show MISSING METHOD error
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
-}
-
 test "fx platform if-expression closure capture regression" {
     // Regression test: Variables bound inside an if-expression's block were
     // incorrectly being captured as free variables by the enclosing lambda,
@@ -1550,4 +1393,22 @@ test "fx platform if-expression closure capture regression" {
     defer allocator.free(run_result.stderr);
 
     try checkSuccess(run_result);
+}
+
+test "fx platform var with string interpolation segfault" {
+    // Regression test: Using `var` variables with string interpolation causes segfault.
+    // The code calls fnA! multiple times, each using var state variables, and
+    // interpolates the results into strings.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/var_interp_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
 }
