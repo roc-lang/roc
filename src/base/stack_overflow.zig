@@ -6,19 +6,28 @@
 //!
 //! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
 //! signal stack and install a SIGSEGV handler that detects stack overflows.
+//!
+//! On Windows, we use SetUnhandledExceptionFilter to catch EXCEPTION_STACK_OVERFLOW.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = std.posix;
+const posix = if (builtin.os.tag != .windows) std.posix else undefined;
+const windows = if (builtin.os.tag == .windows) std.os.windows else undefined;
 
 /// Size of the alternate signal stack (64KB should be plenty for the handler)
 const ALT_STACK_SIZE = 64 * 1024;
 
-/// Storage for the alternate signal stack
+/// Storage for the alternate signal stack (POSIX only)
 var alt_stack_storage: [ALT_STACK_SIZE]u8 align(16) = undefined;
 
 /// Whether the handler has been installed
 var handler_installed = false;
+
+// Windows constants
+const EXCEPTION_STACK_OVERFLOW: u32 = 0xC00000FD;
+const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC0000005;
+const EXCEPTION_CONTINUE_SEARCH: c_long = 0;
+const EXCEPTION_EXECUTE_HANDLER: c_long = 1;
 
 /// Error message to display on stack overflow
 const STACK_OVERFLOW_MESSAGE =
@@ -50,11 +59,8 @@ const STACK_OVERFLOW_MESSAGE =
 pub fn install() bool {
     if (handler_installed) return true;
 
-    // Only supported on POSIX systems
     if (comptime builtin.os.tag == .windows) {
-        // TODO: Implement Windows stack overflow handling using SetUnhandledExceptionFilter
-        // and checking for EXCEPTION_STACK_OVERFLOW
-        return false;
+        return installWindows();
     }
 
     if (comptime builtin.os.tag == .wasi) {
@@ -62,6 +68,10 @@ pub fn install() bool {
         return false;
     }
 
+    return installPosix();
+}
+
+fn installPosix() bool {
     // Set up the alternate signal stack
     var alt_stack = posix.stack_t{
         .sp = &alt_stack_storage,
@@ -75,7 +85,7 @@ pub fn install() bool {
 
     // Install the SIGSEGV handler
     const action = posix.Sigaction{
-        .handler = .{ .sigaction = handleSignal },
+        .handler = .{ .sigaction = handleSignalPosix },
         .mask = posix.sigemptyset(),
         .flags = posix.SA.SIGINFO | posix.SA.ONSTACK,
     };
@@ -89,9 +99,16 @@ pub fn install() bool {
     return true;
 }
 
-/// The signal handler function
-fn handleSignal(sig: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn installWindows() bool {
+    // Use SetUnhandledExceptionFilter to catch unhandled exceptions
+    const kernel32 = windows.kernel32;
+    _ = kernel32.SetUnhandledExceptionFilter(handleExceptionWindows);
+    handler_installed = true;
+    return true;
+}
 
+/// The POSIX signal handler function
+fn handleSignalPosix(sig: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     // Check if this is likely a stack overflow by examining the fault address
     const fault_addr = @intFromPtr(info.addr);
 
@@ -132,6 +149,39 @@ fn handleSignal(sig: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv
     } else {
         posix.exit(139); // 128 + 11 (SIGSEGV)
     }
+}
+
+/// Windows exception handler function
+fn handleExceptionWindows(exception_info: *windows.EXCEPTION_POINTERS) callconv(windows.WINAPI) c_long {
+    const exception_code = exception_info.ExceptionRecord.ExceptionCode;
+
+    // Check if this is a stack overflow or access violation
+    const is_stack_overflow = exception_code == EXCEPTION_STACK_OVERFLOW;
+    const is_access_violation = exception_code == EXCEPTION_ACCESS_VIOLATION;
+
+    if (!is_stack_overflow and !is_access_violation) {
+        // Let other handlers deal with this exception
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // Write error message to stderr
+    const stderr_handle = windows.kernel32.GetStdHandle(windows.STD_ERROR_HANDLE);
+    if (stderr_handle != windows.INVALID_HANDLE_VALUE) {
+        var bytes_written: windows.DWORD = 0;
+        if (is_stack_overflow) {
+            _ = windows.kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        } else {
+            const msg = "\nAccess violation in the Roc compiler.\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+            _ = windows.kernel32.WriteFile(stderr_handle, msg, msg.len, &bytes_written, null);
+        }
+    }
+
+    // Exit with appropriate code
+    const exit_code: windows.UINT = if (is_stack_overflow) 134 else 139;
+    windows.kernel32.ExitProcess(exit_code);
+
+    // Never reached, but required for return type
+    return EXCEPTION_EXECUTE_HANDLER;
 }
 
 /// Heuristic to determine if a fault is likely a stack overflow
@@ -219,7 +269,11 @@ pub fn triggerStackOverflowForTest() noreturn {
 
     // This should never be reached
     std.debug.print("Unexpected result: {}\n", .{result});
-    posix.exit(1);
+    if (comptime builtin.os.tag == .windows) {
+        windows.kernel32.ExitProcess(1);
+    } else {
+        posix.exit(1);
+    }
 }
 
 test "formatHex" {
@@ -235,12 +289,37 @@ test "formatHex" {
     try std.testing.expectEqualStrings("0xdeadbeef", medium);
 }
 
+/// Check if we're being run as a subprocess to trigger stack overflow.
+/// This is called by tests to create a child process that will crash.
+/// Returns true if we should trigger the overflow (and not return).
+pub fn checkAndTriggerIfSubprocess() bool {
+    // Check for the special environment variable that signals we should crash
+    const env_val = std.process.getEnvVarOwned(std.heap.page_allocator, "ROC_TEST_TRIGGER_STACK_OVERFLOW") catch return false;
+    defer std.heap.page_allocator.free(env_val);
+
+    if (std.mem.eql(u8, env_val, "1")) {
+        // Install handler and trigger overflow
+        _ = install();
+        triggerStackOverflowForTest();
+        // Never returns
+    }
+    return false;
+}
+
 test "stack overflow handler produces helpful error message" {
-    // Skip on non-POSIX systems
-    if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) {
+    // Skip on WASI - no process spawning
+    if (comptime builtin.os.tag == .wasi) {
         return error.SkipZigTest;
     }
 
+    if (comptime builtin.os.tag == .windows) {
+        try testStackOverflowWindows();
+    } else {
+        try testStackOverflowPosix();
+    }
+}
+
+fn testStackOverflowPosix() !void {
     // Create a pipe to capture stderr from the child
     const pipe_fds = try posix.pipe();
     const pipe_read = pipe_fds[0];
@@ -274,10 +353,6 @@ test "stack overflow handler produces helpful error message" {
         const status = wait_result.status;
 
         // Parse the wait status (Unix encoding)
-        // WIFEXITED: (status & 0x7f) == 0
-        // WEXITSTATUS: (status >> 8) & 0xff
-        // WIFSIGNALED: ((status & 0x7f) + 1) >> 1 > 0
-        // WTERMSIG: status & 0x7f
         const exited_normally = (status & 0x7f) == 0;
         const exit_code: u8 = @truncate((status >> 8) & 0xff);
         const termination_signal: u8 = @truncate(status & 0x7f);
@@ -289,27 +364,83 @@ test "stack overflow handler produces helpful error message" {
 
         const stderr_output = stderr_buf[0..bytes_read];
 
-        // Verify the handler caught the signal and printed a helpful message
-        // Exit code 134 = stack overflow detected
-        // Exit code 139 = generic segfault (handler caught it but didn't classify as stack overflow)
-        if (exited_normally and (exit_code == 134 or exit_code == 139)) {
-            // Check that our handler message was printed
-            const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "STACK OVERFLOW") != null;
-            const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
-            const has_roc_compiler_msg = std.mem.indexOf(u8, stderr_output, "Roc compiler") != null;
+        try verifyHandlerOutput(exited_normally, exit_code, termination_signal, stderr_output);
+    }
+}
 
-            // Handler should have printed EITHER stack overflow message OR segfault message
-            try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
-            try std.testing.expect(has_roc_compiler_msg);
-        } else if (!exited_normally and (termination_signal == posix.SIG.SEGV or termination_signal == posix.SIG.BUS)) {
-            // The handler might not have caught it - this can happen on some systems
-            // where the signal delivery is different. Just warn and skip.
-            std.debug.print("Warning: Stack overflow was not caught by handler (signal {})\n", .{termination_signal});
-            return error.SkipZigTest;
-        } else {
-            std.debug.print("Unexpected exit status: 0x{x} (exited={}, code={}, signal={})\n", .{ status, exited_normally, exit_code, termination_signal });
-            std.debug.print("Stderr: {s}\n", .{stderr_output});
-            return error.TestUnexpectedResult;
-        }
+fn testStackOverflowWindows() !void {
+    const allocator = std.testing.allocator;
+
+    // Get the path to the current executable (the test binary)
+    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe);
+
+    // Spawn ourselves with the special environment variable
+    var child = std.process.Child.init(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{self_exe},
+        .env_map = null, // We'll set env via addEnv
+    }, allocator);
+
+    // Set the trigger environment variable
+    try child.env_map.?.put("ROC_TEST_TRIGGER_STACK_OVERFLOW", "1");
+
+    // Spawn and wait
+    const term = try child.spawnAndWait();
+
+    // Read stderr
+    const stderr_output = if (child.stderr) |stderr| blk: {
+        var buf: [4096]u8 = undefined;
+        const n = stderr.reader().readAll(&buf) catch 0;
+        break :blk buf[0..n];
+    } else "";
+
+    // Verify results
+    const exited_normally = term == .Exited;
+    const exit_code: u8 = if (term == .Exited) @truncate(term.Exited) else 0;
+
+    try verifyHandlerOutputWindows(exited_normally, exit_code, stderr_output);
+}
+
+fn verifyHandlerOutput(exited_normally: bool, exit_code: u8, termination_signal: u8, stderr_output: []const u8) !void {
+    // Exit code 134 = stack overflow detected
+    // Exit code 139 = generic segfault (handler caught it but didn't classify as stack overflow)
+    if (exited_normally and (exit_code == 134 or exit_code == 139)) {
+        // Check that our handler message was printed
+        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "STACK OVERFLOW") != null;
+        const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
+        const has_roc_compiler_msg = std.mem.indexOf(u8, stderr_output, "Roc compiler") != null;
+
+        // Handler should have printed EITHER stack overflow message OR segfault message
+        try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
+        try std.testing.expect(has_roc_compiler_msg);
+    } else if (!exited_normally and (termination_signal == posix.SIG.SEGV or termination_signal == posix.SIG.BUS)) {
+        // The handler might not have caught it - this can happen on some systems
+        // where the signal delivery is different. Just warn and skip.
+        std.debug.print("Warning: Stack overflow was not caught by handler (signal {})\n", .{termination_signal});
+        return error.SkipZigTest;
+    } else {
+        std.debug.print("Unexpected exit status: exited={}, code={}, signal={}\n", .{ exited_normally, exit_code, termination_signal });
+        std.debug.print("Stderr: {s}\n", .{stderr_output});
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn verifyHandlerOutputWindows(exited_normally: bool, exit_code: u8, stderr_output: []const u8) !void {
+    // Exit code 134 = stack overflow detected
+    // Exit code 139 = generic access violation
+    if (exited_normally and (exit_code == 134 or exit_code == 139)) {
+        // Check that our handler message was printed
+        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "STACK OVERFLOW") != null;
+        const has_access_violation_msg = std.mem.indexOf(u8, stderr_output, "Access violation") != null;
+        const has_roc_compiler_msg = std.mem.indexOf(u8, stderr_output, "Roc compiler") != null;
+
+        // Handler should have printed EITHER stack overflow message OR access violation message
+        try std.testing.expect(has_stack_overflow_msg or has_access_violation_msg);
+        try std.testing.expect(has_roc_compiler_msg);
+    } else {
+        std.debug.print("Unexpected exit status: exited={}, code={}\n", .{ exited_normally, exit_code });
+        std.debug.print("Stderr: {s}\n", .{stderr_output});
+        return error.TestUnexpectedResult;
     }
 }
