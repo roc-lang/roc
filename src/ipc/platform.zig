@@ -103,7 +103,7 @@ pub const posix = if (!is_windows) struct {
     pub const PROT_READ = 0x01;
     pub const PROT_WRITE = 0x02;
     pub const MAP_SHARED = 0x0001;
-    pub const MAP_FAILED: *anyopaque = @ptrFromInt(std.math.maxInt(usize));
+    pub const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
 
 /// Shared memory errors

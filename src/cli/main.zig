@@ -182,7 +182,7 @@ const posix = if (!is_windows) struct {
     const FD_CLOEXEC = 1;
 
     // MAP_FAILED is (void*)-1, not NULL
-    const MAP_FAILED: *anyopaque = @ptrFromInt(std.math.maxInt(usize));
+    const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
 
 // Windows shared memory functions
