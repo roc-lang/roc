@@ -1231,3 +1231,16 @@ test "fx platform runtime division by zero" {
         },
     }
 }
+
+test "fx platform recursive top-level function regression" {
+    // Regression test: Recursive functions defined at top-level were incorrectly
+    // capturing themselves as free variables, causing a segfault when the closure
+    // tried to resolve the capture value before the function was fully bound.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/recursive_top_level.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}
