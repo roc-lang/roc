@@ -1582,3 +1582,42 @@ test "fx platform sublist method on inferred type" {
 
     try checkSuccess(run_result);
 }
+
+test "fx platform repeating pattern segfault" {
+    // Regression test: Code using var variables with sublist and repeat operations
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/repeating_pattern_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify the expected output
+    if (std.mem.indexOf(u8, run_result.stdout, "11-22") == null) {
+        std.debug.print("Missing expected output\n", .{});
+        std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+        return error.MissingOutput;
+    }
+}

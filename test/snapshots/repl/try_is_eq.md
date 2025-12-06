@@ -9,8 +9,8 @@ type=repl
 » Try.Ok(1) == Try.Ok(2)
 ~~~
 # OUTPUT
-Crash: e_closure: failed to resolve capture value
+Evaluation error: error.InvalidMethodReceiver
 ---
-Crash: e_closure: failed to resolve capture value
+Evaluation error: error.InvalidMethodReceiver
 # PROBLEMS
 NIL

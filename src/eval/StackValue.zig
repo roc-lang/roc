@@ -204,6 +204,13 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         if (ptr == null) return;
         // Get the closure header to find the captures layout
         const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(ptr.?));
+
+        // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
+        const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
+            std.debug.panic("decrefLayoutPtr: closure has invalid captures_layout_idx=0x{x} (likely uninitialized or corrupted closure header at ptr={*})", .{ idx_as_usize, ptr.? });
+        }
+
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
 
         // Only decref if there are actual captures (record with fields)
