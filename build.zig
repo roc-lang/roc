@@ -1650,6 +1650,8 @@ pub fn build(b: *std.Build) void {
         }
         // Ensure host library is copied before running the test
         run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
+        // Ensure roc binary is built before running the test (tests invoke roc CLI)
+        run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
     }
 
