@@ -11463,6 +11463,13 @@ pub const Interpreter = struct {
             const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
             const base: [*]u8 = @ptrCast(@alignCast(ptr));
             const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+
+            // Zero-initialize the captures area. This is important for self-captures:
+            // we skip copying them (to avoid memcpy aliasing), so their memory would
+            // otherwise be uninitialized, causing decref to read garbage layout indices.
+            const captures_size = self.runtime_layout_store.layoutSize(captures_layout);
+            @memset(base[aligned_off..][0..captures_size], 0);
+
             const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = closure_rt_var };
             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
             for (caps, 0..) |_, cap_i| {
