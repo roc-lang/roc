@@ -9,23 +9,23 @@ const testing = std.testing;
 
 const roc_binary_path = if (builtin.os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
-/// Ensures the roc binary is up-to-date by always rebuilding it.
-/// This is needed because these tests spawn the roc CLI as a child process,
-/// and a stale binary will cause test failures even if the test code is correct.
-fn ensureRocBinary(allocator: std.mem.Allocator) !void {
-    // Always rebuild to ensure the binary is up-to-date with the latest source changes.
-    // This prevents confusing test failures when the binary exists but is stale.
-    const build_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{ "zig", "build", "roc" },
-    });
-    defer allocator.free(build_result.stdout);
-    defer allocator.free(build_result.stderr);
-
-    if (build_result.term != .Exited or build_result.term.Exited != 0) {
-        std.debug.print("Failed to build roc binary:\n{s}\n", .{build_result.stderr});
-        return error.RocBuildFailed;
-    }
+/// Asserts that the roc binary exists.
+/// The build system (build.zig) is responsible for building the roc binary
+/// before running these tests. This avoids rebuilding 50+ times (once per test)
+/// which causes disk space issues on CI.
+fn ensureRocBinary() !void {
+    std.fs.cwd().access(roc_binary_path, .{}) catch {
+        std.debug.print(
+            \\
+            \\ERROR: roc binary not found at {s}
+            \\
+            \\The fx_platform_test requires the roc binary to be pre-built.
+            \\Run `zig build test` which will build it automatically, or
+            \\run `zig build roc` manually before running individual tests.
+            \\
+        , .{roc_binary_path});
+        return error.RocBinaryNotFound;
+    };
 }
 
 /// Options for running roc commands
@@ -39,7 +39,7 @@ const RunOptions = struct {
 /// Runs a roc command and returns the result.
 /// Automatically adds --no-cache for non-test/non-check commands to ensure fresh builds.
 fn runRoc(allocator: std.mem.Allocator, roc_file: []const u8, options: RunOptions) !std.process.Child.RunResult {
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     var args = std.ArrayList([]const u8){};
     defer args.deinit(allocator);
@@ -113,7 +113,7 @@ fn checkFailure(result: std.process.Child.RunResult) !void {
 }
 
 fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_input: []const u8) !std.process.Child.RunResult {
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
     var child = std.process.Child.init(&[_][]const u8{ "./zig-out/bin/roc", roc_file }, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
@@ -152,7 +152,7 @@ fn runRocWithStdin(allocator: std.mem.Allocator, roc_file: []const u8, stdin_inp
 test "fx platform effectful functions" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     // Run the app directly with the roc CLI (not build, just run)
     const run_result = try std.process.Child.run(.{
@@ -204,7 +204,7 @@ test "fx platform effectful functions" {
 test "fx platform with dotdot starting path" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     // Run the app from a subdirectory that uses ../ at the START of its platform path
     // This tests that relative paths starting with .. are handled correctly
@@ -401,7 +401,7 @@ test "fx platform dbg missing return value" {
 test "fx platform check unused state var reports correct errors" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     // Run `roc check` on an app with unused variables and type annotations
     // This test checks that the compiler reports the correct errors and doesn't
@@ -541,7 +541,7 @@ test "fx platform opaque type with method" {
 test "fx platform string interpolation type mismatch" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     // Run an app that tries to interpolate a U8 (non-Str) type in a string.
     // This should fail with a type error because string interpolation only accepts Str.
@@ -587,7 +587,7 @@ test "fx platform run from different cwd" {
     // running from a subdirectory correctly.
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     // Get absolute path to roc binary since we'll change cwd
     const roc_abs_path = try std.fs.cwd().realpathAlloc(allocator, roc_binary_path);
@@ -828,7 +828,7 @@ test "fx platform str_interp_valid" {
 test "fx platform expect with toplevel numeric" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     // Run the app
     const run_result = try std.process.Child.run(.{
@@ -894,7 +894,7 @@ test "fx platform expect with toplevel numeric" {
 // test "fx platform test7" {
 //     const allocator = testing.allocator;
 
-//     try ensureRocBinary(allocator);
+//     try ensureRocBinary();
 
 //     const run_result = try std.process.Child.run(.{
 //         .allocator = allocator,
@@ -930,7 +930,7 @@ test "fx platform expect with toplevel numeric" {
 // test "fx platform test8" {
 //     const allocator = testing.allocator;
 
-//     try ensureRocBinary(allocator);
+//     try ensureRocBinary();
 
 //     const run_result = try std.process.Child.run(.{
 //         .allocator = allocator,
@@ -966,7 +966,7 @@ test "fx platform expect with toplevel numeric" {
 // test "fx platform test9" {
 //     const allocator = testing.allocator;
 
-//     try ensureRocBinary(allocator);
+//     try ensureRocBinary();
 
 //     const run_result = try std.process.Child.run(.{
 //         .allocator = allocator,
@@ -1001,7 +1001,7 @@ test "fx platform expect with toplevel numeric" {
 test "fx platform numeric_lookup_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1036,7 +1036,7 @@ test "fx platform numeric_lookup_test" {
 test "fx platform string_lookup_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1071,7 +1071,7 @@ test "fx platform string_lookup_test" {
 test "fx platform test_direct_string" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1106,7 +1106,7 @@ test "fx platform test_direct_string" {
 test "fx platform test_one_call" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1141,7 +1141,7 @@ test "fx platform test_one_call" {
 test "fx platform test_type_mismatch" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1177,7 +1177,7 @@ test "fx platform test_type_mismatch" {
 test "fx platform test_with_wrapper" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1212,7 +1212,7 @@ test "fx platform test_with_wrapper" {
 test "fx platform inspect_compare_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1249,7 +1249,7 @@ test "fx platform inspect_compare_test" {
 test "fx platform inspect_custom_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1285,7 +1285,7 @@ test "fx platform inspect_custom_test" {
 test "fx platform inspect_nested_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1321,7 +1321,7 @@ test "fx platform inspect_nested_test" {
 test "fx platform inspect_no_method_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1357,7 +1357,7 @@ test "fx platform inspect_no_method_test" {
 test "fx platform inspect_record_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1392,7 +1392,7 @@ test "fx platform inspect_record_test" {
 test "fx platform inspect_wrong_sig_test" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1427,7 +1427,7 @@ test "fx platform inspect_wrong_sig_test" {
 test "fx platform issue8433" {
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1463,7 +1463,7 @@ test "run aborts on errors by default" {
     // Tests that roc run aborts when there are type errors (without --allow-errors)
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
@@ -1486,7 +1486,7 @@ test "run with --allow-errors attempts execution despite errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
+    try ensureRocBinary();
 
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
