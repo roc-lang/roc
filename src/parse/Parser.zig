@@ -2082,9 +2082,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                             },
                         }
                         lookahead_pos += 1;
-
-                        // Limit lookahead to prevent infinite loops
-                        if (lookahead_pos > saved_pos + 100) break;
                     }
                 }
 

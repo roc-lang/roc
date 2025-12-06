@@ -7659,12 +7659,12 @@ pub const Interpreter = struct {
 
         // Apply rigid variable substitution if this is a rigid variable
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Use a counter to prevent infinite loops from cyclic substitutions
+        // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
         var count: u32 = 0;
         while (resolved.desc.content == .rigid) {
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 count += 1;
-                if (count > 1000) break; // Prevent infinite loops
+                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -8453,12 +8453,12 @@ pub const Interpreter = struct {
         // Check if this variable has a substitution active (for generic function instantiation)
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
             // Follow the substitution chain to find the final variable
-            // Use a counter to prevent infinite loops from cyclic substitutions
+            // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
             var current = substituted;
             var count: u32 = 0;
             while (self.rigid_subst.get(current)) |next_subst| {
                 count += 1;
-                if (count > 1000) break; // Prevent infinite loops
+                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 current = next_subst;
             }
             break :blk current;
@@ -10595,6 +10595,8 @@ pub const Interpreter = struct {
 
                     var subst_iter = subst_map.iterator();
                     while (subst_iter.next()) |entry| {
+                        // Skip identity mappings to avoid infinite loops when following substitution chains
+                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -13627,8 +13629,26 @@ pub const Interpreter = struct {
                 const operand = value_stack.pop() orelse return error.Crash;
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
 
-                // Resolve the operand type
-                const operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+                // Resolve the operand type, following aliases to find the nominal type
+                var operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+
+                // Follow aliases to get to the underlying type (but NOT through nominal types)
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (operand_resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000); // Prevent infinite loops in debug builds
+                        const alias = operand_resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        operand_resolved = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (operand_resolved.desc.content == .alias) {
+                        const alias = operand_resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        operand_resolved = self.runtime_types.resolveVar(backing);
+                    }
+                }
 
                 // Get nominal type info
                 const nominal_info = switch (operand_resolved.desc.content) {
@@ -13786,7 +13806,7 @@ pub const Interpreter = struct {
                 var alias_count: u32 = 0;
                 while (current_resolved.desc.content == .alias) {
                     alias_count += 1;
-                    if (alias_count > 1000) break; // Prevent infinite loops
+                    std.debug.assert(alias_count < 1000); // Prevent infinite loops
                     const alias = current_resolved.desc.content.alias;
                     current_var = self.runtime_types.getAliasBackingVar(alias);
                     current_resolved = self.runtime_types.resolveVar(current_var);
@@ -14211,7 +14231,26 @@ pub const Interpreter = struct {
 
                 // Don't use resolveBaseVar here - we need to keep the nominal type
                 // for method dispatch (resolveBaseVar unwraps nominal types to their backing)
-                const resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                // However, we DO need to follow aliases to find the nominal type.
+                var resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+
+                // Follow aliases to get to the underlying type (but NOT through nominal types)
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (resolved_receiver.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000); // Prevent infinite loops in debug builds
+                        const alias = resolved_receiver.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved_receiver = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (resolved_receiver.desc.content == .alias) {
+                        const alias = resolved_receiver.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved_receiver = self.runtime_types.resolveVar(backing);
+                    }
+                }
 
                 const method_args = da.method_args.?;
                 const arg_exprs = self.env.store.sliceExpr(method_args);
@@ -14280,9 +14319,11 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         var args = [1]StackValue{receiver_value};
-                        // Get return type from the dot access expression for low-level builtins that need it
+                        // Get return type from the dot access expression for low-level builtins that need it.
+                        // Use saved_env (the caller's module) since da.expr_idx is from that module,
+                        // not from self.env which has been switched to the closure's source module.
                         const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
-                        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
                         const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
 
                         // Decref based on ownership semantics
@@ -14437,9 +14478,11 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // Get return type from the dot access expression for low-level builtins that need it
+                    // Get return type from the dot access expression for low-level builtins that need it.
+                    // Use saved_env (the caller's module) since dac.expr_idx is from that module,
+                    // not from self.env which has been switched to the closure's source module.
                     const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
@@ -14529,6 +14572,8 @@ pub const Interpreter = struct {
                     saved_rigid_subst = try self.rigid_subst.clone();
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
+                        // Skip identity mappings to avoid infinite loops when following substitution chains
+                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     @memset(self.var_to_layout_slot.items, 0);
