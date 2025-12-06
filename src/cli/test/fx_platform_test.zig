@@ -1569,3 +1569,16 @@ test "fx platform var with string interpolation segfault" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
 }
+
+test "fx platform sublist method on inferred type" {
+    // Regression test: Calling .sublist() method on a List(U8) from "".to_utf8()
+    // causes a segfault when the variable doesn't have an explicit type annotation.
+    // Error was: "Roc crashed: Error evaluating from shared memory: InvalidMethodReceiver"
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/sublist_method_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}

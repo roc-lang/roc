@@ -13627,8 +13627,26 @@ pub const Interpreter = struct {
                 const operand = value_stack.pop() orelse return error.Crash;
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
 
-                // Resolve the operand type
-                const operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+                // Resolve the operand type, following aliases to find the nominal type
+                var operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+
+                // Follow aliases to get to the underlying type (but NOT through nominal types)
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (operand_resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        if (alias_count > 1000) break; // Prevent infinite loops in debug builds
+                        const alias = operand_resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        operand_resolved = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (operand_resolved.desc.content == .alias) {
+                        const alias = operand_resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        operand_resolved = self.runtime_types.resolveVar(backing);
+                    }
+                }
 
                 // Get nominal type info
                 const nominal_info = switch (operand_resolved.desc.content) {
@@ -14211,7 +14229,26 @@ pub const Interpreter = struct {
 
                 // Don't use resolveBaseVar here - we need to keep the nominal type
                 // for method dispatch (resolveBaseVar unwraps nominal types to their backing)
-                const resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                // However, we DO need to follow aliases to find the nominal type.
+                var resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+
+                // Follow aliases to get to the underlying type (but NOT through nominal types)
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (resolved_receiver.desc.content == .alias) {
+                        alias_count += 1;
+                        if (alias_count > 1000) break; // Prevent infinite loops in debug builds
+                        const alias = resolved_receiver.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved_receiver = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (resolved_receiver.desc.content == .alias) {
+                        const alias = resolved_receiver.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved_receiver = self.runtime_types.resolveVar(backing);
+                    }
+                }
 
                 const method_args = da.method_args.?;
                 const arg_exprs = self.env.store.sliceExpr(method_args);
@@ -14280,9 +14317,11 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
                         var args = [1]StackValue{receiver_value};
-                        // Get return type from the dot access expression for low-level builtins that need it
+                        // Get return type from the dot access expression for low-level builtins that need it.
+                        // Use saved_env (the caller's module) since da.expr_idx is from that module,
+                        // not from self.env which has been switched to the closure's source module.
                         const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
-                        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
                         const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
 
                         // Decref based on ownership semantics
@@ -14437,9 +14476,11 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // Get return type from the dot access expression for low-level builtins that need it
+                    // Get return type from the dot access expression for low-level builtins that need it.
+                    // Use saved_env (the caller's module) since dac.expr_idx is from that module,
+                    // not from self.env which has been switched to the closure's source module.
                     const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
