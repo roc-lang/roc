@@ -1387,3 +1387,12 @@ test "if block with local bindings - regression" {
         \\else 99
     , 0, .no_trace);
 }
+
+test "recursive function - regression" {
+    // Regression test for recursive function
+    // Bug report: `main! = || { countdown = |n| if True { 0 } else { countdown(n - 1) }\n _ignore = countdown(1) }`
+    try runExpectInt(
+        \\{ countdown = |n| if True { 0 } else { countdown(n - 1) }
+        \\countdown(1) }
+    , 0, .no_trace);
+}
