@@ -11372,6 +11372,8 @@ pub const Interpreter = struct {
     }
 
     /// Evaluate a closure expression (e_closure) - creates a closure with captured values
+    /// Handles recursive self-captures by allocating the closure first, registering it,
+    /// then resolving captures (so self-references find the in-progress closure).
     fn evalClosure(
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
@@ -11391,31 +11393,59 @@ pub const Interpreter = struct {
         var field_names = try self.allocator.alloc(base_pkg.Ident.Idx, caps.len);
         defer self.allocator.free(field_names);
 
-        // Resolve all capture values
-        var capture_values = try self.allocator.alloc(StackValue, caps.len);
+        // First pass: get names and estimate layouts (using closure layout for self-references)
+        // We need to know the layout to allocate the closure, but we need the closure
+        // allocated to resolve self-captures. For self-captures, we use the closure layout.
+        const ct_var = can.ModuleEnv.varFrom(expr_idx);
+        const closure_rt_var = try self.translateTypeVar(self.env, ct_var);
+        const self_closure_layout = try self.getRuntimeLayout(closure_rt_var);
+
+        // Track which captures are self-references (null initially)
+        var capture_values = try self.allocator.alloc(?StackValue, caps.len);
         defer self.allocator.free(capture_values);
+        var has_self_captures = false;
 
         for (caps, 0..) |cap_idx, i| {
             const cap = self.env.store.getCapture(cap_idx);
             const name_text = self.env.getIdent(cap.name);
             field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
 
-            const cap_val = self.resolveCapture(cap, roc_ops) orelse {
-                self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
-                return error.Crash;
-            };
+            // Try to resolve the capture - returns null for recursive self-references
+            const cap_val = self.resolveCapture(cap, roc_ops);
             capture_values[i] = cap_val;
-            field_layouts[i] = cap_val.layout;
+            if (cap_val) |cv| {
+                field_layouts[i] = cv.layout;
+            } else {
+                // Self-capture - use the closure's own layout
+                field_layouts[i] = self_closure_layout;
+                has_self_captures = true;
+            }
         }
 
         const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
         const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
         const closure_layout = Layout.closure(captures_layout_idx);
-        // Get rt_var for the closure
-        const ct_var = can.ModuleEnv.varFrom(expr_idx);
-        const closure_rt_var = try self.translateTypeVar(self.env, ct_var);
+
         const value = try self.pushRaw(closure_layout, 0, closure_rt_var);
+
+        // Register the value BEFORE resolving self-captures, so self-references can find it
         self.registerDefValue(expr_idx, value);
+
+        // If we have self-captures, resolve them now that the closure is registered
+        if (has_self_captures) {
+            for (caps, 0..) |cap_idx, i| {
+                if (capture_values[i] == null) {
+                    const cap = self.env.store.getCapture(cap_idx);
+                    // Try again - now the closure is registered in def_stack
+                    const cap_val = self.resolveCapture(cap, roc_ops) orelse {
+                        // Still null means it's a true self-capture - use the closure value itself
+                        capture_values[i] = value;
+                        continue;
+                    };
+                    capture_values[i] = cap_val;
+                }
+            }
+        }
 
         if (value.ptr) |ptr| {
             const header: *layout.Closure = @ptrCast(@alignCast(ptr));
@@ -11436,7 +11466,18 @@ pub const Interpreter = struct {
             const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = closure_rt_var };
             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
             for (caps, 0..) |_, cap_i| {
-                const cap_val = capture_values[cap_i];
+                const cap_val = capture_values[cap_i] orelse {
+                    self.triggerCrash("e_closure: unresolved capture after second pass", false, roc_ops);
+                    return error.Crash;
+                };
+
+                // Skip self-captures - they point to the closure itself, so copying would cause
+                // memcpy to alias (source and dest overlap). Self-references work through
+                // normal lookup mechanisms (bindings/all_defs), not through the captures area.
+                if (cap_val.ptr == value.ptr) {
+                    continue;
+                }
+
                 const translated_name = field_names[cap_i];
                 const idx_opt = accessor.findFieldIndex(translated_name) orelse {
                     self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
@@ -11487,17 +11528,24 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == cap.pattern_idx) {
+                // Check if we're already evaluating this def (recursive self-reference)
                 var k: usize = self.def_stack.items.len;
                 while (k > 0) {
                     k -= 1;
                     const entry = self.def_stack.items[k];
                     if (entry.pattern_idx == cap.pattern_idx) {
                         if (entry.value) |val| {
+                            // Def already evaluated, return its value
                             return val;
+                        } else {
+                            // Recursive self-reference detected: this def is currently being evaluated.
+                            // Return null to indicate this is a recursive capture.
+                            // The caller (evalClosure) should handle this case specially.
+                            return null;
                         }
                     }
                 }
-                // Found the def! Evaluate it to get the captured value
+                // Not in def_stack yet, evaluate it
                 const new_entry = DefInProgress{
                     .pattern_idx = def.pattern,
                     .expr_idx = def.expr,

@@ -172,7 +172,7 @@ fn stderrWriter() *std.Io.Writer {
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) *anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
@@ -180,6 +180,9 @@ const posix = if (!is_windows) struct {
     const F_GETFD = 1;
     const F_SETFD = 2;
     const FD_CLOEXEC = 1;
+
+    // MAP_FAILED is (void*)-1, not NULL
+    const MAP_FAILED: *anyopaque = @ptrFromInt(std.math.maxInt(usize));
 } else struct {};
 
 // Windows shared memory functions
@@ -2038,10 +2041,12 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
         0x0001, // MAP_SHARED
         shm_fd,
         0,
-    ) orelse {
+    );
+    // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
+    if (mapped_ptr == posix.MAP_FAILED) {
         _ = c.close(shm_fd);
         return error.SharedMemoryMapFailed;
-    };
+    }
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
 
     // Write length at the beginning
