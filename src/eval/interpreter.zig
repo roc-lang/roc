@@ -209,6 +209,8 @@ pub const Interpreter = struct {
     empty_scope: TypeScope,
     // Translation cache: (module, resolved_var) -> runtime_var
     translate_cache: std.AutoHashMap(ModuleVarKey, types.Var),
+    // Types currently being translated (for cycle detection)
+    translation_in_progress: std.AutoHashMap(ModuleVarKey, void),
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
@@ -391,6 +393,7 @@ pub const Interpreter = struct {
             .var_to_layout_slot = slots,
             .empty_scope = scope,
             .translate_cache = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
+            .translation_in_progress = std.AutoHashMap(ModuleVarKey, void).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .translate_rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
@@ -7172,6 +7175,7 @@ pub const Interpreter = struct {
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
+        self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
         self.translate_rigid_subst.deinit();
         self.flex_type_context.deinit();
@@ -8050,19 +8054,32 @@ pub const Interpreter = struct {
             }
         }
 
-        // Skip translate_cache for flex/rigid vars when inside a polymorphic function.
-        // The cache may have stale mappings from a different calling context where the
-        // flex var defaulted to Dec, but we now have a concrete type from flex_type_context.
-        // We check if flex_type_context has ANY entries as a proxy for "inside polymorphic call".
+        // Cycle detection: if we're already translating this type, return the placeholder
+        // to break the infinite recursion.
+        if (self.translation_in_progress.contains(key)) {
+            // We must have a placeholder in translate_cache - return it to break the cycle
+            if (self.translate_cache.get(key)) |placeholder| {
+                return placeholder;
+            }
+            // This shouldn't happen, but if it does, create a fresh var
+            return try self.runtime_types.fresh();
+        }
+
+        // Check translate_cache for completed translations.
+        // For flex/rigid vars in polymorphic contexts, skip cached results because they
+        // might be stale mappings from a different calling context.
         const in_polymorphic_context = self.flex_type_context.count() > 0;
-        const skip_cache_for_this_var = in_polymorphic_context and
+        const skip_stale_cached_result = in_polymorphic_context and
             (resolved.desc.content == .flex or resolved.desc.content == .rigid);
 
-        if (!skip_cache_for_this_var) {
+        if (!skip_stale_cached_result) {
             if (self.translate_cache.get(key)) |found| {
                 return found;
             }
         }
+
+        // Mark this type as in-progress to detect cycles
+        try self.translation_in_progress.put(key, {});
 
         // Insert a placeholder to break cycles during recursive type translation.
         // If we recurse back to this type, we'll return the placeholder instead of infinite looping.
@@ -8446,6 +8463,9 @@ pub const Interpreter = struct {
             }
             break :blk current;
         } else out_var;
+
+        // Translation complete - remove from in-progress set
+        _ = self.translation_in_progress.remove(key);
 
         // Update the cache with the final var
         try self.translate_cache.put(key, final_var);

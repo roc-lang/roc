@@ -1551,3 +1551,21 @@ test "fx platform if-expression closure capture regression" {
 
     try checkSuccess(run_result);
 }
+
+test "fx platform var with string interpolation segfault" {
+    // Regression test: Using `var` variables with string interpolation causes segfault.
+    // The code calls fnA! multiple times, each using var state variables, and
+    // interpolates the results into strings.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/var_interp_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
+}
