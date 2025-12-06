@@ -48,13 +48,13 @@ const EXCEPTION_POINTERS = extern struct {
     ContextRecord: *CONTEXT,
 };
 
-const LPTOP_LEVEL_EXCEPTION_FILTER = ?*const fn (*EXCEPTION_POINTERS) callconv(std.os.windows.WINAPI) LONG;
+const LPTOP_LEVEL_EXCEPTION_FILTER = ?*const fn (*EXCEPTION_POINTERS) callconv(.winapi) LONG;
 
 // Windows API imports
-extern "kernel32" fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: LPTOP_LEVEL_EXCEPTION_FILTER) callconv(std.os.windows.WINAPI) LPTOP_LEVEL_EXCEPTION_FILTER;
-extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(std.os.windows.WINAPI) HANDLE;
-extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(std.os.windows.WINAPI) BOOL;
-extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(std.os.windows.WINAPI) noreturn;
+extern "kernel32" fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: LPTOP_LEVEL_EXCEPTION_FILTER) callconv(.winapi) LPTOP_LEVEL_EXCEPTION_FILTER;
+extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) BOOL;
+extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
 
 /// Size of the alternate signal stack (64KB should be plenty for the handler)
 const ALT_STACK_SIZE = 64 * 1024;
@@ -142,7 +142,7 @@ fn installWindows() bool {
 }
 
 /// Windows exception handler function
-fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(std.os.windows.WINAPI) LONG {
+fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi) LONG {
     const exception_code = exception_info.ExceptionRecord.ExceptionCode;
 
     // Check if this is a stack overflow or access violation
