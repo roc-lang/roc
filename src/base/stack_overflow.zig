@@ -47,23 +47,7 @@ fn handleStackOverflow() noreturn {
 }
 
 /// Error message to display on arithmetic error (division by zero, etc.)
-const ARITHMETIC_ERROR_MESSAGE =
-    \\
-    \\================================================================================
-    \\ARITHMETIC ERROR in the Roc compiler
-    \\================================================================================
-    \\
-    \\The Roc compiler encountered an arithmetic error (likely division by zero).
-    \\This is a bug in the compiler, not in your code.
-    \\
-    \\Please report this issue at: https://github.com/roc-lang/roc/issues
-    \\
-    \\Include the Roc code that triggered this error if possible.
-    \\
-    \\================================================================================
-    \\
-    \\
-;
+const ARITHMETIC_ERROR_MESSAGE = "\nThe Roc compiler divided by zero and had to exit.\n\n";
 
 /// Callback for arithmetic errors (division by zero) in the compiler
 fn handleArithmeticError() noreturn {

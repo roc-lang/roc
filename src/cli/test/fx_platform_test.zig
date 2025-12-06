@@ -1640,7 +1640,7 @@ test "fx platform runtime division by zero" {
     //
     // The error can be caught by either:
     // 1. The Roc interpreter (exit code 1, "DivisionByZero" message) - most common
-    // 2. The SIGFPE signal handler (exit code 136, "DIVISION BY ZERO" message) - native code
+    // 2. The SIGFPE signal handler (exit code 136, "divided by zero" message) - native code
     const allocator = testing.allocator;
 
     // The Roc program uses a var to prevent compile-time constant folding
@@ -1652,7 +1652,7 @@ test "fx platform runtime division by zero" {
         .Exited => |code| {
             if (code == 136) {
                 // Division by zero was caught by the SIGFPE handler (native code)
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DIVISION BY ZERO") != null);
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "divided by zero") != null);
             } else if (code == 1) {
                 // Division by zero was caught by the interpreter - this is the expected case
                 // The interpreter catches it and reports "DivisionByZero"

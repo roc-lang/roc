@@ -73,20 +73,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
 }
 
 /// Error message to display on division by zero in a Roc program
-const DIVISION_BY_ZERO_MESSAGE =
-    \\
-    \\================================================================================
-    \\DIVISION BY ZERO in this Roc program
-    \\================================================================================
-    \\
-    \\This Roc program attempted to divide by zero.
-    \\
-    \\Check your code for places where a divisor might be zero.
-    \\
-    \\================================================================================
-    \\
-    \\
-;
+const DIVISION_BY_ZERO_MESSAGE = "\nThis Roc application divided by zero and crashed.\n\n";
 
 /// Callback for arithmetic errors (division by zero) in a Roc program
 fn handleRocArithmeticError() noreturn {
