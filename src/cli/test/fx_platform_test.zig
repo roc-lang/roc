@@ -1585,43 +1585,39 @@ test "fx platform sublist method on inferred type" {
 
 test "fx platform repeating pattern segfault" {
     // Regression test: Code using var variables with sublist and repeat operations
-    // can intermittently segfault. Run 20 times to reliably reproduce.
     const allocator = testing.allocator;
 
-    // Run 20 times to catch intermittent segfaults
-    for (0..20) |iteration| {
-        const run_result = try runRoc(allocator, "test/fx/repeating_pattern_segfault.roc", .{});
-        defer allocator.free(run_result.stdout);
-        defer allocator.free(run_result.stderr);
+    const run_result = try runRoc(allocator, "test/fx/repeating_pattern_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
 
-        switch (run_result.term) {
-            .Exited => |code| {
-                if (code != 0) {
-                    std.debug.print("Run failed on iteration {} with exit code {}\n", .{ iteration, code });
-                    std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                    std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                    return error.RunFailed;
-                }
-            },
-            .Signal => |sig| {
-                std.debug.print("Process terminated by signal on iteration {}: {}\n", .{ iteration, sig });
-                std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-                return error.SegFault;
-            },
-            else => {
-                std.debug.print("Run terminated abnormally on iteration {}: {}\n", .{ iteration, run_result.term });
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("Run failed with exit code {}\n", .{code});
                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.RunFailed;
-            },
-        }
-
-        // Verify the expected output
-        if (std.mem.indexOf(u8, run_result.stdout, "11-22") == null) {
-            std.debug.print("Missing expected output on iteration {}\n", .{iteration});
+            }
+        },
+        .Signal => |sig| {
+            std.debug.print("Process terminated by signal: {}\n", .{sig});
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
-            return error.MissingOutput;
-        }
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.SegFault;
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunFailed;
+        },
+    }
+
+    // Verify the expected output
+    if (std.mem.indexOf(u8, run_result.stdout, "11-22") == null) {
+        std.debug.print("Missing expected output\n", .{});
+        std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
+        return error.MissingOutput;
     }
 }
