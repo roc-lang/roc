@@ -13635,7 +13635,7 @@ pub const Interpreter = struct {
                     var alias_count: u32 = 0;
                     while (operand_resolved.desc.content == .alias) {
                         alias_count += 1;
-                        if (alias_count > 1000) break; // Prevent infinite loops in debug builds
+                        std.debug.assert(alias_count < 1000); // Prevent infinite loops in debug builds
                         const alias = operand_resolved.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
                         operand_resolved = self.runtime_types.resolveVar(backing);
@@ -13804,7 +13804,7 @@ pub const Interpreter = struct {
                 var alias_count: u32 = 0;
                 while (current_resolved.desc.content == .alias) {
                     alias_count += 1;
-                    if (alias_count > 1000) break; // Prevent infinite loops
+                    std.debug.assert(alias_count < 1000); // Prevent infinite loops
                     const alias = current_resolved.desc.content.alias;
                     current_var = self.runtime_types.getAliasBackingVar(alias);
                     current_resolved = self.runtime_types.resolveVar(current_var);
@@ -14237,7 +14237,7 @@ pub const Interpreter = struct {
                     var alias_count: u32 = 0;
                     while (resolved_receiver.desc.content == .alias) {
                         alias_count += 1;
-                        if (alias_count > 1000) break; // Prevent infinite loops in debug builds
+                        std.debug.assert(alias_count < 1000); // Prevent infinite loops in debug builds
                         const alias = resolved_receiver.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
                         resolved_receiver = self.runtime_types.resolveVar(backing);
