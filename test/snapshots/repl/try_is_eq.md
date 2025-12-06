@@ -7,10 +7,16 @@ type=repl
 ~~~roc
 » Try.Ok(1) == Try.Ok(1)
 » Try.Ok(1) == Try.Ok(2)
+» Try.Ok(1) != Try.Ok(1)
+» Try.Ok(1) != Try.Ok(2)
 ~~~
 # OUTPUT
-Evaluation error: error.InvalidMethodReceiver
+True
 ---
-Evaluation error: error.InvalidMethodReceiver
+False
+---
+False
+---
+True
 # PROBLEMS
 NIL
