@@ -10595,6 +10595,8 @@ pub const Interpreter = struct {
 
                     var subst_iter = subst_map.iterator();
                     while (subst_iter.next()) |entry| {
+                        // Skip identity mappings to avoid infinite loops when following substitution chains
+                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -14570,6 +14572,8 @@ pub const Interpreter = struct {
                     saved_rigid_subst = try self.rigid_subst.clone();
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
+                        // Skip identity mappings to avoid infinite loops when following substitution chains
+                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     @memset(self.var_to_layout_slot.items, 0);
