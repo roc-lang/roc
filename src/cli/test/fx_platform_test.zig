@@ -481,6 +481,77 @@ test "fx platform check unused state var reports correct errors" {
     }
 }
 
+test "fx platform check reports correct errors when platform is used" {
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    // Run `roc check` on an app that imports and depends on the platform
+    // This test checks that the compiler reports the correct errors and doesn't
+    // produce extraneous unrelated errors from platform module resolution
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "check",
+            "test/fx/type_error_with_platform_use.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The check should fail with errors
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 0) {
+                std.debug.print("ERROR: roc check succeeded but we expected it to fail with errors\n", .{});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            return error.RunFailed;
+        },
+    }
+
+    const stderr = run_result.stderr;
+
+    // Count occurrences of each error type
+    var type_mismatch_count: usize = 0;
+    var undefined_variable_count: usize = 0;
+
+    var line_iter = std.mem.splitScalar(u8, stderr, '\n');
+    while (line_iter.next()) |line| {
+        if (std.mem.indexOf(u8, line, "TYPE MISMATCH") != null) {
+            type_mismatch_count += 1;
+        } else if (std.mem.indexOf(u8, line, "UNDEFINED VARIABLE") != null) {
+            undefined_variable_count += 1;
+        }
+    }
+
+    // We expect exactly 1 TYPE MISMATCH error
+    // We should NOT get a UNDEFINED VARIABLE error
+    // (this error was popping up on the first pass of the fix for this)
+    var test_passed = true;
+
+    if (type_mismatch_count != 1) {
+        std.debug.print("\n❌ TYPE MISMATCH count mismatch: expected 1, got {d}\n", .{type_mismatch_count});
+        test_passed = false;
+    }
+
+    if (undefined_variable_count != 0) {
+        std.debug.print("❌ UNDEFINED VARIABLE (extraneous): expected 0, got {d}\n", .{undefined_variable_count});
+        test_passed = false;
+    }
+
+    if (!test_passed) {
+        std.debug.print("\n========== FULL ROC CHECK OUTPUT ==========\n", .{});
+        std.debug.print("STDERR:\n{s}\n", .{stderr});
+        std.debug.print("==========================================\n\n", .{});
+        return error.ExtraneousErrorsFound;
+    }
+}
+
 test "fx platform checked directly finds sibling modules" {
     // When checking a platform module directly (not through an app), sibling .roc
     // files in the same directory should be discovered automatically. This means
