@@ -533,6 +533,10 @@ pub const BuildEnv = struct {
             try self.global_queue.start(self.gpa, self.max_threads, &self.sink);
         }
 
+        // Send platform into the global queue
+        const platform_sched = self.schedulers.getPtr(header_info.platform_alias.?).?;
+        try platform_sched.*.buildRoot(header_info.platform_path.?);
+
         // Seed root module into global queue via schedule hook (ModuleBuild will call back)
         const root_sched = self.schedulers.getPtr(pkg_name).?;
         try root_sched.*.buildRoot(pkg_root_file);
