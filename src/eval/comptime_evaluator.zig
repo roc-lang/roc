@@ -1514,8 +1514,12 @@ pub const ComptimeEvaluator = struct {
                         try self.reportProblem(expect_info.message, expect_info.region, .expect_failed);
                     },
                     .error_eval => |error_info| {
-                        const error_name = @errorName(error_info.err);
-                        try self.reportProblem(error_name, error_info.region, .error_eval);
+                        // Provide user-friendly messages for specific errors
+                        const error_message = switch (error_info.err) {
+                            error.DivisionByZero => "Division by zero",
+                            else => @errorName(error_info.err),
+                        };
+                        try self.reportProblem(error_message, error_info.region, .error_eval);
                     },
                 }
             }

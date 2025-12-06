@@ -1,307 +1,122 @@
-//! Stack overflow detection and handling for the Roc compiler.
+//! Signal handling for the Roc compiler (stack overflow, segfault, division by zero).
 //!
-//! This module provides a mechanism to catch stack overflows and report them
-//! with a helpful error message instead of a generic segfault. This is particularly
-//! useful during compiler development when recursive algorithms might blow the stack.
+//! This module provides a thin wrapper around the generic signal handlers in
+//! builtins.handlers, configured with compiler-specific error messages.
 //!
 //! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
-//! signal stack and install a SIGSEGV handler that detects stack overflows.
+//! signal stack and install handlers for SIGSEGV, SIGBUS, and SIGFPE.
 //!
-//! On Windows, we use SetUnhandledExceptionFilter to catch EXCEPTION_STACK_OVERFLOW.
+//! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
 //! WASI is not currently supported (no signal handling available).
 
 const std = @import("std");
 const builtin = @import("builtin");
+const handlers = @import("builtins").handlers;
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
-// Windows types and constants
-const DWORD = u32;
-const LONG = i32;
-const ULONG_PTR = usize;
-const PVOID = ?*anyopaque;
-const HANDLE = ?*anyopaque;
-const BOOL = i32;
-
-const EXCEPTION_STACK_OVERFLOW: DWORD = 0xC00000FD;
-const EXCEPTION_ACCESS_VIOLATION: DWORD = 0xC0000005;
-const EXCEPTION_CONTINUE_SEARCH: LONG = 0;
-const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));
-
-const EXCEPTION_RECORD = extern struct {
-    ExceptionCode: DWORD,
-    ExceptionFlags: DWORD,
-    ExceptionRecord: ?*EXCEPTION_RECORD,
-    ExceptionAddress: PVOID,
-    NumberParameters: DWORD,
-    ExceptionInformation: [15]ULONG_PTR,
-};
-
-const CONTEXT = extern struct {
-    // We don't need the full context, just enough to make the struct valid
-    data: [1232]u8, // Size varies by arch, this is x64 size
-};
-
-const EXCEPTION_POINTERS = extern struct {
-    ExceptionRecord: *EXCEPTION_RECORD,
-    ContextRecord: *CONTEXT,
-};
-
-const LPTOP_LEVEL_EXCEPTION_FILTER = ?*const fn (*EXCEPTION_POINTERS) callconv(.winapi) LONG;
-
-// Windows API imports
-extern "kernel32" fn SetUnhandledExceptionFilter(lpTopLevelExceptionFilter: LPTOP_LEVEL_EXCEPTION_FILTER) callconv(.winapi) LPTOP_LEVEL_EXCEPTION_FILTER;
-extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) BOOL;
-extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
-
-/// Size of the alternate signal stack (64KB should be plenty for the handler)
-const ALT_STACK_SIZE = 64 * 1024;
-
-/// Storage for the alternate signal stack (POSIX only)
-var alt_stack_storage: [ALT_STACK_SIZE]u8 align(16) = undefined;
-
-/// Whether the handler has been installed
-var handler_installed = false;
-
 /// Error message to display on stack overflow
-const STACK_OVERFLOW_MESSAGE =
-    \\
-    \\================================================================================
-    \\STACK OVERFLOW in the Roc compiler
-    \\================================================================================
-    \\
-    \\The Roc compiler ran out of stack space. This is a bug in the compiler,
-    \\not in your code.
-    \\
-    \\This often happens due to:
-    \\  - Infinite recursion in type translation or unification
-    \\  - Very deeply nested expressions without tail-call optimization
-    \\  - Cyclic data structures without proper cycle detection
-    \\
-    \\Please report this issue at: https://github.com/roc-lang/roc/issues
-    \\
-    \\Include the Roc code that triggered this error if possible.
-    \\
-    \\================================================================================
-    \\
-    \\
-;
+const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
 
-/// Install the stack overflow handler.
-/// This should be called early in main() before any significant work is done.
-/// Returns true if the handler was installed successfully, false otherwise.
-pub fn install() bool {
-    if (handler_installed) return true;
-
+/// Callback for stack overflow in the compiler
+fn handleStackOverflow() noreturn {
     if (comptime builtin.os.tag == .windows) {
-        return installWindows();
-    }
+        // Windows: use WriteFile for signal-safe output
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
 
-    if (comptime builtin.os.tag == .wasi) {
-        // WASI doesn't support signal handling
-        return false;
-    }
-
-    return installPosix();
-}
-
-fn installPosix() bool {
-    // Set up the alternate signal stack
-    var alt_stack = posix.stack_t{
-        .sp = &alt_stack_storage,
-        .flags = 0,
-        .size = ALT_STACK_SIZE,
-    };
-
-    posix.sigaltstack(&alt_stack, null) catch {
-        return false;
-    };
-
-    // Install the SIGSEGV handler
-    const action = posix.Sigaction{
-        .handler = .{ .sigaction = handleSignalPosix },
-        .mask = posix.sigemptyset(),
-        .flags = posix.SA.SIGINFO | posix.SA.ONSTACK,
-    };
-
-    posix.sigaction(posix.SIG.SEGV, &action, null);
-
-    // Also catch SIGBUS which can occur on some systems for stack overflow
-    posix.sigaction(posix.SIG.BUS, &action, null);
-
-    handler_installed = true;
-    return true;
-}
-
-fn installWindows() bool {
-    _ = SetUnhandledExceptionFilter(handleExceptionWindows);
-    handler_installed = true;
-    return true;
-}
-
-/// Windows exception handler function
-fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi) LONG {
-    const exception_code = exception_info.ExceptionRecord.ExceptionCode;
-
-    // Check if this is a stack overflow or access violation
-    const is_stack_overflow = (exception_code == EXCEPTION_STACK_OVERFLOW);
-    const is_access_violation = (exception_code == EXCEPTION_ACCESS_VIOLATION);
-
-    if (!is_stack_overflow and !is_access_violation) {
-        // Let other handlers deal with this exception
-        return EXCEPTION_CONTINUE_SEARCH;
-    }
-
-    // Write error message to stderr
-    const stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
-    if (stderr_handle != INVALID_HANDLE_VALUE and stderr_handle != null) {
-        var bytes_written: DWORD = 0;
-        if (is_stack_overflow) {
-            _ = WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
-        } else {
-            const msg = "\nAccess violation in the Roc compiler.\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
-            _ = WriteFile(stderr_handle, msg.ptr, msg.len, &bytes_written, null);
-        }
-    }
-
-    // Exit with appropriate code
-    const exit_code: c_uint = if (is_stack_overflow) 134 else 139;
-    ExitProcess(exit_code);
-}
-
-/// The POSIX signal handler function
-fn handleSignalPosix(sig: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
-    // Get the fault address - access differs by platform
-    const fault_addr: usize = getFaultAddress(info);
-
-    // Get the current stack pointer to help determine if this is a stack overflow
-    var current_sp: usize = 0;
-    asm volatile (""
-        : [sp] "={sp}" (current_sp),
-    );
-
-    // A stack overflow typically occurs when the fault address is near the stack pointer
-    // or below the stack (stacks grow downward on most architectures)
-    const likely_stack_overflow = isLikelyStackOverflow(fault_addr, current_sp);
-
-    // Write our error message to stderr (use STDERR_FILENO directly for signal safety)
-    const stderr_fd = posix.STDERR_FILENO;
-
-    if (likely_stack_overflow) {
-        _ = posix.write(stderr_fd, STACK_OVERFLOW_MESSAGE) catch {};
-    } else {
-        // Generic segfault - provide some context
-        const generic_msg = switch (sig) {
-            posix.SIG.SEGV => "\nSegmentation fault (SIGSEGV) in the Roc compiler.\nFault address: ",
-            posix.SIG.BUS => "\nBus error (SIGBUS) in the Roc compiler.\nFault address: ",
-            else => "\nFatal signal in the Roc compiler.\nFault address: ",
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
         };
-        _ = posix.write(stderr_fd, generic_msg) catch {};
+
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        kernel32.ExitProcess(134);
+    } else if (comptime builtin.os.tag != .wasi) {
+        // POSIX: use direct write syscall for signal-safety
+        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
+        posix.exit(134);
+    } else {
+        // WASI fallback
+        std.process.exit(134);
+    }
+}
+
+/// Error message to display on arithmetic error (division by zero, etc.)
+const ARITHMETIC_ERROR_MESSAGE = "\nThe Roc compiler divided by zero and had to exit.\n\n";
+
+/// Callback for arithmetic errors (division by zero) in the compiler
+fn handleArithmeticError() noreturn {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+        };
+
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
+        kernel32.ExitProcess(136);
+    } else if (comptime builtin.os.tag != .wasi) {
+        _ = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
+        posix.exit(136); // 128 + 8 (SIGFPE)
+    } else {
+        std.process.exit(136);
+    }
+}
+
+/// Callback for access violation in the compiler
+fn handleAccessViolation(fault_addr: usize) noreturn {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+        };
+
+        var addr_buf: [18]u8 = undefined;
+        const addr_str = handlers.formatHex(fault_addr, &addr_buf);
+
+        const msg1 = "\nAccess violation in the Roc compiler.\nFault address: ";
+        const msg2 = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
+        kernel32.ExitProcess(139);
+    } else {
+        // POSIX (and WASI fallback): use direct write syscall for signal-safety
+        const generic_msg = "\nSegmentation fault (SIGSEGV) in the Roc compiler.\nFault address: ";
+        _ = posix.write(posix.STDERR_FILENO, generic_msg) catch {};
 
         // Write the fault address as hex
         var addr_buf: [18]u8 = undefined;
-        const addr_str = formatHex(fault_addr, &addr_buf);
-        _ = posix.write(stderr_fd, addr_str) catch {};
-        _ = posix.write(stderr_fd, "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n") catch {};
-    }
-
-    // Exit with a distinct error code for stack overflow
-    if (likely_stack_overflow) {
-        posix.exit(134); // 128 + 6 (SIGABRT-like)
-    } else {
-        posix.exit(139); // 128 + 11 (SIGSEGV)
+        const addr_str = handlers.formatHex(fault_addr, &addr_buf);
+        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
+        _ = posix.write(posix.STDERR_FILENO, "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n") catch {};
+        posix.exit(139);
     }
 }
 
-/// Get the fault address from siginfo_t (platform-specific)
-fn getFaultAddress(info: *const posix.siginfo_t) usize {
-    // The siginfo_t structure varies by platform
-    if (comptime builtin.os.tag == .linux) {
-        // Linux: fault address is in fields.sigfault.addr
-        return @intFromPtr(info.fields.sigfault.addr);
-    } else if (comptime builtin.os.tag == .macos or
-        builtin.os.tag == .ios or
-        builtin.os.tag == .tvos or
-        builtin.os.tag == .watchos or
-        builtin.os.tag == .visionos or
-        builtin.os.tag == .freebsd or
-        builtin.os.tag == .dragonfly or
-        builtin.os.tag == .netbsd or
-        builtin.os.tag == .openbsd)
-    {
-        // macOS/iOS/BSD: fault address is in addr field
-        return @intFromPtr(info.addr);
-    } else {
-        // Fallback: return 0 if we can't determine the address
-        return 0;
-    }
-}
-
-/// Heuristic to determine if a fault is likely a stack overflow
-fn isLikelyStackOverflow(fault_addr: usize, current_sp: usize) bool {
-    // If fault address is 0 or very low, it's likely a null pointer dereference
-    if (fault_addr < 4096) return false;
-
-    // Stack overflows typically fault near the stack guard page
-    // The fault address will be close to (but below) the current stack pointer
-    // We use a generous range since the stack pointer in the signal handler
-    // is on the alternate stack
-
-    // On most systems, the main stack is in high memory and grows down
-    // A stack overflow fault will be at an address lower than the normal stack
-
-    // Check if fault address is within a reasonable range of where stack would be
-    // This is a heuristic - we check if the fault is in the lower part of address space
-    // where guard pages typically are
-
-    const max_addr = std.math.maxInt(usize);
-    const high_memory_threshold = max_addr - (16 * 1024 * 1024 * 1024); // 16GB from top
-
-    // If the fault is in the high memory region (where stacks live) but at a page boundary
-    // it's likely a stack guard page hit
-    if (fault_addr > high_memory_threshold) {
-        // Check if it's at a page boundary (guard pages are typically page-aligned)
-        const page_size = std.heap.page_size_min;
-        const page_aligned = (fault_addr & (page_size - 1)) == 0 or (fault_addr & (page_size - 1)) < 64;
-        if (page_aligned) return true;
-    }
-
-    // Also check if the fault address is suspiciously close to the current SP
-    // This catches cases where we're still on the main stack when the overflow happens
-    const sp_distance = if (fault_addr < current_sp) current_sp - fault_addr else fault_addr - current_sp;
-    if (sp_distance < 1024 * 1024) { // Within 1MB of stack pointer
-        return true;
-    }
-
-    return false;
-}
-
-/// Format a usize as hexadecimal
-fn formatHex(value: usize, buf: []u8) []const u8 {
-    const hex_chars = "0123456789abcdef";
-    var i: usize = buf.len;
-
-    if (value == 0) {
-        i -= 1;
-        buf[i] = '0';
-    } else {
-        var v = value;
-        while (v > 0 and i > 2) {
-            i -= 1;
-            buf[i] = hex_chars[v & 0xf];
-            v >>= 4;
-        }
-    }
-
-    // Add 0x prefix
-    i -= 1;
-    buf[i] = 'x';
-    i -= 1;
-    buf[i] = '0';
-
-    return buf[i..];
+/// Install signal handlers for stack overflow, segfault, and division by zero.
+/// This should be called early in main() before any significant work is done.
+/// Returns true if the handlers were installed successfully, false otherwise.
+pub fn install() bool {
+    return handlers.install(handleStackOverflow, handleAccessViolation, handleArithmeticError);
 }
 
 /// Test function that intentionally causes a stack overflow.
@@ -330,13 +145,13 @@ pub fn triggerStackOverflowForTest() noreturn {
 test "formatHex" {
     var buf: [18]u8 = undefined;
 
-    const zero = formatHex(0, &buf);
+    const zero = handlers.formatHex(0, &buf);
     try std.testing.expectEqualStrings("0x0", zero);
 
-    const small = formatHex(0xff, &buf);
+    const small = handlers.formatHex(0xff, &buf);
     try std.testing.expectEqualStrings("0xff", small);
 
-    const medium = formatHex(0xdeadbeef, &buf);
+    const medium = handlers.formatHex(0xdeadbeef, &buf);
     try std.testing.expectEqualStrings("0xdeadbeef", medium);
 }
 
@@ -430,13 +245,11 @@ fn verifyHandlerOutput(exited_normally: bool, exit_code: u8, termination_signal:
     // Exit code 139 = generic segfault (handler caught it but didn't classify as stack overflow)
     if (exited_normally and (exit_code == 134 or exit_code == 139)) {
         // Check that our handler message was printed
-        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "STACK OVERFLOW") != null;
+        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null;
         const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
-        const has_roc_compiler_msg = std.mem.indexOf(u8, stderr_output, "Roc compiler") != null;
 
         // Handler should have printed EITHER stack overflow message OR segfault message
         try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
-        try std.testing.expect(has_roc_compiler_msg);
     } else if (!exited_normally and (termination_signal == posix.SIG.SEGV or termination_signal == posix.SIG.BUS)) {
         // The handler might not have caught it - this can happen on some systems
         // where the signal delivery is different. Just warn and skip.
