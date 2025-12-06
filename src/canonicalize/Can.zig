@@ -69,6 +69,8 @@ function_regions: std.array_list.Managed(Region),
 var_function_regions: std.AutoHashMapUnmanaged(Pattern.Idx, Region),
 /// Set of pattern indices that are vars
 var_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
+/// Tracks the pattern currently being defined (for filtering self-recursive captures)
+current_def_pattern: ?Pattern.Idx = null,
 /// Tracks which pattern indices have been used/referenced
 used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of module name identifiers to their type information for import validation
@@ -3661,6 +3663,11 @@ fn canonicalizeDeclWithAnnotation(
         }
     };
 
+    // Set current_def_pattern so lambda canonicalization can filter self-recursive captures
+    const saved_def_pattern = self.current_def_pattern;
+    self.current_def_pattern = pattern_idx;
+    defer self.current_def_pattern = saved_def_pattern;
+
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
@@ -4835,7 +4842,9 @@ pub fn canonicalizeExpr(
 
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !bound_vars.contains(fv)) {
+                    // Skip self-recursive references (e.g., `countdown` in `countdown = |n| ... countdown(n-1)`)
+                    const is_self_reference = if (self.current_def_pattern) |def_pat| fv == def_pat else false;
+                    if (!is_self_reference and !self.scratch_captures.contains(fv) and !bound_vars.contains(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -9480,6 +9489,11 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
             .region = self.parse_ir.tokenizedRegionToRegion(pattern.to_tokenized_region()),
         } });
     };
+
+    // Set current_def_pattern so lambda canonicalization can filter self-recursive captures
+    const saved_def_pattern = self.current_def_pattern;
+    self.current_def_pattern = pattern_idx;
+    defer self.current_def_pattern = saved_def_pattern;
 
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
