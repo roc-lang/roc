@@ -1,12 +1,12 @@
-//! Stack overflow detection and handling for the Roc compiler.
+//! Signal handling for the Roc compiler (stack overflow, segfault, division by zero).
 //!
 //! This module provides a thin wrapper around the generic signal handlers in
 //! builtins.handlers, configured with compiler-specific error messages.
 //!
 //! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
-//! signal stack and install a SIGSEGV handler that detects stack overflows.
+//! signal stack and install handlers for SIGSEGV, SIGBUS, and SIGFPE.
 //!
-//! On Windows, we use SetUnhandledExceptionFilter to catch EXCEPTION_STACK_OVERFLOW.
+//! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
 //! WASI is not currently supported (no signal handling available).
 
@@ -67,6 +67,50 @@ fn handleStackOverflow() noreturn {
     }
 }
 
+/// Error message to display on arithmetic error (division by zero, etc.)
+const ARITHMETIC_ERROR_MESSAGE =
+    \\
+    \\================================================================================
+    \\ARITHMETIC ERROR in the Roc compiler
+    \\================================================================================
+    \\
+    \\The Roc compiler encountered an arithmetic error (likely division by zero).
+    \\This is a bug in the compiler, not in your code.
+    \\
+    \\Please report this issue at: https://github.com/roc-lang/roc/issues
+    \\
+    \\Include the Roc code that triggered this error if possible.
+    \\
+    \\================================================================================
+    \\
+    \\
+;
+
+/// Callback for arithmetic errors (division by zero) in the compiler
+fn handleArithmeticError() noreturn {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+        };
+
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
+        kernel32.ExitProcess(136);
+    } else if (comptime builtin.os.tag != .wasi) {
+        _ = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
+        posix.exit(136); // 128 + 8 (SIGFPE)
+    } else {
+        std.process.exit(136);
+    }
+}
+
 /// Callback for access violation in the compiler
 fn handleAccessViolation(fault_addr: usize) noreturn {
     if (comptime builtin.os.tag == .windows) {
@@ -105,11 +149,11 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
     }
 }
 
-/// Install the stack overflow handler.
+/// Install signal handlers for stack overflow, segfault, and division by zero.
 /// This should be called early in main() before any significant work is done.
-/// Returns true if the handler was installed successfully, false otherwise.
+/// Returns true if the handlers were installed successfully, false otherwise.
 pub fn install() bool {
-    return handlers.install(handleStackOverflow, handleAccessViolation);
+    return handlers.install(handleStackOverflow, handleAccessViolation, handleArithmeticError);
 }
 
 /// Test function that intentionally causes a stack overflow.

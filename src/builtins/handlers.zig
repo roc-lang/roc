@@ -1,12 +1,13 @@
-//! Generic signal handlers for stack overflow and access violation detection.
+//! Generic signal handlers for stack overflow, access violation, and arithmetic errors.
 //!
-//! This module provides a mechanism to catch stack overflows and access violations
-//! and handle them with custom callbacks instead of crashing with a raw signal.
+//! This module provides a mechanism to catch runtime errors like stack overflows,
+//! access violations, and division by zero, handling them with custom callbacks
+//! instead of crashing with a raw signal.
 //!
 //! On POSIX systems (Linux, macOS), we use sigaltstack to set up an alternate
-//! signal stack and install a SIGSEGV handler that detects stack overflows.
+//! signal stack and install handlers for SIGSEGV, SIGBUS, and SIGFPE.
 //!
-//! On Windows, we use SetUnhandledExceptionFilter to catch EXCEPTION_STACK_OVERFLOW.
+//! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
 //! WASI is not currently supported (no signal handling available).
 
@@ -24,6 +25,8 @@ const BOOL = i32;
 
 const EXCEPTION_STACK_OVERFLOW: DWORD = 0xC00000FD;
 const EXCEPTION_ACCESS_VIOLATION: DWORD = 0xC0000005;
+const EXCEPTION_INT_DIVIDE_BY_ZERO: DWORD = 0xC0000094;
+const EXCEPTION_INT_OVERFLOW: DWORD = 0xC0000095;
 const EXCEPTION_CONTINUE_SEARCH: LONG = 0;
 const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
 const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));
@@ -70,9 +73,13 @@ pub const StackOverflowCallback = *const fn () noreturn;
 /// Callback function type for handling access violation/segfault
 pub const AccessViolationCallback = *const fn (fault_addr: usize) noreturn;
 
+/// Callback function type for handling division by zero (and other arithmetic errors)
+pub const ArithmeticErrorCallback = *const fn () noreturn;
+
 /// Stored callbacks (set during install)
 var stack_overflow_callback: ?StackOverflowCallback = null;
 var access_violation_callback: ?AccessViolationCallback = null;
+var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 
 /// Install signal handlers with custom callbacks.
 ///
@@ -80,13 +87,19 @@ var access_violation_callback: ?AccessViolationCallback = null;
 /// - on_stack_overflow: Called when a stack overflow is detected. Must not return.
 /// - on_access_violation: Called for other memory access violations (segfaults).
 ///   Receives the fault address. Must not return.
+/// - on_arithmetic_error: Called for arithmetic errors like division by zero. Must not return.
 ///
 /// Returns true if the handlers were installed successfully, false otherwise.
-pub fn install(on_stack_overflow: StackOverflowCallback, on_access_violation: AccessViolationCallback) bool {
+pub fn install(
+    on_stack_overflow: StackOverflowCallback,
+    on_access_violation: AccessViolationCallback,
+    on_arithmetic_error: ArithmeticErrorCallback,
+) bool {
     if (handler_installed) return true;
 
     stack_overflow_callback = on_stack_overflow;
     access_violation_callback = on_access_violation;
+    arithmetic_error_callback = on_arithmetic_error;
 
     if (comptime builtin.os.tag == .windows) {
         return installWindows();
@@ -112,17 +125,26 @@ fn installPosix() bool {
         return false;
     };
 
-    // Install the SIGSEGV handler
-    const action = posix.Sigaction{
-        .handler = .{ .sigaction = handleSignalPosix },
+    // Install the SIGSEGV handler for stack overflow and access violations
+    const segv_action = posix.Sigaction{
+        .handler = .{ .sigaction = handleSegvSignal },
         .mask = posix.sigemptyset(),
         .flags = posix.SA.SIGINFO | posix.SA.ONSTACK,
     };
 
-    posix.sigaction(posix.SIG.SEGV, &action, null);
+    posix.sigaction(posix.SIG.SEGV, &segv_action, null);
 
     // Also catch SIGBUS which can occur on some systems for stack overflow
-    posix.sigaction(posix.SIG.BUS, &action, null);
+    posix.sigaction(posix.SIG.BUS, &segv_action, null);
+
+    // Install the SIGFPE handler for division by zero and other arithmetic errors
+    const fpe_action = posix.Sigaction{
+        .handler = .{ .sigaction = handleFpeSignal },
+        .mask = posix.sigemptyset(),
+        .flags = posix.SA.SIGINFO | posix.SA.ONSTACK,
+    };
+
+    posix.sigaction(posix.SIG.FPE, &fpe_action, null);
 
     handler_installed = true;
     return true;
@@ -138,11 +160,14 @@ fn installWindows() bool {
 fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi) LONG {
     const exception_code = exception_info.ExceptionRecord.ExceptionCode;
 
-    // Check if this is a stack overflow or access violation
+    // Check if this is a known exception type
     const is_stack_overflow = (exception_code == EXCEPTION_STACK_OVERFLOW);
     const is_access_violation = (exception_code == EXCEPTION_ACCESS_VIOLATION);
+    const is_divide_by_zero = (exception_code == EXCEPTION_INT_DIVIDE_BY_ZERO);
+    const is_int_overflow = (exception_code == EXCEPTION_INT_OVERFLOW);
+    const is_arithmetic_error = is_divide_by_zero or is_int_overflow;
 
-    if (!is_stack_overflow and !is_access_violation) {
+    if (!is_stack_overflow and !is_access_violation and !is_arithmetic_error) {
         // Let other handlers deal with this exception
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -151,21 +176,24 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
         if (stack_overflow_callback) |callback| {
             callback();
         }
+        ExitProcess(134);
+    } else if (is_arithmetic_error) {
+        if (arithmetic_error_callback) |callback| {
+            callback();
+        }
+        ExitProcess(136); // 128 + 8 (SIGFPE)
     } else {
         if (access_violation_callback) |callback| {
             // Get fault address from ExceptionInformation[1] for access violations
             const fault_addr = exception_info.ExceptionRecord.ExceptionInformation[1];
             callback(fault_addr);
         }
+        ExitProcess(139);
     }
-
-    // If no callback was set, exit with appropriate code
-    const exit_code: c_uint = if (is_stack_overflow) 134 else 139;
-    ExitProcess(exit_code);
 }
 
-/// The POSIX signal handler function
-fn handleSignalPosix(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+/// The POSIX SIGSEGV/SIGBUS signal handler function
+fn handleSegvSignal(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     // Get the fault address - access differs by platform
     const fault_addr: usize = getFaultAddress(info);
 
@@ -195,6 +223,16 @@ fn handleSignalPosix(_: i32, info: *const posix.siginfo_t, _: ?*anyopaque) callc
     } else {
         posix.exit(139); // 128 + 11 (SIGSEGV)
     }
+}
+
+/// The POSIX SIGFPE signal handler function (division by zero, etc.)
+fn handleFpeSignal(_: i32, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+    if (arithmetic_error_callback) |callback| {
+        callback();
+    }
+
+    // If no callback was set, exit with SIGFPE code
+    posix.exit(136); // 128 + 8 (SIGFPE)
 }
 
 /// Get the fault address from siginfo_t (platform-specific)

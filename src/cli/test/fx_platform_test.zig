@@ -1633,3 +1633,46 @@ test "fx platform runtime stack overflow" {
         },
     }
 }
+
+test "fx platform runtime division by zero" {
+    // Tests that division by zero in a running Roc program is caught and reported
+    // with a helpful error message instead of crashing with a raw signal.
+    //
+    // The error can be caught by either:
+    // 1. The Roc interpreter (exit code 1, "DivisionByZero" message) - most common
+    // 2. The SIGFPE signal handler (exit code 136, "DIVISION BY ZERO" message) - native code
+    const allocator = testing.allocator;
+
+    // The Roc program uses a var to prevent compile-time constant folding
+    const run_result = try runRoc(allocator, "test/fx/division_by_zero.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 136) {
+                // Division by zero was caught by the SIGFPE handler (native code)
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DIVISION BY ZERO") != null);
+            } else if (code == 1) {
+                // Division by zero was caught by the interpreter - this is the expected case
+                // The interpreter catches it and reports "DivisionByZero"
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DivisionByZero") != null);
+            } else {
+                std.debug.print("Unexpected exit code: {}\n", .{code});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedExitCode;
+            }
+        },
+        .Signal => |sig| {
+            // Process was killed directly by a signal without being caught
+            std.debug.print("\n", .{});
+            std.debug.print("Division by zero was not caught!\n", .{});
+            std.debug.print("Process was killed by signal: {}\n", .{sig});
+            return error.DivisionByZeroNotHandled;
+        },
+        else => {
+            std.debug.print("Unexpected termination: {}\n", .{run_result.term});
+            return error.UnexpectedTermination;
+        },
+    }
+}
