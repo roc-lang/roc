@@ -1598,20 +1598,20 @@ test "fx platform runtime stack overflow" {
 
     // After stack overflow handling is implemented, we expect:
     // 1. The process exits with code 134 (indicating stack overflow was caught)
-    // 2. Stderr contains a helpful "STACK OVERFLOW" message
+    // 2. Stderr contains a helpful message about stack overflow
     switch (run_result.term) {
         .Exited => |code| {
             if (code == 134) {
                 // Stack overflow was caught and handled properly
                 // Verify the helpful error message was printed
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "STACK OVERFLOW") != null);
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") != null);
             } else if (code == 139) {
                 // Exit code 139 = 128 + 11 (SIGSEGV) - stack overflow was NOT handled
                 // The Roc program crashed with a segfault that wasn't caught
                 std.debug.print("\n", .{});
                 std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
                 std.debug.print("Process crashed with SIGSEGV (exit code 139).\n", .{});
-                std.debug.print("Expected: exit code 134 with STACK OVERFLOW message\n", .{});
+                std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
                 return error.StackOverflowNotHandled;
             } else {
                 std.debug.print("Unexpected exit code: {}\n", .{code});
@@ -1624,7 +1624,7 @@ test "fx platform runtime stack overflow" {
             std.debug.print("\n", .{});
             std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
             std.debug.print("Process was killed by signal: {}\n", .{sig});
-            std.debug.print("Expected: exit code 134 with STACK OVERFLOW message\n", .{});
+            std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
             return error.StackOverflowNotHandled;
         },
         else => {

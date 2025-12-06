@@ -8,22 +8,7 @@ const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.po
 const trace_refcount = build_options.trace_refcount;
 
 /// Error message to display on stack overflow in a Roc program
-const STACK_OVERFLOW_MESSAGE =
-    \\
-    \\================================================================================
-    \\STACK OVERFLOW in this Roc program
-    \\================================================================================
-    \\
-    \\This Roc program ran out of stack space. This can happen with:
-    \\  - Infinite recursion (a function that calls itself without stopping)
-    \\  - Very deeply nested function calls
-    \\
-    \\Check your code for functions that might recurse infinitely.
-    \\
-    \\================================================================================
-    \\
-    \\
-;
+const STACK_OVERFLOW_MESSAGE = "\nThis Roc application overflowed its stack memory and crashed.\n\n";
 
 /// Callback for stack overflow in a Roc program
 fn handleRocStackOverflow() noreturn {

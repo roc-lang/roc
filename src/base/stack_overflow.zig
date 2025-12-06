@@ -16,28 +16,7 @@ const handlers = @import("builtins").handlers;
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
 /// Error message to display on stack overflow
-const STACK_OVERFLOW_MESSAGE =
-    \\
-    \\================================================================================
-    \\STACK OVERFLOW in the Roc compiler
-    \\================================================================================
-    \\
-    \\The Roc compiler ran out of stack space. This is a bug in the compiler,
-    \\not in your code.
-    \\
-    \\This often happens due to:
-    \\  - Infinite recursion in type translation or unification
-    \\  - Very deeply nested expressions without tail-call optimization
-    \\  - Cyclic data structures without proper cycle detection
-    \\
-    \\Please report this issue at: https://github.com/roc-lang/roc/issues
-    \\
-    \\Include the Roc code that triggered this error if possible.
-    \\
-    \\================================================================================
-    \\
-    \\
-;
+const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
 
 /// Callback for stack overflow in the compiler
 fn handleStackOverflow() noreturn {
@@ -282,13 +261,11 @@ fn verifyHandlerOutput(exited_normally: bool, exit_code: u8, termination_signal:
     // Exit code 139 = generic segfault (handler caught it but didn't classify as stack overflow)
     if (exited_normally and (exit_code == 134 or exit_code == 139)) {
         // Check that our handler message was printed
-        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "STACK OVERFLOW") != null;
+        const has_stack_overflow_msg = std.mem.indexOf(u8, stderr_output, "overflowed its stack memory") != null;
         const has_segfault_msg = std.mem.indexOf(u8, stderr_output, "Segmentation fault") != null;
-        const has_roc_compiler_msg = std.mem.indexOf(u8, stderr_output, "Roc compiler") != null;
 
         // Handler should have printed EITHER stack overflow message OR segfault message
         try std.testing.expect(has_stack_overflow_msg or has_segfault_msg);
-        try std.testing.expect(has_roc_compiler_msg);
     } else if (!exited_normally and (termination_signal == posix.SIG.SEGV or termination_signal == posix.SIG.BUS)) {
         // The handler might not have caught it - this can happen on some systems
         // where the signal delivery is different. Just warn and skip.
