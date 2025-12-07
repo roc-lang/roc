@@ -208,6 +208,7 @@ jobs:
         # We can re-evaluate as new version of zig/valgrind come out.
         if: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
           sudo snap install valgrind --classic
           valgrind --version
           ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
