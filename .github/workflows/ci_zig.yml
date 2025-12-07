@@ -85,18 +85,25 @@ jobs:
         include:
           - os: macos-15-intel
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: ''
           - os: macos-15
             cpu_flag: ''
+            target_flag: ''
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: -Dtarget=x86_64-linux-musl
           - os: ubuntu-24.04-arm
             cpu_flag: ''
+            target_flag: -Dtarget=aarch64-linux-musl
           - os: windows-2022
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: ''
           - os: windows-2025
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: ''
           - os: windows-11-arm
             cpu_flag: ''
+            target_flag: ''
 
     steps:
       - name: Checkout
@@ -119,7 +126,7 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }}"
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
           error_string_contains: "EndOfStream"
           retry_count: 3
 
@@ -136,7 +143,7 @@ jobs:
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
-          zig build test-cli
+          zig build test-cli ${{ matrix.target_flag }}
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -165,13 +172,13 @@ jobs:
           zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
 
       - name: zig snapshot tests
-        run: zig build snapshot -- --debug
+        run: zig build snapshot ${{ matrix.target_flag }} -- --debug
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Dfuzz -Dsystem-afl=false"
+          command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
           error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
@@ -179,7 +186,7 @@ jobs:
       - name: Build and execute tests, build repro executables. All in release mode.
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }}"
+          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
           error_string_contains: "double roundtrip bundle"
           retry_count: 3
 
@@ -208,6 +215,7 @@ jobs:
         # We can re-evaluate as new version of zig/valgrind come out.
         if: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
           sudo snap install valgrind --classic
           valgrind --version
           ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
@@ -248,7 +256,7 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          nix develop ./src/ -c zig build && zig build snapshot && zig build test
+          nix develop ./src/ -c zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}
 
   zig-cross-compile:
     needs: check-once

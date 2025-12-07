@@ -1650,6 +1650,8 @@ pub fn build(b: *std.Build) void {
         }
         // Ensure host library is copied before running the test
         run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
+        // Ensure roc binary is built before running the test (tests invoke roc CLI)
+        run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
     }
 
@@ -2204,9 +2206,8 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
     mod.linkSystemLibrary("z", link_static);
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
-        // TODO: Can this just be `mod.link_libcpp = true`? Does that make a difference?
-        // This means we rely on clang-or-zig-built LLVM, Clang, LLD libraries.
-        mod.linkSystemLibrary("c++", .{});
+        // Use Zig's bundled static libc++ to keep the binary statically linked
+        mod.link_libcpp = true;
     }
 
     if (mod.resolved_target.?.result.os.tag == .windows) {
