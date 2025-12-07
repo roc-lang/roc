@@ -21,6 +21,22 @@ const Ident = @This();
 /// that Idx values are only looked up in the store that created them.
 const enable_store_tracking = builtin.mode == .Debug;
 
+/// Runtime flag to disable store tracking (e.g., in interpreter shim).
+/// This is needed because the interpreter shim works with deserialized stores
+/// that have uninitialized debug_id fields.
+var runtime_store_tracking_disabled: bool = false;
+
+/// Disable store tracking at runtime. Call this in contexts where stores
+/// are deserialized and debug tracking is not valid (e.g., interpreter shim).
+pub fn disableStoreTracking() void {
+    runtime_store_tracking_disabled = true;
+}
+
+/// Check if store tracking is currently active (comptime enabled AND runtime not disabled).
+fn isStoreTrackingActive() bool {
+    return enable_store_tracking and !runtime_store_tracking_disabled;
+}
+
 /// Method name for parsing integers from digit lists - used by numeric literal type checking
 pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
 /// Method name for parsing decimals from digit lists - used by numeric literal type checking
@@ -143,6 +159,8 @@ pub const Store = struct {
     /// Debug-only: get or assign a unique ID for this store.
     fn getOrAssignDebugId(self: *Store, src: std.builtin.SourceLocation) u32 {
         if (enable_store_tracking) {
+            // Check runtime disable flag first
+            if (runtime_store_tracking_disabled) return 0;
             if (self.debug_id == 0) {
                 // If this store already has idents (e.g., deserialized), we can't
                 // fully track it because existing idents weren't registered.
@@ -209,6 +227,8 @@ pub const Store = struct {
     /// Debug-only: verify an Idx belongs to this store.
     fn verifyIdx(self: *const Store, idx: Idx) void {
         if (enable_store_tracking) {
+            // Check runtime disable flag first
+            if (runtime_store_tracking_disabled) return;
             if (self.debug_id == 0) {
                 // Store was never registered (e.g., deserialized store).
                 // Skip verification.
@@ -241,6 +261,8 @@ pub const Store = struct {
     /// multiple sources (e.g., during type unification with builtins).
     pub fn containsIdx(self: *const Store, idx: Idx) bool {
         if (enable_store_tracking) {
+            // Check runtime disable flag first
+            if (runtime_store_tracking_disabled) return true;
             if (self.debug_id == 0) {
                 // Store was never registered (e.g., deserialized store).
                 // Can't verify, assume true.
@@ -287,6 +309,19 @@ pub const Store = struct {
             // Note: Serialized may be smaller than the runtime struct.
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            // DEBUG: Check struct sizes - if Store > Serialized, we'd write past the end!
+            comptime {
+                const store_size = @sizeOf(Store);
+                const serialized_size = @sizeOf(Serialized);
+                if (store_size > serialized_size) {
+                    @compileError(std.fmt.comptimePrint(
+                        "STRUCT SIZE MISMATCH: Store ({d} bytes) > Serialized ({d} bytes). " ++
+                            "Writing Store to Serialized memory will corrupt adjacent data!",
+                        .{ store_size, serialized_size },
+                    ));
+                }
+            }
 
             store.* = Store{
                 .interner = self.interner.deserialize(offset).*,

@@ -68,6 +68,13 @@ const ShimError = error{
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
+    // Disable Ident store tracking in the interpreter shim.
+    // This is necessary because:
+    // 1. Stores are deserialized from shared memory with uninitialized debug_id fields
+    // 2. The debug tracking hashmap is per-process and may have corrupt state
+    // 3. Debug store tracking is meant for fresh compilation, not deserialized stores
+    base.Ident.disableStoreTracking();
+
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         // Only show this generic error if we haven't already crashed with a more specific message
         // (errors like Crash already triggered roc_crashed with details)
@@ -207,6 +214,22 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!Setup
     // Use signed arithmetic to avoid overflow on 64-bit addresses
     const offset: i64 = @as(i64, @intCast(child_base_addr)) - @as(i64, @intCast(parent_base_addr));
 
+    // Debug check: verify offset preserves 16-byte alignment
+    // If this fails, ASLR has caused misaligned shared memory mapping
+    const REQUIRED_ALIGNMENT: u64 = 16; // SERIALIZATION_ALIGNMENT
+    const abs_offset: u64 = @abs(offset);
+    if (abs_offset % REQUIRED_ALIGNMENT != 0) {
+        const err_msg = std.fmt.bufPrint(&buf, "Relocation offset 0x{x} not {}-byte aligned! parent=0x{x} child=0x{x}", .{
+            abs_offset,
+            REQUIRED_ALIGNMENT,
+            parent_base_addr,
+            child_base_addr,
+        }) catch "Relocation offset misaligned";
+        std.debug.print("[MAIN] {s}\n", .{err_msg});
+        roc_ops.crash(err_msg);
+        return error.MemoryLayoutInvalid;
+    }
+
     // Sanity check for overflow potential
     if (@abs(offset) > std.math.maxInt(isize) / 2) {
         const err_msg = std.fmt.bufPrint(&buf, "Relocation offset too large: {}", .{offset}) catch "Relocation offset too large";
@@ -216,6 +239,18 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!Setup
 
     // Get module env offsets array
     const module_envs_base_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.module_envs_offset));
+
+    // Debug check: verify alignment before @ptrFromInt
+    if (module_envs_base_addr % @alignOf(u64) != 0) {
+        const err_msg = std.fmt.bufPrint(&buf, "module_envs_base_addr misaligned: addr=0x{x}, base=0x{x}, offset=0x{x}", .{
+            module_envs_base_addr,
+            @intFromPtr(base_ptr),
+            header_ptr.module_envs_offset,
+        }) catch "module_envs_base_addr misaligned";
+        roc_ops.crash(err_msg);
+        return error.MemoryLayoutInvalid;
+    }
+
     const module_env_offsets: [*]const u64 = @ptrFromInt(module_envs_base_addr);
 
     // Load all module envs (platform modules first, app module last)
@@ -229,6 +264,18 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!Setup
     for (0..module_count - 1) |i| {
         const module_env_offset = module_env_offsets[i];
         const module_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_env_offset));
+
+        // Debug check: verify alignment before @ptrFromInt
+        if (module_env_addr % @alignOf(ModuleEnv) != 0) {
+            const err_msg = std.fmt.bufPrint(&buf, "module_env_addr[{}] misaligned: addr=0x{x}, offset=0x{x}", .{
+                i,
+                module_env_addr,
+                module_env_offset,
+            }) catch "module_env_addr misaligned";
+            roc_ops.crash(err_msg);
+            return error.MemoryLayoutInvalid;
+        }
+
         const module_env_ptr: *ModuleEnv = @ptrFromInt(module_env_addr);
         module_env_ptr.relocate(@intCast(offset));
         module_env_ptr.gpa = allocator;
@@ -240,6 +287,17 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!Setup
 
     // Get and relocate the app module using the header's app_env_offset
     const app_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.app_env_offset));
+
+    // Debug check: verify alignment before @ptrFromInt
+    if (app_env_addr % @alignOf(ModuleEnv) != 0) {
+        const err_msg = std.fmt.bufPrint(&buf, "app_env_addr misaligned: addr=0x{x}, offset=0x{x}", .{
+            app_env_addr,
+            header_ptr.app_env_offset,
+        }) catch "app_env_addr misaligned";
+        roc_ops.crash(err_msg);
+        return error.MemoryLayoutInvalid;
+    }
+
     const app_env_ptr: *ModuleEnv = @ptrFromInt(app_env_addr);
     app_env_ptr.relocate(@intCast(offset));
     app_env_ptr.gpa = allocator;
@@ -247,6 +305,17 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!Setup
     // Determine primary env: platform main if available, otherwise app
     const primary_env: *ModuleEnv = if (header_ptr.platform_main_env_offset != 0) blk: {
         const platform_env_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(header_ptr.platform_main_env_offset));
+
+        // Debug check: verify alignment before @ptrFromInt
+        if (platform_env_addr % @alignOf(ModuleEnv) != 0) {
+            const err_msg = std.fmt.bufPrint(&buf, "platform_env_addr misaligned: addr=0x{x}, offset=0x{x}", .{
+                platform_env_addr,
+                header_ptr.platform_main_env_offset,
+            }) catch "platform_env_addr misaligned";
+            roc_ops.crash(err_msg);
+            return error.MemoryLayoutInvalid;
+        }
+
         const platform_env_ptr: *ModuleEnv = @ptrFromInt(platform_env_addr);
         platform_env_ptr.relocate(@intCast(offset));
         platform_env_ptr.gpa = allocator;

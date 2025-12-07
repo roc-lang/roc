@@ -188,7 +188,14 @@ pub const RocList = extern struct {
             return 1;
         }
 
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr())));
+        const alloc_ptr = self.getAllocationDataPtr();
+        // Debug check: verify alignment before @alignCast
+        const ptr_int = @intFromPtr(alloc_ptr);
+        if (ptr_int % @sizeOf(usize) != 0) {
+            @panic("BITCODE RocList.refcount: alloc_ptr is not 8-byte aligned");
+        }
+
+        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(alloc_ptr)));
         return (ptr - 1)[0];
     }
 

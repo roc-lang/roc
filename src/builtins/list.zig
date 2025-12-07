@@ -15,6 +15,7 @@
 //!
 //! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
+const builtin = @import("builtin");
 
 const utils = @import("utils.zig");
 const UpdateMode = utils.UpdateMode;
@@ -142,6 +143,15 @@ pub const RocList = extern struct {
         const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+
+        // Debug check: verify the computed allocation pointer is 8-byte aligned
+        if (alloc_ptr != 0 and alloc_ptr % 8 != 0) {
+            std.debug.panic(
+                "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
+                .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
+            );
+        }
+
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
@@ -154,6 +164,11 @@ pub const RocList = extern struct {
         if (self.isSeamlessSlice() and elements_refcounted) {
             // Seamless slices always refer to an underlying allocation.
             const alloc_ptr = self.getAllocationDataPtr() orelse unreachable;
+            // Debug check: verify alignment before @alignCast
+            const ptr_int = @intFromPtr(alloc_ptr);
+            if (ptr_int % @sizeOf(usize) != 0) {
+                @panic("RocList.getAllocationElementCount: alloc_ptr is not properly aligned");
+            }
             // - 1 is refcount.
             // - 2 is size on heap.
             const ptr = @as([*]usize, @ptrCast(@alignCast(alloc_ptr))) - 2;
@@ -167,9 +182,15 @@ pub const RocList = extern struct {
     // It will put the allocation size on the heap to enable the seamless slice to free the underlying allocation.
     fn setAllocationElementCount(self: RocList, elements_refcounted: bool) void {
         if (elements_refcounted and !self.isSeamlessSlice()) {
+            const alloc_ptr = self.getAllocationDataPtr();
+            // Debug check: verify alignment before @alignCast
+            const ptr_int = @intFromPtr(alloc_ptr);
+            if (ptr_int % @sizeOf(usize) != 0) {
+                @panic("RocList.setAllocationElementCount: alloc_ptr is not properly aligned");
+            }
             // - 1 is refcount.
             // - 2 is size on heap.
-            const ptr = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr()))) - 2;
+            const ptr = @as([*]usize, @ptrCast(@alignCast(alloc_ptr))) - 2;
             ptr[0] = self.length;
         }
     }
@@ -178,6 +199,11 @@ pub const RocList = extern struct {
         // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
         if (elements_refcounted and self.isUnique() and !self.isSeamlessSlice()) {
             if (self.getAllocationDataPtr()) |source| {
+                // Debug check: verify alignment before @alignCast
+                const ptr_int = @intFromPtr(source);
+                if (ptr_int % @sizeOf(usize) != 0) {
+                    @panic("RocList.incref: source is not properly aligned");
+                }
                 // - 1 is refcount.
                 // - 2 is size on heap.
                 const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
@@ -228,13 +254,36 @@ pub const RocList = extern struct {
     }
 
     fn refcount(self: RocList) usize {
+        // Reduced debug output - only print on potential issues
         if (self.getCapacity() == 0 and !self.isSeamlessSlice()) {
             // the zero-capacity is Clone, copying it will not leak memory
             return 1;
         }
 
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr())));
-        return (ptr - 1)[0];
+        const alloc_ptr = self.getAllocationDataPtr();
+        // Debug check: verify alignment before @alignCast
+        if (alloc_ptr) |non_null_ptr| {
+            const ptr_int = @intFromPtr(non_null_ptr);
+            if (ptr_int % @sizeOf(usize) != 0) {
+                std.debug.panic("RocList.refcount: alloc_ptr=0x{x} is not {}-byte aligned (bytes=0x{x}, cap=0x{x})", .{
+                    ptr_int,
+                    @sizeOf(usize),
+                    @intFromPtr(self.bytes),
+                    self.capacity_or_alloc_ptr,
+                });
+            }
+            const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(non_null_ptr)));
+            const refcount_val = (ptr - 1)[0];
+            std.debug.print("[REFCOUNT] bytes=0x{x} alloc_ptr=0x{x} refcount_addr=0x{x} refcount_val={}\n", .{
+                @intFromPtr(self.bytes),
+                @intFromPtr(non_null_ptr),
+                @intFromPtr(ptr - 1),
+                refcount_val,
+            });
+            return refcount_val;
+        } else {
+            @panic("RocList.refcount: getAllocationDataPtr returned null");
+        }
     }
 
     pub fn makeUnique(
@@ -403,6 +452,11 @@ pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callc
 
 /// Get the number of elements in the list.
 pub fn listLen(list: RocList) callconv(.c) usize {
+    std.debug.print("[BUILTIN listLen] bytes=0x{x} len={} cap_or_alloc=0x{x}\n", .{
+        @intFromPtr(list.bytes),
+        list.length,
+        list.capacity_or_alloc_ptr,
+    });
     return list.len();
 }
 
@@ -416,6 +470,12 @@ pub fn listIsEmpty(list: RocList) callconv(.c) bool {
 /// This is intended for internal use by low-level operations only.
 /// Returns a pointer to the element at the given index.
 pub fn listGetUnsafe(list: RocList, index: u64, element_width: usize) callconv(.c) ?[*]u8 {
+    std.debug.print("[BUILTIN listGetUnsafe] bytes=0x{x} len={} index={} width={}\n", .{
+        @intFromPtr(list.bytes),
+        list.length,
+        index,
+        element_width,
+    });
     if (list.bytes) |bytes| {
         const byte_offset = @as(usize, @intCast(index)) * element_width;
         return bytes + byte_offset;
@@ -829,6 +889,9 @@ pub fn listSwap(
 /// - Shrinks length in place, returns same allocation
 ///
 /// Otherwise: creates a seamless slice pointing into the original allocation.
+
+var listSublist_call_counter: usize = 0;
+
 pub fn listSublist(
     list: RocList,
     alignment: u32,
@@ -840,6 +903,20 @@ pub fn listSublist(
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
+    listSublist_call_counter += 1;
+    const call_num = listSublist_call_counter;
+    std.debug.print("[BUILTIN listSublist #{d}] list.bytes=0x{x} len={} cap_or_alloc=0x{x} align={} width={} start={} len_req={} isUnique={} isSlice={}\n", .{
+        call_num,
+        @intFromPtr(list.bytes),
+        list.length,
+        list.capacity_or_alloc_ptr,
+        alignment,
+        element_width,
+        start_u64,
+        len_u64,
+        list.isUnique(),
+        list.isSeamlessSlice(),
+    });
     const size = list.len();
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
         if (list.isUnique()) {
@@ -899,6 +976,28 @@ pub fn listSublist(
             const slice_alloc_ptr = list.capacity_or_alloc_ptr;
             const slice_mask = list.seamlessSliceMask();
             const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+
+            // Debug check: verify the encoded pointer will decode correctly
+            const test_decode = alloc_ptr << 1;
+            const original_ptr = if (list.isSeamlessSlice())
+                slice_alloc_ptr << 1
+            else
+                @intFromPtr(source_ptr);
+            if (test_decode != (original_ptr & ~@as(usize, 1))) {
+                std.debug.panic(
+                    "listSublist: encoding error! source_ptr=0x{x}, is_slice={}, alloc_ptr=0x{x}, decoded=0x{x}, expected=0x{x}",
+                    .{ @intFromPtr(source_ptr), list.isSeamlessSlice(), alloc_ptr, test_decode, original_ptr & ~@as(usize, 1) },
+                );
+            }
+
+            // Debug check: verify alignment of the original allocation pointer
+            if (original_ptr % 8 != 0) {
+                std.debug.panic(
+                    "listSublist: misaligned original ptr=0x{x} (source_ptr=0x{x}, is_slice={})",
+                    .{ original_ptr, @intFromPtr(source_ptr), list.isSeamlessSlice() },
+                );
+            }
+
             return RocList{
                 .bytes = source_ptr + start * element_width,
                 .length = keep_len,
@@ -1154,28 +1253,29 @@ pub fn listConcat(
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
+    std.debug.print("[BUILTIN listConcat] list_a.bytes=0x{x} list_b.bytes=0x{x} align={} width={}\n", .{
+        @intFromPtr(list_a.bytes),
+        @intFromPtr(list_b.bytes),
+        alignment,
+        element_width,
+    });
     // Early return for empty lists - avoid unnecessary allocations
     if (list_a.isEmpty()) {
-        if (list_b.getCapacity() == 0) {
-            // b could be a seamless slice, so we still need to decref.
+        if (list_b.isEmpty()) {
+            // Both are empty, return list_a and clean up list_b
             list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
             return list_a;
         } else {
-            // list_b has capacity, return it and consume list_a
+            // list_a is empty, list_b has elements - return list_b
+            // list_a might still need decref if it has capacity
             list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
             return list_b;
         }
     } else if (list_b.isEmpty()) {
-        if (list_a.getCapacity() == 0) {
-            // a could be a seamless slice, so we still need to decref.
-            list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-            return list_b;
-        } else {
-            // we must consume this list. Even though it has no elements, it could still have capacity
-            list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-
-            return list_a;
-        }
+        // list_b is empty, list_a has elements - return list_a
+        // list_b might still need decref if it has capacity
+        list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        return list_a;
     } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
@@ -1474,6 +1574,10 @@ pub fn copy_i64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to U128 and copies from src to dest.
 pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_val = @intFromPtr(dest.?);
+    const src_val = @intFromPtr(src.?);
+    if (dest_val % 16 != 0) std.debug.panic("[copy_u128] dest alignment error: ptr=0x{x}", .{dest_val});
+    if (src_val % 16 != 0) std.debug.panic("[copy_u128] src alignment error: ptr=0x{x}", .{src_val});
     const dest_ptr = @as(*u128, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*u128, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;
@@ -1481,6 +1585,10 @@ pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to I128 and copies from src to dest.
 pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    const dest_val = @intFromPtr(dest.?);
+    const src_val = @intFromPtr(src.?);
+    if (dest_val % 16 != 0) std.debug.panic("[copy_i128] dest alignment error: ptr=0x{x}", .{dest_val});
+    if (src_val % 16 != 0) std.debug.panic("[copy_i128] src alignment error: ptr=0x{x}", .{src_val});
     const dest_ptr = @as(*i128, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*i128, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;
@@ -1488,6 +1596,15 @@ pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to Boxes and copies from src to dest.
 pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    // Debug alignment checks
+    const dest_addr = @intFromPtr(dest);
+    const src_addr = @intFromPtr(src);
+    if (dest_addr % @alignOf(usize) != 0) {
+        std.debug.panic("[copy_box] dest=0x{x} not aligned to {} bytes", .{ dest_addr, @alignOf(usize) });
+    }
+    if (src_addr % @alignOf(usize) != 0) {
+        std.debug.panic("[copy_box] src=0x{x} not aligned to {} bytes", .{ src_addr, @alignOf(usize) });
+    }
     const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest)));
     const src_ptr = @as(*usize, @ptrCast(@alignCast(src)));
     dest_ptr.* = src_ptr.*;
@@ -1495,12 +1612,26 @@ pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to ZST Boxes and copies from src to dest.
 pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
+    // Debug alignment check
+    const dest_addr = @intFromPtr(dest.?);
+    if (dest_addr % @alignOf(usize) != 0) {
+        std.debug.panic("[copy_box_zst] dest=0x{x} not aligned to {} bytes", .{ dest_addr, @alignOf(usize) });
+    }
     const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest.?)));
     dest_ptr.* = 0;
 }
 
 /// Specialized copy fn which takes pointers as pointers to Lists and copies from src to dest.
 pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    // Debug alignment checks
+    const dest_addr = @intFromPtr(dest.?);
+    const src_addr = @intFromPtr(src.?);
+    if (dest_addr % @alignOf(RocList) != 0) {
+        @panic("copy_list: dest is not properly aligned for RocList");
+    }
+    if (src_addr % @alignOf(RocList) != 0) {
+        @panic("copy_list: src is not properly aligned for RocList");
+    }
     const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;
@@ -1508,6 +1639,25 @@ pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to ZST Lists and copies from src to dest.
 pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    // Debug alignment checks
+    const dest_addr = @intFromPtr(dest.?);
+    const src_addr = @intFromPtr(src.?);
+    const required_alignment = @alignOf(RocList);
+    std.debug.print("[COPY_LIST_ZST] dest_addr=0x{x} src_addr=0x{x} required_align={} dest_mod={} src_mod={}\n", .{
+        dest_addr,
+        src_addr,
+        required_alignment,
+        dest_addr % required_alignment,
+        src_addr % required_alignment,
+    });
+    if (dest_addr % required_alignment != 0) {
+        std.debug.print("[COPY_LIST_ZST] ABOUT TO PANIC: dest misaligned\n", .{});
+        @panic("copy_list_zst: dest is not properly aligned for RocList");
+    }
+    if (src_addr % required_alignment != 0) {
+        std.debug.print("[COPY_LIST_ZST] ABOUT TO PANIC: src misaligned\n", .{});
+        @panic("copy_list_zst: src is not properly aligned for RocList");
+    }
     const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;
@@ -1515,6 +1665,15 @@ pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to a RocStr and copies from src to dest.
 pub fn copy_str(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
+    // Debug alignment checks
+    const dest_addr = @intFromPtr(dest.?);
+    const src_addr = @intFromPtr(src.?);
+    if (dest_addr % @alignOf(RocStr) != 0) {
+        @panic("copy_str: dest is not properly aligned for RocStr");
+    }
+    if (src_addr % @alignOf(RocStr) != 0) {
+        @panic("copy_str: src is not properly aligned for RocStr");
+    }
     const dest_ptr = @as(*RocStr, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*RocStr, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;

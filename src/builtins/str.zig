@@ -35,9 +35,22 @@ const rcNone = @import("utils.zig").rcNone;
 /// The context parameter is expected to be a *RocOps.
 fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element) |elem_ptr| {
+        const elem_addr = @intFromPtr(elem_ptr);
+        const required_align = @alignOf(RocStr);
+        if (elem_addr % required_align != 0) {
+            @panic("strDecref: elem_ptr is not properly aligned for RocStr");
+        }
         const str_ptr: *RocStr = @ptrCast(@alignCast(elem_ptr));
-        const roc_ops: *RocOps = @ptrCast(@alignCast(context.?));
-        str_ptr.decref(roc_ops);
+        if (context) |ctx| {
+            const ctx_addr = @intFromPtr(ctx);
+            if (ctx_addr % @alignOf(RocOps) != 0) {
+                @panic("strDecref: context is not properly aligned for RocOps");
+            }
+            const roc_ops: *RocOps = @ptrCast(@alignCast(ctx));
+            str_ptr.decref(roc_ops);
+        } else {
+            @panic("strDecref: context is null");
+        }
     }
 }
 
@@ -231,6 +244,15 @@ pub const RocStr = extern struct {
         const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+
+        // Debug check: verify the computed allocation pointer is 8-byte aligned
+        if (alloc_ptr != 0 and alloc_ptr % 8 != 0) {
+            std.debug.panic(
+                "RocStr.getAllocationPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
+                .{ alloc_ptr, str_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
+            );
+        }
+
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
@@ -238,6 +260,11 @@ pub const RocStr = extern struct {
         if (!self.isSmallStr()) {
             const alloc_ptr = self.getAllocationPtr();
             if (alloc_ptr != null) {
+                // Debug check: verify alignment before @alignCast
+                const ptr_int = @intFromPtr(alloc_ptr);
+                if (ptr_int % @sizeOf(isize) != 0) {
+                    @panic("RocStr.incref: alloc_ptr is not properly aligned");
+                }
                 const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(alloc_ptr)));
                 @import("utils.zig").increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
             }
@@ -484,6 +511,12 @@ pub const RocStr = extern struct {
             self.getAllocationPtr()
         else
             self.bytes;
+
+        // Debug check: verify alignment before @alignCast
+        const ptr_int = @intFromPtr(data_ptr);
+        if (ptr_int % @sizeOf(usize) != 0) {
+            @panic("RocStr.refcount: data_ptr is not properly aligned");
+        }
 
         const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(data_ptr)));
         return (ptr - 1)[0];
