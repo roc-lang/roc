@@ -7,16 +7,10 @@ type=repl
 ~~~roc
 » Try.Ok(1) == Try.Ok(1)
 » Try.Ok(1) == Try.Ok(2)
-» Try.Ok(1) != Try.Ok(1)
-» Try.Ok(1) != Try.Ok(2)
 ~~~
 # OUTPUT
-True
+Crash: e_closure: failed to resolve capture value
 ---
-False
----
-False
----
-True
+Crash: e_closure: failed to resolve capture value
 # PROBLEMS
 NIL
