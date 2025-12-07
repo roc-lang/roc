@@ -973,9 +973,15 @@ pub fn listSublist(
                 }
             }
 
-            // No incref needed: listSublist consumes ownership of the input list,
-            // so the seamless slice inherits that consumed reference. Any other
-            // holders of the list (e.g., bindings) already have their own references.
+            // When the list is not unique (refcount > 1), the seamless slice needs
+            // its own reference to the parent allocation. The "consume" semantic
+            // only means the caller gives us their reference, but there are other
+            // holders, and the new slice is an additional reference to the allocation.
+            if (!list.isUnique()) {
+                if (list.getAllocationDataPtr()) |parent_alloc| {
+                    increfDataPtrC(parent_alloc, 1);
+                }
+            }
 
             return RocList{
                 .bytes = source_ptr + start * element_width,
