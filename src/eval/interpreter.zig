@@ -515,11 +515,8 @@ pub const Interpreter = struct {
         // Clear flex_type_context at the start of each top-level evaluation.
         // This prevents stale type mappings from previous evaluations from
         // interfering with polymorphic function instantiation.
-        std.debug.print("[eval] START\n", .{});
         self.flex_type_context.clearRetainingCapacity();
-        const result = try self.evalWithExpectedType(expr_idx, roc_ops, null);
-        std.debug.print("[eval] evalWithExpectedType returned, returning result\n", .{});
-        return result;
+        return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
     pub fn registerDefValue(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, value: StackValue) void {
@@ -541,11 +538,8 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
     ) Error!void {
-        std.debug.print("[evaluateExpression] START\n", .{});
         if (arg_ptr) |args_ptr| {
-            std.debug.print("[evaluateExpression] calling eval\n", .{});
             const func_val = try self.eval(expr_idx, roc_ops);
-            std.debug.print("[evaluateExpression] eval returned ptr=0x{x}\n", .{@intFromPtr(func_val.ptr)});
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
 
             if (func_val.layout.tag != .closure) {
@@ -553,11 +547,6 @@ pub const Interpreter = struct {
                 return error.Crash;
             }
 
-            // Check alignment before cast
-            const ptr_val = @intFromPtr(func_val.ptr.?);
-            const closure_align = @alignOf(layout.Closure);
-            std.debug.print("[evaluateExpression] ptr=0x{x} closure_align={} remainder={}\n", .{ ptr_val, closure_align, ptr_val % closure_align });
-            std.debug.assert(ptr_val % closure_align == 0); // Closure ptr must be aligned
             const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
 
             // Switch to the closure's source module for correct expression evaluation.
@@ -635,7 +624,6 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
-            std.debug.print("[evalExprIntoSlot] calling evalWithExpectedType\n", .{});
             const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| {
                 if (err == error.EarlyReturn) {
                     const return_val = self.early_return_value orelse return error.Crash;
@@ -648,36 +636,22 @@ pub const Interpreter = struct {
                 }
                 return err;
             };
-            std.debug.print("[evalExprIntoSlot] got result_value ptr=0x{x}\n", .{@intFromPtr(result_value.ptr)});
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
             // Only copy result if the result type is compatible with ret_ptr
-            std.debug.print("[evalExprIntoSlot] calling shouldCopyResult\n", .{});
             if (try self.shouldCopyResult(result_value, ret_ptr, roc_ops)) {
-                std.debug.print("[evalExprIntoSlot] calling copyToPtr\n", .{});
                 try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr);
-                std.debug.print("[evalExprIntoSlot] copyToPtr done\n", .{});
             }
             return;
         }
 
-        std.debug.print("[evaluateExpression] else branch, calling eval\n", .{});
         const result = try self.eval(expr_idx, roc_ops);
-        std.debug.print("[evaluateExpression] eval returned, setting up defer\n", .{});
-        defer {
-            std.debug.print("[evaluateExpression] defer: calling decref\n", .{});
-            result.decref(&self.runtime_layout_store, roc_ops);
-            std.debug.print("[evaluateExpression] defer: decref done\n", .{});
-        }
+        defer result.decref(&self.runtime_layout_store, roc_ops);
 
         // Only copy result if the result type is compatible with ret_ptr
-        std.debug.print("[evaluateExpression] calling shouldCopyResult\n", .{});
         if (try self.shouldCopyResult(result, ret_ptr, roc_ops)) {
-            std.debug.print("[evaluateExpression] calling copyToPtr\n", .{});
             try result.copyToPtr(&self.runtime_layout_store, ret_ptr);
-            std.debug.print("[evaluateExpression] copyToPtr done\n", .{});
         }
-        std.debug.print("[evaluateExpression] returning\n", .{});
     }
 
     /// Check if the result should be copied to ret_ptr based on the result's layout.
@@ -789,8 +763,6 @@ pub const Interpreter = struct {
         if (layout_val.tag == .closure) {
             const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
             alignment = alignment.max(captures_layout.alignment(target_usize));
-            // Force 16-byte alignment for closures - generated code may expect max_roc_alignment
-            alignment = .@"16";
         }
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
@@ -819,26 +791,13 @@ pub const Interpreter = struct {
         var alignment = src.layout.alignment(target_usize);
         if (src.layout.tag == .closure) {
             const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
-            const captures_align = captures_layout.alignment(target_usize);
-            std.debug.print("[pushCopy closure] base_align={} captures_align={}\n", .{ alignment.toByteUnits(), captures_align.toByteUnits() });
-            // Always use max_roc_alignment (16 bytes) for closures to ensure downstream code
-            // that expects 16-byte alignment doesn't fail on ASLR edge cases
-            alignment = .@"16";
+            alignment = alignment.max(captures_layout.alignment(target_usize));
         }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
-        // Debug verify: check that allocated ptr has requested alignment
-        if (ptr) |p| {
-            const ptr_int = @intFromPtr(p);
-            const align_bytes = alignment.toByteUnits();
-            if (ptr_int % align_bytes != 0) {
-                std.debug.panic("[pushCopy] ALLOCA ALIGNMENT BUG! ptr=0x{x} requested {}-byte alignment but got remainder={}", .{ ptr_int, align_bytes, ptr_int % align_bytes });
-            }
-        }
         // Preserve rt_var for constant folding
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
         if (size > 0 and src.ptr != null and ptr != null) {
             try src.copyToPtr(&self.runtime_layout_store, ptr.?);
-            std.debug.print("[pushCopy DONE] layout.tag={} size={} ptr=0x{x}\n", .{ @intFromEnum(src.layout.tag), size, @intFromPtr(ptr.?) });
         }
         return dest;
     }
@@ -953,7 +912,6 @@ pub const Interpreter = struct {
         saved_rigid_subst = null; // Ownership transferred to continuation
 
         // Invoke comparison function with (elem_at_outer, elem_at_inner)
-        std.debug.assert(@intFromPtr(compare_fn.ptr.?) % @alignOf(layout.Closure) == 0); // compare_fn closure ptr must be aligned
         const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
         const cmp_saved_env = self.env;
         self.env = @constCast(cmp_header.source_env);
@@ -2071,12 +2029,6 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null); // low-level .list_len expects non-null list pointer
 
-                // DEBUG: Check alignment before @alignCast
-                const list_ptr_val = @intFromPtr(list_arg.ptr.?);
-                const roclist_alignment = @alignOf(builtins.list.RocList);
-                if (list_ptr_val % roclist_alignment != 0) {
-                    std.debug.panic("[list_len] ALIGNMENT ERROR: list_arg.ptr=0x{x} align={} remainder={}\n", .{ list_ptr_val, roclist_alignment, list_ptr_val % roclist_alignment });
-                }
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const len_usize = builtins.list.listLen(roc_list.*);
 
@@ -2181,11 +2133,6 @@ pub const Interpreter = struct {
                 // Extract element layout from List(a)
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
-                // Debug check: verify alignment before @alignCast
-                const list_ptr_int = @intFromPtr(list_arg.ptr.?);
-                if (list_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-                    std.debug.panic("list_get_unsafe: list_arg.ptr=0x{x} is not aligned to {} bytes", .{ list_ptr_int, @alignOf(builtins.list.RocList) });
-                }
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
                 const index = index_arg.asI128(); // U64 stored as i128
 
@@ -2325,16 +2272,6 @@ pub const Interpreter = struct {
                 // Extract element layout from List(a)
                 std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
                 std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
-
-                // Debug check: verify alignment before @alignCast
-                const list_a_ptr_int = @intFromPtr(list_a_arg.ptr.?);
-                if (list_a_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-                    std.debug.panic("list_concat: list_a_arg.ptr=0x{x} is not aligned to {} bytes", .{ list_a_ptr_int, @alignOf(builtins.list.RocList) });
-                }
-                const list_b_ptr_int = @intFromPtr(list_b_arg.ptr.?);
-                if (list_b_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-                    std.debug.panic("list_concat: list_b_arg.ptr=0x{x} is not aligned to {} bytes", .{ list_b_ptr_int, @alignOf(builtins.list.RocList) });
-                }
 
                 const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
                 const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
@@ -2708,7 +2645,6 @@ pub const Interpreter = struct {
             // Numeric comparison operations
             .num_is_eq => {
                 // num.is_eq : num, num -> Bool (all integer types + Dec, NOT F32/F64)
-                std.debug.print("[num_is_eq] START args.len={}\n", .{args.len});
                 std.debug.assert(args.len == 2); // low-level .num_is_eq expects 2 arguments
                 const lhs = try self.extractNumericValue(args[0]);
                 const rhs = try self.extractNumericValue(args[1]);
@@ -4542,16 +4478,6 @@ pub const Interpreter = struct {
 
         const result_layout = try self.getRuntimeLayout(result_rt_var);
 
-        // Debug check: verify alignment before @alignCast
-        const ptr_addr = @intFromPtr(int_arg.ptr.?);
-        if (ptr_addr % @alignOf(From) != 0) {
-            std.debug.panic("intConvertTry: ptr=0x{x} is not aligned to {} bytes for type {s}", .{
-                ptr_addr,
-                @alignOf(From),
-                @typeName(From),
-            });
-        }
-
         const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
 
         // Check if conversion is in range
@@ -6081,24 +6007,10 @@ pub const Interpreter = struct {
         elem_var: types.Var,
         roc_ops: *RocOps,
     ) StructuralEqError!bool {
-        std.debug.print("structuralEqualList ENTRY: lhs.ptr=0x{x} rhs.ptr=0x{x}\n", .{
-            @intFromPtr(lhs.ptr orelse @as(*anyopaque, @ptrFromInt(0))),
-            @intFromPtr(rhs.ptr orelse @as(*anyopaque, @ptrFromInt(0))),
-        });
         const lhs_is_list = lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst;
         const rhs_is_list = rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst;
         if (!lhs_is_list or !rhs_is_list) return error.TypeMismatch;
         if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-
-        // Debug check: verify alignment before @alignCast
-        const lhs_ptr_int = @intFromPtr(lhs.ptr.?);
-        if (lhs_ptr_int % @alignOf(RocList) != 0) {
-            std.debug.panic("structuralEqualList: lhs.ptr=0x{x} is not aligned to {} bytes", .{ lhs_ptr_int, @alignOf(RocList) });
-        }
-        const rhs_ptr_int = @intFromPtr(rhs.ptr.?);
-        if (rhs_ptr_int % @alignOf(RocList) != 0) {
-            std.debug.panic("structuralEqualList: rhs.ptr=0x{x} is not aligned to {} bytes", .{ rhs_ptr_int, @alignOf(RocList) });
-        }
 
         const lhs_header = @as(*const RocList, @ptrCast(@alignCast(lhs.ptr.?))).*;
         const rhs_header = @as(*const RocList, @ptrCast(@alignCast(rhs.ptr.?))).*;
@@ -6115,8 +6027,8 @@ pub const Interpreter = struct {
 
         var index: usize = 0;
         while (index < lhs_header.len()) : (index += 1) {
-            const lhs_elem = try lhs_acc.getElement(index, elem_var);
-            const rhs_elem = try rhs_acc.getElement(index, elem_var);
+            const lhs_elem = try lhs_acc.getElement(index);
+            const rhs_elem = try rhs_acc.getElement(index);
             const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
             if (!elems_equal) {
                 return false;
@@ -6245,7 +6157,6 @@ pub const Interpreter = struct {
             return error.TypeMismatch;
         }
 
-        std.debug.assert(@intFromPtr(method_func.ptr.?) % @alignOf(layout.Closure) == 0); // method_func closure ptr must be aligned (is_eq)
         const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
 
         // All is_eq methods are low-level lambdas (builtins). If a type doesn't have
@@ -7262,19 +7173,12 @@ pub const Interpreter = struct {
     }
 
     pub fn deinit(self: *Interpreter) void {
-        std.debug.print("[interp.deinit] start\n", .{});
         self.empty_scope.deinit();
-        std.debug.print("[interp.deinit] 1 empty_scope\n", .{});
         self.translate_cache.deinit();
-        std.debug.print("[interp.deinit] 2 translate_cache\n", .{});
         self.translation_in_progress.deinit();
-        std.debug.print("[interp.deinit] 3 translation_in_progress\n", .{});
         self.rigid_subst.deinit();
-        std.debug.print("[interp.deinit] 4 rigid_subst\n", .{});
         self.translate_rigid_subst.deinit();
-        std.debug.print("[interp.deinit] 5 translate_rigid_subst\n", .{});
         self.flex_type_context.deinit();
-        std.debug.print("[interp.deinit] 6 flex_type_context\n", .{});
         var it = self.poly_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.args.len > 0) {
@@ -7282,45 +7186,26 @@ pub const Interpreter = struct {
             }
         }
         self.poly_cache.deinit();
-        std.debug.print("[interp.deinit] 7 poly_cache\n", .{});
         self.module_envs.deinit(self.allocator);
-        std.debug.print("[interp.deinit] 8 module_envs\n", .{});
         self.translated_module_envs.deinit(self.allocator);
-        std.debug.print("[interp.deinit] 9 translated_module_envs\n", .{});
         self.module_ids.deinit(self.allocator);
-        std.debug.print("[interp.deinit] 10 module_ids\n", .{});
         self.import_envs.deinit(self.allocator);
-        std.debug.print("[interp.deinit] 11 import_envs\n", .{});
         self.var_to_layout_slot.deinit();
-        std.debug.print("[interp.deinit] 12 var_to_layout_slot\n", .{});
         self.runtime_layout_store.deinit();
-        std.debug.print("[interp.deinit] 13 runtime_layout_store\n", .{});
         self.runtime_types.deinit();
-        std.debug.print("[interp.deinit] 14 runtime_types\n", .{});
         self.allocator.destroy(self.runtime_types);
-        std.debug.print("[interp.deinit] 15 destroy runtime_types\n", .{});
         self.snapshots.deinit();
-        std.debug.print("[interp.deinit] 16 snapshots\n", .{});
         self.problems.deinit(self.allocator);
-        std.debug.print("[interp.deinit] 17 problems\n", .{});
         // Note: import_mapping is borrowed, not owned - don't deinit it
         self.unify_scratch.deinit();
-        std.debug.print("[interp.deinit] 18 unify_scratch\n", .{});
         self.type_writer.deinit();
-        std.debug.print("[interp.deinit] 19 type_writer\n", .{});
         self.stack_memory.deinit();
-        std.debug.print("[interp.deinit] 20 stack_memory\n", .{});
         self.bindings.deinit();
-        std.debug.print("[interp.deinit] 21 bindings\n", .{});
         self.active_closures.deinit();
-        std.debug.print("[interp.deinit] 22 active_closures\n", .{});
         self.def_stack.deinit();
-        std.debug.print("[interp.deinit] 23 def_stack\n", .{});
         self.scratch_tags.deinit();
-        std.debug.print("[interp.deinit] 24 scratch_tags\n", .{});
         // Free all constant/static strings at once - they were never freed individually
         self.constant_strings_arena.deinit();
-        std.debug.print("[interp.deinit] done\n", .{});
     }
 
     /// Get the module environment for a given origin module identifier.
@@ -9017,17 +8902,14 @@ pub const Interpreter = struct {
         /// Binary operation - apply method after both operands are evaluated.
         binop_apply: BinopApply,
 
-        /// Dot access - await receiver evaluation, then capture receiver for resolve.
+        /// Dot access - await receiver evaluation and capture immediately.
         dot_access_await_receiver: DotAccessAwaitReceiver,
 
-        /// Dot access - resolve field or method with receiver carried in continuation.
+        /// Dot access - resolve field or method after receiver is evaluated.
         dot_access_resolve: DotAccessResolve,
 
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
-
-        /// Flex type is_eq - compare values after argument is evaluated.
-        flex_is_eq: FlexIsEq,
 
         /// For loop/expression - iterate over list elements after list is evaluated.
         for_iterate: ForIterate,
@@ -9352,7 +9234,7 @@ pub const Interpreter = struct {
             negate_result: bool,
         };
 
-        /// Dot access - await receiver evaluation, then schedule resolve with carried receiver.
+        /// Dot access - await receiver evaluation, then capture receiver for resolve.
         /// This prevents value stack interleaving issues by ensuring the receiver is captured
         /// immediately after evaluation, before other work items can push values.
         pub const DotAccessAwaitReceiver = struct {
@@ -9395,12 +9277,6 @@ pub const Interpreter = struct {
             receiver_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
-        };
-
-        /// Flex type is_eq - compare values after argument is evaluated
-        pub const FlexIsEq = struct {
-            /// Receiver runtime type variable
-            receiver_rt_var: types.Var,
         };
 
         /// For loop/expression - iterate over list elements
@@ -9618,21 +9494,13 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
         var work_stack = try WorkStack.init(self.allocator);
-        defer {
-            std.debug.print("[evalWithExpectedType] defer: work_stack.deinit() start\n", .{});
-            work_stack.deinit();
-            std.debug.print("[evalWithExpectedType] defer: work_stack.deinit() done\n", .{});
-        }
+        defer work_stack.deinit();
 
         // On error, clean up any pending allocations in continuations
         errdefer self.cleanupPendingWorkStack(&work_stack, roc_ops);
 
         var value_stack = try ValueStack.init(self.allocator);
-        defer {
-            std.debug.print("[evalWithExpectedType] defer: value_stack.deinit() start\n", .{});
-            value_stack.deinit();
-            std.debug.print("[evalWithExpectedType] defer: value_stack.deinit() done\n", .{});
-        }
+        defer value_stack.deinit();
 
         // Initial work: evaluate the root expression, then return result
         // Push in reverse order: return_result first (will be executed last),
@@ -9644,53 +9512,15 @@ pub const Interpreter = struct {
         } });
 
         while (work_stack.pop()) |work_item| {
-            std.debug.print("[WORK_LOOP] item type: {s}\n", .{@tagName(work_item)});
             switch (work_item) {
                 .eval_expr => |eval_item| {
                     try self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops);
                 },
                 .apply_continuation => |cont| {
-                    std.debug.print("[WORK_LOOP] cont type: {s}\n", .{@tagName(cont)});
-                    std.debug.print("[WORK_LOOP] calling applyContinuation\n", .{});
                     const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
-                    std.debug.print("[WORK_LOOP] applyContinuation returned {}\n", .{should_continue});
                     if (!should_continue) {
                         // return_result continuation signals completion
-                        std.debug.print("[WORK_LOOP] about to pop value_stack\n", .{});
                         if (value_stack.pop()) |val| {
-                            std.debug.print("[WORK_LOOP] popped value ptr=0x{x} layout.tag={}\n", .{ @intFromPtr(val.ptr), @intFromEnum(val.layout.tag) });
-                            // Check if ptr requires alignment and meets it
-                            if (val.ptr) |ptr| {
-                                const ptr_int = @intFromPtr(ptr);
-                                const required_align = val.layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                                if (ptr_int % required_align != 0) {
-                                    std.debug.print("[WORK_LOOP] ALIGNMENT ERROR! ptr=0x{x} requires {}-byte alignment but is not aligned!\n", .{ ptr_int, required_align });
-                                }
-                            }
-                            std.debug.print("[WORK_LOOP] returning val - about to return from function\n", .{});
-                            // Add explicit verification that val is in valid memory
-                            std.debug.print("[WORK_LOOP] val.layout.tag={} val.ptr=0x{x} is_init={} val address=0x{x}\n", .{
-                                @intFromEnum(val.layout.tag),
-                                @intFromPtr(val.ptr),
-                                val.is_initialized,
-                                @intFromPtr(&val)
-                            });
-                            // Debug: check self alignment before return
-                            const self_addr = @intFromPtr(self);
-                            if (self_addr % @alignOf(Interpreter) != 0) {
-                                std.debug.print("[WORK_LOOP] CRITICAL: self not aligned! addr=0x{x} align={}\n", .{ self_addr, @alignOf(Interpreter) });
-                            }
-                            // Debug: check env alignment
-                            const env_addr = @intFromPtr(self.env);
-                            if (env_addr % @alignOf(can.ModuleEnv) != 0) {
-                                std.debug.print("[WORK_LOOP] CRITICAL: env not aligned! addr=0x{x} align={}\n", .{ env_addr, @alignOf(can.ModuleEnv) });
-                            }
-                            // Debug: check runtime_types alignment
-                            const rt_addr = @intFromPtr(self.runtime_types);
-                            if (rt_addr % @alignOf(types.store.Store) != 0) {
-                                std.debug.print("[WORK_LOOP] CRITICAL: runtime_types not aligned! addr=0x{x} align={}\n", .{ rt_addr, @alignOf(types.store.Store) });
-                            }
-                            std.debug.print("[WORK_LOOP] alignments ok, returning\n", .{});
                             return val;
                         } else {
                             self.triggerCrash("eval: value_stack empty after return_result", false, roc_ops);
@@ -10015,13 +9845,8 @@ pub const Interpreter = struct {
                         }
 
                         // Evaluate the app's exported expression synchronously
-                        std.debug.print("[scheduleExprEval:ext] calling evalWithExpectedType\n", .{});
                         const result = try self.evalWithExpectedType(app_expr_idx, roc_ops, expected_rt_var);
-                        std.debug.print("[scheduleExprEval:ext] IMMEDIATELY after evalWithExpectedType call\n", .{});
-                        std.debug.print("[scheduleExprEval:ext] result.ptr=0x{x} result.layout.tag={}\n", .{ @intFromPtr(result.ptr), @intFromEnum(result.layout.tag) });
-                        std.debug.print("[scheduleExprEval:ext] evalWithExpectedType returned, pushing to stack\n", .{});
                         try value_stack.push(result);
-                        std.debug.print("[scheduleExprEval:ext] done\n", .{});
                     } else {
                         return error.TypeMismatch;
                     }
@@ -10956,24 +10781,17 @@ pub const Interpreter = struct {
                     receiver_rt_var = dec_var;
                 }
 
-                // Evaluate receiver synchronously with isolated stacks to prevent value stack interleaving.
-                // Using evalWithExpectedType ensures the receiver evaluation is completely isolated
-                // from the outer value stack, so no other work items can interleave their values.
-                const receiver_value = try self.evalWithExpectedType(dot_access.receiver, roc_ops, receiver_rt_var);
-
-                // Copy the receiver value to the interpreter's stack memory to ensure it persists
-                // beyond the temporary evaluation stacks. Then push to outer value stack.
-                const copied_receiver = try self.pushCopy(receiver_value);
-                try value_stack.push(copied_receiver);
-
-                // Schedule dot_access_await_receiver to pop the receiver and carry it to resolve.
-                // This ensures proper value stack management while preventing interleaving.
-                try work_stack.push(.{ .apply_continuation = .{ .dot_access_await_receiver = .{
+                // Schedule: first evaluate receiver, then resolve field/method
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
                     .field_name = dot_access.field_name,
                     .method_args = dot_access.args,
                     .receiver_rt_var = receiver_rt_var,
                     .expr_idx = expr_idx,
                 } } });
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dot_access.receiver,
+                    .expected_rt_var = receiver_rt_var,
+                } });
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
@@ -11496,7 +11314,6 @@ pub const Interpreter = struct {
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
-            std.debug.assert(@intFromPtr(ptr) % @alignOf(layout.Closure) == 0); // evalLambda closure ptr must be aligned
             const header: *layout.Closure = @ptrCast(@alignCast(ptr));
             header.* = .{
                 .body_idx = lam.body,
@@ -11577,8 +11394,6 @@ pub const Interpreter = struct {
     }
 
     /// Evaluate a closure expression (e_closure) - creates a closure with captured values
-    /// Handles recursive self-captures by allocating the closure first, registering it,
-    /// then resolving captures (so self-references find the in-progress closure).
     fn evalClosure(
         self: *Interpreter,
         expr_idx: can.CIR.Expr.Idx,
@@ -11598,59 +11413,31 @@ pub const Interpreter = struct {
         var field_names = try self.allocator.alloc(base_pkg.Ident.Idx, caps.len);
         defer self.allocator.free(field_names);
 
-        // First pass: get names and estimate layouts (using closure layout for self-references)
-        // We need to know the layout to allocate the closure, but we need the closure
-        // allocated to resolve self-captures. For self-captures, we use the closure layout.
-        const ct_var = can.ModuleEnv.varFrom(expr_idx);
-        const closure_rt_var = try self.translateTypeVar(self.env, ct_var);
-        const self_closure_layout = try self.getRuntimeLayout(closure_rt_var);
-
-        // Track which captures are self-references (null initially)
-        var capture_values = try self.allocator.alloc(?StackValue, caps.len);
+        // Resolve all capture values
+        var capture_values = try self.allocator.alloc(StackValue, caps.len);
         defer self.allocator.free(capture_values);
-        var has_self_captures = false;
 
         for (caps, 0..) |cap_idx, i| {
             const cap = self.env.store.getCapture(cap_idx);
             const name_text = self.env.getIdent(cap.name);
             field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
 
-            // Try to resolve the capture - returns null for recursive self-references
-            const cap_val = self.resolveCapture(cap, roc_ops);
+            const cap_val = self.resolveCapture(cap, roc_ops) orelse {
+                self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                return error.Crash;
+            };
             capture_values[i] = cap_val;
-            if (cap_val) |cv| {
-                field_layouts[i] = cv.layout;
-            } else {
-                // Self-capture - use the closure's own layout
-                field_layouts[i] = self_closure_layout;
-                has_self_captures = true;
-            }
+            field_layouts[i] = cap_val.layout;
         }
 
         const captures_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, field_layouts, field_names);
         const captures_layout = self.runtime_layout_store.getLayout(captures_layout_idx);
         const closure_layout = Layout.closure(captures_layout_idx);
-
+        // Get rt_var for the closure
+        const ct_var = can.ModuleEnv.varFrom(expr_idx);
+        const closure_rt_var = try self.translateTypeVar(self.env, ct_var);
         const value = try self.pushRaw(closure_layout, 0, closure_rt_var);
-
-        // Register the value BEFORE resolving self-captures, so self-references can find it
         self.registerDefValue(expr_idx, value);
-
-        // If we have self-captures, resolve them now that the closure is registered
-        if (has_self_captures) {
-            for (caps, 0..) |cap_idx, i| {
-                if (capture_values[i] == null) {
-                    const cap = self.env.store.getCapture(cap_idx);
-                    // Try again - now the closure is registered in def_stack
-                    const cap_val = self.resolveCapture(cap, roc_ops) orelse {
-                        // Still null means it's a true self-capture - use the closure value itself
-                        capture_values[i] = value;
-                        continue;
-                    };
-                    capture_values[i] = cap_val;
-                }
-            }
-        }
 
         if (value.ptr) |ptr| {
             const header: *layout.Closure = @ptrCast(@alignCast(ptr));
@@ -11668,28 +11455,10 @@ pub const Interpreter = struct {
             const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
             const base: [*]u8 = @ptrCast(@alignCast(ptr));
             const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-
-            // Zero-initialize the captures area. This is important for self-captures:
-            // we skip copying them (to avoid memcpy aliasing), so their memory would
-            // otherwise be uninitialized, causing decref to read garbage layout indices.
-            const captures_size = self.runtime_layout_store.layoutSize(captures_layout);
-            @memset(base[aligned_off..][0..captures_size], 0);
-
             const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = closure_rt_var };
             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
             for (caps, 0..) |_, cap_i| {
-                const cap_val = capture_values[cap_i] orelse {
-                    self.triggerCrash("e_closure: unresolved capture after second pass", false, roc_ops);
-                    return error.Crash;
-                };
-
-                // Skip self-captures - they point to the closure itself, so copying would cause
-                // memcpy to alias (source and dest overlap). Self-references work through
-                // normal lookup mechanisms (bindings/all_defs), not through the captures area.
-                if (cap_val.ptr == value.ptr) {
-                    continue;
-                }
-
+                const cap_val = capture_values[cap_i];
                 const translated_name = field_names[cap_i];
                 const idx_opt = accessor.findFieldIndex(translated_name) orelse {
                     self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
@@ -11740,24 +11509,17 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == cap.pattern_idx) {
-                // Check if we're already evaluating this def (recursive self-reference)
                 var k: usize = self.def_stack.items.len;
                 while (k > 0) {
                     k -= 1;
                     const entry = self.def_stack.items[k];
                     if (entry.pattern_idx == cap.pattern_idx) {
                         if (entry.value) |val| {
-                            // Def already evaluated, return its value
                             return val;
-                        } else {
-                            // Recursive self-reference detected: this def is currently being evaluated.
-                            // Return null to indicate this is a recursive capture.
-                            // The caller (evalClosure) should handle this case specially.
-                            return null;
                         }
                     }
                 }
-                // Not in def_stack yet, evaluate it
+                // Found the def! Evaluate it to get the captured value
                 const new_entry = DefInProgress{
                     .pattern_idx = def.pattern,
                     .expr_idx = def.expr,
@@ -11827,9 +11589,7 @@ pub const Interpreter = struct {
                                     // polymorphic functions from pre-compiled modules like Builtin.
                                     try self.setupFlexContextForNumericExpr(root_expr_idx, b.source_env, exp_var);
 
-                                    std.debug.print("[lookup:reeval] calling evalWithExpectedType\n", .{});
                                     const result = try self.evalWithExpectedType(root_expr_idx, roc_ops, exp_var);
-                                    std.debug.print("[lookup:reeval] done\n", .{});
                                     return result;
                                 }
                             }
@@ -11881,9 +11641,7 @@ pub const Interpreter = struct {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == lookup.pattern_idx) {
                 // Evaluate the definition on demand and cache the result in bindings
-                std.debug.print("[lookup:top-level] calling evalWithExpectedType\n", .{});
                 const result = try self.evalWithExpectedType(def.expr, roc_ops, null);
-                std.debug.print("[lookup:top-level] done\n", .{});
                 try self.bindings.append(.{
                     .pattern_idx = def.pattern,
                     .value = result,
@@ -11927,9 +11685,7 @@ pub const Interpreter = struct {
         }
 
         // Evaluate the definition's expression in the other module's context
-        std.debug.print("[evalLookupExternal] calling evalWithExpectedType\n", .{});
         const result = try self.evalWithExpectedType(target_def.expr, roc_ops, expected_rt_var);
-        std.debug.print("[evalLookupExternal] done\n", .{});
 
         return result;
     }
@@ -12275,7 +12031,6 @@ pub const Interpreter = struct {
         switch (cont) {
             .return_result => {
                 // Signal to exit the main loop - the result is on the value stack
-                std.debug.print("[applyCont] return_result handler, returning false\n", .{});
                 return false;
             },
             .decref_value => |dv| {
@@ -14027,12 +13782,9 @@ pub const Interpreter = struct {
             .binop_apply => |ba| {
                 // Binary operation: both operands on stack, apply method
                 // Stack: [lhs, rhs] - RHS on top
-                std.debug.print("[binop_apply] START\n", .{});
                 const rhs = value_stack.pop() orelse return error.Crash;
-                std.debug.print("[binop_apply] got rhs ptr={any}\n", .{rhs.ptr});
                 defer rhs.decref(&self.runtime_layout_store, roc_ops);
                 const lhs = value_stack.pop() orelse return error.Crash;
-                std.debug.print("[binop_apply] got lhs ptr={any}\n", .{lhs.ptr});
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
                 // Prefer the runtime type from the evaluated value if it's more concrete
@@ -14446,35 +14198,9 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .dot_access_await_receiver => |da| {
-                // Await receiver: pop receiver from stack, then schedule resolve with carried value.
-                // This prevents value stack interleaving by capturing the receiver immediately
-                // after it's evaluated, before other work items can push values.
-                const receiver_value = value_stack.pop() orelse return error.Crash;
-
-                // Validate that we got the expected receiver type
-                // This helps catch value stack interleaving bugs
-                if (receiver_value.rt_var != da.receiver_rt_var) {
-                    std.debug.panic(
-                        "[dot_access_await_receiver] VALUE STACK INTERLEAVE: expected receiver rt_var={} but got rt_var={} layout.tag={}\n",
-                        .{ @intFromEnum(da.receiver_rt_var), @intFromEnum(receiver_value.rt_var), @intFromEnum(receiver_value.layout.tag) },
-                    );
-                }
-
-                // Schedule dot_access_resolve with the receiver carried in the continuation
-                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
-                    .field_name = da.field_name,
-                    .method_args = da.method_args,
-                    .receiver_rt_var = da.receiver_rt_var,
-                    .expr_idx = da.expr_idx,
-                    .receiver_value = receiver_value,
-                } } });
-                return true;
-            },
             .dot_access_resolve => |da| {
-                // Dot access: receiver is carried in the continuation, not on stack.
-                // This prevents value stack interleaving issues from nested evaluations.
-                const receiver_value = da.receiver_value;
+                // Dot access: receiver is on stack, resolve field or method
+                const receiver_value = value_stack.pop() orelse return error.Crash;
 
                 if (da.method_args == null) {
                     // Field access on a record
@@ -14563,30 +14289,6 @@ pub const Interpreter = struct {
                             return error.InvalidMethodReceiver;
                         },
                     },
-                    .flex, .rigid, .err => {
-                        // For flex/rigid/err types, handle is_eq specially
-                        if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
-                            // Need to evaluate the argument, then do comparison
-                            // Push receiver back on stack
-                            try value_stack.push(receiver_value);
-
-                            // Push continuation for flex is_eq handling
-                            try work_stack.push(.{ .apply_continuation = .{ .flex_is_eq = .{
-                                .receiver_rt_var = effective_receiver_rt_var,
-                            } } });
-
-                            // Evaluate the argument
-                            const arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                            const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = arg_exprs[0],
-                                .expected_rt_var = arg_rt_var,
-                            } });
-                            return true;
-                        }
-                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                        return error.InvalidMethodReceiver;
-                    },
                     else => {
                         receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         return error.InvalidMethodReceiver;
@@ -14628,12 +14330,6 @@ pub const Interpreter = struct {
 
                 // If no additional args, invoke method directly with receiver
                 if (arg_exprs.len == 0) {
-                    // DEBUG: Check alignment before @alignCast
-                    const method_ptr_val = @intFromPtr(method_func.ptr.?);
-                    const closure_alignment = @alignOf(layout.Closure);
-                    if (method_ptr_val % closure_alignment != 0) {
-                        std.debug.panic("[dot_access_resolve] ALIGNMENT ERROR: method_func.ptr=0x{x} align={} remainder={}\n", .{ method_ptr_val, closure_alignment, method_ptr_val % closure_alignment });
-                    }
                     const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
 
                     const saved_env = self.env;
@@ -14941,53 +14637,6 @@ pub const Interpreter = struct {
                     .expr_idx = closure_header.body_idx,
                     .expected_rt_var = null,
                 } });
-                return true;
-            },
-            .flex_is_eq => |fie| {
-                // Handle is_eq for flex/rigid/err types
-                // Stack: [receiver, arg]
-                const rhs = value_stack.pop() orelse return error.Crash;
-                const lhs = value_stack.pop() orelse return error.Crash;
-
-                // Try numeric scalar fast-path
-                if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-                    const lhs_tag = lhs.layout.data.scalar.tag;
-                    const rhs_tag = rhs.layout.data.scalar.tag;
-
-                    const lhs_is_numeric = lhs_tag == .int or lhs_tag == .frac;
-                    const rhs_is_numeric = rhs_tag == .int or rhs_tag == .frac;
-
-                    if (lhs_is_numeric and rhs_is_numeric) {
-                        const order = self.compareNumericScalars(lhs, rhs) catch {
-                            lhs.decref(&self.runtime_layout_store, roc_ops);
-                            rhs.decref(&self.runtime_layout_store, roc_ops);
-                            self.triggerCrash("Failed to compare numeric scalars (flex is_eq)", false, roc_ops);
-                            return error.Crash;
-                        };
-                        lhs.decref(&self.runtime_layout_store, roc_ops);
-                        rhs.decref(&self.runtime_layout_store, roc_ops);
-                        const result = (order == .eq);
-                        const result_val = try self.makeBoolValue(result);
-                        try value_stack.push(result_val);
-                        return true;
-                    }
-                }
-
-                // Fall back to structural equality
-                const rhs_rt_var = rhs.rt_var;
-                const result = self.valuesStructurallyEqual(lhs, fie.receiver_rt_var, rhs, rhs_rt_var, roc_ops) catch |err| {
-                    lhs.decref(&self.runtime_layout_store, roc_ops);
-                    rhs.decref(&self.runtime_layout_store, roc_ops);
-                    if (err == error.NotImplemented) {
-                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                        return error.Crash;
-                    }
-                    return err;
-                };
-                lhs.decref(&self.runtime_layout_store, roc_ops);
-                rhs.decref(&self.runtime_layout_store, roc_ops);
-                const result_val = try self.makeBoolValue(result);
-                try value_stack.push(result_val);
                 return true;
             },
             .for_iterate => |fl_in| {
