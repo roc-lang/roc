@@ -10781,17 +10781,24 @@ pub const Interpreter = struct {
                     receiver_rt_var = dec_var;
                 }
 
-                // Schedule: first evaluate receiver, then resolve field/method
-                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
+                // Evaluate receiver synchronously with isolated stacks to prevent value stack interleaving.
+                // This ensures the receiver is captured immediately before other dot_access expressions
+                // can push values that would corrupt the expected stack order.
+                const receiver_value = try self.evalWithExpectedType(dot_access.receiver, roc_ops, receiver_rt_var);
+
+                // Copy receiver to persistent memory (evalWithExpectedType uses temporary stacks that are freed)
+                const copied_receiver = try self.pushCopy(receiver_value);
+
+                // Push to outer value_stack so dot_access_await_receiver can pop it
+                try value_stack.push(copied_receiver);
+
+                // Schedule await_receiver which will pop from value stack and create resolve with carried value
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_await_receiver = .{
                     .field_name = dot_access.field_name,
                     .method_args = dot_access.args,
                     .receiver_rt_var = receiver_rt_var,
                     .expr_idx = expr_idx,
                 } } });
-                try work_stack.push(.{ .eval_expr = .{
-                    .expr_idx = dot_access.receiver,
-                    .expected_rt_var = receiver_rt_var,
-                } });
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
@@ -14198,9 +14205,23 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .dot_access_resolve => |da| {
-                // Dot access: receiver is on stack, resolve field or method
+            .dot_access_await_receiver => |da| {
+                // Pop the receiver from value stack (pushed by e_dot_access after evalWithExpectedType)
+                // and schedule dot_access_resolve with the receiver carried directly
                 const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
+                    .field_name = da.field_name,
+                    .method_args = da.method_args,
+                    .receiver_rt_var = da.receiver_rt_var,
+                    .expr_idx = da.expr_idx,
+                    .receiver_value = receiver_value,
+                } } });
+                return true;
+            },
+            .dot_access_resolve => |da| {
+                // Dot access: receiver is carried in continuation to avoid value stack interleaving
+                const receiver_value = da.receiver_value;
 
                 if (da.method_args == null) {
                     // Field access on a record
