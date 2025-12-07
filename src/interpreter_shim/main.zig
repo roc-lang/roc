@@ -68,13 +68,6 @@ const ShimError = error{
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
-    // Disable Ident store tracking in the interpreter shim.
-    // This is necessary because:
-    // 1. Stores are deserialized from shared memory with uninitialized debug_id fields
-    // 2. The debug tracking hashmap is per-process and may have corrupt state
-    // 3. Debug store tracking is meant for fresh compilation, not deserialized stores
-    base.Ident.disableStoreTracking();
-
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         // Only show this generic error if we haven't already crashed with a more specific message
         // (errors like Crash already triggered roc_crashed with details)
