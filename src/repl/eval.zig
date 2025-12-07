@@ -547,7 +547,7 @@ pub const Repl = struct {
 
         // Create CIR
         const cir = module_env; // CIR is now just ModuleEnv
-        try cir.initCIRFields(self.allocator, "repl");
+        try cir.initCIRFields("repl");
 
         // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
         // These refer to the actual statements in the Builtin module
@@ -749,7 +749,7 @@ pub const Repl = struct {
 
         // Create CIR
         const cir = module_env;
-        try cir.initCIRFields(self.allocator, "repl");
+        try cir.initCIRFields("repl");
 
         // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
@@ -855,16 +855,7 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const output = blk: {
-            if (result.rt_var) |rt_var| {
-                break :blk try interpreter.renderValueRocWithType(result, rt_var, self.roc_ops);
-            }
-            const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
-            const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
-                break :blk try interpreter.renderValueRoc(result);
-            };
-            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var, self.roc_ops);
-        };
+        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         return .{ .expression = output };

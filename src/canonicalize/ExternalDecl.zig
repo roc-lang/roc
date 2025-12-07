@@ -22,8 +22,6 @@ pub const Idx = enum(u32) { _ };
 pub const Span = extern struct { span: DataSpan };
 
 /// Converts this external declaration to an S-expression tree representation for debugging
-pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) !void {
-    _ = self;
-    _ = cir;
+pub fn pushToSExprTree(_: *const ExternalDecl, _: anytype, tree: anytype) !void {
     try tree.pushStaticAtom("external-decl-stub");
 }

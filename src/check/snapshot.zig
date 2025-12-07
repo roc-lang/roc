@@ -323,8 +323,8 @@ pub const Store = struct {
         return SnapshotStaticDispatchConstraint{
             .fn_name = constraint.fn_name,
             .fn_content = try self.deepCopyVarInternal(store, type_writer, constraint.fn_var),
-            // Dispatcher will be set when collecting constraints during write
-            .dispatcher = @enumFromInt(0),
+            // Dispatcher is set when collecting constraints during write
+            .dispatcher = undefined,
         };
     }
 

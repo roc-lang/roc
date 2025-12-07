@@ -40,7 +40,7 @@ fn runParse(env: *CommonEnv, gpa: std.mem.Allocator, parserCall: *const fn (*Par
     const msg_slice = messages[0..];
     var tokenizer = try tokenize.Tokenizer.init(env, gpa, env.source, msg_slice);
     try tokenizer.tokenize(gpa);
-    var result = tokenizer.finishAndDeinit(gpa);
+    var result = tokenizer.finishAndDeinit();
 
     var parser = try Parser.init(result.tokens, gpa);
     defer parser.deinit();

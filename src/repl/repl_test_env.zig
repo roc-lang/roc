@@ -132,9 +132,7 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
+fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("testRocDbg not implemented yet");
 }
 

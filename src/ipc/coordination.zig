@@ -100,9 +100,9 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     };
     const dir_basename = std.fs.path.basename(exe_dir);
 
-    // Verify it has the expected prefix
-    if (!std.mem.startsWith(u8, dir_basename, "roc-tmp-")) {
-        std.log.err("Unexpected directory name: expected 'roc-tmp-*', got '{s}'", .{dir_basename});
+    // Verify it has the expected prefix (roc-{pid} or roc-{pid}-{suffix})
+    if (!std.mem.startsWith(u8, dir_basename, "roc-")) {
+        std.log.err("Unexpected directory name: expected 'roc-*', got '{s}'", .{dir_basename});
         return error.FdInfoReadFailed;
     }
 

@@ -309,7 +309,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 3: Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(gpa, "test");
+    try cir.initCIRFields("test");
 
     // Get Bool, Try, and Str statement indices from the builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;

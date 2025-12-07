@@ -1,13 +1,10 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
-import pf.Stdout
 import pf.Stdin
-
-str : Str -> Str
-str = |s| s
+import pf.Stdout
 
 main! = || {
-    Stdout.line!(str("Before stdin"))
-    temp = Stdin.line!()
-    Stdout.line!(str("After stdin"))
+    Stdout.line!("Before stdin")
+    _line = Stdin.line!()
+    Stdout.line!("After stdin")
 }

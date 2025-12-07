@@ -40,5 +40,4 @@ pub const freeForZstd = bundle.freeForZstd;
 test {
     _ = @import("test_bundle.zig");
     _ = @import("test_streaming.zig");
-    _ = bundle;
 }

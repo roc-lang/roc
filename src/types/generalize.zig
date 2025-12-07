@@ -205,12 +205,18 @@ pub const Generalizer = struct {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
-                } else if (self.hasNumeralConstraint(resolved.desc.content)) {
-                    // Flex var with numeric constraint - don't generalize.
+                } else if (rank_to_generalize_int == @intFromEnum(Rank.top_level) and self.hasNumeralConstraint(resolved.desc.content)) {
+                    // Flex var with numeric constraint at TOP LEVEL - don't generalize.
                     // This ensures numeric literals like `x = 15` stay monomorphic so that
                     // later usage like `I64.to_str(x)` can constrain x to I64.
                     // Without this, let-generalization would create a fresh copy at each use,
                     // leaving the original as an unconstrained flex var that defaults to Dec.
+                    //
+                    // However, at rank > top_level (inside lambdas OR inside nested blocks),
+                    // we DO generalize numeric literals. This allows:
+                    // - Polymorphic functions like `|a| a + 1` to work correctly
+                    // - Numeric literals in blocks like `{ n = 42; use_as_i64(n); use_as_dec(n) }`
+                    //   to be used polymorphically within that block's scope.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Rank unchanged - safe to generalize

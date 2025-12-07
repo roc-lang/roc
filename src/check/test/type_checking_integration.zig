@@ -1353,9 +1353,10 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    // With no let-generalization for numeric flex vars, the `x == 1` comparison
-    // adds an is_eq constraint to x (since x is not generalized and remains monomorphic)
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // Inside lambdas, numeric flex vars ARE generalized (to support polymorphic functions).
+    // Each use of `x` gets a fresh instance, so constraints from `x == 1` don't
+    // propagate to the generalized type. Only `from_numeral` from the def is captured.
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {
@@ -2425,10 +2426,10 @@ test "check type - pure zero-arg function annotation" {
     try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
 }
 
-test "imports of non-existent modules produce MODULE NOT FOUND errors" {
-    // This test verifies that importing modules that don't exist produces
-    // MODULE NOT FOUND errors. This is a regression test - a parser change
-    // for zero-arg functions accidentally caused these errors to disappear.
+test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
+    // Qualified imports (e.g., "json.Json") are cross-package imports that are
+    // resolved by the workspace resolver, not during canonicalization.
+    // They should NOT produce MODULE NOT FOUND errors during canonicalization.
     //
     // Source from test/snapshots/can_import_comprehensive.md
     const source =
@@ -2479,11 +2480,9 @@ test "imports of non-existent modules produce MODULE NOT FOUND errors" {
         }
     }
 
-    // We expect exactly 3 MODULE NOT FOUND errors:
-    // 1. json.Json
-    // 2. http.Client
-    // 3. utils.String
-    try testing.expectEqual(@as(usize, 3), module_not_found_count);
+    // Qualified imports (json.Json, http.Client, utils.String) should NOT produce
+    // MODULE NOT FOUND errors - they're handled by the workspace resolver
+    try testing.expectEqual(@as(usize, 0), module_not_found_count);
 }
 
 // Try with match and error propagation //

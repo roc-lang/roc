@@ -1080,3 +1080,63 @@ test "run allows warnings without blocking execution" {
     // Should produce output (runs successfully)
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello, World!") != null);
 }
+
+test "fx platform method inspect on string" {
+    // Tests that calling .inspect() on a Str correctly reports MISSING METHOD
+    // (Str doesn't have an inspect method, unlike custom opaque types)
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/test_method_inspect.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // This should fail because Str doesn't have an inspect method
+    try checkFailure(run_result);
+
+    // Should show MISSING METHOD error
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
+}
+
+test "fx platform if-expression closure capture regression" {
+    // Regression test: Variables bound inside an if-expression's block were
+    // incorrectly being captured as free variables by the enclosing lambda,
+    // causing a crash with "e_closure: failed to resolve capture value".
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/if-closure-capture.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}
+
+test "fx platform var with string interpolation segfault" {
+    // Regression test: Using `var` variables with string interpolation causes segfault.
+    // The code calls fnA! multiple times, each using var state variables, and
+    // interpolates the results into strings.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/var_interp_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A1: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A2: 1") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "A3: 1") != null);
+}
+
+test "fx platform sublist method on inferred type" {
+    // Regression test: Calling .sublist() method on a List(U8) from "".to_utf8()
+    // causes a segfault when the variable doesn't have an explicit type annotation.
+    // Error was: "Roc crashed: Error evaluating from shared memory: InvalidMethodReceiver"
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/sublist_method_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}
