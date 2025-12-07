@@ -2383,8 +2383,19 @@ pub const Interpreter = struct {
                 // The elements were already increffed above, and decref on the lists
                 // will decref their elements (if they're unique), resulting in net-zero
                 // refcount change for shared elements.
+                //
+                // IMPORTANT: Check if both arguments point to the same underlying allocation.
+                // If they share the same allocation, we must only decref once to avoid double-free.
+                const same_allocation = blk: {
+                    const alloc_a = list_a.getAllocationDataPtr();
+                    const alloc_b = list_b.getAllocationDataPtr();
+                    break :blk (alloc_a != null and alloc_a == alloc_b);
+                };
+
                 list_a_arg.decref(&self.runtime_layout_store, roc_ops);
-                list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                if (!same_allocation) {
+                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                }
 
                 return out;
             },
@@ -6027,8 +6038,8 @@ pub const Interpreter = struct {
 
         var index: usize = 0;
         while (index < lhs_header.len()) : (index += 1) {
-            const lhs_elem = try lhs_acc.getElement(index);
-            const rhs_elem = try rhs_acc.getElement(index);
+            const lhs_elem = try lhs_acc.getElement(index, elem_var);
+            const rhs_elem = try rhs_acc.getElement(index, elem_var);
             const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
             if (!elems_equal) {
                 return false;
@@ -7170,6 +7181,20 @@ pub const Interpreter = struct {
             },
             else => return false,
         }
+    }
+
+    /// Clean up any remaining bindings before deinit.
+    /// This should be called after eval() completes to ensure no leaked allocations.
+    /// Block expressions clean up their own bindings via trim_bindings, but this
+    /// serves as a safety net for any bindings that might remain.
+    pub fn cleanupBindings(self: *Interpreter, roc_ops: *RocOps) void {
+        // Decref all remaining bindings in reverse order
+        var i = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            self.bindings.items[i].value.decref(&self.runtime_layout_store, roc_ops);
+        }
+        self.bindings.items.len = 0;
     }
 
     pub fn deinit(self: *Interpreter) void {

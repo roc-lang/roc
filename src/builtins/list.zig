@@ -950,18 +950,24 @@ pub fn listSublist(
             else
                 @intFromPtr(source_ptr);
             if (test_decode != (original_ptr & ~@as(usize, 1))) {
-                std.debug.panic(
-                    "listSublist: encoding error! source_ptr=0x{x}, is_slice={}, alloc_ptr=0x{x}, decoded=0x{x}, expected=0x{x}",
-                    .{ @intFromPtr(source_ptr), list.isSeamlessSlice(), alloc_ptr, test_decode, original_ptr & ~@as(usize, 1) },
-                );
+                @panic("listSublist: encoding error");
             }
 
             // Debug check: verify alignment of the original allocation pointer
             if (original_ptr % 8 != 0) {
-                std.debug.panic(
-                    "listSublist: misaligned original ptr=0x{x} (source_ptr=0x{x}, is_slice={})",
-                    .{ original_ptr, @intFromPtr(source_ptr), list.isSeamlessSlice() },
-                );
+                @panic("listSublist: misaligned original ptr");
+            }
+
+            // Increment the parent allocation's refcount.
+            // Although listSublist has "consumes" ownership, in practice the compiler
+            // may generate code that uses the original list after sublist returns
+            // (e.g., in `if repeated == s` where s was the source of the sublist).
+            // By incrementing the refcount, we ensure the parent allocation stays
+            // alive for both the original list and the seamless slice.
+            // The "extra" reference will be decremented when the original list
+            // is eventually cleaned up.
+            if (list.getAllocationDataPtr()) |parent_alloc| {
+                utils.increfDataPtrC(parent_alloc, 1);
             }
 
             return RocList{
@@ -1236,7 +1242,22 @@ pub fn listConcat(
         // list_b might still need decref if it has capacity
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return list_a;
-    } else if (list_a.isUnique()) {
+    }
+
+    // Check if both lists share the same underlying allocation.
+    // This can happen when the same list is passed as both arguments (e.g., in repeat_helper).
+    const same_allocation = blk: {
+        const alloc_a = list_a.getAllocationDataPtr();
+        const alloc_b = list_b.getAllocationDataPtr();
+        break :blk (alloc_a != null and alloc_a == alloc_b);
+    };
+
+    // If they share the same allocation, we must:
+    // 1. NOT use the unique paths (reallocate might free/move the allocation)
+    // 2. Only decref once at the end (to avoid double-free)
+    // Instead, fall through to the general path that allocates a new list.
+
+    if (!same_allocation and list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
         const resized_list_a = list_a.reallocate(
@@ -1271,7 +1292,7 @@ pub fn listConcat(
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return resized_list_a;
-    } else if (list_b.isUnique()) {
+    } else if (!same_allocation and list_b.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
         const resized_list_b = list_b.reallocate(
@@ -1337,8 +1358,11 @@ pub fn listConcat(
     }
 
     // decrement list a and b.
+    // If they share the same allocation, only decref once to avoid double-free.
     list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-    list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+    if (!same_allocation) {
+        list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+    }
 
     return output;
 }
