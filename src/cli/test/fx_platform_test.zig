@@ -734,7 +734,6 @@ test "fx platform expect with toplevel numeric" {
 // TODO: Fix test7.roc - currently fails with "UNRECOGNIZED SYNTAX" for `_ = x` pattern
 // test "fx platform test7" {
 //     const allocator = testing.allocator;
-
 //
 //     const run_result = try std.process.Child.run(.{
 //         .allocator = allocator,
@@ -769,7 +768,6 @@ test "fx platform expect with toplevel numeric" {
 // TODO: Fix test8.roc - currently fails with "UNRECOGNIZED SYNTAX" for `_ = x` pattern
 // test "fx platform test8" {
 //     const allocator = testing.allocator;
-
 //
 //     const run_result = try std.process.Child.run(.{
 //         .allocator = allocator,
@@ -804,7 +802,6 @@ test "fx platform expect with toplevel numeric" {
 // TODO: Fix test9.roc - currently fails with "UNRECOGNIZED SYNTAX" for `_ = y` pattern
 // test "fx platform test9" {
 //     const allocator = testing.allocator;
-
 //
 //     const run_result = try std.process.Child.run(.{
 //         .allocator = allocator,
