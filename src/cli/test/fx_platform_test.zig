@@ -1459,7 +1459,7 @@ test "fx platform issue8433" {
     }
 }
 
-test "run aborts on errors by default" {
+test "run aborts on type errors by default" {
     // Tests that roc run aborts when there are type errors (without --allow-errors)
     const allocator = testing.allocator;
 
@@ -1482,7 +1482,30 @@ test "run aborts on errors by default" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
 }
 
-test "run with --allow-errors attempts execution despite errors" {
+test "run aborts on parse errors by default" {
+    // Tests that roc run aborts when there are parse errors (without --allow-errors)
+    const allocator = testing.allocator;
+
+    try ensureRocBinary(allocator);
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/parse_error.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Should fail with type errors
+    try checkFailure(run_result);
+
+    // Should show the errors
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "PARSE ERROR") != null);
+}
+
+test "run with --allow-errors attempts execution despite type errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors
     const allocator = testing.allocator;
 
