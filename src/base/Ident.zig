@@ -288,7 +288,7 @@ pub const Store = struct {
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
-            // DEBUG: Check struct sizes - if Store > Serialized, we'd write past the end!
+            // Check struct sizes - if Store > Serialized, we'd write past the end!
             comptime {
                 const store_size = @sizeOf(Store);
                 const serialized_size = @sizeOf(Serialized);

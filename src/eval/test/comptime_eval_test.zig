@@ -1181,7 +1181,6 @@ test "comptime eval - U8 valid max value" {
     defer cleanupEvalModule(&result);
 
     _ = try result.evaluator.evalAll();
-    // Debug: print any problems
     if (result.problems.len() > 0) {
         std.debug.print("\nU8 valid max problems ({d}):\n", .{result.problems.len()});
         for (result.problems.problems.items) |problem| {
@@ -1683,7 +1682,6 @@ test "comptime eval - F32 valid" {
     defer cleanupEvalModule(&result);
 
     _ = try result.evaluator.evalAll();
-    // Debug: print any problems
     if (result.problems.len() > 0) {
         std.debug.print("\nF32 problems ({d}):\n", .{result.problems.len()});
         for (result.problems.problems.items) |problem| {
