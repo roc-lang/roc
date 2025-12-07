@@ -583,6 +583,11 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
+    // Install stack overflow handler early, before any significant work.
+    // This gives us a helpful error message instead of a generic segfault
+    // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
+    _ = base.stack_overflow.install();
+
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
         if (builtin.os.tag == .wasi) break :gpa .{ std.heap.wasm_allocator, false };
