@@ -34,9 +34,7 @@ const HostEnv = struct {
 
 /// Roc allocation function with size-tracking metadata
 fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    std.debug.print("[rocAllocFn ENTRY] roc_alloc=0x{x} env=0x{x}\n", .{ @intFromPtr(roc_alloc), @intFromPtr(env) });
-
-    // Debug: print entry and check roc_alloc pointer alignment
+    // Debug check: verify roc_alloc pointer alignment
     const roc_alloc_addr = @intFromPtr(roc_alloc);
     if (roc_alloc_addr % @alignOf(builtins.host_abi.RocAlloc) != 0) {
         std.debug.panic("[rocAllocFn] roc_alloc ptr not aligned! addr=0x{x} required={}", .{ roc_alloc_addr, @alignOf(builtins.host_abi.RocAlloc) });
@@ -48,9 +46,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
         std.debug.panic("rocAllocFn: env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
     }
 
-    std.debug.print("[rocAllocFn] about to @alignCast env\n", .{});
     const host: *HostEnv = @ptrCast(@alignCast(env));
-    std.debug.print("[rocAllocFn] @alignCast env done, getting allocator\n", .{});
     const allocator = host.gpa.allocator();
 
     // The allocation must be at least 8-byte aligned because:
@@ -139,11 +135,6 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 
 /// Roc reallocation function with size-tracking metadata
 fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-    std.debug.print("[HOST REALLOC] answer=0x{x} alignment={} new_length={}\n", .{
-        @intFromPtr(roc_realloc.answer),
-        roc_realloc.alignment,
-        roc_realloc.new_length,
-    });
     // Debug check: verify env is properly aligned for HostEnv
     const env_addr = @intFromPtr(env);
     if (env_addr % @alignOf(HostEnv) != 0) {
@@ -361,7 +352,6 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
 
 /// Platform host entrypoint
 fn platform_main() !void {
-    std.debug.print("[HOST platform_main] ENTRY\n", .{});
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{}){},
     };
@@ -395,11 +385,5 @@ fn platform_main() !void {
     // currently dereference both of these eagerly even though it won't use either,
     // causing a segfault if you pass null. This should be changed! Dereferencing
     // garbage memory is obviously pointless, and there's no reason we should do it.
-    std.debug.print("[HOST platform_main] About to call roc__main\n", .{});
-    std.debug.print("[HOST platform_main] roc_ops.env=0x{x} align check: {}\n", .{
-        @intFromPtr(roc_ops.env),
-        @intFromPtr(roc_ops.env) % @alignOf(HostEnv) == 0,
-    });
     roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
-    std.debug.print("[HOST platform_main] roc__main returned\n", .{});
 }

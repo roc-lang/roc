@@ -706,13 +706,6 @@ pub fn allocateWithRefcount(
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
-    std.debug.print("[ALLOC_RC] data_ptr=0x{x} refcount_ptr=0x{x} wrote_refcount={} extra_bytes={}\n", .{
-        @intFromPtr(data_ptr),
-        @intFromPtr(refcount_ptr),
-        refcount_ptr[0],
-        extra_bytes,
-    });
-
     return data_ptr;
 }
 

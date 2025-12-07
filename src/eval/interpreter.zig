@@ -11430,7 +11430,11 @@ pub const Interpreter = struct {
             field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
 
             const cap_val = self.resolveCapture(cap, roc_ops) orelse {
-                self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                // Include capture name, module, expr_idx, and pattern_idx in error for debugging
+                var buf: [512]u8 = undefined;
+                const module_name = self.env.module_name;
+                const msg = std.fmt.bufPrint(&buf, "e_closure(expr={d}): failed to resolve capture '{s}' (pattern_idx={d}) in module '{s}', bindings.len={d}", .{ @intFromEnum(expr_idx), name_text, @intFromEnum(cap.pattern_idx), module_name, self.bindings.items.len }) catch "e_closure: failed to resolve capture value";
+                self.triggerCrash(msg, false, roc_ops);
                 return error.Crash;
             };
             capture_values[i] = cap_val;
@@ -14298,28 +14302,96 @@ pub const Interpreter = struct {
                 const method_args = da.method_args.?;
                 const arg_exprs = self.env.store.sliceExpr(method_args);
 
-                // Get nominal type info
-                const nominal_info = switch (resolved_receiver.desc.content) {
+                // Get nominal type info, or handle structural/numeric types for is_eq
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (resolved_receiver.desc.content) {
                     .structure => |s| switch (s) {
                         .nominal_type => |nom| .{
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => {
-                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                            return error.InvalidMethodReceiver;
+                        .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                            // Structural types have implicit is_eq - handle directly
+                            if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                                // Evaluate the RHS argument
+                                const rhs_expr_idx = arg_exprs[0];
+                                const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                                defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Use structural equality
+                                const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
+                                const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                                const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
+                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                    if (err == error.NotImplemented) {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    }
+                                    return err;
+                                };
+                                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                const result_val = try self.makeBoolValue(result);
+                                try value_stack.push(result_val);
+                                return true;
+                            }
+                            break :blk null;
                         },
+                        else => null,
                     },
-                    else => {
-                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                        return error.InvalidMethodReceiver;
+                    .flex, .rigid, .err => blk: {
+                        // For flex/rigid types, check if it's numeric is_eq that we can handle directly
+                        if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                            // Check if receiver is numeric
+                            if (receiver_value.layout.tag == .scalar) {
+                                const scalar_tag = receiver_value.layout.data.scalar.tag;
+                                const is_numeric = scalar_tag == .int or scalar_tag == .frac;
+                                if (is_numeric) {
+                                    // Evaluate the RHS argument
+                                    const rhs_expr_idx = arg_exprs[0];
+                                    const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                                    defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                    // Use numeric comparison
+                                    const result = try self.compareNumericValues(receiver_value, rhs_value, .eq);
+                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                    const result_val = try self.makeBoolValue(result);
+                                    try value_stack.push(result_val);
+                                    return true;
+                                }
+                            }
+                            // For non-numeric flex/rigid, try structural equality
+                            const rhs_expr_idx = arg_exprs[0];
+                            const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                            defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                            const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
+                            const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                            const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
+                                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                if (err == error.NotImplemented) {
+                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                    return error.Crash;
+                                }
+                                return err;
+                            };
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                            const result_val = try self.makeBoolValue(result);
+                            try value_stack.push(result_val);
+                            return true;
+                        }
+                        break :blk null;
                     },
+                    else => null,
                 };
+
+                if (nominal_info == null) {
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.InvalidMethodReceiver;
+                }
 
                 // Resolve the method function
                 const method_func = self.resolveMethodFunction(
-                    nominal_info.origin,
-                    nominal_info.ident,
+                    nominal_info.?.origin,
+                    nominal_info.?.ident,
                     da.field_name,
                     roc_ops,
                     effective_receiver_rt_var,
@@ -14330,7 +14402,7 @@ pub const Interpreter = struct {
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
                             layout_env.common.getIdentStore(),
-                            nominal_info.ident,
+                            nominal_info.?.ident,
                         );
                         const method_name = self.env.getIdent(da.field_name);
                         const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {

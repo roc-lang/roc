@@ -274,12 +274,6 @@ pub const RocList = extern struct {
             }
             const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(non_null_ptr)));
             const refcount_val = (ptr - 1)[0];
-            std.debug.print("[REFCOUNT] bytes=0x{x} alloc_ptr=0x{x} refcount_addr=0x{x} refcount_val={}\n", .{
-                @intFromPtr(self.bytes),
-                @intFromPtr(non_null_ptr),
-                @intFromPtr(ptr - 1),
-                refcount_val,
-            });
             return refcount_val;
         } else {
             @panic("RocList.refcount: getAllocationDataPtr returned null");
@@ -452,11 +446,6 @@ pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callc
 
 /// Get the number of elements in the list.
 pub fn listLen(list: RocList) callconv(.c) usize {
-    std.debug.print("[BUILTIN listLen] bytes=0x{x} len={} cap_or_alloc=0x{x}\n", .{
-        @intFromPtr(list.bytes),
-        list.length,
-        list.capacity_or_alloc_ptr,
-    });
     return list.len();
 }
 
@@ -470,12 +459,6 @@ pub fn listIsEmpty(list: RocList) callconv(.c) bool {
 /// This is intended for internal use by low-level operations only.
 /// Returns a pointer to the element at the given index.
 pub fn listGetUnsafe(list: RocList, index: u64, element_width: usize) callconv(.c) ?[*]u8 {
-    std.debug.print("[BUILTIN listGetUnsafe] bytes=0x{x} len={} index={} width={}\n", .{
-        @intFromPtr(list.bytes),
-        list.length,
-        index,
-        element_width,
-    });
     if (list.bytes) |bytes| {
         const byte_offset = @as(usize, @intCast(index)) * element_width;
         return bytes + byte_offset;
@@ -889,9 +872,6 @@ pub fn listSwap(
 /// - Shrinks length in place, returns same allocation
 ///
 /// Otherwise: creates a seamless slice pointing into the original allocation.
-
-var listSublist_call_counter: usize = 0;
-
 pub fn listSublist(
     list: RocList,
     alignment: u32,
@@ -903,20 +883,6 @@ pub fn listSublist(
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    listSublist_call_counter += 1;
-    const call_num = listSublist_call_counter;
-    std.debug.print("[BUILTIN listSublist #{d}] list.bytes=0x{x} len={} cap_or_alloc=0x{x} align={} width={} start={} len_req={} isUnique={} isSlice={}\n", .{
-        call_num,
-        @intFromPtr(list.bytes),
-        list.length,
-        list.capacity_or_alloc_ptr,
-        alignment,
-        element_width,
-        start_u64,
-        len_u64,
-        list.isUnique(),
-        list.isSeamlessSlice(),
-    });
     const size = list.len();
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
         if (list.isUnique()) {
@@ -1253,12 +1219,6 @@ pub fn listConcat(
     dec: Dec,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
-    std.debug.print("[BUILTIN listConcat] list_a.bytes=0x{x} list_b.bytes=0x{x} align={} width={}\n", .{
-        @intFromPtr(list_a.bytes),
-        @intFromPtr(list_b.bytes),
-        alignment,
-        element_width,
-    });
     // Early return for empty lists - avoid unnecessary allocations
     if (list_a.isEmpty()) {
         if (list_b.isEmpty()) {
@@ -1643,19 +1603,10 @@ pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
     const dest_addr = @intFromPtr(dest.?);
     const src_addr = @intFromPtr(src.?);
     const required_alignment = @alignOf(RocList);
-    std.debug.print("[COPY_LIST_ZST] dest_addr=0x{x} src_addr=0x{x} required_align={} dest_mod={} src_mod={}\n", .{
-        dest_addr,
-        src_addr,
-        required_alignment,
-        dest_addr % required_alignment,
-        src_addr % required_alignment,
-    });
     if (dest_addr % required_alignment != 0) {
-        std.debug.print("[COPY_LIST_ZST] ABOUT TO PANIC: dest misaligned\n", .{});
         @panic("copy_list_zst: dest is not properly aligned for RocList");
     }
     if (src_addr % required_alignment != 0) {
-        std.debug.print("[COPY_LIST_ZST] ABOUT TO PANIC: src misaligned\n", .{});
         @panic("copy_list_zst: src is not properly aligned for RocList");
     }
     const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));

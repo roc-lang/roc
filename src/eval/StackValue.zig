@@ -333,7 +333,6 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
                 const dest_ptr_val = @intFromPtr(dest_ptr);
-                std.debug.print("[copyToPtr.int] precision={} dest_ptr=0x{x} value={}\n", .{ precision, dest_ptr_val, value });
                 switch (precision) {
                     .u8 => {
                         const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
@@ -384,7 +383,6 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                         typed_ptr.* = value;
                     },
                 }
-                std.debug.print("[copyToPtr.int DONE]\n", .{});
                 return;
             },
             else => {},
@@ -672,7 +670,6 @@ pub fn asI128(self: StackValue) i128 {
 
     const precision = self.layout.data.scalar.data.int;
     const ptr_val = @intFromPtr(self.ptr.?);
-    std.debug.print("[asI128] precision={} ptr=0x{x}\n", .{ precision, ptr_val });
 
     return switch (precision) {
         .u8 => blk: {
@@ -743,7 +740,6 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
 
     const precision = self.layout.data.scalar.data.int;
     const ptr_val = @intFromPtr(self.ptr.?);
-    std.debug.print("[setInt] precision={} ptr=0x{x} value={}\n", .{ precision, ptr_val, value });
 
     // Inline integer writing logic with proper type casting and alignment
     // Use std.math.cast to safely check if value fits, returning error instead of panicking
@@ -1100,9 +1096,6 @@ pub const TagUnionAccessor = struct {
         const base_ptr: [*]u8 = @ptrCast(self.base_value.ptr.?);
         const disc_ptr = base_ptr + self.tu_data.discriminant_offset;
         const disc_ptr_val = @intFromPtr(disc_ptr);
-        std.debug.print("[getDiscriminant] base_ptr=0x{x} offset={} disc_ptr=0x{x} size={}\n", .{
-            @intFromPtr(base_ptr), self.tu_data.discriminant_offset, disc_ptr_val, self.tu_data.discriminant_size,
-        });
         return switch (self.tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
             2 => blk: {
