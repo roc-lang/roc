@@ -114,9 +114,13 @@ pub const SyntaxChecker = struct {
             }
 
             for (entry.reports) |*rep| {
-                const diag = try self.reportToDiagnostic(rep.*);
+                const report = rep.*;
+                defer rep.deinit();
+
+                if (self.shouldSuppressReport(report)) continue;
+
+                const diag = try self.reportToDiagnostic(report);
                 try diags.append(self.allocator, diag);
-                rep.deinit();
             }
             self.allocator.free(entry.reports);
 
@@ -239,6 +243,50 @@ pub const SyntaxChecker = struct {
         log_file.writeAll(msg) catch return;
         log_file.writeAll("\n") catch {};
         log_file.sync() catch {};
+    }
+
+    /// Temporary suppression to avoid noisy undefined-variable diagnostics from BuildEnv.
+    fn shouldSuppressReport(_: *SyntaxChecker, rep: reporting.Report) bool {
+        if (!std.mem.startsWith(u8, rep.title, "UNDEFINED VARIABLE")) return false;
+
+        const disallowed = [_][]const u8{ "Stderr", "Stdin", "Stdout" };
+        return reportContainsAny(rep, &disallowed);
+    }
+
+    fn reportContainsAny(rep: reporting.Report, needles: []const []const u8) bool {
+        var idx: usize = 0;
+        while (rep.document.getElement(idx)) |element| : (idx += 1) {
+            if (elementContainsAny(element, needles)) return true;
+        }
+        return false;
+    }
+
+    fn elementContainsAny(element: reporting.DocumentElement, needles: []const []const u8) bool {
+        switch (element) {
+            .text => |t| return textHasAny(t, needles),
+            .annotated => |a| return textHasAny(a.content, needles),
+            .raw => |r| return textHasAny(r, needles),
+            .reflowing_text => |t| return textHasAny(t, needles),
+            .link => |l| return textHasAny(l, needles),
+            .vertical_stack => |stack| {
+                for (stack) |el| if (elementContainsAny(el, needles)) return true;
+            },
+            .horizontal_concat => |concat| {
+                for (concat) |el| if (elementContainsAny(el, needles)) return true;
+            },
+            .source_code_region => |region| return textHasAny(region.line_text, needles),
+            .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
+            .source_code_with_underlines => |with_underlines| return textHasAny(with_underlines.display_region.line_text, needles),
+            else => {},
+        }
+        return false;
+    }
+
+    fn textHasAny(text: []const u8, needles: []const []const u8) bool {
+        for (needles) |needle| {
+            if (std.mem.indexOf(u8, text, needle) != null) return true;
+        }
+        return false;
     }
 
     const OverrideProvider = struct {
