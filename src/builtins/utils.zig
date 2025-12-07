@@ -334,10 +334,10 @@ pub fn decrefDataPtrC(
 
     const data_ptr = @intFromPtr(bytes);
 
-    // Verify original pointer is 8-byte aligned
+    // Verify original pointer is properly aligned
     if (comptime builtin.mode == .Debug) {
-        if (data_ptr % 8 != 0) {
-            std.debug.panic("decrefDataPtrC: ORIGINAL data_ptr=0x{x} is not 8-byte aligned!", .{data_ptr});
+        if (data_ptr % @alignOf(usize) != 0) {
+            std.debug.panic("decrefDataPtrC: ORIGINAL data_ptr=0x{x} is not {}-byte aligned!", .{ data_ptr, @alignOf(usize) });
         }
     }
 
@@ -368,10 +368,10 @@ pub fn increfDataPtrC(
 
     const ptr = @intFromPtr(bytes);
 
-    // Verify original pointer is 8-byte aligned (can fail if seamless slice encoding produces bad pointer)
+    // Verify original pointer is properly aligned (can fail if seamless slice encoding produces bad pointer)
     if (comptime builtin.mode == .Debug) {
-        if (ptr % 8 != 0) {
-            std.debug.panic("increfDataPtrC: ORIGINAL ptr=0x{x} is not 8-byte aligned!", .{ptr});
+        if (ptr % @alignOf(usize) != 0) {
+            std.debug.panic("increfDataPtrC: ORIGINAL ptr=0x{x} is not {}-byte aligned!", .{ ptr, @alignOf(usize) });
         }
     }
 

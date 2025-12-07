@@ -144,9 +144,9 @@ pub const RocList = extern struct {
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
-        // Verify the computed allocation pointer is 8-byte aligned
+        // Verify the computed allocation pointer is properly aligned
         if (comptime builtin.mode == .Debug) {
-            if (alloc_ptr != 0 and alloc_ptr % 8 != 0) {
+            if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
                 std.debug.panic(
                     "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
                     .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
@@ -968,7 +968,7 @@ pub fn listSublist(
                 }
 
                 // Verify alignment of the original allocation pointer
-                if (original_ptr % 8 != 0) {
+                if (original_ptr % @alignOf(usize) != 0) {
                     @panic("listSublist: misaligned original ptr");
                 }
             }
@@ -1565,10 +1565,12 @@ pub fn copy_i64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to U128 and copies from src to dest.
 pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_val = @intFromPtr(dest.?);
-    const src_val = @intFromPtr(src.?);
-    if (dest_val % 16 != 0) std.debug.panic("[copy_u128] dest alignment error: ptr=0x{x}", .{dest_val});
-    if (src_val % 16 != 0) std.debug.panic("[copy_u128] src alignment error: ptr=0x{x}", .{src_val});
+    if (comptime builtin.mode == .Debug) {
+        const dest_val = @intFromPtr(dest.?);
+        const src_val = @intFromPtr(src.?);
+        if (dest_val % @alignOf(u128) != 0) std.debug.panic("[copy_u128] dest alignment error: ptr=0x{x}", .{dest_val});
+        if (src_val % @alignOf(u128) != 0) std.debug.panic("[copy_u128] src alignment error: ptr=0x{x}", .{src_val});
+    }
     const dest_ptr = @as(*u128, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*u128, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;
@@ -1576,10 +1578,12 @@ pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to I128 and copies from src to dest.
 pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_val = @intFromPtr(dest.?);
-    const src_val = @intFromPtr(src.?);
-    if (dest_val % 16 != 0) std.debug.panic("[copy_i128] dest alignment error: ptr=0x{x}", .{dest_val});
-    if (src_val % 16 != 0) std.debug.panic("[copy_i128] src alignment error: ptr=0x{x}", .{src_val});
+    if (comptime builtin.mode == .Debug) {
+        const dest_val = @intFromPtr(dest.?);
+        const src_val = @intFromPtr(src.?);
+        if (dest_val % @alignOf(i128) != 0) std.debug.panic("[copy_i128] dest alignment error: ptr=0x{x}", .{dest_val});
+        if (src_val % @alignOf(i128) != 0) std.debug.panic("[copy_i128] src alignment error: ptr=0x{x}", .{src_val});
+    }
     const dest_ptr = @as(*i128, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*i128, @ptrCast(@alignCast(src.?)));
     dest_ptr.* = src_ptr.*;

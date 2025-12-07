@@ -246,9 +246,9 @@ pub const RocStr = extern struct {
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
-        // Verify the computed allocation pointer is 8-byte aligned
+        // Verify the computed allocation pointer is properly aligned
         if (comptime builtin.mode == .Debug) {
-            if (alloc_ptr != 0 and alloc_ptr % 8 != 0) {
+            if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
                 std.debug.panic(
                     "RocStr.getAllocationPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
                     .{ alloc_ptr, str_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
