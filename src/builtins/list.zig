@@ -144,12 +144,14 @@ pub const RocList = extern struct {
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
-        // Debug check: verify the computed allocation pointer is 8-byte aligned
-        if (alloc_ptr != 0 and alloc_ptr % 8 != 0) {
-            std.debug.panic(
-                "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
-                .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
-            );
+        // Verify the computed allocation pointer is 8-byte aligned
+        if (comptime builtin.mode == .Debug) {
+            if (alloc_ptr != 0 and alloc_ptr % 8 != 0) {
+                std.debug.panic(
+                    "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
+                    .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
+                );
+            }
         }
 
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
@@ -164,10 +166,12 @@ pub const RocList = extern struct {
         if (self.isSeamlessSlice() and elements_refcounted) {
             // Seamless slices always refer to an underlying allocation.
             const alloc_ptr = self.getAllocationDataPtr() orelse unreachable;
-            // Debug check: verify alignment before @alignCast
-            const ptr_int = @intFromPtr(alloc_ptr);
-            if (ptr_int % @sizeOf(usize) != 0) {
-                @panic("RocList.getAllocationElementCount: alloc_ptr is not properly aligned");
+            // Verify alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const ptr_int = @intFromPtr(alloc_ptr);
+                if (ptr_int % @sizeOf(usize) != 0) {
+                    @panic("RocList.getAllocationElementCount: alloc_ptr is not properly aligned");
+                }
             }
             // - 1 is refcount.
             // - 2 is size on heap.
@@ -183,10 +187,12 @@ pub const RocList = extern struct {
     fn setAllocationElementCount(self: RocList, elements_refcounted: bool) void {
         if (elements_refcounted and !self.isSeamlessSlice()) {
             const alloc_ptr = self.getAllocationDataPtr();
-            // Debug check: verify alignment before @alignCast
-            const ptr_int = @intFromPtr(alloc_ptr);
-            if (ptr_int % @sizeOf(usize) != 0) {
-                @panic("RocList.setAllocationElementCount: alloc_ptr is not properly aligned");
+            // Verify alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const ptr_int = @intFromPtr(alloc_ptr);
+                if (ptr_int % @sizeOf(usize) != 0) {
+                    @panic("RocList.setAllocationElementCount: alloc_ptr is not properly aligned");
+                }
             }
             // - 1 is refcount.
             // - 2 is size on heap.
@@ -199,10 +205,12 @@ pub const RocList = extern struct {
         // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
         if (elements_refcounted and self.isUnique() and !self.isSeamlessSlice()) {
             if (self.getAllocationDataPtr()) |source| {
-                // Debug check: verify alignment before @alignCast
-                const ptr_int = @intFromPtr(source);
-                if (ptr_int % @sizeOf(usize) != 0) {
-                    @panic("RocList.incref: source is not properly aligned");
+                // Verify alignment before @alignCast
+                if (comptime builtin.mode == .Debug) {
+                    const ptr_int = @intFromPtr(source);
+                    if (ptr_int % @sizeOf(usize) != 0) {
+                        @panic("RocList.incref: source is not properly aligned");
+                    }
                 }
                 // - 1 is refcount.
                 // - 2 is size on heap.
@@ -261,16 +269,18 @@ pub const RocList = extern struct {
         }
 
         const alloc_ptr = self.getAllocationDataPtr();
-        // Debug check: verify alignment before @alignCast
+        // Verify alignment before @alignCast
         if (alloc_ptr) |non_null_ptr| {
-            const ptr_int = @intFromPtr(non_null_ptr);
-            if (ptr_int % @sizeOf(usize) != 0) {
-                std.debug.panic("RocList.refcount: alloc_ptr=0x{x} is not {}-byte aligned (bytes=0x{x}, cap=0x{x})", .{
-                    ptr_int,
-                    @sizeOf(usize),
-                    @intFromPtr(self.bytes),
-                    self.capacity_or_alloc_ptr,
-                });
+            if (comptime builtin.mode == .Debug) {
+                const ptr_int = @intFromPtr(non_null_ptr);
+                if (ptr_int % @sizeOf(usize) != 0) {
+                    std.debug.panic("RocList.refcount: alloc_ptr=0x{x} is not {}-byte aligned (bytes=0x{x}, cap=0x{x})", .{
+                        ptr_int,
+                        @sizeOf(usize),
+                        @intFromPtr(self.bytes),
+                        self.capacity_or_alloc_ptr,
+                    });
+                }
             }
             const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(non_null_ptr)));
             const refcount_val = (ptr - 1)[0];
@@ -935,8 +945,7 @@ pub fn listSublist(
             output.length = keep_len;
             return output;
         } else {
-            const is_unique = list.isUnique();
-            if (is_unique) {
+            if (list.isUnique()) {
                 // Store original element count for proper cleanup when the slice is freed.
                 // When the seamless slice is later decreffed, it will decref ALL elements
                 // starting from the original allocation pointer, not just the slice elements.
@@ -947,19 +956,21 @@ pub fn listSublist(
             const slice_mask = list.seamlessSliceMask();
             const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
-            // Debug check: verify the encoded pointer will decode correctly
-            const test_decode = alloc_ptr << 1;
-            const original_ptr = if (list.isSeamlessSlice())
-                slice_alloc_ptr << 1
-            else
-                @intFromPtr(source_ptr);
-            if (test_decode != (original_ptr & ~@as(usize, 1))) {
-                @panic("listSublist: encoding error");
-            }
+            // Verify the encoded pointer will decode correctly
+            if (comptime builtin.mode == .Debug) {
+                const test_decode = alloc_ptr << 1;
+                const original_ptr = if (list.isSeamlessSlice())
+                    slice_alloc_ptr << 1
+                else
+                    @intFromPtr(source_ptr);
+                if (test_decode != (original_ptr & ~@as(usize, 1))) {
+                    @panic("listSublist: encoding error");
+                }
 
-            // Debug check: verify alignment of the original allocation pointer
-            if (original_ptr % 8 != 0) {
-                @panic("listSublist: misaligned original ptr");
+                // Verify alignment of the original allocation pointer
+                if (original_ptr % 8 != 0) {
+                    @panic("listSublist: misaligned original ptr");
+                }
             }
 
             // No incref needed: listSublist consumes ownership of the input list,

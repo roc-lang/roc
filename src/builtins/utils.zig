@@ -303,12 +303,13 @@ pub fn decrefCheckNullC(
 ) callconv(.c) void {
     // MARKER: This function has been updated with alignment checks 2024-12-06
     if (bytes_or_null) |bytes| {
-        // Debug check: verify alignment before @alignCast
-        const ptr_int = @intFromPtr(bytes);
-        const expected_align = @sizeOf(isize);
-        if (ptr_int % expected_align != 0) {
-            // Use std.debug.panic instead of @panic for a more distinctive message
-            std.debug.panic("DECREF_CHECK_NULL: ptr=0x{x} is not 8-byte aligned!", .{ptr_int});
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(bytes);
+            const expected_align = @sizeOf(isize);
+            if (ptr_int % expected_align != 0) {
+                std.debug.panic("DECREF_CHECK_NULL: ptr=0x{x} is not 8-byte aligned!", .{ptr_int});
+            }
         }
 
         const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
@@ -333,17 +334,21 @@ pub fn decrefDataPtrC(
 
     const data_ptr = @intFromPtr(bytes);
 
-    // Debug check: if original pointer is not 8-byte aligned, something is very wrong
-    if (data_ptr % 8 != 0) {
-        std.debug.panic("decrefDataPtrC: ORIGINAL data_ptr=0x{x} is not 8-byte aligned!", .{data_ptr});
+    // Verify original pointer is 8-byte aligned
+    if (comptime builtin.mode == .Debug) {
+        if (data_ptr % 8 != 0) {
+            std.debug.panic("decrefDataPtrC: ORIGINAL data_ptr=0x{x} is not 8-byte aligned!", .{data_ptr});
+        }
     }
 
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const unmasked_ptr = data_ptr & ~tag_mask;
 
-    // Debug check: verify alignment before @ptrFromInt
-    if (unmasked_ptr % @alignOf(isize) != 0) {
-        std.debug.panic("decrefDataPtrC: unmasked_ptr=0x{x} (data_ptr=0x{x}) is not {}-byte aligned", .{ unmasked_ptr, data_ptr, @alignOf(isize) });
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (unmasked_ptr % @alignOf(isize) != 0) {
+            std.debug.panic("decrefDataPtrC: unmasked_ptr=0x{x} (data_ptr=0x{x}) is not {}-byte aligned", .{ unmasked_ptr, data_ptr, @alignOf(isize) });
+        }
     }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(unmasked_ptr));
@@ -363,19 +368,22 @@ pub fn increfDataPtrC(
 
     const ptr = @intFromPtr(bytes);
 
-    // Debug check: if original pointer is not 8-byte aligned, something is very wrong
-    // This can happen if seamless slice encoding produces a bad pointer
-    if (ptr % 8 != 0) {
-        std.debug.panic("increfDataPtrC: ORIGINAL ptr=0x{x} is not 8-byte aligned!", .{ptr});
+    // Verify original pointer is 8-byte aligned (can fail if seamless slice encoding produces bad pointer)
+    if (comptime builtin.mode == .Debug) {
+        if (ptr % 8 != 0) {
+            std.debug.panic("increfDataPtrC: ORIGINAL ptr=0x{x} is not 8-byte aligned!", .{ptr});
+        }
     }
 
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
-
-    // Debug check: verify alignment before @ptrFromInt
     const rc_addr = masked_ptr - @sizeOf(usize);
-    if (rc_addr % @alignOf(isize) != 0) {
-        std.debug.panic("increfDataPtrC: rc_addr=0x{x} (ptr=0x{x}, masked=0x{x}) is not {}-byte aligned", .{ rc_addr, ptr, masked_ptr, @alignOf(isize) });
+
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (rc_addr % @alignOf(isize) != 0) {
+            std.debug.panic("increfDataPtrC: rc_addr=0x{x} (ptr=0x{x}, masked=0x{x}) is not {}-byte aligned", .{ rc_addr, ptr, masked_ptr, @alignOf(isize) });
+        }
     }
 
     const isizes: *isize = @as(*isize, @ptrFromInt(rc_addr));
@@ -398,9 +406,11 @@ pub fn freeDataPtrC(
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
 
-    // Debug check: verify alignment before @ptrFromInt
-    if (masked_ptr % @alignOf(isize) != 0) {
-        std.debug.panic("freeDataPtrC: masked_ptr=0x{x} (ptr=0x{x}) is not {}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) });
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (masked_ptr % @alignOf(isize) != 0) {
+            std.debug.panic("freeDataPtrC: masked_ptr=0x{x} (ptr=0x{x}) is not {}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) });
+        }
     }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
@@ -436,11 +446,13 @@ pub fn decref(
 
     const bytes = bytes_or_null orelse return;
 
-    // Debug check: verify alignment before @alignCast
-    const ptr_int = @intFromPtr(bytes);
-    const expected_align = @sizeOf(isize);
-    if (ptr_int % expected_align != 0) {
-        @panic("decref: bytes pointer is not properly aligned");
+    // Verify alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const ptr_int = @intFromPtr(bytes);
+        const expected_align = @sizeOf(isize);
+        if (ptr_int % expected_align != 0) {
+            @panic("decref: bytes pointer is not properly aligned");
+        }
     }
 
     const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
@@ -536,9 +548,11 @@ pub fn isUnique(
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
 
-    // Debug check: verify alignment before @ptrFromInt
-    if (masked_ptr % @alignOf(isize) != 0) {
-        std.debug.panic("isUnique: masked_ptr=0x{x} (ptr=0x{x}) is not {}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) });
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (masked_ptr % @alignOf(isize) != 0) {
+            std.debug.panic("isUnique: masked_ptr=0x{x} (ptr=0x{x}) is not {}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) });
+        }
     }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
@@ -697,10 +711,12 @@ pub fn allocateWithRefcount(
 
     const data_ptr = new_bytes + extra_bytes;
 
-    // Debug check: verify alignment before @alignCast
-    const ptr_int = @intFromPtr(data_ptr);
-    if (ptr_int % ptr_width != 0) {
-        @panic("allocateWithRefcount: data_ptr is not properly aligned");
+    // Verify alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const ptr_int = @intFromPtr(data_ptr);
+        if (ptr_int % ptr_width != 0) {
+            @panic("allocateWithRefcount: data_ptr is not properly aligned");
+        }
     }
 
     const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));

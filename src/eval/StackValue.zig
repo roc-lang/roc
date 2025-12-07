@@ -43,10 +43,12 @@ const StackValue = @This();
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         if (ptr == null) return;
-        // Debug check: verify alignment before @alignCast
-        const ptr_int = @intFromPtr(ptr.?);
-        if (ptr_int % @alignOf(RocStr) != 0) {
-            std.debug.panic("increfLayoutPtr(str): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocStr) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocStr) != 0) {
+                std.debug.panic("increfLayoutPtr(str): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocStr) });
+            }
         }
         const roc_str = @as(*const RocStr, @ptrCast(@alignCast(ptr.?))).*;
         roc_str.incref(1);
@@ -54,10 +56,12 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
     }
     if (layout.tag == .list) {
         if (ptr == null) return;
-        // Debug check: verify alignment before @alignCast
-        const ptr_int = @intFromPtr(ptr.?);
-        if (ptr_int % @alignOf(RocList) != 0) {
-            std.debug.panic("increfLayoutPtr(list): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocList) != 0) {
+                std.debug.panic("increfLayoutPtr(list): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+            }
         }
         const list_value = @as(*const RocList, @ptrCast(@alignCast(ptr.?))).*;
         list_value.incref(1, false);
@@ -65,10 +69,12 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
     }
     if (layout.tag == .box) {
         if (ptr == null) return;
-        // Debug check: verify alignment before @alignCast
-        const ptr_int = @intFromPtr(ptr.?);
-        if (ptr_int % @alignOf(usize) != 0) {
-            std.debug.panic("increfLayoutPtr(box): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(usize) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(usize) != 0) {
+                std.debug.panic("increfLayoutPtr(box): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(usize) });
+            }
         }
         const slot: *usize = @ptrCast(@alignCast(ptr.?));
         if (slot.* != 0) {
@@ -127,10 +133,12 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
 fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         if (ptr == null) return;
-        // Debug check: verify alignment before @alignCast
-        const ptr_int = @intFromPtr(ptr.?);
-        if (ptr_int % @alignOf(RocStr) != 0) {
-            std.debug.panic("decrefLayoutPtr(str): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocStr) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocStr) != 0) {
+                std.debug.panic("decrefLayoutPtr(str): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocStr) });
+            }
         }
         const roc_str = @as(*const RocStr, @ptrCast(@alignCast(ptr.?))).*;
         roc_str.decref(ops);
@@ -138,10 +146,12 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .list) {
         if (ptr == null) return;
-        // Debug check: verify alignment before @alignCast
-        const ptr_int = @intFromPtr(ptr.?);
-        if (ptr_int % @alignOf(RocList) != 0) {
-            std.debug.panic("decrefLayoutPtr(list): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocList) != 0) {
+                std.debug.panic("decrefLayoutPtr(list): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+            }
         }
         const list_header: *const RocList = @ptrCast(@alignCast(ptr.?));
         const list_value = list_header.*;
@@ -166,10 +176,12 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .box) {
         if (ptr == null) return;
-        // Debug check: verify alignment before @alignCast
-        const box_ptr_int = @intFromPtr(ptr.?);
-        if (box_ptr_int % @alignOf(usize) != 0) {
-            std.debug.panic("decrefLayoutPtr(box): ptr=0x{x} is not {}-byte aligned", .{ box_ptr_int, @alignOf(usize) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const box_ptr_int = @intFromPtr(ptr.?);
+            if (box_ptr_int % @alignOf(usize) != 0) {
+                std.debug.panic("decrefLayoutPtr(box): ptr=0x{x} is not {}-byte aligned", .{ box_ptr_int, @alignOf(usize) });
+            }
         }
         const slot: *usize = @ptrCast(@alignCast(ptr.?));
         const raw_ptr = slot.*;
@@ -182,15 +194,17 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const ptr_int = @intFromPtr(data_ptr);
         const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
         const unmasked_ptr = ptr_int & ~tag_mask;
-
-        // Debug check: verify alignment before @ptrFromInt for refcount
         const refcount_addr = unmasked_ptr - @sizeOf(isize);
-        if (refcount_addr % @alignOf(isize) != 0) {
-            std.debug.panic("decrefLayoutPtr: refcount_addr=0x{x} misaligned! unmasked=0x{x}, raw=0x{x}", .{
-                refcount_addr,
-                unmasked_ptr,
-                raw_ptr,
-            });
+
+        // Verify alignment before @ptrFromInt for refcount
+        if (comptime builtin.mode == .Debug) {
+            if (refcount_addr % @alignOf(isize) != 0) {
+                std.debug.panic("decrefLayoutPtr: refcount_addr=0x{x} misaligned! unmasked=0x{x}, raw=0x{x}", .{
+                    refcount_addr,
+                    unmasked_ptr,
+                    raw_ptr,
+                });
+            }
         }
 
         const payload_ptr = @as([*]u8, @ptrFromInt(unmasked_ptr));
@@ -390,14 +404,16 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box) {
-        // Debug check: verify alignment before @alignCast for usize
-        const box_src_ptr_val = @intFromPtr(self.ptr.?);
-        const box_dest_ptr_val = @intFromPtr(dest_ptr);
-        if (box_src_ptr_val % @alignOf(usize) != 0) {
-            std.debug.panic("[copyToPtr box] src alignment error: ptr=0x{x} not {}-byte aligned", .{ box_src_ptr_val, @alignOf(usize) });
-        }
-        if (box_dest_ptr_val % @alignOf(usize) != 0) {
-            std.debug.panic("[copyToPtr box] dest alignment error: ptr=0x{x} not {}-byte aligned", .{ box_dest_ptr_val, @alignOf(usize) });
+        // Verify alignment before @alignCast for usize
+        if (comptime builtin.mode == .Debug) {
+            const box_src_ptr_val = @intFromPtr(self.ptr.?);
+            const box_dest_ptr_val = @intFromPtr(dest_ptr);
+            if (box_src_ptr_val % @alignOf(usize) != 0) {
+                std.debug.panic("[copyToPtr box] src alignment error: ptr=0x{x} not {}-byte aligned", .{ box_src_ptr_val, @alignOf(usize) });
+            }
+            if (box_dest_ptr_val % @alignOf(usize) != 0) {
+                std.debug.panic("[copyToPtr box] dest alignment error: ptr=0x{x} not {}-byte aligned", .{ box_dest_ptr_val, @alignOf(usize) });
+            }
         }
         const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
         const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
@@ -410,10 +426,12 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box_of_zst) {
-        // Debug check: verify alignment before @alignCast for usize
-        const box_zst_dest_ptr_val = @intFromPtr(dest_ptr);
-        if (box_zst_dest_ptr_val % @alignOf(usize) != 0) {
-            std.debug.panic("[copyToPtr box_of_zst] dest alignment error: ptr=0x{x} not {}-byte aligned", .{ box_zst_dest_ptr_val, @alignOf(usize) });
+        // Verify alignment before @alignCast for usize
+        if (comptime builtin.mode == .Debug) {
+            const box_zst_dest_ptr_val = @intFromPtr(dest_ptr);
+            if (box_zst_dest_ptr_val % @alignOf(usize) != 0) {
+                std.debug.panic("[copyToPtr box_of_zst] dest alignment error: ptr=0x{x} not {}-byte aligned", .{ box_zst_dest_ptr_val, @alignOf(usize) });
+            }
         }
         const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
         dest_slot.* = 0;
@@ -423,14 +441,16 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list) {
         // Copy the list header and incref the underlying data
         std.debug.assert(self.ptr != null);
-        // Debug check: verify alignment before @alignCast
-        const copyToPtr_src_ptr_int = @intFromPtr(self.ptr.?);
-        if (copyToPtr_src_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-            std.debug.panic("copyToPtr(list): self.ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_src_ptr_int, @alignOf(builtins.list.RocList) });
-        }
-        const copyToPtr_dest_ptr_int = @intFromPtr(dest_ptr);
-        if (copyToPtr_dest_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-            std.debug.panic("copyToPtr(list): dest_ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_dest_ptr_int, @alignOf(builtins.list.RocList) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const copyToPtr_src_ptr_int = @intFromPtr(self.ptr.?);
+            if (copyToPtr_src_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list): self.ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_src_ptr_int, @alignOf(builtins.list.RocList) });
+            }
+            const copyToPtr_dest_ptr_int = @intFromPtr(dest_ptr);
+            if (copyToPtr_dest_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list): dest_ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_dest_ptr_int, @alignOf(builtins.list.RocList) });
+            }
         }
         const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
         const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
@@ -467,14 +487,16 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list_of_zst) {
         // Copy the list header for ZST lists - no refcounting needed for ZSTs
         std.debug.assert(self.ptr != null);
-        // Debug check: verify alignment before @alignCast
-        const copyToPtr_zst_src_ptr_int = @intFromPtr(self.ptr.?);
-        if (copyToPtr_zst_src_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-            std.debug.panic("copyToPtr(list_of_zst): self.ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_zst_src_ptr_int, @alignOf(builtins.list.RocList) });
-        }
-        const copyToPtr_zst_dest_ptr_int = @intFromPtr(dest_ptr);
-        if (copyToPtr_zst_dest_ptr_int % @alignOf(builtins.list.RocList) != 0) {
-            std.debug.panic("copyToPtr(list_of_zst): dest_ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_zst_dest_ptr_int, @alignOf(builtins.list.RocList) });
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const copyToPtr_zst_src_ptr_int = @intFromPtr(self.ptr.?);
+            if (copyToPtr_zst_src_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list_of_zst): self.ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_zst_src_ptr_int, @alignOf(builtins.list.RocList) });
+            }
+            const copyToPtr_zst_dest_ptr_int = @intFromPtr(dest_ptr);
+            if (copyToPtr_zst_dest_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list_of_zst): dest_ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_zst_dest_ptr_int, @alignOf(builtins.list.RocList) });
+            }
         }
         const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
         const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
@@ -1148,10 +1170,12 @@ pub fn asList(self: StackValue, layout_cache: *LayoutStore, element_layout: Layo
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
 
-    // Debug check: verify alignment before @alignCast
-    const ptr_int = @intFromPtr(self.ptr.?);
-    if (ptr_int % @alignOf(RocList) != 0) {
-        std.debug.panic("asList: self.ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+    // Verify alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const ptr_int = @intFromPtr(self.ptr.?);
+        if (ptr_int % @alignOf(RocList) != 0) {
+            std.debug.panic("asList: self.ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+        }
     }
     const header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
     return ListAccessor{
@@ -1205,10 +1229,12 @@ pub const ListAccessor = struct {
 fn storeListElementCount(list: *RocList, elements_refcounted: bool) void {
     if (elements_refcounted and !list.isSeamlessSlice()) {
         if (list.getAllocationDataPtr()) |source| {
-            // Debug check: verify alignment before @alignCast
-            const source_int = @intFromPtr(source);
-            if (source_int % @alignOf(usize) != 0) {
-                std.debug.panic("storeListElementCount: source=0x{x} is not {}-byte aligned", .{ source_int, @alignOf(usize) });
+            // Verify alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const source_int = @intFromPtr(source);
+                if (source_int % @alignOf(usize) != 0) {
+                    std.debug.panic("storeListElementCount: source=0x{x} is not {}-byte aligned", .{ source_int, @alignOf(usize) });
+                }
             }
             const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
             ptr[0] = list.length;
@@ -1222,10 +1248,12 @@ fn copyListValueToPtr(
     dest_ptr: *anyopaque,
     dest_layout: Layout,
 ) error{ TypeMismatch, NullStackPointer }!void {
-    // Debug check: verify dest_ptr alignment before @alignCast
-    const dest_ptr_int = @intFromPtr(dest_ptr);
-    if (dest_ptr_int % @alignOf(RocList) != 0) {
-        std.debug.panic("copyListValueToPtr: dest_ptr=0x{x} is not {}-byte aligned", .{ dest_ptr_int, @alignOf(RocList) });
+    // Verify dest_ptr alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const dest_ptr_int = @intFromPtr(dest_ptr);
+        if (dest_ptr_int % @alignOf(RocList) != 0) {
+            std.debug.panic("copyListValueToPtr: dest_ptr=0x{x} is not {}-byte aligned", .{ dest_ptr_int, @alignOf(RocList) });
+        }
     }
     var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
 
@@ -1236,10 +1264,12 @@ fn copyListValueToPtr(
                 dest_list.* = RocList.empty();
                 return;
             }
-            // Debug check: verify src.ptr alignment before @alignCast
-            const src_ptr_int_zst = @intFromPtr(src.ptr.?);
-            if (src_ptr_int_zst % @alignOf(RocList) != 0) {
-                std.debug.panic("copyListValueToPtr(list_of_zst): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_zst, @alignOf(RocList) });
+            // Verify src.ptr alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const src_ptr_int_zst = @intFromPtr(src.ptr.?);
+                if (src_ptr_int_zst % @alignOf(RocList) != 0) {
+                    std.debug.panic("copyListValueToPtr(list_of_zst): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_zst, @alignOf(RocList) });
+                }
             }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
             dest_list.* = src_list;
@@ -1252,10 +1282,12 @@ fn copyListValueToPtr(
                 return;
             }
             if (src.layout.tag != .list) return error.TypeMismatch;
-            // Debug check: verify src.ptr alignment before @alignCast
-            const src_ptr_int_list = @intFromPtr(src.ptr.?);
-            if (src_ptr_int_list % @alignOf(RocList) != 0) {
-                std.debug.panic("copyListValueToPtr(list): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_list, @alignOf(RocList) });
+            // Verify src.ptr alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const src_ptr_int_list = @intFromPtr(src.ptr.?);
+                if (src_ptr_int_list % @alignOf(RocList) != 0) {
+                    std.debug.panic("copyListValueToPtr(list): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_list, @alignOf(RocList) });
+                }
             }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
             dest_list.* = src_list;
