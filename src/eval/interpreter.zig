@@ -6169,16 +6169,66 @@ pub const Interpreter = struct {
         }
 
         const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-        // All is_eq methods are low-level lambdas (builtins). If a type doesn't have
-        // is_eq, the type-checker catches it as a missing method error before we get here.
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
-        if (lambda_expr != .e_low_level_lambda) {
-            unreachable; // is_eq methods are always low-level builtins
+
+        if (lambda_expr == .e_low_level_lambda) {
+            // Low-level builtin is_eq (e.g., for simple types)
+            const low_level = lambda_expr.e_low_level_lambda;
+            var args = [2]StackValue{ lhs, rhs };
+            const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+                return error.NotImplemented;
+            };
+            defer result.decref(&self.runtime_layout_store, roc_ops);
+            return self.boolValueEquals(true, result);
         }
-        const low_level = lambda_expr.e_low_level_lambda;
-        var args = [2]StackValue{ lhs, rhs };
-        const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+
+        // Regular Roc closure (e.g., List.is_eq which is defined in Roc, not as a low-level builtin)
+        // We need to evaluate this synchronously. This requires setting up bindings and evaluating the body.
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+        defer {
+            self.env = saved_env;
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+        }
+
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != 2) {
+            return error.TypeMismatch;
+        }
+
+        // Bind parameters - create copies for proper ownership
+        const lhs_copy = self.pushCopy(lhs) catch return error.OutOfMemory;
+        const rhs_copy = self.pushCopy(rhs) catch {
+            lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.OutOfMemory;
+        };
+
+        // patternMatchesBind will create its own copies
+        const lhs_matched = self.patternMatchesBind(params[0], lhs_copy, lhs.rt_var, roc_ops, &self.bindings, null) catch {
+            lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.OutOfMemory;
+        };
+        if (!lhs_matched) {
+            lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.TypeMismatch;
+        }
+        lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+
+        const rhs_matched = self.patternMatchesBind(params[1], rhs_copy, rhs.rt_var, roc_ops, &self.bindings, null) catch {
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.OutOfMemory;
+        };
+        if (!rhs_matched) {
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.TypeMismatch;
+        }
+        rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+
+        // Evaluate the function body synchronously
+        const result = self.evalWithExpectedType(closure_header.body_idx, roc_ops, null) catch {
             return error.NotImplemented;
         };
         defer result.decref(&self.runtime_layout_store, roc_ops);
@@ -6680,7 +6730,8 @@ pub const Interpreter = struct {
 
         defer {
             self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Copy the value to pass to the method
@@ -7362,8 +7413,8 @@ pub const Interpreter = struct {
         self.env = @constCast(origin_env);
         defer {
             self.env = saved_env;
-            // Restore bindings
-            self.bindings.items.len = saved_bindings_len;
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Propagate receiver type to flex_type_context BEFORE translating the method's type.
@@ -7450,8 +7501,8 @@ pub const Interpreter = struct {
         self.env = @constCast(origin_env);
         defer {
             self.env = saved_env;
-            // Restore bindings
-            self.bindings.items.len = saved_bindings_len;
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Propagate receiver type to flex_type_context BEFORE translating the method's type.
@@ -9866,7 +9917,8 @@ pub const Interpreter = struct {
                         self.env = @constCast(app_env);
                         defer {
                             self.env = saved_env;
-                            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                            // Use trimBindingList to properly decref bindings before removing them
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                         }
 
                         // Evaluate the app's exported expression synchronously
@@ -10814,6 +10866,10 @@ pub const Interpreter = struct {
                 // Copy receiver to persistent memory (evalWithExpectedType uses temporary stacks that are freed)
                 const copied_receiver = try self.pushCopy(receiver_value);
 
+                // Decref the original receiver_value since we made a copy.
+                // This is necessary for records/tuples containing refcounted values like lists.
+                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
                 // Push to outer value_stack so dot_access_await_receiver can pop it
                 try value_stack.push(copied_receiver);
 
@@ -11717,7 +11773,8 @@ pub const Interpreter = struct {
         self.env = @constCast(other_env);
         defer {
             self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Evaluate the definition's expression in the other module's context
@@ -14090,10 +14147,13 @@ pub const Interpreter = struct {
                     roc_ops,
                     effective_receiver_rt_var,
                 );
-                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+                // Note: method_func decref is handled differently for low-level vs regular closures:
+                // - Low-level: decref explicitly below after the call
+                // - Regular closures: call_cleanup handles it via active_closures
 
                 // Call the method closure
                 if (method_func.layout.tag != .closure) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
 
@@ -14120,6 +14180,8 @@ pub const Interpreter = struct {
                         }
                     }
 
+                    // Decref the method closure (for low-level, we handle it here)
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
 
                     // For != operator, negate boolean result
@@ -14136,6 +14198,7 @@ pub const Interpreter = struct {
                 // Regular closure invocation
                 const params = self.env.store.slicePatterns(closure_header.params);
                 if (params.len != 2) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
                     return error.TypeMismatch;
                 }
@@ -14199,7 +14262,9 @@ pub const Interpreter = struct {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
-                    _ = self.active_closures.pop();
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
                     return error.TypeMismatch;
                 }
                 if (!try self.patternMatchesBind(params[1], rhs, rhs.rt_var, roc_ops, &self.bindings, null)) {
@@ -14208,7 +14273,9 @@ pub const Interpreter = struct {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
-                    _ = self.active_closures.pop();
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
                     return error.TypeMismatch;
                 }
 

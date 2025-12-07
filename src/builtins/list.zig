@@ -935,7 +935,11 @@ pub fn listSublist(
             output.length = keep_len;
             return output;
         } else {
-            if (list.isUnique()) {
+            const is_unique = list.isUnique();
+            if (is_unique) {
+                // Store original element count for proper cleanup when the slice is freed.
+                // When the seamless slice is later decreffed, it will decref ALL elements
+                // starting from the original allocation pointer, not just the slice elements.
                 list.setAllocationElementCount(elements_refcounted);
             }
             const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
@@ -958,17 +962,9 @@ pub fn listSublist(
                 @panic("listSublist: misaligned original ptr");
             }
 
-            // Increment the parent allocation's refcount.
-            // Although listSublist has "consumes" ownership, in practice the compiler
-            // may generate code that uses the original list after sublist returns
-            // (e.g., in `if repeated == s` where s was the source of the sublist).
-            // By incrementing the refcount, we ensure the parent allocation stays
-            // alive for both the original list and the seamless slice.
-            // The "extra" reference will be decremented when the original list
-            // is eventually cleaned up.
-            if (list.getAllocationDataPtr()) |parent_alloc| {
-                utils.increfDataPtrC(parent_alloc, 1);
-            }
+            // No incref needed: listSublist consumes ownership of the input list,
+            // so the seamless slice inherits that consumed reference. Any other
+            // holders of the list (e.g., bindings) already have their own references.
 
             return RocList{
                 .bytes = source_ptr + start * element_width,
