@@ -1,3 +1,5 @@
+//! Tests for the LSP document store.
+
 const std = @import("std");
 const DocumentStore = @import("../document_store.zig").DocumentStore;
 

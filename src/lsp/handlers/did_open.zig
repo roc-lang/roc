@@ -1,3 +1,5 @@
+//! Handler for LSP `textDocument/didOpen` notifications.
+
 const std = @import("std");
 
 /// Handler for `textDocument/didOpen` notifications.

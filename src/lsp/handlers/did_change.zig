@@ -1,3 +1,5 @@
+//! Handler for LSP `textDocument/didChange` notifications.
+
 const std = @import("std");
 const DocumentStore = @import("../document_store.zig").DocumentStore;
 
