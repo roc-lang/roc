@@ -987,6 +987,29 @@ const ClearRocCacheStep = struct {
     }
 };
 
+const PrintBuildSuccessStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *PrintBuildSuccessStep {
+        const self = b.allocator.create(PrintBuildSuccessStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "print-build-success",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = step;
+        _ = options;
+        std.debug.print("Build succeeded!\n", .{});
+    }
+};
+
 /// Create a step that clears the Roc cache directory.
 /// This is useful when rebuilding test platforms to ensure stale cached hosts aren't used.
 fn createClearCacheStep(b: *std.Build) *Step {
@@ -2001,7 +2024,12 @@ fn install_and_run(
         b.getInstallStep().dependOn(&exe.step);
     } else {
         const install = b.addInstallArtifact(exe, .{});
-        build_step.dependOn(&install.step);
+
+        // Add a step to print success message after build completes
+        const success_step = PrintBuildSuccessStep.create(b);
+        success_step.step.dependOn(&install.step);
+        build_step.dependOn(&success_step.step);
+
         b.getInstallStep().dependOn(&install.step);
 
         const run = b.addRunArtifact(exe);
