@@ -74,6 +74,14 @@ pub const ValidationResult = union(enum) {
         link_type: LinkType,
         supported_targets: []const TargetLinkSpec,
     },
+
+    /// Cross-compilation requested but platform doesn't have host library for target
+    missing_cross_compile_host: struct {
+        platform_path: []const u8,
+        target: RocTarget,
+        expected_path: []const u8,
+        files_dir: []const u8,
+    },
 };
 
 /// Validate that a platform has a targets section
@@ -372,6 +380,38 @@ pub fn createValidationReport(
             }
 
             try report.document.addText("To add support, update the targets section in the platform header.");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .missing_cross_compile_host => |info| {
+            var report = Report.init(allocator, "MISSING HOST LIBRARY FOR CROSS-COMPILATION", .runtime_error);
+
+            try report.document.addText("Cannot cross-compile for ");
+            try report.document.addAnnotated(@tagName(info.target), .emphasized);
+            try report.document.addText(": the platform doesn't provide");
+            try report.document.addLineBreak();
+            try report.document.addText("a pre-built host library for this target.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Expected host library at:");
+            try report.document.addLineBreak();
+            try report.document.addText("  ");
+            try report.document.addAnnotated(info.expected_path, .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Platform authors: build your host for this target and place it at:");
+            try report.document.addLineBreak();
+            try report.document.addText("  <platform>/");
+            // Trim trailing slash from files_dir for cleaner display
+            const trimmed_files_dir = std.mem.trimRight(u8, info.files_dir, "/");
+            try report.document.addAnnotated(trimmed_files_dir, .emphasized);
+            try report.document.addText("/");
+            try report.document.addAnnotated(@tagName(info.target), .emphasized);
+            try report.document.addText("/libhost.a");
             try report.document.addLineBreak();
 
             return report;

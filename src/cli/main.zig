@@ -708,7 +708,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
             try rocRun(allocs, run_args);
         },
         .check => |check_args| rocCheck(allocs, check_args),
-        .build => |build_args| rocBuild(allocs, build_args),
+        .build => |build_args| try rocBuild(allocs, build_args),
         .bundle => |bundle_args| rocBundle(allocs, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(allocs, unbundle_args),
         .fmt => |format_args| rocFormat(allocs, format_args),
@@ -3100,9 +3100,13 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         null;
 
     // Validate platform header has targets section and supports requested target
+    // Also extract files_dir for later use when finding target-specific files
+    var platform_files_dir: ?[]const u8 = null;
     if (platform_paths) |pp| {
         if (pp.platform_source_path) |platform_source| {
             if (platform_validation.validatePlatformHeader(allocs.arena, platform_source)) |validation| {
+                // Store files_dir for later use
+                platform_files_dir = validation.config.files_dir;
                 // Validate that the requested target is supported
                 platform_validation.validateTargetSupported(validation.config, target, .exe) catch |err| {
                     switch (err) {
@@ -3164,12 +3168,22 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
         const target_name = @tagName(target);
         const host_lib_filename = "libhost.a";
-        const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", target_name, host_lib_filename });
+        // Use files_dir from platform header if available, otherwise default to "targets"
+        const files_dir = platform_files_dir orelse "targets";
+        const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, files_dir, target_name, host_lib_filename });
 
-        std.fs.cwd().access(target_specific_path, .{}) catch |err| {
-            std.log.warn("Target-specific host library not found: {s} ({})", .{ target_specific_path, err });
-            std.log.warn("Falling back to native host library - may not link correctly", .{});
-            break :blk native_host_lib_path;
+        std.fs.cwd().access(target_specific_path, .{}) catch {
+            // Use the proper reporting infrastructure for nice error messages
+            const result = platform_validation.targets_validator.ValidationResult{
+                .missing_cross_compile_host = .{
+                    .platform_path = if (platform_paths) |pp| pp.platform_source_path orelse platform_spec else platform_spec,
+                    .target = target,
+                    .expected_path = target_specific_path,
+                    .files_dir = files_dir,
+                },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+            return error.CrossCompileHostLibraryNotFound;
         };
         std.log.debug("Using target-specific host library: {s}", .{target_specific_path});
         break :blk target_specific_path;
@@ -3251,7 +3265,7 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         } else deriveBasePlatformDir(native_host_lib_path);
 
         // Get CRT files for the target
-        const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, target, platform_dir);
+        const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, target, platform_dir, platform_files_dir);
 
         // Add CRT files in correct order
         if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
@@ -3263,7 +3277,9 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
             try platform_files_post.append(libc);
         } else if (target.isDynamic()) {
             // For dynamic linking with glibc, we need the glibc stub library
-            const stub_dir = try std.fmt.allocPrint(allocs.arena, "{s}/targets/{s}", .{ platform_dir, target_name });
+            // Use files_dir from platform header if available, otherwise default to "targets"
+            const files_dir_for_stub = platform_files_dir orelse "targets";
+            const stub_dir = try std.fmt.allocPrint(allocs.arena, "{s}/{s}/{s}", .{ platform_dir, files_dir_for_stub, target_name });
             const stub_so_path = try std.fmt.allocPrint(allocs.arena, "{s}/libc.so.6", .{stub_dir});
 
             // Verify the vendored stub exists

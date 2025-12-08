@@ -262,7 +262,9 @@ pub const CRTFiles = struct {
 
 /// Get vendored CRT object files for a platform target
 /// All CRT files must be provided by the platform in its targets/ directory
-pub fn getVendoredCRTFiles(allocator: Allocator, target: RocTarget, platform_dir: []const u8) !CRTFiles {
+/// The files_dir parameter specifies the subdirectory name from the platform header (e.g., "targets/")
+/// If null, defaults to "targets"
+pub fn getVendoredCRTFiles(allocator: Allocator, target: RocTarget, platform_dir: []const u8, files_dir: ?[]const u8) !CRTFiles {
     // macOS and Windows targets don't need vendored CRT files - they use system libraries
     if (target.isMacOS() or target.isWindows()) {
         return CRTFiles{}; // Return empty CRTFiles struct
@@ -279,7 +281,9 @@ pub fn getVendoredCRTFiles(allocator: Allocator, target: RocTarget, platform_dir
         else => return error.UnsupportedTargetForPlatform,
     };
 
-    const targets_dir = try std.fs.path.join(allocator, &[_][]const u8{ platform_dir, "targets", target_subdir });
+    // Use files_dir from platform header if available, otherwise default to "targets"
+    const files_subdir = files_dir orelse "targets";
+    const targets_dir = try std.fs.path.join(allocator, &[_][]const u8{ platform_dir, files_subdir, target_subdir });
 
     var result = CRTFiles{};
 
