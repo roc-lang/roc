@@ -5270,6 +5270,17 @@ pub const Interpreter = struct {
         roc_ops.crash(message);
     }
 
+    /// The canonical error message for stack overflow.
+    /// Used by all stack overflow detection to ensure consistent user-facing messaging.
+    const stack_overflow_message = "This Roc program overflowed its stack memory. This usually means there is infinite recursion somewhere in the code.";
+
+    /// Trigger a stack overflow error.
+    /// This is the single entry point for all stack overflow handling in the interpreter.
+    fn triggerStackOverflow(self: *Interpreter, roc_ops: *RocOps) Error {
+        self.triggerCrash(stack_overflow_message, false, roc_ops);
+        return error.StackOverflow;
+    }
+
     fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) void {
         const region = self.env.store.getExprRegion(snippet_expr_idx);
         const source_bytes = self.env.getSource(region);
@@ -9550,9 +9561,9 @@ pub const Interpreter = struct {
     pub const WorkStack = struct {
         items: std.array_list.AlignedManaged(WorkItem, null),
 
-        /// Maximum work stack size to prevent infinite recursion from hanging.
+        /// Maximum stack size to prevent infinite recursion from hanging.
         /// When exceeded, triggers a stack overflow error.
-        /// 10,000 items allows deep but not infinite recursion (~1MB memory).
+        /// 10,000 allows deep but not infinite recursion.
         pub const max_size: usize = 10_000;
 
         pub fn init(allocator: std.mem.Allocator) !WorkStack {
@@ -9658,8 +9669,7 @@ pub const Interpreter = struct {
 
             // Check for stack overflow (infinite recursion)
             if (work_stack.items.items.len > WorkStack.max_size) {
-                self.triggerCrash("This Roc program overflowed its stack memory. This usually means there is infinite recursion somewhere in the code.", false, roc_ops);
-                return error.Crash;
+                return self.triggerStackOverflow(roc_ops);
             }
         }
 

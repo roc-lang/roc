@@ -72,8 +72,8 @@ const ShimError = error{
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         // Only show this generic error if we haven't already crashed with a more specific message
-        // (errors like Crash already triggered roc_crashed with details)
-        if (err != error.Crash) {
+        // (errors like Crash and StackOverflow already triggered roc_crashed with details)
+        if (err != error.Crash and err != error.StackOverflow) {
             var buf: [256]u8 = undefined;
             const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
             ops.crash(msg2);
