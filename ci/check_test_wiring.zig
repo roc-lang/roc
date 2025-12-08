@@ -46,8 +46,13 @@ pub fn main() !void {
     // To avoid false positives, we:
     // - Treat src/cli/main.zig as an additional aggregator when scanning @import()
     //   statements for wired test files.
+    // - Treat src/cli/test/fx_platform_test.zig as an aggregator since it imports
+    //   fx_test_specs.zig which contains shared test specifications.
     if (fileExists("src/cli/main.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/main.zig"));
+    }
+    if (fileExists("src/cli/test/fx_platform_test.zig")) {
+        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/fx_platform_test.zig"));
     }
 
     if (test_files.items.len == 0) {

@@ -18,6 +18,11 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const fx_test_specs = @import("fx_test_specs.zig");
 
+// Wire up tests from fx_test_specs module
+comptime {
+    std.testing.refAllDecls(fx_test_specs);
+}
+
 const roc_binary_path = if (builtin.os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
 /// Options for running roc commands
