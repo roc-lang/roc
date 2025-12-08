@@ -1660,7 +1660,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const platform_env = platform_main_env orelse {
         const is_absolute = std.fs.path.isAbsolute(platform_spec);
         if (is_absolute) {
-            std.log.err("No platform found. Absolute paths are not allowed for platform specification: \"{s}\". Please use a relative path like `./path/to/platform` or a URL.", .{platform_spec});
+            std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
         } else {
             std.log.err("No platform found. Every Roc app requires a platform.", .{});
         }
@@ -2103,11 +2103,14 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
         return resolveUrlPlatform(allocs, platform_spec);
     }
 
-    // Try to interpret as a file path (resolve relative to base_dir)
-    const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
-        try allocs.arena.dupe(u8, platform_spec)
-    else
-        try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
+    // Check for absolute paths and reject them
+    if (std.fs.path.isAbsolute(platform_spec)) {
+        std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
+        return error.PlatformNotSupported;
+    }
+
+    // Try to interpret as a file path (must be relative, resolve relative to base_dir)
+    const resolved_path = try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
 
     std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
