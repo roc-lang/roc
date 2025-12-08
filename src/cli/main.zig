@@ -3099,97 +3099,100 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     else
         null;
 
-    // Validate platform header has targets section and supports requested target
-    // Also extract files_dir for later use when finding target-specific files
-    var platform_files_dir: ?[]const u8 = null;
-    if (platform_paths) |pp| {
-        if (pp.platform_source_path) |platform_source| {
-            if (platform_validation.validatePlatformHeader(allocs.arena, platform_source)) |validation| {
-                // Store files_dir for later use
-                platform_files_dir = validation.config.files_dir;
-                // Validate that the requested target is supported
-                platform_validation.validateTargetSupported(validation.config, target, .exe) catch |err| {
-                    switch (err) {
-                        error.UnsupportedTarget => {
-                            // Create a nice formatted error report
-                            const result = platform_validation.createUnsupportedTargetResult(
-                                platform_source,
-                                target,
-                                .exe,
-                                validation.config,
-                            );
-                            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
-                            return error.UnsupportedTarget;
-                        },
-                        else => {},
-                    }
-                };
-            } else |err| {
-                switch (err) {
-                    error.MissingTargetsSection => {
-                        // Render a nice warning report
-                        const result = platform_validation.ValidationResult{
-                            .missing_targets_section = .{ .platform_path = platform_source },
-                        };
-                        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
-                        // Continue with build - validation is advisory for now
-                    },
-                    else => {
-                        std.log.warn("Failed to validate platform header: {}", .{err});
-                    },
-                }
+    // Validate platform header has targets section and get link configuration
+    // The targets section is REQUIRED - it defines exactly what to link
+    const platform_source = if (platform_paths) |pp| pp.platform_source_path else null;
+    const validation = if (platform_source) |ps|
+        platform_validation.validatePlatformHeader(allocs.arena, ps) catch |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    const result = platform_validation.ValidationResult{
+                        .missing_targets_section = .{ .platform_path = ps },
+                    };
+                    _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                    return error.MissingTargetsSection;
+                },
+                else => {
+                    std.log.err("Failed to validate platform header: {}", .{err});
+                    return err;
+                },
             }
+        }
+    else {
+        std.log.err("Platform source not found - cannot determine link configuration", .{});
+        return error.NoPlatformSource;
+    };
+
+    const targets_config = validation.config;
+    const platform_dir = validation.platform_dir;
+
+    // Validate that the requested target is supported and get its link spec
+    platform_validation.validateTargetSupported(targets_config, target, .exe) catch |err| {
+        switch (err) {
+            error.UnsupportedTarget => {
+                const result = platform_validation.createUnsupportedTargetResult(
+                    platform_source.?,
+                    target,
+                    .exe,
+                    targets_config,
+                );
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                return error.UnsupportedTarget;
+            },
+            else => return err,
+        }
+    };
+
+    // Get the link spec for this target - tells us exactly what files to link
+    const link_spec = targets_config.getLinkSpec(target, .exe) orelse {
+        std.log.err("No link spec for target {s} - this shouldn't happen after validation", .{@tagName(target)});
+        return error.UnsupportedTarget;
+    };
+
+    // Build link file lists from the link spec
+    // Files before 'app' go in pre, files after 'app' go in post
+    const target_name = @tagName(target);
+    const files_dir = targets_config.files_dir orelse "targets";
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    var hit_app = false;
+
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |path| {
+                // Build full path: platform_dir/files_dir/target_name/path
+                const full_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, files_dir, target_name, path });
+
+                // Validate the file exists
+                std.fs.cwd().access(full_path, .{}) catch {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .missing_target_file = .{
+                            .target = target,
+                            .link_type = .exe,
+                            .file_path = path,
+                            .expected_full_path = full_path,
+                        },
+                    };
+                    _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                    return error.MissingTargetFile;
+                };
+
+                if (!hit_app) {
+                    try platform_files_pre.append(full_path);
+                } else {
+                    try platform_files_post.append(full_path);
+                }
+            },
+            .app => {
+                hit_app = true;
+            },
+            .win_gui => {
+                // Windows subsystem flag - will be handled by linker
+            },
         }
     }
 
-    // For cross-compilation, try to find the target-specific host library
-    const native_host_lib_path = if (platform_paths) |pp| pp.host_lib_path else {
-        std.log.err("Could not find host library for platform: {s}", .{platform_spec});
-        return error.PlatformHostLibraryNotFound;
-    };
-
-    // Detect if we're cross-compiling by comparing against the native target
-    // This checks both OS and architecture (not just OS) to handle cases like
-    // compiling from Linux x64 to Linux arm64
-    const native_target = roc_target.RocTarget.detectNative();
-    const is_cross_compile = target != native_target;
-    const host_lib_path: []const u8 = if (is_cross_compile and target.isLinux()) blk: {
-        // For cross-compilation, look for target-specific host library
-        // The platform directory is where the platform's main.roc lives.
-        // Target-specific files are in <platform_dir>/targets/<target>/
-        const platform_dir: []const u8 = if (platform_paths) |pp| dir: {
-            if (pp.platform_source_path) |source_path| {
-                // Use the directory containing the platform source (main.roc)
-                break :dir std.fs.path.dirname(source_path) orelse ".";
-            }
-            // Fall back to deriving from host lib path
-            break :dir deriveBasePlatformDir(native_host_lib_path);
-        } else deriveBasePlatformDir(native_host_lib_path);
-
-        const target_name = @tagName(target);
-        const host_lib_filename = "libhost.a";
-        // Use files_dir from platform header if available, otherwise default to "targets"
-        const files_dir = platform_files_dir orelse "targets";
-        const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, files_dir, target_name, host_lib_filename });
-
-        std.fs.cwd().access(target_specific_path, .{}) catch {
-            // Use the proper reporting infrastructure for nice error messages
-            const result = platform_validation.targets_validator.ValidationResult{
-                .missing_cross_compile_host = .{
-                    .platform_path = if (platform_paths) |pp| pp.platform_source_path orelse platform_spec else platform_spec,
-                    .target = target,
-                    .expected_path = target_specific_path,
-                    .files_dir = files_dir,
-                },
-            };
-            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
-            return error.CrossCompileHostLibraryNotFound;
-        };
-        std.log.debug("Using target-specific host library: {s}", .{target_specific_path});
-        break :blk target_specific_path;
-    } else native_host_lib_path;
-
-    std.log.debug("Host library: {s}", .{host_lib_path});
+    std.log.debug("Link spec: {} files before app, {} files after app", .{ platform_files_pre.items.len, platform_files_post.items.len });
 
     // Extract entrypoints from the platform source file
     std.log.debug("Extracting entrypoints from platform...", .{});
@@ -3198,32 +3201,21 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return error.OutOfMemory;
     };
 
-    if (platform_paths) |pp| {
-        if (pp.platform_source_path) |platform_source| {
-            extractEntrypointsFromPlatform(allocs, platform_source, &entrypoints) catch |err| {
-                std.log.err("Failed to extract entrypoints: {}", .{err});
-                return err;
-            };
-        } else {
-            std.log.err("No platform source file found for entrypoint extraction", .{});
-            return error.NoPlatformSource;
-        }
-    } else {
-        std.log.err("No platform paths available", .{});
-        return error.PlatformHostLibraryNotFound;
-    }
+    extractEntrypointsFromPlatform(allocs, platform_source.?, &entrypoints) catch |err| {
+        std.log.err("Failed to extract entrypoints: {}", .{err});
+        return err;
+    };
     std.log.debug("Found {} entrypoints", .{entrypoints.items.len});
 
     // Extract shim library (interpreter shim)
     // Include target name in filename to support different targets in the same cache
-    const target_name = @tagName(target);
     const shim_filename = try std.fmt.allocPrint(allocs.arena, "libroc_shim_{s}.a", .{target_name});
     const shim_path = try std.fs.path.join(allocs.arena, &.{ build_cache_dir, shim_filename });
 
     std.fs.cwd().access(shim_path, .{}) catch {
         // Shim not found, extract it
         // For roc build, use the target-specific shim for cross-compilation support
-        std.log.debug("Extracting shim library for target {s} to {s}...", .{ @tagName(target), shim_path });
+        std.log.debug("Extracting shim library for target {s} to {s}...", .{ target_name, shim_path });
         extractReadRocFilePathShimLibrary(allocs, shim_path, target) catch |err| {
             std.log.err("Failed to extract shim library: {}", .{err});
             return err;
@@ -3241,60 +3233,18 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     std.log.debug("Platform shim generated: {?s}", .{platform_shim_path});
 
     // Link everything together
-    var object_files = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    // object_files = the Roc application (interpreter shim + platform shim with embedded module)
+    // platform_files_pre/post = files declared in link spec before/after 'app'
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 4);
     try object_files.append(shim_path);
-    try object_files.append(host_lib_path);
     if (platform_shim_path) |psp| {
         try object_files.append(psp);
     }
 
-    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 4);
-    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 4);
-    var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32);
-
-    // For Linux targets, we need CRT files from the platform's targets/ directory
-    // This applies to both cross-compilation AND native Linux builds
-    if (target.isLinux()) {
-        // Get the base platform directory (where main.roc lives, not targets/<native>/)
-        // CRT files are organized as <platform_dir>/targets/{target}/
-        const platform_dir: []const u8 = if (platform_paths) |pp| dir: {
-            if (pp.platform_source_path) |source_path| {
-                break :dir std.fs.path.dirname(source_path) orelse ".";
-            }
-            break :dir deriveBasePlatformDir(native_host_lib_path);
-        } else deriveBasePlatformDir(native_host_lib_path);
-
-        // Get CRT files for the target
-        const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, target, platform_dir, platform_files_dir);
-
-        // Add CRT files in correct order
-        if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
-        if (crt_files.crti_o) |crti| try platform_files_pre.append(crti);
-        if (crt_files.crtn_o) |crtn| try platform_files_post.append(crtn);
-
-        // For static linking with musl, add libc.a
-        if (crt_files.libc_a) |libc| {
-            try platform_files_post.append(libc);
-        } else if (target.isDynamic()) {
-            // For dynamic linking with glibc, we need the glibc stub library
-            // Use files_dir from platform header if available, otherwise default to "targets"
-            const files_dir_for_stub = platform_files_dir orelse "targets";
-            const stub_dir = try std.fmt.allocPrint(allocs.arena, "{s}/{s}/{s}", .{ platform_dir, files_dir_for_stub, target_name });
-            const stub_so_path = try std.fmt.allocPrint(allocs.arena, "{s}/libc.so.6", .{stub_dir});
-
-            // Verify the vendored stub exists
-            std.fs.cwd().access(stub_so_path, .{}) catch |err| {
-                std.log.err("Pre-built glibc stub not found: {s} ({})", .{ stub_so_path, err });
-                std.log.err("Try running 'zig build' first to generate platform target files.", .{});
-                return error.MissingGlibcStub;
-            };
-
-            try extra_args.append("-L");
-            try extra_args.append(stub_dir);
-            try extra_args.append("-lc");
-        }
-    } else if (target.isMacOS()) {
-        // For macOS targets, link with system libraries
+    // Extra linker args for system libraries (not platform-provided)
+    var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    if (target.isMacOS()) {
+        // macOS requires linking with system libraries
         try extra_args.append("-lSystem");
     }
 

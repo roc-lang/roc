@@ -252,55 +252,6 @@ pub const RocTarget = enum {
     }
 };
 
-/// CRT (C runtime) file paths for linking
-pub const CRTFiles = struct {
-    crt1_o: ?[]const u8 = null, // crt1.o or Scrt1.o (for PIE)
-    crti_o: ?[]const u8 = null, // crti.o
-    crtn_o: ?[]const u8 = null, // crtn.o
-    libc_a: ?[]const u8 = null, // libc.a (for static linking)
-};
-
-/// Get vendored CRT object files for a platform target
-/// All CRT files must be provided by the platform in its targets/ directory
-/// The files_dir parameter specifies the subdirectory name from the platform header (e.g., "targets/")
-/// If null, defaults to "targets"
-pub fn getVendoredCRTFiles(allocator: Allocator, target: RocTarget, platform_dir: []const u8, files_dir: ?[]const u8) !CRTFiles {
-    // macOS and Windows targets don't need vendored CRT files - they use system libraries
-    if (target.isMacOS() or target.isWindows()) {
-        return CRTFiles{}; // Return empty CRTFiles struct
-    }
-
-    // Build path to the vendored CRT files
-    const target_subdir = switch (target) {
-        .x64musl => "x64musl",
-        .x64glibc => "x64glibc",
-        .arm64musl => "arm64musl",
-        .arm64glibc => "arm64glibc",
-        .arm32musl => "arm32musl",
-        .arm32linux => "arm32glibc",
-        else => return error.UnsupportedTargetForPlatform,
-    };
-
-    // Use files_dir from platform header if available, otherwise default to "targets"
-    const files_subdir = files_dir orelse "targets";
-    const targets_dir = try std.fs.path.join(allocator, &[_][]const u8{ platform_dir, files_subdir, target_subdir });
-
-    var result = CRTFiles{};
-
-    if (target.isStatic()) {
-        // For musl static linking
-        result.crt1_o = try std.fs.path.join(allocator, &[_][]const u8{ targets_dir, "crt1.o" });
-        result.libc_a = try std.fs.path.join(allocator, &[_][]const u8{ targets_dir, "libc.a" });
-    } else {
-        // For glibc dynamic linking
-        result.crt1_o = try std.fs.path.join(allocator, &[_][]const u8{ targets_dir, "Scrt1.o" });
-        result.crti_o = try std.fs.path.join(allocator, &[_][]const u8{ targets_dir, "crti.o" });
-        result.crtn_o = try std.fs.path.join(allocator, &[_][]const u8{ targets_dir, "crtn.o" });
-    }
-
-    return result;
-}
-
 /// Individual link item from a targets section
 /// Can be a file path (relative to files/ directory) or a special identifier
 pub const LinkItem = union(enum) {
