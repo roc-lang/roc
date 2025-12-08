@@ -2364,30 +2364,7 @@ pub const Interpreter = struct {
                 // (handles refcounting internally), but we're working with StackValues that
                 // have their own lifetime management - the caller will decref the args.
                 const total_count = list_a.len() + list_b.len();
-
-                // Determine the result's rt_var. For unannotated polymorphic functions,
-                // return_rt_var might be a flex var that doesn't provide useful type info.
-                // In that case, prefer the concrete type from the input lists.
-                const result_rt_var = blk: {
-                    if (return_rt_var) |ret_var| {
-                        const ret_resolved = self.runtime_types.resolveVar(ret_var);
-                        // If return_rt_var resolves to a concrete structure type, use it
-                        if (ret_resolved.desc.content == .structure) {
-                            break :blk ret_var;
-                        }
-                    }
-                    // Fallback: prefer list_a's rt_var if it's concrete, otherwise list_b's
-                    const a_resolved = self.runtime_types.resolveVar(list_a_arg.rt_var);
-                    if (a_resolved.desc.content == .structure) {
-                        break :blk list_a_arg.rt_var;
-                    }
-                    const b_resolved = self.runtime_types.resolveVar(list_b_arg.rt_var);
-                    if (b_resolved.desc.content == .structure) {
-                        break :blk list_b_arg.rt_var;
-                    }
-                    // Last resort: use return_rt_var or list_a's type
-                    break :blk return_rt_var orelse list_a_arg.rt_var;
-                };
+                const result_rt_var = return_rt_var orelse list_a_arg.rt_var;
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
                 const header: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
@@ -14798,11 +14775,53 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // Get return type from the dot access expression for low-level builtins that need it.
-                    // Use saved_env (the caller's module) since dac.expr_idx is from that module,
-                    // not from self.env which has been switched to the closure's source module.
-                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    // Get the return type from the method's function type signature, not from the
+                    // call site. The method has a type annotation (e.g., `List.concat : List(a), List(a) -> List(a)`)
+                    // and we should use that, properly instantiated with argument types.
+                    const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
+                    const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                    // Extract return type from function signature and unify with argument types
+                    const return_rt_var: types.Var = if (lambda_resolved.desc.content == .structure) blk: {
+                        const func_struct = lambda_resolved.desc.content.structure;
+                        const func_info: ?struct { args: types.Var.SafeList.Range, ret: types.Var } = switch (func_struct) {
+                            .fn_pure => |f| .{ .args = f.args, .ret = f.ret },
+                            .fn_effectful => |f| .{ .args = f.args, .ret = f.ret },
+                            .fn_unbound => |f| .{ .args = f.args, .ret = f.ret },
+                            else => null,
+                        };
+
+                        if (func_info) |info| {
+                            // Unify parameter types with actual argument types to instantiate type variables
+                            const param_vars = self.runtime_types.sliceVars(info.args);
+                            const arg_count_to_unify = @min(param_vars.len, all_args.len);
+                            for (0..arg_count_to_unify) |unify_idx| {
+                                _ = unify.unifyWithConf(
+                                    self.env,
+                                    self.runtime_types,
+                                    &self.problems,
+                                    &self.snapshots,
+                                    &self.type_writer,
+                                    &self.unify_scratch,
+                                    &self.unify_scratch.occurs_scratch,
+                                    param_vars[unify_idx],
+                                    all_args[unify_idx].rt_var,
+                                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                                ) catch {};
+                            }
+                            // Return type is now properly instantiated through unification
+                            break :blk info.ret;
+                        }
+                        // Fallback to call site type if no function structure
+                        const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                        break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                    } else blk: {
+                        // Fallback to call site type
+                        const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                        break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                    };
+
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics
