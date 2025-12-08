@@ -11,13 +11,18 @@
 const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
+const reporting = @import("reporting");
 const target_mod = @import("target.zig");
-const targets_validator = @import("targets_validator.zig");
+pub const targets_validator = @import("targets_validator.zig");
 
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
 const LinkType = target_mod.LinkType;
 const LinkItem = target_mod.LinkItem;
+const TargetLinkSpec = target_mod.TargetLinkSpec;
+
+/// Re-export ValidationResult for callers that need to create reports
+pub const ValidationResult = targets_validator.ValidationResult;
 
 /// Errors that can occur during platform validation
 pub const ValidationError = error{
@@ -97,37 +102,82 @@ pub fn validateTargetSupported(
     }
 }
 
+/// Create a ValidationResult for an unsupported target error.
+/// This can be passed to targets_validator.createValidationReport for nice error formatting.
+pub fn createUnsupportedTargetResult(
+    platform_path: []const u8,
+    requested_target: RocTarget,
+    link_type: LinkType,
+    config: TargetsConfig,
+) ValidationResult {
+    return .{
+        .unsupported_target = .{
+            .platform_path = platform_path,
+            .requested_target = requested_target,
+            .link_type = link_type,
+            .supported_targets = config.getSupportedTargets(link_type),
+        },
+    };
+}
+
+/// Render a validation error to stderr using the reporting infrastructure.
+/// Returns true if a report was rendered, false if no report was needed.
+pub fn renderValidationError(
+    allocator: std.mem.Allocator,
+    result: ValidationResult,
+    stderr: anytype,
+) bool {
+    switch (result) {
+        .valid => return false,
+        else => {
+            var report = targets_validator.createValidationReport(allocator, result) catch {
+                // Fallback to simple logging if report creation fails
+                std.log.err("Platform validation failed", .{});
+                return true;
+            };
+            defer report.deinit();
+
+            reporting.renderReportToTerminal(
+                &report,
+                stderr,
+                .ANSI,
+                reporting.ReportingConfig.initColorTerminal(),
+            ) catch {};
+            return true;
+        },
+    }
+}
+
 /// Validate all files declared in targets section exist on disk.
 /// Uses existing targets_validator infrastructure.
+/// Returns the ValidationResult for nice error reporting, or null if validation passed.
 pub fn validateAllTargetFilesExist(
     allocator: std.mem.Allocator,
     config: TargetsConfig,
     platform_dir_path: []const u8,
-) ValidationError!void {
+) ?ValidationResult {
     var platform_dir = std.fs.cwd().openDir(platform_dir_path, .{}) catch {
-        std.log.err("Cannot open platform directory: {s}", .{platform_dir_path});
-        return error.MissingFilesDirectory;
+        return .{
+            .missing_files_directory = .{
+                .platform_path = platform_dir_path,
+                .files_dir = config.files_dir orelse "targets",
+            },
+        };
     };
     defer platform_dir.close();
 
     const result = targets_validator.validateTargetFilesExist(allocator, config, platform_dir) catch {
-        return error.MissingTargetFile;
+        return .{
+            .missing_files_directory = .{
+                .platform_path = platform_dir_path,
+                .files_dir = config.files_dir orelse "targets",
+            },
+        };
     };
 
     switch (result) {
-        .valid => {},
-        .missing_target_file => |info| {
-            std.log.err("Missing target file declared in platform header", .{});
-            std.log.err("  Target: {s}", .{@tagName(info.target)});
-            std.log.err("  File: {s}", .{info.file_path});
-            std.log.err("  Expected at: {s}", .{info.expected_full_path});
-            return error.MissingTargetFile;
-        },
-        .missing_files_directory => |info| {
-            std.log.err("Missing files directory: {s}", .{info.files_dir});
-            return error.MissingFilesDirectory;
-        },
-        else => return error.MissingTargetFile,
+        .valid => return null,
+        else => return result,
     }
 }
 

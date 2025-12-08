@@ -928,8 +928,42 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         return err;
     };
 
-    // Use native detection (typically musl) for shim generation to match embedded shim library
+    // Use native detection for shim generation to match embedded shim library
     const shim_target = builder.RocTarget.detectNative();
+
+    // Validate platform header has targets section and supports native target
+    if (platform_paths.platform_source_path) |platform_source| {
+        if (platform_validation.validatePlatformHeader(allocs.arena, platform_source)) |validation| {
+            // Validate that the native target is supported
+            platform_validation.validateTargetSupported(validation.config, shim_target, .exe) catch |err| {
+                switch (err) {
+                    error.UnsupportedTarget => {
+                        // Create a nice formatted error report
+                        const result = platform_validation.createUnsupportedTargetResult(
+                            platform_source,
+                            shim_target,
+                            .exe,
+                            validation.config,
+                        );
+                        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                        return error.UnsupportedTarget;
+                    },
+                    else => {},
+                }
+            };
+        } else |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    // Warning only - platform may still work for native builds
+                    // Don't block execution, just inform the user
+                    std.log.debug("Platform at '{s}' has no targets section", .{platform_source});
+                },
+                else => {
+                    std.log.debug("Could not validate platform header: {}", .{err});
+                },
+            }
+        }
+    }
 
     // Extract entrypoints from platform source file
     var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch |err| {
@@ -2751,27 +2785,19 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
     if (std.mem.endsWith(u8, main_file, ".roc")) {
         if (platform_validation.validatePlatformHeader(allocs.arena, main_file)) |validation| {
             // Platform validation succeeded - validate all target files exist
-            platform_validation.validateAllTargetFilesExist(
+            if (platform_validation.validateAllTargetFilesExist(
                 allocs.arena,
                 validation.config,
                 validation.platform_dir,
-            ) catch |err| {
-                switch (err) {
-                    error.MissingTargetFile => {
-                        try stderr.print("Error: Platform bundle is missing required target files\n", .{});
-                        try stderr.print("Add target files to targets/ directory or update targets section\n", .{});
-                        return error.MissingTargetFile;
-                    },
-                    error.MissingFilesDirectory => {
-                        try stderr.print("Error: Platform targets directory not found\n", .{});
-                        return error.MissingFilesDirectory;
-                    },
-                    else => {
-                        try stderr.print("Error: Failed to validate target files: {}\n", .{err});
-                        return err;
-                    },
-                }
-            };
+            )) |result| {
+                // Render the validation error with nice formatting
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderr);
+                return switch (result) {
+                    .missing_target_file => error.MissingTargetFile,
+                    .missing_files_directory => error.MissingFilesDirectory,
+                    else => error.MissingTargetFile,
+                };
+            }
             std.log.debug("Platform validation passed for: {s}", .{main_file});
         } else |err| {
             switch (err) {
@@ -3078,7 +3104,14 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
                 platform_validation.validateTargetSupported(validation.config, target, .exe) catch |err| {
                     switch (err) {
                         error.UnsupportedTarget => {
-                            std.log.err("Platform does not support target '{s}'", .{@tagName(target)});
+                            // Create a nice formatted error report
+                            const result = platform_validation.createUnsupportedTargetResult(
+                                platform_source,
+                                target,
+                                .exe,
+                                validation.config,
+                            );
+                            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                             return error.UnsupportedTarget;
                         },
                         else => {},
@@ -3087,15 +3120,17 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
             } else |err| {
                 switch (err) {
                     error.MissingTargetsSection => {
-                        // Warning only - platform may work for native builds
-                        std.log.warn("Platform at '{s}' has no targets section", .{platform_source});
-                        std.log.warn("Cross-compilation may not work correctly", .{});
+                        // Render a nice warning report
+                        const result = platform_validation.ValidationResult{
+                            .missing_targets_section = .{ .platform_path = platform_source },
+                        };
+                        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                        // Continue with build - validation is advisory for now
                     },
                     else => {
                         std.log.warn("Failed to validate platform header: {}", .{err});
                     },
                 }
-                // Continue with build - validation is advisory for now
             }
         }
     }

@@ -66,6 +66,14 @@ pub const ValidationResult = union(enum) {
     empty_targets: struct {
         platform_path: []const u8,
     },
+
+    /// Requested target is not supported by this platform
+    unsupported_target: struct {
+        platform_path: []const u8,
+        requested_target: RocTarget,
+        link_type: LinkType,
+        supported_targets: []const TargetLinkSpec,
+    },
 };
 
 /// Validate that a platform has a targets section
@@ -325,6 +333,45 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
 
             try report.document.addText("Add at least one target to the exe, static_lib, or shared_lib section.");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .unsupported_target => |info| {
+            var report = Report.init(allocator, "UNSUPPORTED TARGET", .runtime_error);
+
+            try report.document.addText("The platform at ");
+            try report.document.addAnnotated(info.platform_path, .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addText("does not support the ");
+            try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
+            try report.document.addText(" target for ");
+            try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
+            try report.document.addText(" builds.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            if (info.supported_targets.len > 0) {
+                try report.document.addText("Supported targets for ");
+                try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
+                try report.document.addText(":");
+                try report.document.addLineBreak();
+                for (info.supported_targets) |spec| {
+                    try report.document.addText("  - ");
+                    try report.document.addAnnotated(@tagName(spec.target), .emphasized);
+                    try report.document.addLineBreak();
+                }
+                try report.document.addLineBreak();
+            } else {
+                try report.document.addText("This platform has no targets configured for ");
+                try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
+                try report.document.addText(" builds.");
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+            }
+
+            try report.document.addText("To add support, update the targets section in the platform header.");
             try report.document.addLineBreak();
 
             return report;
