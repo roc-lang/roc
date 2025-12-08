@@ -8687,18 +8687,50 @@ pub const Interpreter = struct {
                         // Add placeholder to prevent infinite recursion on recursive types
                         try subst_map.put(resolved.var_, type_var);
 
-                        // Recursively process type args to find and map any rigids
+                        // Instantiate the backing type
+                        const backing = self.runtime_types.getNominalBackingVar(nt);
+                        const new_backing = try self.instantiateType(backing, subst_map);
+
+                        // Instantiate type args - create NEW vars with substituted rigids
                         const type_args = self.runtime_types.sliceNominalArgs(nt);
-                        for (type_args) |arg_var| {
-                            _ = try self.instantiateType(arg_var, subst_map);
+                        var new_args = try self.allocator.alloc(types.Var, type_args.len);
+                        defer self.allocator.free(new_args);
+                        for (type_args, 0..) |arg_var, i| {
+                            new_args[i] = try self.instantiateType(arg_var, subst_map);
                         }
 
-                        // Also process the backing type to find any rigids there
-                        const backing = self.runtime_types.getNominalBackingVar(nt);
-                        _ = try self.instantiateType(backing, subst_map);
+                        // Check if anything actually changed - if not, return original to avoid creating duplicates
+                        var any_changed = new_backing != backing;
+                        if (!any_changed) {
+                            for (type_args, new_args) |old, new| {
+                                if (old != new) {
+                                    any_changed = true;
+                                    break;
+                                }
+                            }
+                        }
 
-                        // Return original - substitution handled via rigid_subst during layout
-                        break :blk_nominal type_var;
+                        if (!any_changed) {
+                            // Nothing changed, return original
+                            break :blk_nominal type_var;
+                        }
+
+                        // Create a new nominal type with instantiated args
+                        const content = try self.runtime_types.mkNominal(
+                            nt.ident,
+                            new_backing,
+                            new_args,
+                            nt.origin_module,
+                            nt.is_opaque,
+                        );
+                        const new_var = try self.runtime_types.register(.{
+                            .content = content,
+                            .rank = types.Rank.top_level,
+                            .mark = types.Mark.none,
+                        });
+                        // Update the subst_map with the new var
+                        try subst_map.put(resolved.var_, new_var);
+                        break :blk_nominal new_var;
                     },
                     .tag_union => |tu| blk_tag_union: {
                         // Add placeholder to prevent infinite recursion
@@ -14780,7 +14812,16 @@ pub const Interpreter = struct {
                     // and we should use that, properly instantiated with argument types.
                     const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                     const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
-                    const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                    // CRITICAL: Instantiate the function type to replace rigid type variables with
+                    // fresh flex vars. The method signature from Builtin has rigid type parameters
+                    // (e.g., `List.append : List(a), a -> List(a)` where `a` is rigid).
+                    // Rigid types cannot unify with concrete types - unification returns TypeMismatch.
+                    // Instantiation creates fresh flex copies that CAN be unified.
+                    var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                    defer subst_map.deinit();
+                    const instantiated_func_var = try self.instantiateType(lambda_rt_var, &subst_map);
+                    const lambda_resolved = self.runtime_types.resolveVar(instantiated_func_var);
 
                     // Extract return type from function signature and unify with argument types
                     const return_rt_var: types.Var = if (lambda_resolved.desc.content == .structure) blk: {
@@ -14793,10 +14834,20 @@ pub const Interpreter = struct {
                         };
 
                         if (func_info) |info| {
-                            // Unify parameter types with actual argument types to instantiate type variables
+                            // Unify parameter types with actual argument types to instantiate type variables.
+                            // IMPORTANT: We must create copies of argument types because unification modifies
+                            // BOTH sides, which would corrupt the argument values' types. We create fresh
+                            // copies that share the same content but have independent vars.
                             const param_vars = self.runtime_types.sliceVars(info.args);
                             const arg_count_to_unify = @min(param_vars.len, all_args.len);
                             for (0..arg_count_to_unify) |unify_idx| {
+                                // Create a fresh copy of the argument's type to avoid corrupting the original
+                                const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
+                                const arg_copy = try self.runtime_types.register(.{
+                                    .content = arg_resolved.desc.content,
+                                    .rank = arg_resolved.desc.rank,
+                                    .mark = types.Mark.none,
+                                });
                                 _ = unify.unifyWithConf(
                                     self.env,
                                     self.runtime_types,
@@ -14806,7 +14857,7 @@ pub const Interpreter = struct {
                                     &self.unify_scratch,
                                     &self.unify_scratch.occurs_scratch,
                                     param_vars[unify_idx],
-                                    all_args[unify_idx].rt_var,
+                                    arg_copy,
                                     unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                                 ) catch {};
                             }
