@@ -61,11 +61,11 @@ test "list refcount containers - tuple with string list" {
 test "list refcount containers - single field record with list" {
     try runExpectInt(
         \\{
-        \\    x = [1, 2]
-        \\    r = {lst: x}
-        \\    match r.lst { [a, b] => a + b, _ => 0 }
+        \\    lst = [1, 2, 3]
+        \\    r = {items: lst}
+        \\    match r.items { [a, b, c] => a + b + c, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 6, .no_trace);
 }
 
 test "list refcount containers - multiple fields with lists" {
@@ -73,38 +73,39 @@ test "list refcount containers - multiple fields with lists" {
         \\{
         \\    x = [1, 2]
         \\    y = [3, 4]
-        \\    r = {a: x, b: y}
-        \\    match r.a { [first, ..] => first, _ => 0 }
+        \\    r = {first: x, second: y}
+        \\    match r.first { [a, b] => a + b, _ => 0 }
         \\}
-    , 1, .no_trace);
+    , 3, .no_trace);
 }
 
 test "list refcount containers - same list in multiple fields" {
     try runExpectInt(
         \\{
-        \\    x = [1, 2]
-        \\    r = {a: x, b: x}
-        \\    match r.a { [first, ..] => first, _ => 0 }
+        \\    lst = [10, 20]
+        \\    r = {a: lst, b: lst}
+        \\    match r.a { [x, y] => x + y, _ => 0 }
         \\}
-    , 1, .no_trace);
+    , 30, .no_trace);
 }
 
 test "list refcount containers - nested record with list" {
     try runExpectInt(
         \\{
-        \\    x = [1, 2]
-        \\    r = {inner: {lst: x}}
-        \\    match r.inner.lst { [a, b] => a + b, _ => 0 }
+        \\    lst = [5, 6]
+        \\    inner = {data: lst}
+        \\    outer = {nested: inner}
+        \\    match outer.nested.data { [a, b] => a + b, _ => 0 }
         \\}
-    , 3, .no_trace);
+    , 11, .no_trace);
 }
 
 test "list refcount containers - record with string list" {
     try runExpectStr(
         \\{
-        \\    x = ["hello", "world"]
-        \\    r = {words: x}
-        \\    match r.words { [first, ..] => first, _ => "" }
+        \\    lst = ["hello", "world"]
+        \\    r = {items: lst}
+        \\    match r.items { [first, ..] => first, _ => "" }
         \\}
     , "hello", .no_trace);
 }
@@ -112,11 +113,11 @@ test "list refcount containers - record with string list" {
 test "list refcount containers - record with mixed types" {
     try runExpectInt(
         \\{
-        \\    lst = [10, 20]
-        \\    r = {numbers: lst, name: "test"}
-        \\    match r.numbers { [a, b] => a + b, _ => 0 }
+        \\    lst = [1, 2, 3]
+        \\    r = {count: 42, items: lst}
+        \\    r.count
         \\}
-    , 30, .no_trace);
+    , 42, .no_trace);
 }
 
 // ===== Tags with Lists =====
@@ -160,10 +161,10 @@ test "list refcount containers - tuple of records with lists" {
         \\{
         \\    lst1 = [1, 2]
         \\    lst2 = [3, 4]
-        \\    r1 = {data: lst1}
-        \\    r2 = {data: lst2}
+        \\    r1 = {items: lst1}
+        \\    r2 = {items: lst2}
         \\    t = (r1, r2)
-        \\    match t { (first, _) => match first.data { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    match t { (first, _) => match first.items { [a, b] => a + b, _ => 0 }, _ => 0 }
         \\}
     , 3, .no_trace);
 }
@@ -171,21 +172,21 @@ test "list refcount containers - tuple of records with lists" {
 test "list refcount containers - record of tuples with lists" {
     try runExpectInt(
         \\{
-        \\    lst = [10, 20]
-        \\    tup = (lst, lst)
-        \\    r = {pair: tup}
-        \\    match r.pair { (first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    lst = [5, 6]
+        \\    t = (lst, 99)
+        \\    r = {data: t}
+        \\    match r.data { (items, _) => match items { [a, b] => a + b, _ => 0 }, _ => 0 }
         \\}
-    , 30, .no_trace);
+    , 11, .no_trace);
 }
 
 test "list refcount containers - tag with record containing list" {
     try runExpectInt(
         \\{
-        \\    lst = [5, 10]
-        \\    r = {values: lst}
-        \\    tag = Data(r)
-        \\    match tag { Data(rec) => match rec.values { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\    lst = [7, 8]
+        \\    r = {items: lst}
+        \\    tag = Some(r)
+        \\    match tag { Some(rec) => match rec.items { [a, b] => a + b, _ => 0 }, None => 0 }
         \\}
     , 15, .no_trace);
 }

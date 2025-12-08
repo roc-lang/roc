@@ -1017,29 +1017,36 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "f")))
-					(e-lambda
-						(args
-							(p-assign (ident "container")))
+					(e-closure
+						(captures
+							(capture (ident "f")))
 						(e-lambda
 							(args
-								(p-assign (ident "default")))
-							(e-block
-								(s-let
-									(p-assign (ident "mapped"))
-									(e-dot-access (field "map")
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "container"))))
-										(args
-											(e-lookup-local
-												(p-assign (ident "f"))))))
-								(e-dot-access (field "get_or")
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "mapped"))))
+								(p-assign (ident "container")))
+							(e-closure
+								(captures
+									(capture (ident "container"))
+									(capture (ident "f")))
+								(e-lambda
 									(args
-										(e-lookup-local
-											(p-assign (ident "default"))))))))))
+										(p-assign (ident "default")))
+									(e-block
+										(s-let
+											(p-assign (ident "mapped"))
+											(e-dot-access (field "map")
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "container"))))
+												(args
+													(e-lookup-local
+														(p-assign (ident "f"))))))
+										(e-dot-access (field "get_or")
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "mapped"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "default"))))))))))))
 			(s-let
 				(p-assign (ident "num_container"))
 				(e-nominal (nominal "Container")

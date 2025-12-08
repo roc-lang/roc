@@ -4913,15 +4913,21 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
         .field_access => |field_access| {
+            // Track free vars from receiver and arguments
+            const free_vars_start = self.scratch_free_vars.top();
+
             // Try module-qualified lookup first (e.g., Json.utf8)
             if (try self.tryModuleQualifiedLookup(field_access)) |expr_idx| {
+                // Module-qualified lookups don't have free vars (they reference external definitions)
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
             }
 
             // Regular field access canonicalization
+            const expr_idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null;
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
             return CanonicalizedExpr{
-                .idx = (try self.canonicalizeRegularFieldAccess(field_access)) orelse return null,
-                .free_vars = DataSpan.empty(),
+                .idx = expr_idx,
+                .free_vars = free_vars_span,
             };
         },
         .local_dispatch => |local_dispatch| {

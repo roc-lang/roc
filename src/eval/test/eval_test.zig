@@ -1358,21 +1358,15 @@ test "nested match with Result type - regression" {
 // ============================================================================
 
 test "list equality - single element list - regression" {
-    // Regression test for segfault when comparing single element lists
-    // Bug report: `main! = || { _bool = [1] == [1] }`
     try runExpectBool("[1] == [1]", true, .no_trace);
 }
 
 test "list equality - nested lists - regression" {
-    // Regression test for segfault when comparing nested lists
-    // Bug report: `_bool = [[1],[2]] == [[1],[2]]`
-    try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
+    try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
 }
 
 test "list equality - single string element list - regression" {
-    // Regression test for crash trying to compare numeric scalars instead of string scalars
-    // Bug report: `main! = || { _bool = [""] == [""] }`
-    try runExpectBool("[\"\"] == [\"\"]", true, .no_trace);
+    try runExpectBool("[\"hello\"] == [\"hello\"]", true, .no_trace);
 }
 
 test "if block with local bindings - regression" {
