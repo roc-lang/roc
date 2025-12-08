@@ -622,32 +622,49 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
         }
     }.lessThan);
 
-    // Read fx_platform_test.zig to extract tested files
-    const test_file_path = "src/cli/test/fx_platform_test.zig";
-    const test_file_contents = try std.fs.cwd().readFileAlloc(allocator, test_file_path, 1024 * 1024);
-    defer allocator.free(test_file_contents);
-
-    // Find all references to test/fx/*.roc files in the test file
+    // Find all references to test/fx/*.roc files in test source files
     var tested_files = std.StringHashMap(void).init(allocator);
-    defer tested_files.deinit();
+    defer {
+        var key_iter = tested_files.keyIterator();
+        while (key_iter.next()) |key| {
+            allocator.free(key.*);
+        }
+        tested_files.deinit();
+    }
 
-    var line_iter = std.mem.splitScalar(u8, test_file_contents, '\n');
-    while (line_iter.next()) |line| {
-        // Look for patterns like "test/fx/filename.roc"
-        var search_start: usize = 0;
-        while (std.mem.indexOfPos(u8, line, search_start, "test/fx/")) |idx| {
-            const rest_of_line = line[idx..];
-            // Find the end of the filename
-            if (std.mem.indexOf(u8, rest_of_line, ".roc")) |roc_pos| {
-                const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
-                // Extract just the filename (after "test/fx/")
-                const filename = full_path["test/fx/".len..];
-                // Only count files in test/fx (not subdirectories like test/fx/subdir/)
-                if (std.mem.indexOf(u8, filename, "/") == null) {
-                    try tested_files.put(filename, {});
+    // Scan both the test file and the shared specs file
+    const test_files_to_scan = [_][]const u8{
+        "src/cli/test/fx_platform_test.zig",
+        "src/cli/test/fx_test_specs.zig",
+    };
+
+    for (test_files_to_scan) |test_file_path| {
+        const test_file_contents = std.fs.cwd().readFileAlloc(allocator, test_file_path, 1024 * 1024) catch |err| {
+            std.debug.print("Warning: Could not read {s}: {}\n", .{ test_file_path, err });
+            continue;
+        };
+        defer allocator.free(test_file_contents);
+
+        var line_iter = std.mem.splitScalar(u8, test_file_contents, '\n');
+        while (line_iter.next()) |line| {
+            // Look for patterns like "test/fx/filename.roc"
+            var search_start: usize = 0;
+            while (std.mem.indexOfPos(u8, line, search_start, "test/fx/")) |idx| {
+                const rest_of_line = line[idx..];
+                // Find the end of the filename
+                if (std.mem.indexOf(u8, rest_of_line, ".roc")) |roc_pos| {
+                    const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
+                    // Extract just the filename (after "test/fx/")
+                    const filename = full_path["test/fx/".len..];
+                    // Only count files in test/fx (not subdirectories like test/fx/subdir/)
+                    if (std.mem.indexOf(u8, filename, "/") == null) {
+                        // Dupe the filename since the source buffer will be freed
+                        const duped_filename = try allocator.dupe(u8, filename);
+                        try tested_files.put(duped_filename, {});
+                    }
                 }
+                search_start = idx + 1;
             }
-            search_start = idx + 1;
         }
     }
 
@@ -663,11 +680,11 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
 
     // Report results
     if (missing_tests.items.len > 0) {
-        std.debug.print("\nERROR: The following .roc files in test/fx/ do not have tests in {s}:\n", .{test_file_path});
+        std.debug.print("\nERROR: The following .roc files in test/fx/ do not have tests:\n", .{});
         for (missing_tests.items) |missing_file| {
             std.debug.print("  - {s}\n", .{missing_file});
         }
-        std.debug.print("\nPlease add tests for these files or remove them from test/fx/.\n", .{});
+        std.debug.print("\nPlease add tests in fx_platform_test.zig or fx_test_specs.zig, or remove these files from test/fx/.\n", .{});
         return step.fail("{d} .roc file(s) in test/fx/ are missing tests", .{missing_tests.items.len});
     }
 
@@ -1041,12 +1058,10 @@ fn setupTestPlatforms(
         clear_cache_step.dependOn(&copy_host.step);
     }
 
-    // Cross-compile test platform host libraries for musl and glibc targets
+    // Cross-compile test platform host libraries for musl targets
     const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
         .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
-        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
     };
 
     for (cross_compile_targets) |cross_target| {
@@ -1066,15 +1081,6 @@ fn setupTestPlatforms(
             const copy_cross_host = b.addUpdateSourceFiles();
             copy_cross_host.addCopyFileToSource(cross_host_lib.getEmittedBin(), b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "libhost.a" }));
             clear_cache_step.dependOn(&copy_cross_host.step);
-        }
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
-                test_platforms_step.dependOn(&stub.step);
-            }
         }
     }
 }
@@ -1332,6 +1338,17 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
+
+    // Add fx cross-compilation test runner (used by CI)
+    const fx_cross_runner_exe = b.addExecutable(.{
+        .name = "fx_cross_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/test/fx_cross_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(fx_cross_runner_exe);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",

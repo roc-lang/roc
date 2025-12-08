@@ -83,19 +83,15 @@ const ShimLibraries = struct {
     else
         @embedFile("libroc_interpreter_shim.a");
 
-    /// Cross-compilation target shims (Linux targets)
+    /// Cross-compilation target shims (Linux musl targets)
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_interpreter_shim.a");
     const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_interpreter_shim.a");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_interpreter_shim.a");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_interpreter_shim.a");
 
     /// Get the appropriate shim library bytes for the given target
     pub fn forTarget(target: roc_target.RocTarget) []const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
-            .x64glibc => x64glibc,
-            .arm64glibc => arm64glibc,
             // Native/host targets use the native shim
             .x64mac, .arm64mac, .x64win, .arm64win => native,
             // Fallback for other targets (will use native, may not work for cross-compilation)
