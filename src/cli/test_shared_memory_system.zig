@@ -125,7 +125,7 @@ test "integration - shared memory setup and parsing" {
     const roc_path = "test/int/app.roc";
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_result = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
+    const shm_result = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true);
     const shm_handle = shm_result.handle;
 
     // Clean up shared memory resources
@@ -170,7 +170,7 @@ test "integration - compilation pipeline for different platforms" {
 
     for (test_apps) |roc_path| {
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path) catch |err| {
+        const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true) catch |err| {
             std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
             continue;
         };
@@ -212,7 +212,7 @@ test "integration - error handling for non-existent file" {
     const roc_path = "test/nonexistent/app.roc";
 
     // This should fail because the file doesn't exist
-    const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path);
+    const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true);
 
     // We expect this to fail - the important thing is that it doesn't crash
     if (result) |shm_result| {

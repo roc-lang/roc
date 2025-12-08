@@ -1103,7 +1103,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Set up shared memory with ModuleEnv
     std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
         return err;
     };
@@ -1458,7 +1458,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
-pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8) !SharedMemoryResult {
+pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -1704,6 +1704,17 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
             var report = app_parse_ast.parseDiagnosticToReport(&app_env.common, diagnostic, allocs.gpa, roc_file_path) catch continue;
             defer report.deinit();
             reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+        // If errors are not allowed then we should not move past parsing. return early and let caller handle error/exit
+        if (!allow_errors) {
+            return SharedMemoryResult{
+                .handle = SharedMemoryHandle{
+                    .fd = shm.handle,
+                    .ptr = shm.base_ptr,
+                    .size = shm.getUsedSize(),
+                },
+                .error_count = error_count,
+            };
         }
     }
 
