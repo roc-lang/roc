@@ -3235,9 +3235,14 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     // For cross-compilation to Linux, we need CRT files from the platform's targets/ directory
     if (is_cross_compile and target.isLinux()) {
-        // Extract platform directory from the NATIVE host library path (not the target-specific one)
-        // The CRT files are organized as platform/targets/{target}/, so we need the base platform dir
-        const platform_dir = std.fs.path.dirname(native_host_lib_path) orelse ".";
+        // Get the base platform directory (where main.roc lives, not targets/<native>/)
+        // CRT files are organized as <platform_dir>/targets/{target}/
+        const platform_dir: []const u8 = if (platform_paths) |pp| dir: {
+            if (pp.platform_source_path) |source_path| {
+                break :dir std.fs.path.dirname(source_path) orelse ".";
+            }
+            break :dir deriveBasePlatformDir(native_host_lib_path);
+        } else deriveBasePlatformDir(native_host_lib_path);
 
         // Get CRT files for the target
         const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, target, platform_dir);
