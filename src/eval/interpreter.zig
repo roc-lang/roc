@@ -2056,7 +2056,19 @@ pub const Interpreter = struct {
                 const len_u64: u64 = @intCast(len_usize);
 
                 const result_layout = layout.Layout.int(.u64);
-                const result_rt_var = return_rt_var orelse unreachable;
+                // Use return_rt_var if it's a concrete type, otherwise create U64 nominal type.
+                // This ensures method dispatch works when the CT return type was a flex var.
+                const result_rt_var = blk: {
+                    if (return_rt_var) |rt_var| {
+                        const resolved = self.runtime_types.resolveVar(rt_var);
+                        if (resolved.desc.content != .flex and resolved.desc.content != .rigid) {
+                            break :blk rt_var;
+                        }
+                    }
+                    // Create canonical U64 type for method dispatch
+                    const u64_content = try self.mkNumberTypeContentRuntime("U64");
+                    break :blk try self.runtime_types.freshFromContent(u64_content);
+                };
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
                 try out.setInt(@intCast(len_u64));
@@ -2352,7 +2364,30 @@ pub const Interpreter = struct {
                 // (handles refcounting internally), but we're working with StackValues that
                 // have their own lifetime management - the caller will decref the args.
                 const total_count = list_a.len() + list_b.len();
-                const result_rt_var = return_rt_var orelse list_a_arg.rt_var;
+
+                // Determine the result's rt_var. For unannotated polymorphic functions,
+                // return_rt_var might be a flex var that doesn't provide useful type info.
+                // In that case, prefer the concrete type from the input lists.
+                const result_rt_var = blk: {
+                    if (return_rt_var) |ret_var| {
+                        const ret_resolved = self.runtime_types.resolveVar(ret_var);
+                        // If return_rt_var resolves to a concrete structure type, use it
+                        if (ret_resolved.desc.content == .structure) {
+                            break :blk ret_var;
+                        }
+                    }
+                    // Fallback: prefer list_a's rt_var if it's concrete, otherwise list_b's
+                    const a_resolved = self.runtime_types.resolveVar(list_a_arg.rt_var);
+                    if (a_resolved.desc.content == .structure) {
+                        break :blk list_a_arg.rt_var;
+                    }
+                    const b_resolved = self.runtime_types.resolveVar(list_b_arg.rt_var);
+                    if (b_resolved.desc.content == .structure) {
+                        break :blk list_b_arg.rt_var;
+                    }
+                    // Last resort: use return_rt_var or list_a's type
+                    break :blk return_rt_var orelse list_a_arg.rt_var;
+                };
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
                 const header: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
@@ -8444,48 +8479,23 @@ pub const Interpreter = struct {
                     // before the translate_cache lookup. If we reach here, there was no
                     // contextual override.
                     //
-                    // However, if we're in a polymorphic function context (flex_type_context is non-empty)
-                    // and there's exactly one mapping, we should use it. This handles the case where
-                    // a flex var inside a function body (e.g., the element type of an empty list)
-                    // was unified with the function's type parameter at compile time, but the
-                    // union-find structure wasn't preserved during serialization.
+                    // IMPORTANT: We intentionally do NOT apply a broad heuristic here.
+                    // Previously, this code would use flex_type_context entries for ANY
+                    // unrelated flex var if all entries mapped to the same type. This caused
+                    // bugs where numeric literals in record fields (e.g., { start: 0, len: 2 })
+                    // would incorrectly inherit types from unrelated expressions (e.g., 11.to_str()).
                     //
-                    // For example, in `range_to = |current, end| { var answer = [] ... }`:
-                    // - The function has type `Num a, Num a -> List (Num a)` with rigid `a`
-                    // - The empty list `[]` has element type `Num flex_b` where `flex_b` was unified with `a`
-                    // - After serialization, `flex_b` and `a` are different vars
-                    // - If we mapped `a -> U8` from the call arguments, we should use U8 for `flex_b` too
+                    // The original intent was to handle empty lists in polymorphic functions
+                    // where the element type was unified with a type parameter at compile time
+                    // but the union-find structure wasn't preserved during serialization.
+                    // However, that heuristic was too aggressive and caused incorrect type
+                    // propagation. For now, we only apply context-based type resolution when
+                    // there's a SPECIFIC entry for this flex var (checked at the top of this
+                    // function), not based on unrelated context entries.
                     //
-                    // Check if all entries in flex_type_context map to the same runtime type.
-                    // This handles the case where multiple var entries exist (e.g., from parameters
-                    // and internal type vars) but they all represent the same type parameter.
-                    const ctx_count = self.flex_type_context.count();
-                    if (ctx_count > 0) {
-                        var it = self.flex_type_context.iterator();
-                        var first_rt_var: ?types.Var = null;
-                        var all_same = true;
-                        while (it.next()) |entry| {
-                            const rt_var = entry.value_ptr.*;
-                            if (first_rt_var) |first| {
-                                // Check if this entry maps to the same runtime type
-                                // by comparing the resolved root var
-                                const first_resolved = self.runtime_types.resolveVar(first);
-                                const this_resolved = self.runtime_types.resolveVar(rt_var);
-                                // If they resolve to the same root var, they're the same type
-                                if (first_resolved.var_ != this_resolved.var_) {
-                                    all_same = false;
-                                    break;
-                                }
-                            } else {
-                                first_rt_var = rt_var;
-                            }
-                        }
-                        if (all_same) {
-                            if (first_rt_var) |rt_var| {
-                                break :blk rt_var;
-                            }
-                        }
-                    }
+                    // If we need to fix the empty list case in the future, we should use a
+                    // more targeted approach that only applies to list element types, not
+                    // arbitrary numeric literals.
 
                     // Translate the flex's name from source module's ident store to runtime ident store (if present)
                     const rt_name: ?base_pkg.Ident.Idx = if (flex.name) |name| blk_name: {
@@ -10266,8 +10276,13 @@ pub const Interpreter = struct {
                 };
 
                 if (elems.len == 0) {
-                    // Empty list - create immediately
-                    const list_layout = try self.getRuntimeLayout(list_rt_var);
+                    // Empty list - create immediately.
+                    // IMPORTANT: Always use list_of_zst layout for empty lists.
+                    // We cannot use getRuntimeLayout here because:
+                    // 1. For flex rt_vars, it would return Dec (scalar) layout instead of list
+                    // 2. We have no elements to determine element layout from anyway
+                    // The list_of_zst layout is the correct representation for empty lists.
+                    const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
                     const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                     if (dest.ptr != null) {
                         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
@@ -10913,13 +10928,16 @@ pub const Interpreter = struct {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
                 var receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
 
-                // If the receiver type is a flex/rigid var, default to Dec
-                // (Unsuffixed numeric literals default to Dec in Roc)
+                // Check if the translated type is flex/rigid (unresolved)
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
+                const is_flex_or_rigid = receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid;
+
+                // If the receiver type is a flex/rigid var, default to Dec for evaluation.
+                // This ensures numeric literals get proper type resolution.
+                // (Unsuffixed numeric literals default to Dec in Roc)
+                if (is_flex_or_rigid) {
                     const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    receiver_rt_var = dec_var;
+                    receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
                 }
 
                 // Evaluate receiver synchronously with isolated stacks to prevent value stack interleaving.
@@ -10934,6 +10952,20 @@ pub const Interpreter = struct {
                 // This is necessary for records/tuples containing refcounted values like lists.
                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
+                // After evaluation, prefer the actual runtime type from the receiver value
+                // over the translated/defaulted compile-time type. This handles cases like:
+                // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
+                //   runtime value has the concrete String type from dec_to_str
+                // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
+                //   will be Dec (from evalNum's concrete type assignment)
+                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
+                const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
+                    // Use the concrete type from evaluation (handles bindings to non-numeric results)
+                    copied_receiver.rt_var
+                else
+                    // Evaluation result is still flex/rigid - use the (possibly Dec-defaulted) receiver_rt_var
+                    receiver_rt_var;
+
                 // Push to outer value_stack so dot_access_await_receiver can pop it
                 try value_stack.push(copied_receiver);
 
@@ -10941,7 +10973,7 @@ pub const Interpreter = struct {
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_await_receiver = .{
                     .field_name = dot_access.field_name,
                     .method_args = dot_access.args,
-                    .receiver_rt_var = receiver_rt_var,
+                    .receiver_rt_var = final_receiver_rt_var,
                     .expr_idx = expr_idx,
                 } } });
             },
