@@ -21,6 +21,9 @@ const sexpr = base.sexpr;
 /// packing optional data into u32 fields where 0 would otherwise be ambiguous.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
+/// The root node is always stored at index 0 in the node list.
+pub const root_node_idx: Node.List.Idx = .first;
+
 const NodeStore = @This();
 
 gpa: std.mem.Allocator,
@@ -46,7 +49,7 @@ pub const AST_HEADER_NODE_COUNT = 6;
 /// Count of the statement nodes in the AST
 pub const AST_STATEMENT_NODE_COUNT = 13;
 /// Count of the pattern nodes in the AST
-pub const AST_PATTERN_NODE_COUNT = 14;
+pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 10;
 /// Count of the expression nodes in the AST
@@ -166,7 +169,7 @@ pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag,
 /// Adds a file node to the store.
 pub fn addFile(store: *NodeStore, file: AST.File) std.mem.Allocator.Error!void {
     try store.extra_data.append(store.gpa, @intFromEnum(file.header));
-    store.nodes.set(@enumFromInt(0), .{
+    store.nodes.set(root_node_idx, .{
         .tag = .root,
         .main_token = 0,
         .data = .{ .lhs = file.statements.span.start, .rhs = file.statements.span.len },
@@ -475,6 +478,11 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
     switch (pattern) {
         .ident => |i| {
             node.tag = .ident_patt;
+            node.region = i.region;
+            node.main_token = i.ident_tok;
+        },
+        .var_ident => |i| {
+            node.tag = .var_ident_patt;
             node.region = i.region;
             node.main_token = i.ident_tok;
         },
@@ -1014,7 +1022,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
 
 /// TODO
 pub fn getFile(store: *const NodeStore) AST.File {
-    const node = store.nodes.get(@enumFromInt(0));
+    const node = store.nodes.get(root_node_idx);
     const header_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
     const header = store.extra_data.items[header_ed_idx];
     return .{
@@ -1383,6 +1391,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
     switch (node.tag) {
         .ident_patt => {
             return .{ .ident = .{
+                .ident_tok = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .var_ident_patt => {
+            return .{ .var_ident = .{
                 .ident_tok = node.main_token,
                 .region = node.region,
             } };

@@ -282,6 +282,12 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(gpa, AST.Pattern{
+        .var_ident = .{
+            .ident_tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
         .tag = .{
             .args = AST.Pattern.Span{ .span = rand_span() },
             .qualifiers = AST.Token.Span{ .span = rand_span() },

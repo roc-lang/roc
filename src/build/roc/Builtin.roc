@@ -119,6 +119,19 @@ Builtin :: [].{
 					},
 			)
 
+		count_if : List(a), (a -> Bool) -> U64
+		count_if = |list, predicate|
+			List.fold(
+				list,
+				0,
+				|acc, elem|
+					if predicate(elem) {
+						acc + 1
+					} else {
+						acc
+					},
+			)
+
 		fold : List(item), state, (state, item -> state) -> state
 		fold = |list, init, step| {
 			var $state = init
@@ -330,6 +343,18 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(U8, [BadNumStr, ..others])
+
+			# # List of integers beginning with this `U8` and ending with the other `U8`.
+			# # (Use [until] instead to end with the other `U8` minus one.)
+			# # Returns an empty list if this `U8` is greater than the other.
+			to : U8, U8 -> List(U8)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `U8` and ending with the other `U8` minus one.
+			# # (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
+			# # Returns an empty list if this `U8` is greater than or equal to the other.
+			until : U8, U8 -> List(U8)
+			until = |start, end| range_until(start, end)
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 			to_i8_wrap : U8 -> I8
@@ -977,8 +1002,29 @@ Builtin :: [].{
 	}
 }
 
-# Private top-level function for unsafe list access
-# This is a low-level operation that gets replaced by the compiler
+range_to = |var $current, end| {
+	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
+
+	while $current <= end {
+		$answer = $answer.append($current)
+		$current = $current + 1
+	}
+
+	$answer
+}
+
+range_until = |var $current, end| {
+	var $answer = [] # Not bothering with List.with_capacity because this will become an iterator once those exist.
+
+	while $current < end {
+		$answer = $answer.append($current)
+		$current = $current + 1
+	}
+
+	$answer
+}
+
+# Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
 
 # Unsafe conversion functions - these return simple records instead of Try types

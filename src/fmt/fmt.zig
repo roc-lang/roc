@@ -1353,6 +1353,11 @@ const Formatter = struct {
                 region = i.region;
                 try fmt.formatIdent(i.ident_tok, null);
             },
+            .var_ident => |i| {
+                region = i.region;
+                try fmt.pushAll("var ");
+                try fmt.formatIdent(i.ident_tok, null);
+            },
             .tag => |t| {
                 region = t.region;
 

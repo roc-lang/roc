@@ -331,7 +331,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     for (expected_elements) |expected_element| {
         // Get the element at the specified index
-        const element = try tuple_accessor.getElement(@intCast(expected_element.index));
+        // Use the result's rt_var since we're accessing elements of the evaluated expression
+        const element = try tuple_accessor.getElement(@intCast(expected_element.index), result.rt_var);
 
         // Check if this is an integer or Dec
         try std.testing.expect(element.layout.tag == .scalar);
@@ -397,6 +398,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     .layout = field_layout,
                     .ptr = field_ptr,
                     .is_initialized = true,
+                    .rt_var = result.rt_var, // use result's rt_var for field access
                 };
                 // Check if this is an integer or Dec
                 const int_val = if (field_layout.data.scalar.tag == .int) blk: {
@@ -453,7 +455,8 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
     for (expected_elements, 0..) |expected_val, i| {
-        const element = try list_accessor.getElement(i);
+        // Use the result's rt_var since we're accessing elements of the evaluated expression
+        const element = try list_accessor.getElement(i, result.rt_var);
 
         // Check if this is an integer
         try std.testing.expect(element.layout.tag == .scalar);

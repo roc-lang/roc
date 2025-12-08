@@ -855,16 +855,7 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const output = blk: {
-            if (result.rt_var) |rt_var| {
-                break :blk try interpreter.renderValueRocWithType(result, rt_var, self.roc_ops);
-            }
-            const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
-            const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
-                break :blk try interpreter.renderValueRoc(result);
-            };
-            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var, self.roc_ops);
-        };
+        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         return .{ .expression = output };

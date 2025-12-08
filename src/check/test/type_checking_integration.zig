@@ -1353,9 +1353,10 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    // With no let-generalization for numeric flex vars, the `x == 1` comparison
-    // adds an is_eq constraint to x (since x is not generalized and remains monomorphic)
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // Inside lambdas, numeric flex vars ARE generalized (to support polymorphic functions).
+    // Each use of `x` gets a fresh instance, so constraints from `x == 1` don't
+    // propagate to the generalized type. Only `from_numeral` from the def is captured.
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {

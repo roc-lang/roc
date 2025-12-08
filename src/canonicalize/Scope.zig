@@ -363,7 +363,7 @@ pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
 
 /// Look up a module alias in this scope
 pub fn lookupModuleAlias(scope: *const Scope, name: Ident.Idx) ModuleAliasLookupResult {
-    // Search by comparing text content, not identifier index
+    // Search by comparing .idx values (integer index into string interner)
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
         if (name.idx == entry.key_ptr.idx) {
