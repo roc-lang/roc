@@ -551,6 +551,11 @@ pub const BuildEnv = struct {
             // Multi-threaded mode: wait for global queue to drain
             self.global_queue.waitForIdle();
         }
+        // Give modules stuck on external imports another chance now that all packages are scheduled.
+        try self.unblockExternalImports();
+        if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
+            self.global_queue.waitForIdle();
+        }
         // Note: In single-threaded mode, buildRoot() runs synchronously and blocks
         // until all modules are complete, so no additional waiting is needed.
 
@@ -662,6 +667,51 @@ pub const BuildEnv = struct {
                 const rep = rb.build(prob) catch continue;
                 // Emit via sink with the module name (not path) to match other reports
                 self.sink.emitReport(app_name, app_root_module.name, rep);
+            }
+        }
+    }
+
+    fn unblockExternalImports(self: *BuildEnv) !void {
+        var progress = true;
+        while (progress) {
+            progress = false;
+
+            var sched_it = self.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
+
+                var mod_it = sched.moduleNamesIterator();
+                while (mod_it.next()) |m_entry| {
+                    const module_name = m_entry.key_ptr.*;
+                    const st = sched.getModuleState(module_name) orelse continue;
+                    if (st.phase != .WaitingOnImports or st.external_imports.items.len == 0) continue;
+
+                    const prev_remaining = sched.remaining_modules;
+                    var last_phase = st.phase;
+
+                    // Drive the module forward until it either finishes or stops making progress.
+                    while (true) {
+                        try sched.processModuleByName(module_name);
+                        const updated = sched.getModuleState(module_name) orelse break;
+                        if (updated.phase == .Done) {
+                            progress = true;
+                            break;
+                        }
+                        if (updated.phase == last_phase) {
+                            break;
+                        }
+                        last_phase = updated.phase;
+                    }
+
+                    if (sched.remaining_modules < prev_remaining) {
+                        progress = true;
+                    }
+                }
+            }
+
+            if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
+                // If we queued any new work onto the global scheduler, wait for it.
+                self.global_queue.waitForIdle();
             }
         }
     }
