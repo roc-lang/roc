@@ -1350,6 +1350,17 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(fx_cross_runner_exe);
 
+    // Add int cross-compilation test runner (used by CI)
+    const int_cross_runner_exe = b.addExecutable(.{
+        .name = "int_cross_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/test/int_cross_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(int_cross_runner_exe);
+
     const playground_exe = b.addExecutable(.{
         .name = "playground",
         .root_module = b.createModule(.{

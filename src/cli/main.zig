@@ -1143,15 +1143,22 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
         linker.link(allocs, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
-                std.log.err("LLD linker not available -- this is likely a test executable that was built without LLVM", .{});
+                const result = platform_validation.targets_validator.ValidationResult{ .linker_not_available = {} };
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                 return err;
             },
             linker.LinkError.LinkFailed => {
-                std.log.err("LLD linker failed to create executable", .{});
+                const result = platform_validation.targets_validator.ValidationResult{
+                    .linker_failed = .{ .reason = "LLD linker failed" },
+                };
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                 return err;
             },
             else => {
-                std.log.err("Failed to link executable: {}", .{err});
+                const result = platform_validation.targets_validator.ValidationResult{
+                    .linker_failed = .{ .reason = @errorName(err) },
+                };
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                 return err;
             },
         };
@@ -1343,9 +1350,15 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     if (exit_code != 0) {
         std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
         if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
-            std.log.err("Child process crashed with access violation (segfault)", .{});
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
-            std.log.err("Child process crashed with exception code: 0x{X}", .{exit_code});
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -1433,14 +1446,11 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             }
         },
         .Signal => |signal| {
-            std.log.err("Child process {s} killed by signal: {}", .{ exe_path, signal });
-            if (signal == 11) { // SIGSEGV
-                std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
-            } else if (signal == 6) { // SIGABRT
-                std.log.err("Child process aborted (SIGABRT)", .{});
-            } else if (signal == 9) { // SIGKILL
-                std.log.err("Child process was killed (SIGKILL)", .{});
-            }
+            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, signal });
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_signaled = .{ .signal = signal },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
@@ -1851,7 +1861,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // The platform wraps app-provided functions (from `requires`) and exports them for the host.
     // For example: `provides { main_for_host!: "main" }` where `main_for_host! = main!`
     const platform_env = platform_main_env orelse {
-        std.log.err("No platform found. Every Roc app requires a platform.", .{});
+        const result = platform_validation.targets_validator.ValidationResult{
+            .no_platform_found = .{ .app_path = roc_file_path },
+        };
+        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         return error.NoPlatformFound;
     };
     const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
@@ -3012,7 +3025,10 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     // Parse target if provided, otherwise use native
     const target = if (args.target) |target_str| blk: {
         break :blk target_mod.RocTarget.fromString(target_str) orelse {
-            std.log.err("Invalid target: {s}", .{target_str});
+            const result = platform_validation.targets_validator.ValidationResult{
+                .invalid_target = .{ .target_str = target_str },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
             return error.InvalidTarget;
         };
     } else target_mod.RocTarget.detectNative();
@@ -3023,12 +3039,13 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     // glibc targets require a full libc for linking, which is only available on Linux hosts
     const host_os = builtin.target.os.tag;
     if (target.isDynamic() and host_os != .linux) {
-        std.log.err("Cross-compilation to glibc targets ({s}) is not supported on {s}.", .{
-            @tagName(target),
-            @tagName(host_os),
-        });
-        std.log.err("glibc targets require dynamic linking with libc symbols that are only available on Linux.", .{});
-        std.log.err("Use a statically-linked musl target instead: x64musl or arm64musl", .{});
+        const result = platform_validation.targets_validator.ValidationResult{
+            .unsupported_glibc_cross = .{
+                .target = target,
+                .host_os = @tagName(host_os),
+            },
+        };
+        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         return error.UnsupportedCrossCompilation;
     }
 

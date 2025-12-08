@@ -82,6 +82,41 @@ pub const ValidationResult = union(enum) {
         expected_path: []const u8,
         files_dir: []const u8,
     },
+
+    /// glibc cross-compilation is not supported on non-Linux hosts
+    unsupported_glibc_cross: struct {
+        target: RocTarget,
+        host_os: []const u8,
+    },
+
+    /// App file doesn't have a platform
+    no_platform_found: struct {
+        app_path: []const u8,
+    },
+
+    /// Invalid target string provided
+    invalid_target: struct {
+        target_str: []const u8,
+    },
+
+    /// Linker failed to create executable
+    linker_failed: struct {
+        reason: []const u8,
+    },
+
+    /// Linker not available (LLVM not built)
+    linker_not_available: void,
+
+    /// Process crashed during execution (Windows)
+    process_crashed: struct {
+        exit_code: u32,
+        is_access_violation: bool,
+    },
+
+    /// Process killed by signal (Unix)
+    process_signaled: struct {
+        signal: u32,
+    },
 };
 
 /// Validate that a platform has a targets section
@@ -412,6 +447,188 @@ pub fn createValidationReport(
             try report.document.addText("/");
             try report.document.addAnnotated(@tagName(info.target), .emphasized);
             try report.document.addText("/libhost.a");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .unsupported_glibc_cross => |info| {
+            var report = Report.init(allocator, "GLIBC CROSS-COMPILATION NOT SUPPORTED", .runtime_error);
+
+            try report.document.addText("Cross-compilation to glibc targets (");
+            try report.document.addAnnotated(@tagName(info.target), .emphasized);
+            try report.document.addText(") is not supported on ");
+            try report.document.addAnnotated(info.host_os, .emphasized);
+            try report.document.addText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("glibc targets require dynamic linking with libc symbols that");
+            try report.document.addLineBreak();
+            try report.document.addText("are only available on Linux.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Use a statically-linked musl target instead:");
+            try report.document.addLineBreak();
+            try report.document.addText("  ");
+            try report.document.addAnnotated("x64musl", .emphasized);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("arm64musl", .emphasized);
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .no_platform_found => |info| {
+            var report = Report.init(allocator, "NO PLATFORM FOUND", .runtime_error);
+
+            try report.document.addText("The file ");
+            try report.document.addAnnotated(info.app_path, .emphasized);
+            try report.document.addText(" doesn't have a platform.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Every Roc application needs a platform. Add a platform declaration:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addCodeBlock(
+                \\app [main!] { pf: platform "../path/to/platform/main.roc" }
+            );
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .invalid_target => |info| {
+            var report = Report.init(allocator, "INVALID TARGET", .runtime_error);
+
+            try report.document.addText("The target ");
+            try report.document.addAnnotated(info.target_str, .emphasized);
+            try report.document.addText(" is not a valid build target.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Valid targets are:");
+            try report.document.addLineBreak();
+            try report.document.addText("  x64musl, arm64musl    - Linux (static, portable)");
+            try report.document.addLineBreak();
+            try report.document.addText("  x64glibc, arm64glibc  - Linux (dynamic, faster)");
+            try report.document.addLineBreak();
+            try report.document.addText("  x64mac, arm64mac      - macOS");
+            try report.document.addLineBreak();
+            try report.document.addText("  x64win, arm64win      - Windows");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .linker_failed => |info| {
+            var report = Report.init(allocator, "LINKER FAILED", .runtime_error);
+
+            try report.document.addText("Failed to create executable: ");
+            try report.document.addAnnotated(info.reason, .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This may indicate:");
+            try report.document.addLineBreak();
+            try report.document.addText("  - Missing platform host library (libhost.a)");
+            try report.document.addLineBreak();
+            try report.document.addText("  - Incompatible object files for the target");
+            try report.document.addLineBreak();
+            try report.document.addText("  - Missing system libraries");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .linker_not_available => {
+            var report = Report.init(allocator, "LINKER NOT AVAILABLE", .runtime_error);
+
+            try report.document.addText("The LLD linker is not available.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This typically occurs when running a test executable");
+            try report.document.addLineBreak();
+            try report.document.addText("that was built without LLVM support.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("To fix this, rebuild with LLVM enabled.");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .process_crashed => |info| {
+            var report = Report.init(allocator, "PROCESS CRASHED", .runtime_error);
+
+            if (info.is_access_violation) {
+                try report.document.addText("The program crashed with an access violation (segmentation fault).");
+            } else {
+                var buf: [32]u8 = undefined;
+                const code_str = std.fmt.bufPrint(&buf, "0x{X}", .{info.exit_code}) catch "unknown";
+
+                try report.document.addText("The program crashed with exception code: ");
+                try report.document.addAnnotated(code_str, .emphasized);
+            }
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This is likely a bug in the Roc compiler.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Please report this issue at:");
+            try report.document.addLineBreak();
+            try report.document.addText("  ");
+            try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Include a small reproduction of the code that causes this crash.");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .process_signaled => |info| {
+            var report = Report.init(allocator, "PROCESS KILLED BY SIGNAL", .runtime_error);
+
+            const signal_name: []const u8 = switch (info.signal) {
+                11 => "SIGSEGV (Segmentation fault)",
+                6 => "SIGABRT (Aborted)",
+                9 => "SIGKILL (Killed)",
+                8 => "SIGFPE (Floating point exception)",
+                4 => "SIGILL (Illegal instruction)",
+                7 => "SIGBUS (Bus error)",
+                else => "Unknown signal",
+            };
+
+            try report.document.addText("The program was killed by signal ");
+            var buf: [8]u8 = undefined;
+            const sig_str = std.fmt.bufPrint(&buf, "{d}", .{info.signal}) catch "?";
+            try report.document.addAnnotated(sig_str, .emphasized);
+            try report.document.addText(": ");
+            try report.document.addAnnotated(signal_name, .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("This is likely a bug in the Roc compiler.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Please report this issue at:");
+            try report.document.addLineBreak();
+            try report.document.addText("  ");
+            try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Include a small reproduction of the code that causes this crash.");
             try report.document.addLineBreak();
 
             return report;
