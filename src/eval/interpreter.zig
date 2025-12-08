@@ -2035,7 +2035,7 @@ pub const Interpreter = struct {
                 const len_u64: u64 = @intCast(len_usize);
 
                 const result_layout = layout.Layout.int(.u64);
-                const result_rt_var = try self.runtime_types.fresh();
+                const result_rt_var = return_rt_var orelse unreachable;
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
                 try out.setInt(@intCast(len_u64));
