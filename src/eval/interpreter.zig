@@ -8597,17 +8597,25 @@ pub const Interpreter = struct {
     }
 
     /// Instantiate a type by replacing rigid variables with fresh flex variables.
+    const InstantiateResult = struct { var_: types.Var, changed: bool };
+
+    /// Replaces rigid type variables with fresh flex vars that can be unified with concrete types.
+    /// Returns both the (possibly new) type var and whether any substitution occurred.
     /// This is used when calling generic functions - it allows rigid type parameters
     /// to be unified with concrete argument types.
     fn instantiateType(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!types.Var {
+        return (try self.instantiateTypeInner(type_var, subst_map)).var_;
+    }
+
+    fn instantiateTypeInner(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!InstantiateResult {
         const resolved = self.runtime_types.resolveVar(type_var);
 
         // Check if we've already instantiated this variable
         if (subst_map.get(resolved.var_)) |instantiated| {
-            return instantiated;
+            return .{ .var_ = instantiated, .changed = instantiated != type_var };
         }
 
-        const instantiated = switch (resolved.desc.content) {
+        return switch (resolved.desc.content) {
             .rigid => |rigid| blk: {
                 // Replace rigid with fresh flex that can be unified
                 // IMPORTANT: Copy the rigid's constraints so numeric constraints are preserved
@@ -8615,153 +8623,207 @@ pub const Interpreter = struct {
                     .flex = .{ .name = rigid.name, .constraints = rigid.constraints },
                 });
                 try subst_map.put(resolved.var_, fresh);
-                break :blk fresh;
+                break :blk .{ .var_ = fresh, .changed = true };
             },
-            .structure => |st| blk_struct: {
-                // Recursively instantiate type arguments in structures
-                const new_var = switch (st) {
-                    .fn_pure => |f| blk_fn: {
-                        const arg_vars = self.runtime_types.sliceVars(f.args);
-                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-                        defer self.allocator.free(new_args);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-                        const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncPure(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .fn_effectful => |f| blk_fn: {
-                        const arg_vars = self.runtime_types.sliceVars(f.args);
-                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-                        defer self.allocator.free(new_args);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-                        const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncEffectful(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .fn_unbound => |f| blk_fn: {
-                        const arg_vars = self.runtime_types.sliceVars(f.args);
-                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-                        defer self.allocator.free(new_args);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-                        const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .tuple => |tuple| blk_tuple: {
-                        // Recursively instantiate tuple element types
-                        const elem_vars = self.runtime_types.sliceVars(tuple.elems);
-                        var new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
-                        defer self.allocator.free(new_elems);
-                        for (elem_vars, 0..) |elem_var, i| {
-                            new_elems[i] = try self.instantiateType(elem_var, subst_map);
-                        }
-                        const new_elems_range = try self.runtime_types.appendVars(new_elems);
-                        const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
-                        break :blk_tuple try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .record => |record| blk_record: {
-                        // Recursively instantiate record field types
-                        const fields = self.runtime_types.record_fields.sliceRange(record.fields);
-                        var new_fields = try self.allocator.alloc(types.RecordField, fields.len);
-                        defer self.allocator.free(new_fields);
-                        var i: usize = 0;
-                        while (i < fields.len) : (i += 1) {
-                            const field = fields.get(i);
-                            new_fields[i] = .{
-                                .name = field.name,
-                                .var_ = try self.instantiateType(field.var_, subst_map),
-                            };
-                        }
-                        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
-                        const new_ext = try self.instantiateType(record.ext, subst_map);
-                        const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = new_ext } } };
-                        break :blk_record try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .nominal_type => |nt| blk_nominal: {
-                        // Add placeholder to prevent infinite recursion on recursive types
-                        try subst_map.put(resolved.var_, type_var);
-
-                        // Instantiate the backing type
-                        const backing = self.runtime_types.getNominalBackingVar(nt);
-                        const new_backing = try self.instantiateType(backing, subst_map);
-
-                        // Instantiate type args - create NEW vars with substituted rigids
-                        const type_args = self.runtime_types.sliceNominalArgs(nt);
-                        var new_args = try self.allocator.alloc(types.Var, type_args.len);
-                        defer self.allocator.free(new_args);
-                        for (type_args, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-
-                        // Check if anything actually changed - if not, return original to avoid creating duplicates
-                        var any_changed = new_backing != backing;
-                        if (!any_changed) {
-                            for (type_args, new_args) |old, new| {
-                                if (old != new) {
-                                    any_changed = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!any_changed) {
-                            // Nothing changed, return original
-                            break :blk_nominal type_var;
-                        }
-
-                        // Create a new nominal type with instantiated args
-                        const content = try self.runtime_types.mkNominal(
-                            nt.ident,
-                            new_backing,
-                            new_args,
-                            nt.origin_module,
-                            nt.is_opaque,
-                        );
-                        const new_var = try self.runtime_types.register(.{
-                            .content = content,
-                            .rank = types.Rank.top_level,
-                            .mark = types.Mark.none,
-                        });
-                        // Update the subst_map with the new var
-                        try subst_map.put(resolved.var_, new_var);
-                        break :blk_nominal new_var;
-                    },
-                    .tag_union => |tu| blk_tag_union: {
-                        // Add placeholder to prevent infinite recursion
-                        try subst_map.put(resolved.var_, type_var);
-
-                        // Recursively process each tag's argument types to find rigids
-                        const tags_slice = self.runtime_types.getTagsSlice(tu.tags);
-                        for (tags_slice.items(.args)) |args_range| {
-                            const arg_vars = self.runtime_types.sliceVars(args_range);
-                            for (arg_vars) |arg_var| {
-                                _ = try self.instantiateType(arg_var, subst_map);
-                            }
-                        }
-
-                        // Also process the extension
-                        _ = try self.instantiateType(tu.ext, subst_map);
-
-                        // Return original - substitution handled via rigid_subst during layout
-                        break :blk_tag_union type_var;
-                    },
-                    // For other structures (str, num, empty_record, etc.), return as-is
-                    else => type_var,
-                };
-                try subst_map.put(resolved.var_, new_var);
-                break :blk_struct new_var;
-            },
-            // For other content types, return as-is
-            else => type_var,
+            .structure => |st| self.instantiateStructure(st, type_var, resolved.var_, subst_map),
+            // These don't contain nested type vars that need instantiation
+            .flex, .alias, .recursion_var, .err => .{ .var_ = type_var, .changed = false },
         };
+    }
 
-        return instantiated;
+    fn instantiateStructure(
+        self: *Interpreter,
+        st: types.FlatType,
+        type_var: types.Var,
+        resolved_var: types.Var,
+        subst_map: *std.AutoHashMap(types.Var, types.Var),
+    ) Error!InstantiateResult {
+        return switch (st) {
+            .fn_pure => |f| self.instantiateFn(f.args, f.ret, type_var, resolved_var, subst_map, .pure),
+            .fn_effectful => |f| self.instantiateFn(f.args, f.ret, type_var, resolved_var, subst_map, .effectful),
+            .fn_unbound => |f| self.instantiateFn(f.args, f.ret, type_var, resolved_var, subst_map, .unbound),
+            .tuple => |tuple| self.instantiateTuple(tuple, type_var, resolved_var, subst_map),
+            .record => |record| self.instantiateRecord(record, type_var, resolved_var, subst_map),
+            .nominal_type => |nt| self.instantiateNominal(nt, type_var, resolved_var, subst_map),
+            .tag_union => |tu| self.instantiateTagUnion(tu, type_var, resolved_var, subst_map),
+            // These have no nested type vars to instantiate
+            .record_unbound, .empty_record, .empty_tag_union => .{ .var_ = type_var, .changed = false },
+        };
+    }
+
+    const FnKind = enum { pure, effectful, unbound };
+
+    fn instantiateFn(
+        self: *Interpreter,
+        args_range: types.Var.SafeList.Range,
+        ret: types.Var,
+        type_var: types.Var,
+        resolved_var: types.Var,
+        subst_map: *std.AutoHashMap(types.Var, types.Var),
+        kind: FnKind,
+    ) Error!InstantiateResult {
+        const arg_vars = self.runtime_types.sliceVars(args_range);
+        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
+        defer self.allocator.free(new_args);
+
+        var any_changed = false;
+        for (arg_vars, 0..) |arg_var, i| {
+            const result = try self.instantiateTypeInner(arg_var, subst_map);
+            new_args[i] = result.var_;
+            any_changed = any_changed or result.changed;
+        }
+
+        const ret_result = try self.instantiateTypeInner(ret, subst_map);
+        any_changed = any_changed or ret_result.changed;
+
+        if (!any_changed) {
+            try subst_map.put(resolved_var, type_var);
+            return .{ .var_ = type_var, .changed = false };
+        }
+
+        const content = switch (kind) {
+            .pure => try self.runtime_types.mkFuncPure(new_args, ret_result.var_),
+            .effectful => try self.runtime_types.mkFuncEffectful(new_args, ret_result.var_),
+            .unbound => try self.runtime_types.mkFuncUnbound(new_args, ret_result.var_),
+        };
+        const new_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+        try subst_map.put(resolved_var, new_var);
+        return .{ .var_ = new_var, .changed = true };
+    }
+
+    fn instantiateTuple(
+        self: *Interpreter,
+        tuple: types.Tuple,
+        type_var: types.Var,
+        resolved_var: types.Var,
+        subst_map: *std.AutoHashMap(types.Var, types.Var),
+    ) Error!InstantiateResult {
+        const elem_vars = self.runtime_types.sliceVars(tuple.elems);
+        var new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
+        defer self.allocator.free(new_elems);
+
+        var any_changed = false;
+        for (elem_vars, 0..) |elem_var, i| {
+            const result = try self.instantiateTypeInner(elem_var, subst_map);
+            new_elems[i] = result.var_;
+            any_changed = any_changed or result.changed;
+        }
+
+        if (!any_changed) {
+            try subst_map.put(resolved_var, type_var);
+            return .{ .var_ = type_var, .changed = false };
+        }
+
+        const new_elems_range = try self.runtime_types.appendVars(new_elems);
+        const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
+        const new_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+        try subst_map.put(resolved_var, new_var);
+        return .{ .var_ = new_var, .changed = true };
+    }
+
+    fn instantiateRecord(
+        self: *Interpreter,
+        record: types.Record,
+        type_var: types.Var,
+        resolved_var: types.Var,
+        subst_map: *std.AutoHashMap(types.Var, types.Var),
+    ) Error!InstantiateResult {
+        const fields = self.runtime_types.record_fields.sliceRange(record.fields);
+        var new_fields = try self.allocator.alloc(types.RecordField, fields.len);
+        defer self.allocator.free(new_fields);
+
+        var any_changed = false;
+        var i: usize = 0;
+        while (i < fields.len) : (i += 1) {
+            const field = fields.get(i);
+            const result = try self.instantiateTypeInner(field.var_, subst_map);
+            new_fields[i] = .{ .name = field.name, .var_ = result.var_ };
+            any_changed = any_changed or result.changed;
+        }
+
+        const ext_result = try self.instantiateTypeInner(record.ext, subst_map);
+        any_changed = any_changed or ext_result.changed;
+
+        if (!any_changed) {
+            try subst_map.put(resolved_var, type_var);
+            return .{ .var_ = type_var, .changed = false };
+        }
+
+        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
+        const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = ext_result.var_ } } };
+        const new_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+        try subst_map.put(resolved_var, new_var);
+        return .{ .var_ = new_var, .changed = true };
+    }
+
+    fn instantiateNominal(
+        self: *Interpreter,
+        nt: types.NominalType,
+        type_var: types.Var,
+        resolved_var: types.Var,
+        subst_map: *std.AutoHashMap(types.Var, types.Var),
+    ) Error!InstantiateResult {
+        // Add placeholder to prevent infinite recursion on recursive types
+        try subst_map.put(resolved_var, type_var);
+
+        const backing = self.runtime_types.getNominalBackingVar(nt);
+        const backing_result = try self.instantiateTypeInner(backing, subst_map);
+
+        const type_args = self.runtime_types.sliceNominalArgs(nt);
+        var new_args = try self.allocator.alloc(types.Var, type_args.len);
+        defer self.allocator.free(new_args);
+
+        var any_changed = backing_result.changed;
+        for (type_args, 0..) |arg_var, i| {
+            const result = try self.instantiateTypeInner(arg_var, subst_map);
+            new_args[i] = result.var_;
+            any_changed = any_changed or result.changed;
+        }
+
+        if (!any_changed) {
+            return .{ .var_ = type_var, .changed = false };
+        }
+
+        const content = try self.runtime_types.mkNominal(
+            nt.ident,
+            backing_result.var_,
+            new_args,
+            nt.origin_module,
+            nt.is_opaque,
+        );
+        const new_var = try self.runtime_types.register(.{
+            .content = content,
+            .rank = types.Rank.top_level,
+            .mark = types.Mark.none,
+        });
+        try subst_map.put(resolved_var, new_var);
+        return .{ .var_ = new_var, .changed = true };
+    }
+
+    fn instantiateTagUnion(
+        self: *Interpreter,
+        tu: types.TagUnion,
+        type_var: types.Var,
+        resolved_var: types.Var,
+        subst_map: *std.AutoHashMap(types.Var, types.Var),
+    ) Error!InstantiateResult {
+        // Add placeholder to prevent infinite recursion
+        try subst_map.put(resolved_var, type_var);
+
+        // Recursively process each tag's argument types to find rigids
+        const tags_slice = self.runtime_types.getTagsSlice(tu.tags);
+        for (tags_slice.items(.args)) |args_range| {
+            const arg_vars = self.runtime_types.sliceVars(args_range);
+            for (arg_vars) |arg_var| {
+                _ = try self.instantiateTypeInner(arg_var, subst_map);
+            }
+        }
+
+        // Also process the extension
+        _ = try self.instantiateTypeInner(tu.ext, subst_map);
+
+        // Return original - substitution handled via rigid_subst during layout
+        return .{ .var_ = type_var, .changed = false };
     }
 
     /// Recursively expand a tag union's tags, returning an array list
