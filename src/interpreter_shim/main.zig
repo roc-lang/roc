@@ -8,6 +8,7 @@ const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
+const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const ipc = @import("ipc");
@@ -208,9 +209,9 @@ fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!Setup
     // Use signed arithmetic to avoid overflow on 64-bit addresses
     const offset: i64 = @as(i64, @intCast(child_base_addr)) - @as(i64, @intCast(parent_base_addr));
 
-    // Verify offset preserves 16-byte alignment (ASLR can cause misaligned shared memory mapping)
+    // Verify offset preserves alignment (ASLR can cause misaligned shared memory mapping)
     if (comptime builtin.mode == .Debug) {
-        const REQUIRED_ALIGNMENT: u64 = 16; // SERIALIZATION_ALIGNMENT
+        const REQUIRED_ALIGNMENT: u64 = collections.SERIALIZATION_ALIGNMENT.toByteUnits();
         const abs_offset: u64 = @abs(offset);
         if (abs_offset % REQUIRED_ALIGNMENT != 0) {
             const err_msg = std.fmt.bufPrint(&buf, "Relocation offset 0x{x} not {}-byte aligned! parent=0x{x} child=0x{x}", .{
