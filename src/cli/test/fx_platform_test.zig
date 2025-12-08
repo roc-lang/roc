@@ -1137,3 +1137,97 @@ test "fx platform sublist method on inferred type" {
 
     try checkSuccess(run_result);
 }
+
+test "fx platform runtime stack overflow" {
+    // Tests that stack overflow in a running Roc program is caught and reported
+    // with a helpful error message instead of crashing with a raw signal.
+    //
+    // The Roc program contains an infinitely recursive function that will
+    // overflow the stack at runtime. Once proper stack overflow handling is
+    // implemented in the host/platform, this test will pass.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/stack_overflow_runtime.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // After stack overflow handling is implemented, we expect:
+    // 1. The process exits with code 134 (indicating stack overflow was caught)
+    // 2. Stderr contains a helpful message about stack overflow
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 134) {
+                // Stack overflow was caught and handled properly
+                // Verify the helpful error message was printed
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") != null);
+            } else if (code == 139) {
+                // Exit code 139 = 128 + 11 (SIGSEGV) - stack overflow was NOT handled
+                // The Roc program crashed with a segfault that wasn't caught
+                std.debug.print("\n", .{});
+                std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
+                std.debug.print("Process crashed with SIGSEGV (exit code 139).\n", .{});
+                std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
+                return error.StackOverflowNotHandled;
+            } else {
+                std.debug.print("Unexpected exit code: {}\n", .{code});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedExitCode;
+            }
+        },
+        .Signal => |sig| {
+            // Process was killed directly by a signal (likely SIGSEGV = 11).
+            std.debug.print("\n", .{});
+            std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
+            std.debug.print("Process was killed by signal: {}\n", .{sig});
+            std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
+            return error.StackOverflowNotHandled;
+        },
+        else => {
+            std.debug.print("Unexpected termination: {}\n", .{run_result.term});
+            return error.UnexpectedTermination;
+        },
+    }
+}
+
+test "fx platform runtime division by zero" {
+    // Tests that division by zero in a running Roc program is caught and reported
+    // with a helpful error message instead of crashing with a raw signal.
+    //
+    // The error can be caught by either:
+    // 1. The Roc interpreter (exit code 1, "DivisionByZero" message) - most common
+    // 2. The SIGFPE signal handler (exit code 136, "divided by zero" message) - native code
+    const allocator = testing.allocator;
+
+    // The Roc program uses a var to prevent compile-time constant folding
+    const run_result = try runRoc(allocator, "test/fx/division_by_zero.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code == 136) {
+                // Division by zero was caught by the SIGFPE handler (native code)
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "divided by zero") != null);
+            } else if (code == 1) {
+                // Division by zero was caught by the interpreter - this is the expected case
+                // The interpreter catches it and reports "DivisionByZero"
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "DivisionByZero") != null);
+            } else {
+                std.debug.print("Unexpected exit code: {}\n", .{code});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedExitCode;
+            }
+        },
+        .Signal => |sig| {
+            // Process was killed directly by a signal without being caught
+            std.debug.print("\n", .{});
+            std.debug.print("Division by zero was not caught!\n", .{});
+            std.debug.print("Process was killed by signal: {}\n", .{sig});
+            return error.DivisionByZeroNotHandled;
+        },
+        else => {
+            std.debug.print("Unexpected termination: {}\n", .{run_result.term});
+            return error.UnexpectedTermination;
+        },
+    }
+}
