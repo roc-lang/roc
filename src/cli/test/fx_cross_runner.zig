@@ -50,14 +50,20 @@ pub fn main() !void {
         const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target });
         defer allocator.free(output_name);
 
+        const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target});
+        defer allocator.free(target_arg);
+
+        const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_name});
+        defer allocator.free(output_arg);
+
         // Run roc build --target=<target> --output=<output> <roc_file>
         const result = std.process.Child.run(.{
             .allocator = allocator,
             .argv = &[_][]const u8{
                 roc_binary,
                 "build",
-                try std.fmt.allocPrint(allocator, "--target={s}", .{target}),
-                try std.fmt.allocPrint(allocator, "--output={s}", .{output_name}),
+                target_arg,
+                output_arg,
                 spec.roc_file,
             },
         }) catch |err| {

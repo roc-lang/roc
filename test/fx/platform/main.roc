@@ -7,8 +7,8 @@ platform ""
         exe: {
             x64mac: [app],
             arm64mac: [app],
-            x64linux: [app],
-            arm64linux: [app],
+            x64musl: [app],
+            arm64musl: [app],
         }
     }
 

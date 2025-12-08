@@ -35,11 +35,13 @@ const BuiltinTypes = eval.BuiltinTypes;
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
+const platform_validation = @import("platform_validation.zig");
 
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
         std.testing.refAllDecls(targets_validator);
+        std.testing.refAllDecls(platform_validation);
     }
 }
 const bench = @import("bench.zig");
@@ -2743,6 +2745,51 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
         }
     }
 
+    // Validate platform header if the first file looks like a platform
+    // This ensures bundles have proper targets sections
+    const main_file = file_paths.items[0];
+    if (std.mem.endsWith(u8, main_file, ".roc")) {
+        if (platform_validation.validatePlatformHeader(allocs.arena, main_file)) |validation| {
+            // Platform validation succeeded - validate all target files exist
+            platform_validation.validateAllTargetFilesExist(
+                allocs.arena,
+                validation.config,
+                validation.platform_dir,
+            ) catch |err| {
+                switch (err) {
+                    error.MissingTargetFile => {
+                        try stderr.print("Error: Platform bundle is missing required target files\n", .{});
+                        try stderr.print("Add target files to targets/ directory or update targets section\n", .{});
+                        return error.MissingTargetFile;
+                    },
+                    error.MissingFilesDirectory => {
+                        try stderr.print("Error: Platform targets directory not found\n", .{});
+                        return error.MissingFilesDirectory;
+                    },
+                    else => {
+                        try stderr.print("Error: Failed to validate target files: {}\n", .{err});
+                        return err;
+                    },
+                }
+            };
+            std.log.debug("Platform validation passed for: {s}", .{main_file});
+        } else |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    // Only warn - file might be an app, not a platform
+                    std.log.debug("File {s} has no targets section (may be an app)", .{main_file});
+                },
+                error.ParseError, error.FileReadError => {
+                    // Parsing failed - could be invalid syntax or not a Roc file
+                    std.log.debug("Could not parse {s} as platform: {}", .{ main_file, err });
+                },
+                else => {
+                    std.log.warn("Platform validation warning: {}", .{err});
+                },
+            }
+        }
+    }
+
     // Create temporary output file
     const temp_filename = "temp_bundle.tar.zst";
     const temp_file = try tmp_dir.createFile(temp_filename, .{
@@ -3023,6 +3070,36 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     else
         null;
 
+    // Validate platform header has targets section and supports requested target
+    if (platform_paths) |pp| {
+        if (pp.platform_source_path) |platform_source| {
+            if (platform_validation.validatePlatformHeader(allocs.arena, platform_source)) |validation| {
+                // Validate that the requested target is supported
+                platform_validation.validateTargetSupported(validation.config, target, .exe) catch |err| {
+                    switch (err) {
+                        error.UnsupportedTarget => {
+                            std.log.err("Platform does not support target '{s}'", .{@tagName(target)});
+                            return error.UnsupportedTarget;
+                        },
+                        else => {},
+                    }
+                };
+            } else |err| {
+                switch (err) {
+                    error.MissingTargetsSection => {
+                        // Warning only - platform may work for native builds
+                        std.log.warn("Platform at '{s}' has no targets section", .{platform_source});
+                        std.log.warn("Cross-compilation may not work correctly", .{});
+                    },
+                    else => {
+                        std.log.warn("Failed to validate platform header: {}", .{err});
+                    },
+                }
+                // Continue with build - validation is advisory for now
+            }
+        }
+    }
+
     // For cross-compilation, try to find the target-specific host library
     const native_host_lib_path = if (platform_paths) |pp| pp.host_lib_path else {
         std.log.err("Could not find host library for platform: {s}", .{platform_spec});
@@ -3036,7 +3113,17 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     const is_cross_compile = target != native_target;
     const host_lib_path: []const u8 = if (is_cross_compile and target.isLinux()) blk: {
         // For cross-compilation, look for target-specific host library
-        const platform_dir = std.fs.path.dirname(native_host_lib_path) orelse ".";
+        // The platform directory is where the platform's main.roc lives.
+        // Target-specific files are in <platform_dir>/targets/<target>/
+        const platform_dir: []const u8 = if (platform_paths) |pp| dir: {
+            if (pp.platform_source_path) |source_path| {
+                // Use the directory containing the platform source (main.roc)
+                break :dir std.fs.path.dirname(source_path) orelse ".";
+            }
+            // Fall back to deriving from host lib path
+            break :dir deriveBasePlatformDir(native_host_lib_path);
+        } else deriveBasePlatformDir(native_host_lib_path);
+
         const target_name = @tagName(target);
         const host_lib_filename = "libhost.a";
         const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", target_name, host_lib_filename });
@@ -3166,6 +3253,26 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     try linker_mod.link(allocs, link_config);
 
     std.log.info("Successfully built standalone executable: {s}", .{output_path});
+}
+
+/// Derive the base platform directory from a host library path.
+/// If the path contains "/targets/<target>/", extract the directory before "targets".
+/// This handles the case where the native host lib is in targets/x64musl/libhost.a
+/// and we need to find targets/arm64musl/libhost.a for cross-compilation.
+fn deriveBasePlatformDir(host_lib_path: []const u8) []const u8 {
+    var platform_dir = std.fs.path.dirname(host_lib_path) orelse ".";
+
+    // Check if we're already inside a targets/<native>/ directory
+    // by looking for the "targets" component in the path
+    if (std.mem.indexOf(u8, platform_dir, "/targets/")) |targets_idx| {
+        // Truncate to get the directory containing "targets"
+        return platform_dir[0..targets_idx];
+    } else if (std.mem.startsWith(u8, platform_dir, "targets/")) {
+        // Path starts with targets/, use current directory
+        return ".";
+    }
+
+    return platform_dir;
 }
 
 /// Information about a test (expect statement) to be evaluated
