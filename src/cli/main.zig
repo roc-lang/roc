@@ -1106,7 +1106,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Set up shared memory with ModuleEnv
     std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
         return err;
     };
@@ -1461,7 +1461,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
-pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8) !SharedMemoryResult {
+pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -1692,10 +1692,39 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     app_env.module_name = app_module_name;
     try app_env.common.calcLineStarts(shm_allocator);
 
+    var error_count: usize = 0;
+
     var app_parse_ast = try parse.parse(&app_env.common, allocs.gpa);
     defer app_parse_ast.deinit(allocs.gpa);
-    app_parse_ast.store.emptyScratch();
+    if (app_parse_ast.hasErrors()) {
+        const stderr = stderrWriter();
+        defer stderr.flush() catch {};
+        for (app_parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            error_count += 1;
+            var report = app_parse_ast.tokenizeDiagnosticToReport(diagnostic, allocs.gpa, roc_file_path) catch continue;
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+        for (app_parse_ast.parse_diagnostics.items) |diagnostic| {
+            error_count += 1;
+            var report = app_parse_ast.parseDiagnosticToReport(&app_env.common, diagnostic, allocs.gpa, roc_file_path) catch continue;
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+        // If errors are not allowed then we should not move past parsing. return early and let caller handle error/exit
+        if (!allow_errors) {
+            return SharedMemoryResult{
+                .handle = SharedMemoryHandle{
+                    .fd = shm.handle,
+                    .ptr = shm.base_ptr,
+                    .size = shm.getUsedSize(),
+                },
+                .error_count = error_count,
+            };
+        }
+    }
 
+    app_parse_ast.store.emptyScratch();
     try app_env.initCIRFields(app_module_name);
 
     var app_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
@@ -1851,7 +1880,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Render all type problems (errors and warnings) exactly as roc check would
     // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
-    const error_count = if (!builtin.is_test)
+    error_count += if (!builtin.is_test)
         renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path)
     else
         0;
