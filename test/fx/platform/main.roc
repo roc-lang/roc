@@ -9,6 +9,8 @@ platform ""
             arm64mac: [app],
             x64musl: [app],
             arm64musl: [app],
+            x64win: [app],
+            arm64win: [app],
         }
     }
 
