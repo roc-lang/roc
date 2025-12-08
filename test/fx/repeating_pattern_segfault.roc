@@ -18,40 +18,6 @@ parse_range = |range_str| {
 }
 
 
-is_invalid : I64 -> Bool
-is_invalid = |x| {
-    s = x.to_str().to_utf8()
-    n = s.len()
-    mid = n // 2
-
-    left = s.sublist({ start: 0, len: mid })
-    right = s.sublist({ start: mid, len: n - mid })
-
-    left == right
-}
-
-
-part1! : Str => Try(I64, _)
-part1! = |input| {
-    var $sum = 0
-
-    for range_str in input.trim().split_on(",") {
-        print!(range_str)
-        (start, end) = parse_range(range_str)?
-
-        var $x = start
-        while $x <= end {
-            if is_invalid($x) {
-                $sum = $sum + $x
-            }
-            $x = $x + 1
-        }
-    }
-
-    Ok($sum)
-}
-
-
 repeat = |list, n| repeat_helper([], list, n)
 
 repeat_helper = |acc, list, n| match n {

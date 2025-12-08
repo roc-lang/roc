@@ -264,6 +264,7 @@ pub const Interpreter = struct {
     active_closures: std.array_list.Managed(StackValue),
     canonical_bool_rt_var: ?types.Var,
     canonical_str_rt_var: ?types.Var,
+    cached_list_u8_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
@@ -422,6 +423,7 @@ pub const Interpreter = struct {
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
             .canonical_bool_rt_var = null,
             .canonical_str_rt_var = null,
+            .cached_list_u8_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
@@ -1490,19 +1492,36 @@ pub const Interpreter = struct {
                 // Get the result layout - should be List(U8).
                 // If return_rt_var is a flex that would default to a scalar,
                 // we need to ensure we get a proper list layout for correct refcounting.
-                const result_rt_var = return_rt_var orelse {
+                const provided_rt_var = return_rt_var orelse {
                     self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
                     return error.Crash;
                 };
-                const result_layout = blk: {
-                    const maybe_layout = try self.getRuntimeLayout(result_rt_var);
-                    // If the layout is a list, use it
-                    if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) {
-                        break :blk maybe_layout;
+
+                // Get the result layout - should be List(U8).
+                // If the provided_rt_var leads to a non-list layout, we need to create
+                // a proper List(U8) type to ensure correct method dispatch.
+                const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
+                const list_u8_layout = Layout.list(u8_layout_idx);
+
+                const maybe_layout = try self.getRuntimeLayout(provided_rt_var);
+                const result_rt_var, const result_layout = if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) blk: {
+                    // Layout is already a list - check if the type is also a List
+                    const resolved_rt = self.runtime_types.resolveVar(provided_rt_var);
+                    const is_list_type = switch (resolved_rt.desc.content) {
+                        .structure => |s| switch (s) {
+                            .nominal_type => true,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    if (is_list_type) {
+                        break :blk .{ provided_rt_var, maybe_layout };
                     }
-                    // Fallback: create a proper List(U8) layout
-                    const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
-                    break :blk Layout.list(u8_layout_idx);
+                    // Layout is list but type is not nominal - create proper List(U8) type
+                    break :blk .{ try self.createListU8Type(), list_u8_layout };
+                } else blk: {
+                    // Layout is not a list - create both proper layout and type
+                    break :blk .{ try self.createListU8Type(), list_u8_layout };
                 };
 
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
@@ -7624,6 +7643,28 @@ pub const Interpreter = struct {
         const type_args: [1]types.Var = .{fresh_elem_var};
         const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id, false);
         return try self.runtime_types.freshFromContent(list_content);
+    }
+
+    /// Create List(U8) type for runtime type propagation.
+    /// Used by str_to_utf8 to ensure correct method dispatch.
+    fn createListU8Type(self: *Interpreter) !types.Var {
+        // Return cached value if available
+        if (self.cached_list_u8_rt_var) |cached| return cached;
+
+        const origin_module_id = self.root_env.idents.builtin_module;
+
+        // Create U8 type
+        const u8_type_name = "U8";
+        const u8_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(u8_type_name));
+        const u8_type_ident = types.TypeIdent{ .ident_idx = u8_type_name_ident };
+        const u8_backing_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+        const u8_content = try self.runtime_types.mkNominal(u8_type_ident, u8_backing_var, &.{}, origin_module_id, false);
+        const u8_rt_var = try self.runtime_types.freshFromContent(u8_content);
+
+        // Create List(U8) type and cache it
+        const list_u8_var = try self.createListTypeWithElement(u8_rt_var);
+        self.cached_list_u8_rt_var = list_u8_var;
+        return list_u8_var;
     }
 
     /// Create a type variable from a layout. Used as a fallback when type info is corrupted.
@@ -13797,13 +13838,9 @@ pub const Interpreter = struct {
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => {
-                            return error.InvalidMethodReceiver;
-                        },
+                        else => return error.InvalidMethodReceiver,
                     },
-                    else => {
-                        return error.InvalidMethodReceiver;
-                    },
+                    else => return error.InvalidMethodReceiver,
                 };
 
                 // Resolve the method function
