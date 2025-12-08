@@ -3233,8 +3233,9 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 4);
     var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32);
 
-    // For cross-compilation to Linux, we need CRT files from the platform's targets/ directory
-    if (is_cross_compile and target.isLinux()) {
+    // For Linux targets, we need CRT files from the platform's targets/ directory
+    // This applies to both cross-compilation AND native Linux builds
+    if (target.isLinux()) {
         // Get the base platform directory (where main.roc lives, not targets/<native>/)
         // CRT files are organized as <platform_dir>/targets/{target}/
         const platform_dir: []const u8 = if (platform_paths) |pp| dir: {
