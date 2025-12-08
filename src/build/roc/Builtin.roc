@@ -119,6 +119,19 @@ Builtin :: [].{
 					},
 			)
 
+		count_if : List(a), (a -> Bool) -> U64
+		count_if = |list, predicate|
+			List.fold(
+				list,
+				0,
+				|acc, elem|
+					if predicate(elem) {
+						acc + 1
+					} else {
+						acc
+					},
+			)
+
 		fold : List(item), state, (state, item -> state) -> state
 		fold = |list, init, step| {
 			var $state = init
