@@ -1332,6 +1332,12 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
 
+    // Check for absolute paths and reject them early
+    if (std.fs.path.isAbsolute(platform_spec)) {
+        std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
+        return error.PlatformNotSupported;
+    }
+
     // Resolve platform path based on type:
     // - Relative paths (./...) -> join with app directory
     // - URL paths (http/https) -> resolve to cached package main.roc
@@ -1658,12 +1664,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // The platform wraps app-provided functions (from `requires`) and exports them for the host.
     // For example: `provides { main_for_host!: "main" }` where `main_for_host! = main!`
     const platform_env = platform_main_env orelse {
-        const is_absolute = std.fs.path.isAbsolute(platform_spec);
-        if (is_absolute) {
-            std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
-        } else {
-            std.log.err("No platform found. Every Roc app requires a platform.", .{});
-        }
+        std.log.err("No platform found. Every Roc app requires a platform.", .{});
         return error.NoPlatformFound;
     };
     const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
