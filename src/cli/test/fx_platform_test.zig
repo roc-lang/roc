@@ -1043,8 +1043,6 @@ test "run aborts on parse errors by default" {
     // Tests that roc run aborts when there are parse errors (without --allow-errors)
     const allocator = testing.allocator;
 
-    try ensureRocBinary(allocator);
-
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
