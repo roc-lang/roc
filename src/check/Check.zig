@@ -1497,8 +1497,7 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 },
             });
         },
-        .w_alias => |alias| {
-            _ = alias;
+        .w_alias => {
             // TODO: Recursively unwrap alias
         },
         .w_malformed => {
@@ -3170,7 +3169,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Here, we unwrap the function, following aliases, to get
                     // the actual function we want to check against
                     var var_ = expected_var;
+                    var guard = types_mod.debug.IterationGuard.init("checkExpr.lambda.unwrapExpectedFunc");
                     while (true) {
+                        guard.tick();
                         switch (self.types.resolveVar(var_).desc.content) {
                             .structure => |flat_type| {
                                 switch (flat_type) {
@@ -3365,7 +3366,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             // Here, we unwrap the function, following aliases, to get
                             // the actual function we want to check against
                             var var_ = func_var;
+                            var guard = types_mod.debug.IterationGuard.init("checkExpr.call.unwrapFuncVar");
                             while (true) {
+                                guard.tick();
                                 switch (self.types.resolveVar(var_).desc.content) {
                                     .structure => |flat_type| {
                                         switch (flat_type) {
@@ -4941,7 +4944,7 @@ fn handleRecursiveConstraint(
     const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
 
     // Create RecursionInfo to track the recursion metadata
-    const recursion_info = types_mod.RecursionInfo{
+    _ = types_mod.RecursionInfo{
         .recursion_var = recursion_var,
         .depth = depth,
     };
@@ -4949,7 +4952,6 @@ fn handleRecursiveConstraint(
     // Store the recursion info in the deferred constraint
     // Note: This will be enhanced in later implementation to properly
     // update the constraint with the recursion info
-    _ = recursion_info;
 }
 
 /// Check static dispatch constraints
@@ -4964,28 +4966,6 @@ fn handleRecursiveConstraint(
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-/// Check a from_numeral constraint - actual validation happens during comptime evaluation
-fn checkNumeralConstraint(
-    self: *Self,
-    type_var: Var,
-    constraint: types_mod.StaticDispatchConstraint,
-    num_lit_info: types_mod.NumeralInfo,
-    nominal_type: types_mod.NominalType,
-    env: *Env,
-) !void {
-    // Mark parameters as intentionally unused - validation happens in comptime evaluation
-    _ = self;
-    _ = type_var;
-    _ = constraint;
-    _ = num_lit_info;
-    _ = nominal_type;
-    _ = env;
-
-    // All numeric literal validation now happens during comptime evaluation
-    // in ComptimeEvaluator.validateDeferredNumericLiterals()
-    // This function exists only to satisfy the constraint checking interface
-}
-
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
@@ -5250,16 +5230,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 if (any_arg_failed or ret_result.isProblem()) {
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     try self.unifyWith(resolved_func.ret, .err, env);
-                } else if (constraint.origin == .from_numeral and constraint.num_literal != null) {
-                    // For from_numeral constraints on builtin types, do compile-time validation
-                    try self.checkNumeralConstraint(
-                        deferred_constraint.var_,
-                        constraint,
-                        constraint.num_literal.?,
-                        nominal_type,
-                        env,
-                    );
                 }
+                // Note: from_numeral constraint validation happens during comptime evaluation
+                // in ComptimeEvaluator.validateDeferredNumericLiterals()
             }
         } else if (dispatcher_content == .structure and
             (dispatcher_content.structure == .record or

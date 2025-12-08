@@ -197,7 +197,7 @@ pub fn parseFile(self: *Parser) Error!void {
 
     self.store.emptyScratch();
     try self.store.addFile(.{
-        .header = @as(AST.Header.Idx, @enumFromInt(0)),
+        .header = undefined, // overwritten below after parseHeader()
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
         .region = AST.TokenizedRegion.empty(),
     });
@@ -1664,6 +1664,19 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern
                     .region = .{ .start = start, .end = self.pos },
                 } });
             },
+            .KwVar => {
+                // Mutable variable binding in pattern, e.g., `var $x`
+                self.advance();
+                if (self.peek() != .LowerIdent) {
+                    return try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
+                }
+                const ident_tok = self.pos;
+                self.advance();
+                pattern = try self.store.addPattern(.{ .var_ident = .{
+                    .ident_tok = ident_tok,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
             .NamedUnderscore => {
                 self.advance();
                 pattern = try self.store.addPattern(.{ .ident = .{
@@ -2281,9 +2294,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                             },
                         }
                         lookahead_pos += 1;
-
-                        // Limit lookahead to prevent infinite loops
-                        if (lookahead_pos > saved_pos + 100) break;
                     }
                 }
 

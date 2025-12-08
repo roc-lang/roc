@@ -32,8 +32,6 @@ client = Http.invalidMethod
 parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_unresolved_qualified.md:1:1:1:17
-MODULE NOT FOUND - can_import_unresolved_qualified.md:2:1:2:27
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:5:8:5:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:9:20:9:34
 MODULE NOT IMPORTED - can_import_unresolved_qualified.md:12:18:12:37
@@ -45,28 +43,6 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:22:10:22:28
 UNDEFINED VARIABLE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_unresolved_qualified.md:1:1:1:17:**
-```roc
-import json.Json
-```
-^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_unresolved_qualified.md:2:1:2:27:**
-```roc
-import http.Client as Http
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `method` in this scope.
 Is there an `import` or `exposing` missing up-top?

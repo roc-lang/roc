@@ -190,7 +190,7 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    fn rangeFromReport(self: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
+    fn rangeFromReport(_: *SyntaxChecker, rep: reporting.Report) Diagnostics.Range {
         var start = Diagnostics.Position{ .line = 0, .character = 0 };
         var end = Diagnostics.Position{ .line = 0, .character = 0 };
 
@@ -220,7 +220,6 @@ pub const SyntaxChecker = struct {
             }
         }
 
-        _ = self;
         return .{ .start = start, .end = end };
     }
 

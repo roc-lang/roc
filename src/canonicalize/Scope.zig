@@ -50,8 +50,8 @@ forward_references: std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference),
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
 /// Maps type variables to their type annotation indices
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
-/// Maps module alias names to their full module names
-module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
+/// Maps module alias names to their full module info (name + whether package-qualified)
+module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
 /// Maps exposed item names to their source modules and original names (for import resolution)
 exposed_items: std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 /// Maps module names to their Import.Idx for modules imported in this scope
@@ -69,7 +69,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .forward_references = std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference){},
         .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
-        .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx){},
+        .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
         .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
         .is_function_boundary = is_function_boundary,
@@ -124,9 +124,15 @@ pub const TypeVarLookupResult = union(enum) {
     not_found: void,
 };
 
+/// Information about a module alias
+pub const ModuleAliasInfo = struct {
+    module_name: Ident.Idx,
+    is_package_qualified: bool,
+};
+
 /// Result of looking up a module alias
 pub const ModuleAliasLookupResult = union(enum) {
-    found: Ident.Idx,
+    found: ModuleAliasInfo,
     not_found: void,
 };
 
@@ -174,8 +180,8 @@ pub const TypeVarIntroduceResult = union(enum) {
 /// Result of introducing a module alias
 pub const ModuleAliasIntroduceResult = union(enum) {
     success: void,
-    shadowing_warning: Ident.Idx, // The module alias that was shadowed
-    already_in_scope: Ident.Idx, // The module alias already exists in this scope
+    shadowing_warning: ModuleAliasInfo, // The module alias that was shadowed
+    already_in_scope: ModuleAliasInfo, // The module alias already exists in this scope
 };
 
 /// Result of introducing an exposed item
@@ -204,7 +210,7 @@ pub const ItemKind = enum { ident, alias, type_var, module_alias, exposed_item }
 pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
     .ident, .alias => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
     .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
-    .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
+    .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
     .exposed_item => *std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 } {
     return switch (item_kind) {
@@ -220,7 +226,7 @@ pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
 pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (item_kind) {
     .ident, .alias => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
     .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
-    .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, Ident.Idx),
+    .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
     .exposed_item => *const std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
 } {
     return switch (item_kind) {
@@ -236,7 +242,7 @@ pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (ite
 pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, value: switch (item_kind) {
     .ident, .alias => CIR.Pattern.Idx,
     .type_var => CIR.TypeAnno.Idx,
-    .module_alias => Ident.Idx,
+    .module_alias => ModuleAliasInfo,
     .exposed_item => ExposedItemInfo,
 }) std.mem.Allocator.Error!void {
     try scope.items(item_kind).put(gpa, name, value);
@@ -357,7 +363,7 @@ pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
 
 /// Look up a module alias in this scope
 pub fn lookupModuleAlias(scope: *const Scope, name: Ident.Idx) ModuleAliasLookupResult {
-    // Search by comparing text content, not identifier index
+    // Search by comparing .idx values (integer index into string interner)
     var iter = scope.module_aliases.iterator();
     while (iter.next()) |entry| {
         if (name.idx == entry.key_ptr.idx) {
@@ -373,7 +379,8 @@ pub fn introduceModuleAlias(
     gpa: std.mem.Allocator,
     alias_name: Ident.Idx,
     module_name: Ident.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?Ident.Idx,
+    is_package_qualified: bool,
+    parent_lookup_fn: ?fn (Ident.Idx) ?ModuleAliasInfo,
 ) std.mem.Allocator.Error!ModuleAliasIntroduceResult {
     // Check if already exists in current scope by comparing text content
     var iter = scope.module_aliases.iterator();
@@ -385,15 +392,20 @@ pub fn introduceModuleAlias(
     }
 
     // Check for shadowing in parent scopes
-    var shadowed_module: ?Ident.Idx = null;
+    var shadowed_module: ?ModuleAliasInfo = null;
     if (parent_lookup_fn) |lookup_fn| {
         shadowed_module = lookup_fn(alias_name);
     }
 
-    try scope.put(gpa, .module_alias, alias_name, module_name);
+    const module_info = ModuleAliasInfo{
+        .module_name = module_name,
+        .is_package_qualified = is_package_qualified,
+    };
 
-    if (shadowed_module) |module| {
-        return ModuleAliasIntroduceResult{ .shadowing_warning = module };
+    try scope.put(gpa, .module_alias, alias_name, module_info);
+
+    if (shadowed_module) |info| {
+        return ModuleAliasIntroduceResult{ .shadowing_warning = info };
     }
 
     return ModuleAliasIntroduceResult{ .success = {} };

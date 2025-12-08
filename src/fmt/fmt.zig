@@ -1265,6 +1265,17 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(d.expr);
             },
+            .inspect => |i| {
+                try fmt.pushAll("inspect");
+                const expr_node = fmt.nodeRegion(@intFromEnum(i.expr));
+                if (multiline and try fmt.flushCommentsBefore(expr_node.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(i.expr);
+            },
             .block => |b| {
                 try fmt.formatBlock(b);
             },
@@ -1340,6 +1351,11 @@ const Formatter = struct {
         switch (pattern) {
             .ident => |i| {
                 region = i.region;
+                try fmt.formatIdent(i.ident_tok, null);
+            },
+            .var_ident => |i| {
+                region = i.region;
+                try fmt.pushAll("var ");
                 try fmt.formatIdent(i.ident_tok, null);
             },
             .tag => |t| {

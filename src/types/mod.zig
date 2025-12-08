@@ -12,6 +12,7 @@ pub const store = @import("store.zig");
 pub const instantiate = @import("instantiate.zig");
 pub const generalize = @import("generalize.zig");
 pub const import_mapping = @import("import_mapping.zig");
+pub const debug = @import("debug.zig");
 
 pub const TypeWriter = @import("TypeWriter.zig");
 

@@ -250,6 +250,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     ident_patt,
+    /// Mutable variable binding in pattern
+    /// Example: `var $x` in `|var $x, y|`
+    /// * main_token - the identifier token
+    var_ident_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

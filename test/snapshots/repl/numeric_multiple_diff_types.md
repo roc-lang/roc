@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Numeric without annotation, multiple uses with different types (produces type error)
+description=Numeric without annotation, multiple uses with different types (each use gets fresh type)
 type=repl
 ~~~
 # SOURCE
@@ -17,6 +17,6 @@ assigned `a`
 ---
 assigned `b`
 ---
-TYPE MISMATCH
+"4242.0"
 # PROBLEMS
 NIL

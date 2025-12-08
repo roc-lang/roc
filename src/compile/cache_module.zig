@@ -201,17 +201,6 @@ pub const CacheModule = struct {
         }
     }
 
-    /// Convenience functions for reading/writing cache files
-    pub fn writeToFile(
-        allocator: Allocator,
-        cache_data: []const u8,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) !void {
-        _ = allocator;
-        try filesystem.writeFile(file_path, cache_data);
-    }
-
     /// Convenience function for reading cache files
     pub fn readFromFile(
         allocator: Allocator,

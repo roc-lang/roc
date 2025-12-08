@@ -65,12 +65,6 @@ pub const CacheManager = struct {
         };
     }
 
-    /// Deinitialize the cache manager.
-    pub fn deinit(self: *Self) void {
-        _ = self;
-        // Nothing to deinit currently
-    }
-
     /// Load a cached module based on its content and compiler version.
     /// Look up a cache entry by content and compiler version.
     ///

@@ -711,7 +711,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     parse_ast.store.emptyScratch();
 
     // Initialize CIR fields in ModuleEnv
-    try original_env.initCIRFields(gpa, "test");
+    try original_env.initCIRFields("test");
 
     // Get Bool and Try statement indices from builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
@@ -1351,4 +1351,39 @@ test "nested match with Result type - regression" {
         \\    }
         \\}
     , .no_trace);
+}
+
+// ============================================================================
+// Bug regression tests - segfault issues from bug reports
+// ============================================================================
+
+test "list equality - single element list - regression" {
+    // Regression test for segfault when comparing single element lists
+    // Bug report: `main! = || { _bool = [1] == [1] }`
+    try runExpectBool("[1] == [1]", true, .no_trace);
+}
+
+test "list equality - nested lists - regression" {
+    // Regression test for segfault when comparing nested lists
+    // Bug report: `_bool = [[1],[2]] == [[1],[2]]`
+    try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
+}
+
+test "list equality - single string element list - regression" {
+    // Regression test for crash trying to compare numeric scalars instead of string scalars
+    // Bug report: `main! = || { _bool = [""] == [""] }`
+    try runExpectBool("[\"\"] == [\"\"]", true, .no_trace);
+}
+
+test "if block with local bindings - regression" {
+    // Regression test for segfault in if block with local variable bindings
+    // Bug report: `main! = || { if True { x = 0 _y = x } }`
+    try runExpectInt(
+        \\if True {
+        \\    x = 0
+        \\    _y = x
+        \\    x
+        \\}
+        \\else 99
+    , 0, .no_trace);
 }

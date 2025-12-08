@@ -21,5 +21,8 @@ main_for_host! = |args|
     match main!(args) {
         Ok({}) => 0
         Err(Exit(code)) => code
-        _ => 1
+        Err(other) => {
+            Stderr.line!("exited with other error: ${inspect other})
+            1
+        }
     }

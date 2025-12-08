@@ -310,11 +310,21 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
                 posix.MAP_SHARED,
                 handle,
                 0,
-            ) orelse {
-                std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
+            );
+            // mmap returns MAP_FAILED (which is (void *)-1) on error, not null
+            // Need to check for both null and MAP_FAILED
+            if (ptr == null) {
+                std.log.err("POSIX: Failed to map shared memory - null returned (size: {})", .{size});
                 return error.MmapFailed;
-            };
-            return ptr;
+            }
+            const ptr_value = @intFromPtr(ptr.?);
+            if (ptr_value == std.math.maxInt(usize)) {
+                // This is MAP_FAILED (-1 cast to pointer)
+                const errno = std.c._errno().*;
+                std.log.err("POSIX: Failed to map shared memory - MAP_FAILED (size: {}, fd: {}, errno: {})", .{ size, handle, errno });
+                return error.MmapFailed;
+            }
+            return ptr.?;
         },
         else => return error.UnsupportedPlatform,
     }

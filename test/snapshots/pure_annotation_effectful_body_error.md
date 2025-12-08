@@ -16,20 +16,8 @@ bad_function = |msg| Stdout.line!(msg)
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - pure_annotation_effectful_body_error.md:3:1:3:17
 UNDEFINED VARIABLE - pure_annotation_effectful_body_error.md:7:22:7:34
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**pure_annotation_effectful_body_error.md:3:1:3:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?

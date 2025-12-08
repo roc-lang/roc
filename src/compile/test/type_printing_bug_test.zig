@@ -64,7 +64,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     defer result.deinit();
 
     // Now get the type of map_result and convert it to a string
-    // Find the map_result definition
+    // Find the map_result definition and get its type var from the expression
     const defs_slice = env.store.sliceDefs(env.all_defs);
     var map_result_var: ?types.Var = null;
     for (defs_slice) |def_idx| {
@@ -74,8 +74,8 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
             const ident_idx = pattern.assign.ident;
             const ident_text = env.getIdent(ident_idx);
             if (std.mem.eql(u8, ident_text, "map_result")) {
-                // Get the type variable from the first definition - it's the first in the defs list
-                map_result_var = @enumFromInt(0); // First variable
+                // Get the type variable from the definition's expression
+                map_result_var = ModuleEnv.varFrom(def.expr);
                 break;
             }
         }

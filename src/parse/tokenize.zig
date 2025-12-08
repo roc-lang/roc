@@ -1113,7 +1113,7 @@ pub const Tokenizer = struct {
         self.string_interpolation_stack.deinit();
     }
 
-    pub fn finishAndDeinit(self: *Tokenizer, _: std.mem.Allocator) TokenOutput {
+    pub fn finishAndDeinit(self: *Tokenizer) TokenOutput {
         self.string_interpolation_stack.deinit();
         const actual_message_count = @min(self.cursor.message_count, self.cursor.messages.len);
         return .{
@@ -1256,7 +1256,7 @@ pub const Tokenizer = struct {
                         } else {
                             self.cursor.pos += 1;
                             // Look at what follows the minus to determine if it's unary
-                            const tokenType: Token.Tag = if (self.canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
+                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(gpa, tokenType, start);
                         }
                     } else {
@@ -1573,8 +1573,7 @@ pub const Tokenizer = struct {
     }
 
     /// Determines if a character can follow a unary minus (i.e., can start an expression)
-    fn canFollowUnaryMinus(self: *const Tokenizer, c: u8) bool {
-        _ = self;
+    fn canFollowUnaryMinus(c: u8) bool {
         return switch (c) {
             // Identifiers
             'a'...'z', 'A'...'Z', '_' => true,
@@ -1688,7 +1687,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     var messages: [32]Diagnostic = undefined;
     var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
     try tokenizer.tokenize(gpa);
-    var output = tokenizer.finishAndDeinit(gpa);
+    var output = tokenizer.finishAndDeinit();
     defer output.tokens.deinit(gpa);
 
     if (debug) {
@@ -1723,7 +1722,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     // Second tokenization.
     tokenizer = try Tokenizer.init(&env, gpa, buf2.items, &messages);
     try tokenizer.tokenize(gpa);
-    var output2 = tokenizer.finishAndDeinit(gpa);
+    var output2 = tokenizer.finishAndDeinit();
     defer output2.tokens.deinit(gpa);
 
     if (debug) {

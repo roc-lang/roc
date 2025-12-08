@@ -288,58 +288,43 @@ fn writeFileDefault(path: []const u8, contents: []const u8) WriteError!void {
 
 // Testing implementations that fail tests if called
 
-fn fileExistsTesting(absolute_path: []const u8) OpenError!bool {
-    _ = absolute_path;
+fn fileExistsTesting(_: []const u8) OpenError!bool {
     @panic("fileExists should not be called in this test");
 }
 
-fn readFileTesting(relative_path: []const u8, allocator: Allocator) ReadError![]const u8 {
-    _ = relative_path;
-    _ = allocator;
+fn readFileTesting(_: []const u8, _: Allocator) ReadError![]const u8 {
     @panic("readFile should not be called in this test");
 }
 
-fn readFileIntoTesting(path: []const u8, buffer: []u8) ReadError!usize {
-    _ = path;
-    _ = buffer;
+fn readFileIntoTesting(_: []const u8, _: []u8) ReadError!usize {
     @panic("readFileInto should not be called in this test");
 }
 
-fn writeFileTesting(path: []const u8, contents: []const u8) WriteError!void {
-    _ = path;
-    _ = contents;
+fn writeFileTesting(_: []const u8, _: []const u8) WriteError!void {
     @panic("writeFile should not be called in this test");
 }
 
-fn openDirTesting(absolute_path: []const u8) OpenError!Dir {
-    _ = absolute_path;
+fn openDirTesting(_: []const u8) OpenError!Dir {
     @panic("openDir should not be called in this test");
 }
 
-fn dirNameTesting(absolute_path: []const u8) ?[]const u8 {
-    _ = absolute_path;
+fn dirNameTesting(_: []const u8) ?[]const u8 {
     @panic("dirName should not be called in this test");
 }
 
-fn baseNameTesting(absolute_path: []const u8) ?[]const u8 {
-    _ = absolute_path;
+fn baseNameTesting(_: []const u8) ?[]const u8 {
     @panic("baseName should not be called in this test");
 }
 
-fn canonicalizeTesting(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    _ = root_relative_path;
-    _ = allocator;
+fn canonicalizeTesting(_: []const u8, _: Allocator) CanonicalizeError![]const u8 {
     @panic("canonicalize should not be called in this test");
 }
 
-fn makePathTesting(path: []const u8) MakePathError!void {
-    _ = path;
+fn makePathTesting(_: []const u8) MakePathError!void {
     @panic("makePath should not be called in this test");
 }
 
-fn renameTesting(old_path: []const u8, new_path: []const u8) RenameError!void {
-    _ = old_path;
-    _ = new_path;
+fn renameTesting(_: []const u8, _: []const u8) RenameError!void {
     @panic("rename should not be called in this test");
 }
 

@@ -70,12 +70,9 @@ pub const ValidationResult = union(enum) {
 
 /// Validate that a platform has a targets section
 pub fn validatePlatformHasTargets(
-    allocator: Allocator,
     ast: anytype,
     platform_path: []const u8,
 ) ValidationResult {
-    _ = allocator;
-
     const store = &ast.store;
 
     // Get the file node first, then get the header from it
@@ -443,7 +440,7 @@ test "validatePlatformHasTargets detects missing targets section" {
     var ast = try parse.parse(&env, allocator);
     defer ast.deinit(allocator);
 
-    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
     switch (result) {
         .missing_targets_section => |info| {
@@ -485,7 +482,7 @@ test "validatePlatformHasTargets accepts platform with targets section" {
     var ast = try parse.parse(&env, allocator);
     defer ast.deinit(allocator);
 
-    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
@@ -511,7 +508,7 @@ test "validatePlatformHasTargets skips non-platform headers" {
     var ast = try parse.parse(&env, allocator);
     defer ast.deinit(allocator);
 
-    const result = validatePlatformHasTargets(allocator, ast, "app/main.roc");
+    const result = validatePlatformHasTargets(ast, "app/main.roc");
 
     // Non-platform headers should return valid (they don't need targets)
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
@@ -550,7 +547,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
     var ast = try parse.parse(&env, allocator);
     defer ast.deinit(allocator);
 
-    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
@@ -583,7 +580,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
     var ast = try parse.parse(&env, allocator);
     defer ast.deinit(allocator);
 
-    const result = validatePlatformHasTargets(allocator, ast, "test/platform/main.roc");
+    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
 
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
