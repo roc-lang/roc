@@ -9550,6 +9550,11 @@ pub const Interpreter = struct {
     pub const WorkStack = struct {
         items: std.array_list.AlignedManaged(WorkItem, null),
 
+        /// Maximum work stack size to prevent infinite recursion from hanging.
+        /// When exceeded, triggers a stack overflow error.
+        /// 10,000 items allows deep but not infinite recursion (~1MB memory).
+        pub const max_size: usize = 10_000;
+
         pub fn init(allocator: std.mem.Allocator) !WorkStack {
             return .{ .items = try std.array_list.AlignedManaged(WorkItem, null).initCapacity(allocator, 64) };
         }
@@ -9649,6 +9654,12 @@ pub const Interpreter = struct {
                         }
                     }
                 },
+            }
+
+            // Check for stack overflow (infinite recursion)
+            if (work_stack.items.items.len > WorkStack.max_size) {
+                self.triggerCrash("This Roc program overflowed its stack memory. This usually means there is infinite recursion somewhere in the code.", false, roc_ops);
+                return error.Crash;
             }
         }
 

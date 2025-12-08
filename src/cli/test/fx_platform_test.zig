@@ -1166,14 +1166,18 @@ test "fx platform runtime stack overflow" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // After stack overflow handling is implemented, we expect:
-    // 1. The process exits with code 134 (indicating stack overflow was caught)
-    // 2. Stderr contains a helpful message about stack overflow
+    // Stack overflow can be caught by either:
+    // 1. The Roc interpreter (exit code 1, "overflowed its stack memory" message) - most common
+    // 2. The SIGABRT signal handler (exit code 134) - if native stack overflow handling is used
     switch (run_result.term) {
         .Exited => |code| {
             if (code == 134) {
-                // Stack overflow was caught and handled properly
+                // Stack overflow was caught by native signal handler
                 // Verify the helpful error message was printed
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") != null);
+            } else if (code == 1) {
+                // Stack overflow was caught by the interpreter - this is the expected case
+                // The interpreter detects excessive work stack depth and reports the error
                 try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") != null);
             } else if (code == 139) {
                 // Exit code 139 = 128 + 11 (SIGSEGV) - stack overflow was NOT handled
@@ -1181,7 +1185,7 @@ test "fx platform runtime stack overflow" {
                 std.debug.print("\n", .{});
                 std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
                 std.debug.print("Process crashed with SIGSEGV (exit code 139).\n", .{});
-                std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
+                std.debug.print("Expected: exit code 1 or 134 with stack overflow message\n", .{});
                 return error.StackOverflowNotHandled;
             } else {
                 std.debug.print("Unexpected exit code: {}\n", .{code});
@@ -1194,7 +1198,7 @@ test "fx platform runtime stack overflow" {
             std.debug.print("\n", .{});
             std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
             std.debug.print("Process was killed by signal: {}\n", .{sig});
-            std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
+            std.debug.print("Expected: exit code 1 or 134 with stack overflow message\n", .{});
             return error.StackOverflowNotHandled;
         },
         else => {

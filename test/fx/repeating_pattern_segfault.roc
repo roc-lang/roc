@@ -18,8 +18,10 @@ parse_range = |range_str| {
 }
 
 
+repeat : List(a), U64 -> List(a)
 repeat = |list, n| repeat_helper([], list, n)
 
+repeat_helper : List(a), List(a), U64 -> List(a)
 repeat_helper = |acc, list, n| match n {
     0 => acc
     _ => repeat_helper(acc.concat(list), list, n - 1)
