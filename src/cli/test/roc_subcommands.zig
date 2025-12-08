@@ -396,6 +396,9 @@ test "roc check reports type error - plus operator with incompatible types" {
 }
 
 test "roc test/int/app.roc runs successfully" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -409,6 +412,9 @@ test "roc test/int/app.roc runs successfully" {
 }
 
 test "roc test/str/app.roc runs successfully" {
+    // Skip on Windows - test/str platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -426,6 +432,9 @@ test "roc test/str/app.roc runs successfully" {
 // =============================================================================
 
 test "roc build creates executable from test/int/app.roc" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -461,6 +470,9 @@ test "roc build creates executable from test/int/app.roc" {
 }
 
 test "roc build executable runs correctly" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
     const testing = std.testing;
     const gpa = testing.allocator;
 
