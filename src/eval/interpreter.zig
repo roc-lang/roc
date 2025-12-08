@@ -2037,7 +2037,9 @@ pub const Interpreter = struct {
                 const len_u64: u64 = @intCast(len_usize);
 
                 const result_layout = layout.Layout.int(.u64);
-                const result_rt_var = try self.runtime_types.fresh();
+                // Use return_rt_var when provided (for proper method resolution on the result),
+                // otherwise fall back to a fresh type variable
+                const result_rt_var = return_rt_var orelse try self.runtime_types.fresh();
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
                 try out.setInt(@intCast(len_u64));
@@ -11603,6 +11605,7 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == cap.pattern_idx) {
+                // Check if this def is already being evaluated (to handle self-referential captures)
                 var k: usize = self.def_stack.items.len;
                 while (k > 0) {
                     k -= 1;
@@ -11611,6 +11614,22 @@ pub const Interpreter = struct {
                         if (entry.value) |val| {
                             return val;
                         }
+                        // Self-referential capture detected (def is in progress but value not ready yet)
+                        // For recursive functions, we need to create a placeholder closure
+                        const def_expr = self.env.store.getExpr(def.expr);
+                        if (def_expr == .e_lambda or def_expr == .e_closure) {
+                            // Add placeholder for the recursive function
+                            self.addClosurePlaceholder(def.pattern, def.expr) catch return null;
+                            // Return the placeholder we just added
+                            const bindings_len = self.bindings.items.len;
+                            if (bindings_len > 0) {
+                                const last_binding = self.bindings.items[bindings_len - 1];
+                                if (last_binding.pattern_idx == def.pattern) {
+                                    return last_binding.value;
+                                }
+                            }
+                        }
+                        return null;
                     }
                 }
                 // Found the def! Evaluate it to get the captured value
@@ -11734,7 +11753,11 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == lookup.pattern_idx) {
-                // Evaluate the definition on demand and cache the result in bindings
+                // For top-level recursive functions, we need to add a placeholder BEFORE
+                // evaluating the lambda body, so recursive calls can find the binding.
+                // This mirrors what addClosurePlaceholders does for block-level definitions.
+                //
+                // Evaluate the definition normally - no placeholder handling for now
                 const result = try self.evalWithExpectedType(def.expr, roc_ops, null);
                 try self.bindings.append(.{
                     .pattern_idx = def.pattern,
