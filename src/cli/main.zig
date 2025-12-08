@@ -1294,16 +1294,21 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     };
     std.log.debug("Coordination file written successfully", .{});
 
-    // Configure fd inheritance
-    var flags = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
-    if (flags < 0) {
+    // Configure fd inheritance - clear FD_CLOEXEC so child process inherits the fd
+    // NOTE: The doNotOptimizeAway calls are required to prevent the ReleaseFast
+    // optimizer from incorrectly optimizing away or reordering the fcntl calls.
+    const getfd_result = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
+    std.mem.doNotOptimizeAway(&getfd_result);
+    if (getfd_result < 0) {
         std.log.err("Failed to get fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
 
-    flags &= ~@as(c_int, posix.FD_CLOEXEC);
-
-    if (posix.fcntl(shm_handle.fd, posix.F_SETFD, flags) < 0) {
+    const new_flags = getfd_result & ~@as(c_int, posix.FD_CLOEXEC);
+    std.mem.doNotOptimizeAway(&new_flags);
+    const setfd_result = posix.fcntl(shm_handle.fd, posix.F_SETFD, new_flags);
+    std.mem.doNotOptimizeAway(&setfd_result);
+    if (setfd_result < 0) {
         std.log.err("Failed to set fd flags: {}", .{c._errno().*});
         return error.FdConfigFailed;
     }
