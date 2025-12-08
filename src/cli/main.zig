@@ -1475,6 +1475,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
 
+    // Check for absolute paths and reject them early
+    try validatePlatformSpec(platform_spec);
+
     // Resolve platform path based on type:
     // - Relative paths (./...) -> join with app directory
     // - URL paths (http/https) -> resolve to cached package main.roc
@@ -2139,6 +2142,15 @@ fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
     };
 }
 
+/// Check if platform spec is an absolute path and reject it with a helpful error message.
+/// Returns error.PlatformNotSupported if absolute, otherwise returns void.
+fn validatePlatformSpec(platform_spec: []const u8) error{PlatformNotSupported}!void {
+    if (std.fs.path.isAbsolute(platform_spec)) {
+        std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
+        return error.PlatformNotSupported;
+    }
+}
+
 /// Resolve a platform specification to both host library and platform source paths
 fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
 
@@ -2219,11 +2231,11 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
         return resolveUrlPlatform(allocs, platform_spec);
     }
 
-    // Try to interpret as a file path (resolve relative to base_dir)
-    const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
-        try allocs.arena.dupe(u8, platform_spec)
-    else
-        try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
+    // Check for absolute paths and reject them
+    try validatePlatformSpec(platform_spec);
+
+    // Try to interpret as a file path (must be relative, resolve relative to base_dir)
+    const resolved_path = try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
 
     std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
