@@ -215,6 +215,7 @@ jobs:
         # We can re-evaluate as new version of zig/valgrind come out.
         if: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
+          # Install libc6-dbg which is required for Valgrind's function redirections
           sudo apt-get update && sudo apt-get install -y libc6-dbg
           sudo snap install valgrind --classic
           valgrind --version
