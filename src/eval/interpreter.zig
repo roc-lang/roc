@@ -8663,28 +8663,40 @@ pub const Interpreter = struct {
         kind: FnKind,
     ) Error!InstantiateResult {
         const arg_vars = self.runtime_types.sliceVars(args_range);
-        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-        defer self.allocator.free(new_args);
+        var new_args: ?[]types.Var = null;
+        defer if (new_args) |na| self.allocator.free(na);
 
-        var any_changed = false;
         for (arg_vars, 0..) |arg_var, i| {
             const result = try self.instantiateTypeInner(arg_var, subst_map);
-            new_args[i] = result.var_;
-            any_changed = any_changed or result.changed;
+            if (result.changed) {
+                if (new_args == null) {
+                    new_args = try self.allocator.alloc(types.Var, arg_vars.len);
+                    @memcpy(new_args.?[0..i], arg_vars[0..i]);
+                }
+            }
+            if (new_args) |na| {
+                na[i] = result.var_;
+            }
         }
 
         const ret_result = try self.instantiateTypeInner(ret, subst_map);
-        any_changed = any_changed or ret_result.changed;
 
-        if (!any_changed) {
+        if (new_args == null and !ret_result.changed) {
             try subst_map.put(resolved_var, type_var);
             return .{ .var_ = type_var, .changed = false };
         }
 
+        const final_args = new_args orelse blk: {
+            const na = try self.allocator.alloc(types.Var, arg_vars.len);
+            @memcpy(na, arg_vars);
+            new_args = na;
+            break :blk na;
+        };
+
         const content = switch (kind) {
-            .pure => try self.runtime_types.mkFuncPure(new_args, ret_result.var_),
-            .effectful => try self.runtime_types.mkFuncEffectful(new_args, ret_result.var_),
-            .unbound => try self.runtime_types.mkFuncUnbound(new_args, ret_result.var_),
+            .pure => try self.runtime_types.mkFuncPure(final_args, ret_result.var_),
+            .effectful => try self.runtime_types.mkFuncEffectful(final_args, ret_result.var_),
+            .unbound => try self.runtime_types.mkFuncUnbound(final_args, ret_result.var_),
         };
         const new_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
         try subst_map.put(resolved_var, new_var);
@@ -8699,22 +8711,28 @@ pub const Interpreter = struct {
         subst_map: *std.AutoHashMap(types.Var, types.Var),
     ) Error!InstantiateResult {
         const elem_vars = self.runtime_types.sliceVars(tuple.elems);
-        var new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
-        defer self.allocator.free(new_elems);
+        var new_elems: ?[]types.Var = null;
+        defer if (new_elems) |ne| self.allocator.free(ne);
 
-        var any_changed = false;
         for (elem_vars, 0..) |elem_var, i| {
             const result = try self.instantiateTypeInner(elem_var, subst_map);
-            new_elems[i] = result.var_;
-            any_changed = any_changed or result.changed;
+            if (result.changed) {
+                if (new_elems == null) {
+                    new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
+                    @memcpy(new_elems.?[0..i], elem_vars[0..i]);
+                }
+            }
+            if (new_elems) |ne| {
+                ne[i] = result.var_;
+            }
         }
 
-        if (!any_changed) {
+        if (new_elems == null) {
             try subst_map.put(resolved_var, type_var);
             return .{ .var_ = type_var, .changed = false };
         }
 
-        const new_elems_range = try self.runtime_types.appendVars(new_elems);
+        const new_elems_range = try self.runtime_types.appendVars(new_elems.?);
         const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
         const new_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
         try subst_map.put(resolved_var, new_var);
@@ -8729,27 +8747,46 @@ pub const Interpreter = struct {
         subst_map: *std.AutoHashMap(types.Var, types.Var),
     ) Error!InstantiateResult {
         const fields = self.runtime_types.record_fields.sliceRange(record.fields);
-        var new_fields = try self.allocator.alloc(types.RecordField, fields.len);
-        defer self.allocator.free(new_fields);
+        var new_fields: ?[]types.RecordField = null;
+        defer if (new_fields) |nf| self.allocator.free(nf);
 
-        var any_changed = false;
-        var i: usize = 0;
-        while (i < fields.len) : (i += 1) {
+        for (0..fields.len) |i| {
             const field = fields.get(i);
             const result = try self.instantiateTypeInner(field.var_, subst_map);
-            new_fields[i] = .{ .name = field.name, .var_ = result.var_ };
-            any_changed = any_changed or result.changed;
+            if (result.changed) {
+                // First change - allocate and copy all previous fields
+                if (new_fields == null) {
+                    new_fields = try self.allocator.alloc(types.RecordField, fields.len);
+                    for (0..i) |j| {
+                        const prev_field = fields.get(j);
+                        new_fields.?[j] = .{ .name = prev_field.name, .var_ = prev_field.var_ };
+                    }
+                }
+            }
+            if (new_fields) |nf| {
+                nf[i] = .{ .name = field.name, .var_ = result.var_ };
+            }
         }
 
         const ext_result = try self.instantiateTypeInner(record.ext, subst_map);
-        any_changed = any_changed or ext_result.changed;
 
-        if (!any_changed) {
+        if (new_fields == null and !ext_result.changed) {
             try subst_map.put(resolved_var, type_var);
             return .{ .var_ = type_var, .changed = false };
         }
 
-        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
+        // Need to create new record - ensure we have new_fields allocated
+        const final_fields = new_fields orelse blk: {
+            const nf = try self.allocator.alloc(types.RecordField, fields.len);
+            for (0..fields.len) |i| {
+                const field = fields.get(i);
+                nf[i] = .{ .name = field.name, .var_ = field.var_ };
+            }
+            new_fields = nf;
+            break :blk nf;
+        };
+
+        const new_fields_range = try self.runtime_types.appendRecordFields(final_fields);
         const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = ext_result.var_ } } };
         const new_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
         try subst_map.put(resolved_var, new_var);
@@ -8770,24 +8807,39 @@ pub const Interpreter = struct {
         const backing_result = try self.instantiateTypeInner(backing, subst_map);
 
         const type_args = self.runtime_types.sliceNominalArgs(nt);
-        var new_args = try self.allocator.alloc(types.Var, type_args.len);
-        defer self.allocator.free(new_args);
+        var new_args: ?[]types.Var = null;
+        defer if (new_args) |na| self.allocator.free(na);
 
-        var any_changed = backing_result.changed;
+        var args_changed = false;
         for (type_args, 0..) |arg_var, i| {
             const result = try self.instantiateTypeInner(arg_var, subst_map);
-            new_args[i] = result.var_;
-            any_changed = any_changed or result.changed;
+            if (result.changed) {
+                if (new_args == null) {
+                    new_args = try self.allocator.alloc(types.Var, type_args.len);
+                    @memcpy(new_args.?[0..i], type_args[0..i]);
+                }
+                args_changed = true;
+            }
+            if (new_args) |na| {
+                na[i] = result.var_;
+            }
         }
 
-        if (!any_changed) {
+        if (!backing_result.changed and !args_changed) {
             return .{ .var_ = type_var, .changed = false };
         }
+
+        const final_args = new_args orelse blk: {
+            const na = try self.allocator.alloc(types.Var, type_args.len);
+            @memcpy(na, type_args);
+            new_args = na;
+            break :blk na;
+        };
 
         const content = try self.runtime_types.mkNominal(
             nt.ident,
             backing_result.var_,
-            new_args,
+            final_args,
             nt.origin_module,
             nt.is_opaque,
         );
