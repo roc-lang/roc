@@ -36,16 +36,20 @@ const rcNone = @import("utils.zig").rcNone;
 /// The context parameter is expected to be a *RocOps.
 fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element) |elem_ptr| {
-        const elem_addr = @intFromPtr(elem_ptr);
-        const required_align = @alignOf(RocStr);
-        if (elem_addr % required_align != 0) {
-            @panic("strDecref: elem_ptr is not properly aligned for RocStr");
+        if (comptime builtin.mode == .Debug) {
+            const elem_addr = @intFromPtr(elem_ptr);
+            const required_align = @alignOf(RocStr);
+            if (elem_addr % required_align != 0) {
+                @panic("strDecref: elem_ptr is not properly aligned for RocStr");
+            }
         }
         const str_ptr: *RocStr = @ptrCast(@alignCast(elem_ptr));
         if (context) |ctx| {
-            const ctx_addr = @intFromPtr(ctx);
-            if (ctx_addr % @alignOf(RocOps) != 0) {
-                @panic("strDecref: context is not properly aligned for RocOps");
+            if (comptime builtin.mode == .Debug) {
+                const ctx_addr = @intFromPtr(ctx);
+                if (ctx_addr % @alignOf(RocOps) != 0) {
+                    @panic("strDecref: context is not properly aligned for RocOps");
+                }
             }
             const roc_ops: *RocOps = @ptrCast(@alignCast(ctx));
             str_ptr.decref(roc_ops);

@@ -1587,14 +1587,15 @@ pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to Boxes and copies from src to dest.
 pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    // Debug alignment checks
-    const dest_addr = @intFromPtr(dest);
-    const src_addr = @intFromPtr(src);
-    if (dest_addr % @alignOf(usize) != 0) {
-        std.debug.panic("[copy_box] dest=0x{x} not aligned to {} bytes", .{ dest_addr, @alignOf(usize) });
-    }
-    if (src_addr % @alignOf(usize) != 0) {
-        std.debug.panic("[copy_box] src=0x{x} not aligned to {} bytes", .{ src_addr, @alignOf(usize) });
+    if (comptime builtin.mode == .Debug) {
+        const dest_addr = @intFromPtr(dest);
+        const src_addr = @intFromPtr(src);
+        if (dest_addr % @alignOf(usize) != 0) {
+            std.debug.panic("[copy_box] dest=0x{x} not aligned to {} bytes", .{ dest_addr, @alignOf(usize) });
+        }
+        if (src_addr % @alignOf(usize) != 0) {
+            std.debug.panic("[copy_box] src=0x{x} not aligned to {} bytes", .{ src_addr, @alignOf(usize) });
+        }
     }
     const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest)));
     const src_ptr = @as(*usize, @ptrCast(@alignCast(src)));
@@ -1603,10 +1604,11 @@ pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to ZST Boxes and copies from src to dest.
 pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
-    // Debug alignment check
-    const dest_addr = @intFromPtr(dest.?);
-    if (dest_addr % @alignOf(usize) != 0) {
-        std.debug.panic("[copy_box_zst] dest=0x{x} not aligned to {} bytes", .{ dest_addr, @alignOf(usize) });
+    if (comptime builtin.mode == .Debug) {
+        const dest_addr = @intFromPtr(dest.?);
+        if (dest_addr % @alignOf(usize) != 0) {
+            std.debug.panic("[copy_box_zst] dest=0x{x} not aligned to {} bytes", .{ dest_addr, @alignOf(usize) });
+        }
     }
     const dest_ptr = @as(*usize, @ptrCast(@alignCast(dest.?)));
     dest_ptr.* = 0;
@@ -1614,14 +1616,15 @@ pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to Lists and copies from src to dest.
 pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    // Debug alignment checks
-    const dest_addr = @intFromPtr(dest.?);
-    const src_addr = @intFromPtr(src.?);
-    if (dest_addr % @alignOf(RocList) != 0) {
-        @panic("copy_list: dest is not properly aligned for RocList");
-    }
-    if (src_addr % @alignOf(RocList) != 0) {
-        @panic("copy_list: src is not properly aligned for RocList");
+    if (comptime builtin.mode == .Debug) {
+        const dest_addr = @intFromPtr(dest.?);
+        const src_addr = @intFromPtr(src.?);
+        if (dest_addr % @alignOf(RocList) != 0) {
+            @panic("copy_list: dest is not properly aligned for RocList");
+        }
+        if (src_addr % @alignOf(RocList) != 0) {
+            @panic("copy_list: src is not properly aligned for RocList");
+        }
     }
     const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
@@ -1630,15 +1633,16 @@ pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to ZST Lists and copies from src to dest.
 pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    // Debug alignment checks
-    const dest_addr = @intFromPtr(dest.?);
-    const src_addr = @intFromPtr(src.?);
-    const required_alignment = @alignOf(RocList);
-    if (dest_addr % required_alignment != 0) {
-        @panic("copy_list_zst: dest is not properly aligned for RocList");
-    }
-    if (src_addr % required_alignment != 0) {
-        @panic("copy_list_zst: src is not properly aligned for RocList");
+    if (comptime builtin.mode == .Debug) {
+        const dest_addr = @intFromPtr(dest.?);
+        const src_addr = @intFromPtr(src.?);
+        const required_alignment = @alignOf(RocList);
+        if (dest_addr % required_alignment != 0) {
+            @panic("copy_list_zst: dest is not properly aligned for RocList");
+        }
+        if (src_addr % required_alignment != 0) {
+            @panic("copy_list_zst: src is not properly aligned for RocList");
+        }
     }
     const dest_ptr = @as(*RocList, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*RocList, @ptrCast(@alignCast(src.?)));
@@ -1647,14 +1651,15 @@ pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
 
 /// Specialized copy fn which takes pointers as pointers to a RocStr and copies from src to dest.
 pub fn copy_str(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    // Debug alignment checks
-    const dest_addr = @intFromPtr(dest.?);
-    const src_addr = @intFromPtr(src.?);
-    if (dest_addr % @alignOf(RocStr) != 0) {
-        @panic("copy_str: dest is not properly aligned for RocStr");
-    }
-    if (src_addr % @alignOf(RocStr) != 0) {
-        @panic("copy_str: src is not properly aligned for RocStr");
+    if (comptime builtin.mode == .Debug) {
+        const dest_addr = @intFromPtr(dest.?);
+        const src_addr = @intFromPtr(src.?);
+        if (dest_addr % @alignOf(RocStr) != 0) {
+            @panic("copy_str: dest is not properly aligned for RocStr");
+        }
+        if (src_addr % @alignOf(RocStr) != 0) {
+            @panic("copy_str: src is not properly aligned for RocStr");
+        }
     }
     const dest_ptr = @as(*RocStr, @ptrCast(@alignCast(dest.?)));
     const src_ptr = @as(*RocStr, @ptrCast(@alignCast(src.?)));

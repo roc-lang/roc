@@ -669,10 +669,12 @@ pub const Interpreter = struct {
         // and what the Roc code returns. This should have been caught at compile
         // time, but if the type checking didn't enforce the constraint, we catch
         // it here at runtime.
-        const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
-        const ret_addr = @intFromPtr(ret_ptr);
-        if (ret_addr % required_alignment.toByteUnits() != 0) {
-            return error.TypeMismatch;
+        if (comptime builtin.mode == .Debug) {
+            const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+            const ret_addr = @intFromPtr(ret_ptr);
+            if (ret_addr % required_alignment.toByteUnits() != 0) {
+                return error.TypeMismatch;
+            }
         }
 
         return true;
