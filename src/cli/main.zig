@@ -743,7 +743,8 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
 /// If serialized_module is provided, it will be embedded in the binary (for roc build).
 /// If serialized_module is null, the binary will use IPC to get module data (for roc run).
-fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8) !?[]const u8 {
+/// If debug is true, include debug information in the generated object file.
+fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -820,6 +821,7 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
         .output_path = object_path,
         .optimization = .speed,
         .target = target,
+        .debug = debug, // Use the debug flag passed from caller
     };
 
     if (builder.compileBitcodeToObject(allocs.gpa, compile_config)) |success| {
@@ -1019,7 +1021,8 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         // Generate platform host shim using the detected entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Pass null for serialized_module since roc run uses IPC mode
-        const platform_shim_path = generatePlatformHostShim(allocs, temp_dir_path, entrypoints.items, shim_target, null) catch |err| {
+        // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
+        const platform_shim_path = generatePlatformHostShim(allocs, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug) catch |err| {
             std.log.err("Failed to generate platform host shim: {}", .{err});
             return err;
         };
@@ -3214,8 +3217,10 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     };
 
     // Generate platform host shim with embedded module data
-    std.log.debug("Generating platform host shim with {} bytes of embedded data...", .{serialized_module.len});
-    const platform_shim_path = generatePlatformHostShim(allocs, build_cache_dir, entrypoints.items, target, serialized_module) catch |err| {
+    // Enable debug if explicitly requested via --debug OR if roc is built in debug mode
+    const enable_debug = args.debug or (builtin.mode == .Debug);
+    std.log.debug("Generating platform host shim with {} bytes of embedded data (debug={})...", .{ serialized_module.len, enable_debug });
+    const platform_shim_path = generatePlatformHostShim(allocs, build_cache_dir, entrypoints.items, target, serialized_module, enable_debug) catch |err| {
         std.log.err("Failed to generate platform host shim: {}", .{err});
         return err;
     };
