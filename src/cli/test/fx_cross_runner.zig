@@ -14,6 +14,8 @@
 const std = @import("std");
 const fx_test_specs = @import("fx_test_specs.zig");
 
+/// Entry point for the cross-compilation test runner.
+/// Iterates over all fx test specs and cross-compiles each one to the specified target.
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
