@@ -3345,7 +3345,7 @@ fn introduceItemsAliased(
                         .module_name = module_name,
                         .original_name = main_type_ident,
                     };
-                    try self.scopeIntroduceExposedItem(module_alias, item_info);
+                    try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
 
                     // Get the correct target_node_idx using statement_idx from module_envs
                     const target_node_idx = blk: {
@@ -3421,7 +3421,7 @@ fn introduceItemsAliased(
                 .module_name = module_name,
                 .original_name = exposed_item.name,
             };
-            try self.scopeIntroduceExposedItem(item_name, item_info);
+            try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
         }
     } else {
         // No module_envs provided, introduce all items without validation
@@ -3432,7 +3432,7 @@ fn introduceItemsAliased(
                 .module_name = module_name,
                 .original_name = exposed_item.name,
             };
-            try self.scopeIntroduceExposedItem(item_name, item_info);
+            try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
         }
     }
 }
@@ -3527,7 +3527,7 @@ fn introduceItemsUnaliased(
                     .module_name = module_name,
                     .original_name = exposed_item.name,
                 };
-                try self.scopeIntroduceExposedItem(local_ident, item_info);
+                try self.scopeIntroduceExposedItem(local_ident, item_info, import_region);
 
                 if (is_type_name) {
                     // Get the original type name text from current module's ident store
@@ -3570,7 +3570,7 @@ fn introduceItemsUnaliased(
                 .module_name = module_name,
                 .original_name = exposed_item.name,
             };
-            try self.scopeIntroduceExposedItem(local_ident, item_info);
+            try self.scopeIntroduceExposedItem(local_ident, item_info, import_region);
 
             if (local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z') {
                 // Get the original type name text from current module's ident store
@@ -4714,9 +4714,8 @@ pub fn canonicalizeExpr(
                         if (try self.canonicalizeRecordField(field)) |can_field_idx| {
                             try self.env.store.scratch.?.record_fields.append(can_field_idx);
                         }
-                    } else {
-                        // TODO: Add diagnostic on duplicate record field
                     }
+                    // Duplicate fields are skipped - diagnostic already emitted above
                 } else {
                     // Field name couldn't be resolved, still try to canonicalize
                     if (try self.canonicalizeRecordField(field)) |can_field_idx| {
@@ -4913,7 +4912,13 @@ pub fn canonicalizeExpr(
                     if (ast_fn == .tag) {
                         // Tag application: `arg1->Tag(arg2)` becomes `Tag(arg1, arg2)`
                         const tag_expr = ast_fn.tag;
-                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse {
+                            // Parser should have validated this, but handle gracefully
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                                .region = region,
+                            } });
+                            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                        };
 
                         // Build args: first_arg followed by apply.args
                         const scratch_top = self.env.store.scratchExprTop();
@@ -4970,7 +4975,13 @@ pub fn canonicalizeExpr(
                     // Case: `arg1->fn` or `arg1->Tag` - simple function/tag call with single arg
                     if (right_expr == .tag) {
                         const tag_expr = right_expr.tag;
-                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse @panic("tag token is not an ident");
+                        const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_expr.token) orelse {
+                            // Parser should have validated this, but handle gracefully
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                                .region = region,
+                            } });
+                            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                        };
 
                         const scratch_top = self.env.store.scratchExprTop();
                         try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -5723,10 +5734,9 @@ fn canonicalizeForLoop(
     ast_body: AST.Expr.Idx,
 ) std.mem.Allocator.Error!CanonicalizedForLoop {
 
-    // Tmp state to capture free vars from both expr & body
-    // This is stored as a map to avoid duplicate captures
-    var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-    defer captures.deinit(self.env.gpa);
+    // Use scratch_captures to collect free vars from both expr & body
+    const captures_top = self.scratch_captures.top();
+    defer self.scratch_captures.clearFrom(captures_top);
 
     // Canonicalize the list expr
     const list_expr = blk: {
@@ -5735,10 +5745,12 @@ fn canonicalizeForLoop(
 
         const czerd_expr = try self.canonicalizeExprOrMalformed(ast_list_expr);
 
-        // Copy free vars into captures
+        // Copy free vars into captures (deduplicating)
         const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_expr.free_vars);
         for (free_vars_slice) |fv| {
-            try captures.put(self.env.gpa, fv, {});
+            if (!self.scratch_captures.contains(fv)) {
+                try self.scratch_captures.append(fv);
+            }
         }
 
         break :blk czerd_expr;
@@ -5759,24 +5771,22 @@ fn canonicalizeForLoop(
 
         const body_expr = try self.canonicalizeExprOrMalformed(ast_body);
 
-        // Copy free vars into captures, excluding pattern-bound vars
+        // Copy free vars into captures, excluding pattern-bound vars (deduplicating)
         const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars);
-        var bound_vars_view = self.scratch_bound_vars.setViewFrom(for_bound_vars_top);
-        defer bound_vars_view.deinit();
         for (body_free_vars_slice) |fv| {
-            if (!bound_vars_view.contains(fv)) {
-                try captures.put(self.env.gpa, fv, {});
+            if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.containsFrom(for_bound_vars_top, fv)) {
+                try self.scratch_captures.append(fv);
             }
         }
 
         break :blk body_expr;
     };
 
-    // Get captures and copy to free_vars for parent
+    // Copy captures to free_vars for parent
     const free_vars_start = self.scratch_free_vars.top();
-    var captures_iter = captures.keyIterator();
-    while (captures_iter.next()) |capture| {
-        try self.scratch_free_vars.append(capture.*);
+    const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+    for (captures_slice) |capture| {
+        try self.scratch_free_vars.append(capture);
     }
     const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
@@ -5790,7 +5800,13 @@ fn canonicalizeForLoop(
 
 // Canonicalize a tag expr
 fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, region: base.Region) std.mem.Allocator.Error!?CanonicalizedExpr {
-    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse @panic("tag token is not an ident");
+    const tag_name = self.parse_ir.tokens.resolveIdentifier(e.token) orelse {
+        // Parser should have validated this, but handle gracefully
+        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+    };
     var args_span = Expr.Span{ .span = DataSpan.empty() };
 
     const free_vars_start = self.scratch_free_vars.top();
@@ -9296,9 +9312,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = result.free_vars };
         },
         .@"while" => |while_stmt| {
-            // Tmp state to capture free vars from both cond & body
-            var captures = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-            defer captures.deinit(self.env.gpa);
+            // Use scratch_captures to collect free vars from both cond & body
+            const captures_top = self.scratch_captures.top();
+            defer self.scratch_captures.clearFrom(captures_top);
 
             // Canonicalize the condition expression
             // while $count < 10 {
@@ -9309,10 +9325,12 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
                 const czerd_cond = try self.canonicalizeExprOrMalformed(while_stmt.cond);
 
-                // Copy free vars into captures
+                // Copy free vars into captures (deduplicating)
                 const free_vars_slice = self.scratch_free_vars.sliceFromSpan(czerd_cond.free_vars);
                 for (free_vars_slice) |fv| {
-                    try captures.put(self.env.gpa, fv, {});
+                    if (!self.scratch_captures.contains(fv)) {
+                        try self.scratch_captures.append(fv);
+                    }
                 }
 
                 break :blk czerd_cond;
@@ -9329,20 +9347,22 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
                 const body_expr = try self.canonicalizeExprOrMalformed(while_stmt.body);
 
-                // Copy free vars into captures
+                // Copy free vars into captures (deduplicating)
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars);
                 for (body_free_vars_slice) |fv| {
-                    try captures.put(self.env.gpa, fv, {});
+                    if (!self.scratch_captures.contains(fv)) {
+                        try self.scratch_captures.append(fv);
+                    }
                 }
 
                 break :blk body_expr;
             };
 
-            // Get captures and copy to free_vars for parent
+            // Copy captures to free_vars for parent
             const free_vars_start = self.scratch_free_vars.top();
-            var captures_iter = captures.keyIterator();
-            while (captures_iter.next()) |capture| {
-                try self.scratch_free_vars.append(capture.*);
+            const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+            for (captures_slice) |capture| {
+                try self.scratch_free_vars.append(capture);
             }
             const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
@@ -10028,9 +10048,6 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
 
     // Report unused variables in sorted order
     for (unused_vars.items) |unused| {
-        // TODO: Currently, static dispatch functions are marked as "unused"
-        // even if they are used. As a tmp workaround, this is commented out
-
         try self.env.pushDiagnostic(Diagnostic{ .unused_variable = .{
             .ident = unused.ident,
             .region = unused.region,
@@ -10377,7 +10394,7 @@ fn scopeLookupExposedItem(self: *const Self, item_name: Ident.Idx) ?Scope.Expose
 }
 
 /// Introduce an exposed item into the current scope
-pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo) std.mem.Allocator.Error!void {
+pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: Scope.ExposedItemInfo, import_region: Region) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -10401,7 +10418,7 @@ pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: S
             try self.env.pushDiagnostic(Diagnostic{
                 .not_implemented = .{
                     .feature = message_str,
-                    .region = Region.zero(), // TODO: Get proper region from import statement
+                    .region = import_region,
                 },
             });
         },
@@ -10418,7 +10435,7 @@ pub fn scopeIntroduceExposedItem(self: *Self, item_name: Ident.Idx, item_info: S
             try self.env.pushDiagnostic(Diagnostic{
                 .not_implemented = .{
                     .feature = message_str,
-                    .region = Region.zero(), // TODO: Get proper region from import statement
+                    .region = import_region,
                 },
             });
         },
