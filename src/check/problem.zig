@@ -48,11 +48,11 @@ pub const Problem = union(enum) {
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
-    infinite_recursion: VarProblem1,
-    anonymous_recursion: VarProblem1,
-    invalid_number_type: VarProblem1,
-    invalid_record_ext: VarProblem1,
-    invalid_tag_union_ext: VarProblem1,
+    infinite_recursion: VarWithSnapshot,
+    anonymous_recursion: VarWithSnapshot,
+    invalid_number_type: VarWithSnapshot,
+    invalid_record_ext: VarWithSnapshot,
+    invalid_tag_union_ext: VarWithSnapshot,
     bug: Bug,
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
@@ -80,8 +80,9 @@ pub const ComptimeEvalError = struct {
     region: base.Region,
 };
 
-/// A single var problem
-pub const VarProblem1 = struct {
+/// A problem involving a single type variable, with a snapshot for error reporting.
+/// Used for recursion errors, invalid extension types, etc.
+pub const VarWithSnapshot = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
 };
