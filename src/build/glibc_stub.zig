@@ -58,6 +58,7 @@ pub fn generateComprehensiveStub(
         // Environment
         "getenv",
         "isatty",
+        "sysconf", // System configuration (page size, etc.)
         // Signal handling
         "sigaction",
         "sigemptyset",
