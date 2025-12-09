@@ -6339,7 +6339,7 @@ fn canonicalizePatternOrMalformed(
     }
 }
 
-fn canonicalizePattern(
+pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?Pattern.Idx {
