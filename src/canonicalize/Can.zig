@@ -91,8 +91,10 @@ scratch_seen_record_fields: base.Scratch(SeenRecordField),
 scratch_tags: base.Scratch(types.Tag),
 /// Scratch free variables
 scratch_free_vars: base.Scratch(Pattern.Idx),
-/// Scratch free variables
+/// Scratch captures (free variables being collected)
 scratch_captures: base.Scratch(Pattern.Idx),
+/// Scratch bound variables (for filtering out locally-bound vars from captures)
+scratch_bound_vars: base.Scratch(Pattern.Idx),
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -209,6 +211,7 @@ pub fn deinit(
     self.scratch_tags.deinit();
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
+    self.scratch_bound_vars.deinit();
 }
 
 /// Options for initializing the canonicalizer.
@@ -240,6 +243,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
     };
 
     // Top-level scope is not a function boundary
@@ -2496,42 +2500,42 @@ const TypeAnnoIdent = struct {
     where: ?WhereClause.Span,
 };
 
-fn collectBoundVars(self: *Self, pattern_idx: Pattern.Idx, bound_vars: *std.AutoHashMapUnmanaged(Pattern.Idx, void)) !void {
+fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
     const pattern = self.env.store.getPattern(pattern_idx);
     switch (pattern) {
         .assign => {
-            try bound_vars.put(self.env.gpa, pattern_idx, {});
+            try self.scratch_bound_vars.append(pattern_idx);
         },
         .record_destructure => |destructure| {
             for (self.env.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
                 const destruct = self.env.store.getRecordDestruct(destruct_idx);
                 switch (destruct.kind) {
-                    .Required => |sub_pattern_idx| try self.collectBoundVars(sub_pattern_idx, bound_vars),
-                    .SubPattern => |sub_pattern_idx| try self.collectBoundVars(sub_pattern_idx, bound_vars),
+                    .Required => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
+                    .SubPattern => |sub_pattern_idx| try self.collectBoundVarsToScratch(sub_pattern_idx),
                 }
             }
         },
         .tuple => |tuple| {
             for (self.env.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
-                try self.collectBoundVars(elem_pattern_idx, bound_vars);
+                try self.collectBoundVarsToScratch(elem_pattern_idx);
             }
         },
         .applied_tag => |tag| {
             for (self.env.store.slicePatterns(tag.args)) |arg_pattern_idx| {
-                try self.collectBoundVars(arg_pattern_idx, bound_vars);
+                try self.collectBoundVarsToScratch(arg_pattern_idx);
             }
         },
         .as => |as_pat| {
-            try bound_vars.put(self.env.gpa, pattern_idx, {});
-            try self.collectBoundVars(as_pat.pattern, bound_vars);
+            try self.scratch_bound_vars.append(pattern_idx);
+            try self.collectBoundVarsToScratch(as_pat.pattern);
         },
         .list => |list| {
             for (self.env.store.slicePatterns(list.patterns)) |elem_idx| {
-                try self.collectBoundVars(elem_idx, bound_vars);
+                try self.collectBoundVarsToScratch(elem_idx);
             }
             if (list.rest_info) |rest| {
                 if (rest.pattern) |rest_pat_idx| {
-                    try self.collectBoundVars(rest_pat_idx, bound_vars);
+                    try self.collectBoundVarsToScratch(rest_pat_idx);
                 }
             }
         },
@@ -4826,16 +4830,16 @@ pub fn canonicalizeExpr(
                 };
 
                 // Determine captures: free variables in body minus variables bound by args
-                var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-                defer bound_vars.deinit(self.env.gpa);
+                const bound_vars_top = self.scratch_bound_vars.top();
+                defer self.scratch_bound_vars.clearFrom(bound_vars_top);
 
                 for (self.env.store.slicePatterns(args_span)) |arg_pat_idx| {
-                    try self.collectBoundVars(arg_pat_idx, &bound_vars);
+                    try self.collectBoundVarsToScratch(arg_pat_idx);
                 }
 
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !bound_vars.contains(fv)) {
+                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.contains(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -5596,11 +5600,11 @@ pub fn canonicalizeExpr(
                 const branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
                 // Collect variables bound by the branch pattern(s)
-                var branch_bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-                defer branch_bound_vars.deinit(self.env.gpa);
+                const branch_bound_vars_top = self.scratch_bound_vars.top();
+                defer self.scratch_bound_vars.clearFrom(branch_bound_vars_top);
                 for (self.env.store.sliceMatchBranchPatterns(branch_pat_span)) |branch_pat_idx| {
                     const branch_pat = self.env.store.getMatchBranchPattern(branch_pat_idx);
-                    try self.collectBoundVars(branch_pat.pattern, &branch_bound_vars);
+                    try self.collectBoundVarsToScratch(branch_pat.pattern);
                 }
 
                 // Save position before canonicalizing body so we can filter pattern-bound vars
@@ -5623,17 +5627,13 @@ pub fn canonicalizeExpr(
                 if (can_body.free_vars.len > 0) {
                     // Copy the free vars we need to filter
                     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
-                    var filtered_free_vars = std.ArrayListUnmanaged(Pattern.Idx){};
-                    defer filtered_free_vars.deinit(self.env.gpa);
-                    for (body_free_vars_slice) |fv| {
-                        if (!branch_bound_vars.contains(fv)) {
-                            try filtered_free_vars.append(self.env.gpa, fv);
-                        }
-                    }
-                    // Clear back to before body canonicalization and re-add only filtered vars
+                    // Clear back to before body canonicalization
                     self.scratch_free_vars.clearFrom(body_free_vars_start);
-                    for (filtered_free_vars.items) |fv| {
-                        try self.scratch_free_vars.append(fv);
+                    // Re-add only filtered vars (not bound by branch patterns)
+                    for (body_free_vars_slice) |fv| {
+                        if (!self.scratch_bound_vars.contains(fv)) {
+                            try self.scratch_free_vars.append(fv);
+                        }
                     }
                 }
 
@@ -5787,9 +5787,9 @@ fn canonicalizeForLoop(
     const ptrn = try self.canonicalizePatternOrMalformed(ast_patt);
 
     // Collect bound vars from pattern
-    var for_bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-    defer for_bound_vars.deinit(self.env.gpa);
-    try self.collectBoundVars(ptrn, &for_bound_vars);
+    const for_bound_vars_top = self.scratch_bound_vars.top();
+    defer self.scratch_bound_vars.clearFrom(for_bound_vars_top);
+    try self.collectBoundVarsToScratch(ptrn);
 
     // Canonicalize the body
     const body = blk: {
@@ -5801,7 +5801,7 @@ fn canonicalizeForLoop(
         // Copy free vars into captures, excluding pattern-bound vars
         const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars);
         for (body_free_vars_slice) |fv| {
-            if (!for_bound_vars.contains(fv)) {
+            if (!self.scratch_bound_vars.contains(fv)) {
                 try captures.put(self.env.gpa, fv, {});
             }
         }
@@ -8660,12 +8660,9 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     // Keep track of the start position for statements
     const stmt_start = self.env.store.scratch.?.statements.top();
 
-    // TODO Use a temporary scratch space for the block's free variables
-    //
-    // I apologize for leaving these AutoHashMapUnmanaged's here ... but it's a workaround
-    // to land a working closure capture implementation, and we can optimize this later. Forgive me.
-    var bound_vars = std.AutoHashMapUnmanaged(Pattern.Idx, void){};
-    defer bound_vars.deinit(self.env.gpa);
+    // Track bound variables using scratch space (for filtering out locally-bound vars from captures)
+    const bound_vars_top = self.scratch_bound_vars.top();
+    defer self.scratch_bound_vars.clearFrom(bound_vars_top);
 
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
@@ -8771,19 +8768,19 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
             if (stmt_result.canonicalized_stmt) |canonicailzed_stmt| {
                 try self.env.store.addScratchStatement(canonicailzed_stmt.idx);
 
-                // Collect bound variables for the
+                // Collect bound variables for the block
                 const cir_stmt = self.env.store.getStatement(canonicailzed_stmt.idx);
                 switch (cir_stmt) {
-                    .s_decl => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
-                    .s_decl_gen => |decl| try self.collectBoundVars(decl.pattern, &bound_vars),
-                    .s_var => |var_stmt| try self.collectBoundVars(var_stmt.pattern_idx, &bound_vars),
+                    .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
+                    .s_decl_gen => |decl| try self.collectBoundVarsToScratch(decl.pattern),
+                    .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
                     else => {},
                 }
 
                 // Collect free vars from the statement into the block's scratch space
                 const stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(canonicailzed_stmt.free_vars);
                 for (stmt_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !bound_vars.contains(fv)) {
+                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.contains(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -8813,7 +8810,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     // Add free vars from the final expression to the block's scratch space
     const final_expr_free_vars_slice = self.scratch_free_vars.sliceFromSpan(final_expr.free_vars);
     for (final_expr_free_vars_slice) |fv| {
-        if (!self.scratch_captures.contains(fv) and !bound_vars.contains(fv)) {
+        if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.contains(fv)) {
             try self.scratch_captures.append(fv);
         }
     }
