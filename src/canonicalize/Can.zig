@@ -8303,8 +8303,11 @@ fn canonicalizeTypeAnnoRecord(
     const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
     std.mem.sort(types.RecordField, record_fields_scratch, self.env.common.getIdentStore(), comptime types.RecordField.sortByNameAsc);
 
+    // TODO: Support record extension syntax in the parser (e.g., `{ name: Str, ..others }`)
+    // For now, all records are closed (ext = null)
     return try self.env.addTypeAnno(.{ .record = .{
         .fields = field_anno_idxs,
+        .ext = null,
     } }, region);
 }
 

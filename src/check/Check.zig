@@ -1001,9 +1001,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, &env);
             },
-            .s_type_anno => |_| {
-                // TODO: Handle standalone type annotations
-                try self.unifyWith(stmt_var, .err, &env);
+            .s_type_anno => |type_anno| {
+                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
             else => {
                 // All other stmt types are invalid at the top level
@@ -1373,6 +1372,25 @@ fn generateNominalDecl(
         ),
         env,
     );
+}
+
+/// Generate types for a standalone type annotation (one without a corresponding definition).
+/// These are typically used for FFI function declarations or forward declarations.
+fn generateStandaloneTypeAnno(
+    self: *Self,
+    stmt_var: Var,
+    type_anno: std.meta.fieldInfo(CIR.Statement, .s_type_anno).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    // Generate the type from the annotation
+    self.seen_annos.clearRetainingCapacity();
+    const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, .annotation);
+
+    // Unify the statement variable with the generated annotation type
+    _ = try self.unify(stmt_var, anno_var, env);
+
+    // TODO: Handle where clauses if present (type_anno.where)
 }
 
 /// Generate types for type anno args
@@ -1952,17 +1970,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
             const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
 
-            // Process the ext if it exists. Absence means it's a closed union
-            // TODO: Capture ext in record field CIR
-            // const ext_var = inner_blk: {
-            //     if (rec.ext) |ext_anno_idx| {
-            //         try self.generateAnnoType(rigid_vars_ctx, ext_anno_idx);
-            //         break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
-            //     } else {
-            //         break :inner_blk try self.freshFromContent(.{ .structure = .empty_record }, rank, anno_region);
-            //     }
-            // };
-            const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
+            // Process the ext if it exists. Absence (null) means it's a closed record.
+            const ext_var = if (rec.ext) |ext_anno_idx| blk: {
+                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
+                break :blk ModuleEnv.varFrom(ext_anno_idx);
+            } else blk: {
+                break :blk try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
+            };
 
             // Create the type for the anno in the store
             try self.unifyWith(
@@ -2853,7 +2867,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try self.checkDef(processing_def.def_idx, &sub_env);
                     },
                     .processing => {
-                        // TODO: Handle recursive defs
+                        // Recursive reference - the pattern variable is still at
+                        // top_level rank (not generalized), so the code below will
+                        // unify directly with it, which is the correct behavior.
                     },
                     .processed => {},
                 }
@@ -5024,7 +5040,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                                 try self.checkDef(def_idx, &sub_env);
                             },
                             .processing => {
-                                // TODO: Handle recursive defs
+                                // Recursive reference during static dispatch resolution.
+                                // The def is still being processed, so we'll use its
+                                // current (non-generalized) type.
                             },
                             .processed => {},
                         }

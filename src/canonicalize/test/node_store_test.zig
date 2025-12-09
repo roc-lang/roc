@@ -968,6 +968,7 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .record = .{
             .fields = CIR.TypeAnno.RecordField.Span{ .span = rand_span() },
+            .ext = null,
         },
     });
 

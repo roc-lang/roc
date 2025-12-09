@@ -1272,54 +1272,54 @@ const Unifier = struct {
     ///
     /// **Case 1: Exactly the Same Fields**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - All fields are shared
-    /// - We unify `ext_a ~ ext_b`
+    /// - We unify `others_a ~ others_b`
     /// - Then unify each shared field pair
     ///
     /// ---
     ///
     /// **Case 2: `a` Extends `b`**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - `a` has additional fields not in `b`
-    /// - We generate a new var `only_in_a_var = { z }ext_a`
-    /// - Unify `only_in_a_var ~ ext_b`
+    /// - We generate a new var `only_in_a_var = { z, ..others_a }`
+    /// - Unify `only_in_a_var ~ others_b`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 3: `b` Extends `a`**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y, z }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, z, ..others_b }
     ///
     /// - Same as Case 2, but reversed
     /// - `b` has additional fields not in `a`
-    /// - We generate a new var `only_in_b_var = { z }ext_b`
-    /// - Unify `ext_a ~ only_in_b_var`
+    /// - We generate a new var `only_in_b_var = { z, ..others_b }`
+    /// - Unify `others_a ~ only_in_b_var`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 4: Both Extend Each Other**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y, w }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, w, ..others_b }
     ///
     /// - Each has unique fields the other lacks
     /// - Generate:
-    ///     - shared_ext = fresh flex_var
-    ///     - only_in_a_var = { z }shared_ext
-    ///     - only_in_b_var = { w }shared_ext
+    ///     - shared_others = fresh flex_var
+    ///     - only_in_a_var = { z, ..shared_others }
+    ///     - only_in_b_var = { w, ..shared_others }
     /// - Unify:
-    ///     - `ext_a ~ only_in_b_var`
-    ///     - `only_in_a_var ~ ext_b`
-    /// - Then unify shared fields into `{ x, y }shared_ext`
+    ///     - `others_a ~ only_in_b_var`
+    ///     - `only_in_a_var ~ others_b`
+    /// - Then unify shared fields into `{ x, y, ..shared_others }`
     ///
     /// ---
     ///

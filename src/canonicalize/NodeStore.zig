@@ -1214,9 +1214,12 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
             .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
-        .ty_record => return CIR.TypeAnno{ .record = .{
-            .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-        } },
+        .ty_record => return CIR.TypeAnno{
+            .record = .{
+                .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .ext = null, // TODO: Support record extension in serialization
+            },
+        },
         .ty_fn => {
             const extra_data_idx = node.data_3;
             const effectful = store.extra_data.items.items[extra_data_idx] != 0;

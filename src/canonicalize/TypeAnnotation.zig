@@ -365,6 +365,7 @@ pub const TypeAnno = union(enum) {
     /// A record in a type annotation
     pub const Record = struct {
         fields: RecordField.Span, // The field definitions
+        ext: ?TypeAnno.Idx, // Optional extension variable for open records
     };
 
     /// A tag union in a type annotation
