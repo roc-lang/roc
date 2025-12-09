@@ -2383,8 +2383,10 @@ fn createAnnoOnlyDef(
                 break :placeholder_check existing_pattern;
             },
             .not_found => {
-                // Placeholder is tracked but not found in any scope - this shouldn't happen
-                // Create a new pattern as fallback
+                // Placeholder is tracked but not found in current scope chain.
+                // This can happen if the placeholder was created in a scope that's
+                // not an ancestor of the current scope. Create a new pattern as fallback;
+                // any actual errors will be caught later during definition checking.
                 const pattern = Pattern{
                     .assign = .{
                         .ident = ident,
@@ -2862,56 +2864,6 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
             .ident = ident_idx,
             .region = region,
         } });
-    }
-}
-
-fn bringImportIntoScope(
-    self: *Self,
-    import: *const AST.Statement,
-) void {
-    // const gpa = self.env.gpa;
-    // const import_name: []u8 = &.{}; // import.module_name_tok;
-    // const shorthand: []u8 = &.{}; // import.qualifier_tok;
-    // const region = Region{
-    //     .start = Region.Position.zero(),
-    //     .end = Region.Position.zero(),
-    // };
-
-    // const res = self.env.imports.getOrInsert(gpa, import_name, shorthand);
-
-    // if (res.was_present) {
-    //     _ = self.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
-    //         .duplicate_import_region = region,
-    //     } }));
-    // }
-
-    const exposesSlice = self.parse_ir.store.exposedItemSlice(import.exposes);
-    for (exposesSlice) |exposed_idx| {
-        const exposed = self.parse_ir.store.getExposedItem(exposed_idx);
-        switch (exposed) {
-            .lower_ident => |ident| {
-                // TODO handle `as` here using an Alias
-                // TODO Introduce our import
-                if (self.parse_ir.tokens.resolveIdentifier(ident.ident)) |_| {
-                    // _ = self.scope.levels.introduce(gpa, &self.env.idents, .ident, .{ .scope_name = ident_idx, .ident = ident_idx });
-                }
-            },
-            .upper_ident => {
-                // TODO: const alias = Alias{
-                //     .name = imported_type.name,
-                //     .region = ir.env.tag_names.getRegion(imported_type.name),
-                //     .is_builtin = false,
-                //     .kind = .ImportedUnknown,
-                // };
-                // const alias_idx = ir.aliases.append(alias);
-                //
-                // _ = scope.levels.introduce(.alias, .{
-                //     .scope_name = imported_type.name,
-                //     .alias = alias_idx,
-                // });
-            },
-            .upper_ident_star => {},
-        }
     }
 }
 

@@ -438,7 +438,7 @@ pub fn relocate(self: *Self, offset: isize) void {
 
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
-    self.module_kind = .deprecated_module; // default until canonicalization sets the actual kind
+    self.module_kind = .deprecated_module; // Placeholder - set to actual kind during header canonicalization
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
@@ -468,7 +468,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .gpa = gpa,
         .common = common,
         .types = try TypeStore.initCapacity(gpa, 2048, 512),
-        .module_kind = .deprecated_module, // Set during canonicalization
+        .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },

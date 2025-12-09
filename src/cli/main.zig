@@ -174,12 +174,6 @@ const posix = if (!is_windows) struct {
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
     extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) *anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
-    extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
-
-    // fcntl constants
-    const F_GETFD = 1;
-    const F_SETFD = 2;
-    const FD_CLOEXEC = 1;
 
     // MAP_FAILED is (void*)-1, not NULL
     const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
@@ -1298,22 +1292,30 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     std.log.debug("Coordination file written successfully", .{});
 
     // Configure fd inheritance - clear FD_CLOEXEC so child process inherits the fd
-    // NOTE: The doNotOptimizeAway calls are required to prevent the ReleaseFast
-    // optimizer from incorrectly optimizing away or reordering the fcntl calls.
-    const getfd_result = posix.fcntl(shm_handle.fd, posix.F_GETFD, 0);
-    std.mem.doNotOptimizeAway(&getfd_result);
-    if (getfd_result < 0) {
-        std.log.err("Failed to get fd flags: {}", .{c._errno().*});
+    // Use std.posix.fcntl which properly handles the variadic C function.
+    const current_flags = std.posix.fcntl(shm_handle.fd, std.posix.F.GETFD, 0) catch |err| {
+        std.log.err("Failed to get fd flags: {}", .{err});
         return error.FdConfigFailed;
-    }
+    };
 
-    const new_flags = getfd_result & ~@as(c_int, posix.FD_CLOEXEC);
-    std.mem.doNotOptimizeAway(&new_flags);
-    const setfd_result = posix.fcntl(shm_handle.fd, posix.F_SETFD, new_flags);
-    std.mem.doNotOptimizeAway(&setfd_result);
-    if (setfd_result < 0) {
-        std.log.err("Failed to set fd flags: {}", .{c._errno().*});
+    // Clear FD_CLOEXEC - the flag value is 1
+    const new_flags = current_flags & ~@as(usize, 1);
+    _ = std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
+        std.log.err("Failed to set fd flags: {}", .{err});
         return error.FdConfigFailed;
+    };
+
+    // Debug-only verification that fd flags were actually cleared
+    if (comptime builtin.mode == .Debug) {
+        const verify_flags = std.posix.fcntl(shm_handle.fd, std.posix.F.GETFD, 0) catch |err| {
+            std.log.err("Failed to verify fd flags: {}", .{err});
+            return error.FdConfigFailed;
+        };
+        if ((verify_flags & 1) != 0) {
+            std.log.err("FD_CLOEXEC still set after clearing! fd={} flags={}", .{ shm_handle.fd, verify_flags });
+            return error.FdConfigFailed;
+        }
+        std.log.debug("fd={} FD_CLOEXEC cleared successfully", .{shm_handle.fd});
     }
 
     // Build argv slice using arena allocator (memory lives until arena is freed)
