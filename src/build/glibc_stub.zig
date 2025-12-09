@@ -31,6 +31,7 @@ pub fn generateComprehensiveStub(
         "__tls_get_addr", // Thread-local storage
         "memcpy", // Memory operations
         "memmove",
+        "mmap", // Memory mapping (used by platform.mapMemory and std.posix)
     };
 
     for (essential_symbols) |symbol| {
