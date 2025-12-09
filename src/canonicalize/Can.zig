@@ -4790,8 +4790,10 @@ pub fn canonicalizeExpr(
                 }
 
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
+                var bound_vars_view = self.scratch_bound_vars.setViewFrom(bound_vars_top);
+                defer bound_vars_view.deinit();
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.containsFrom(bound_vars_top, fv)) {
+                    if (!self.scratch_captures.contains(fv) and !bound_vars_view.contains(fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -5582,8 +5584,10 @@ pub fn canonicalizeExpr(
                     // Clear back to before body canonicalization
                     self.scratch_free_vars.clearFrom(body_free_vars_start);
                     // Re-add only filtered vars (not bound by branch patterns)
+                    var bound_vars_view = self.scratch_bound_vars.setViewFrom(branch_bound_vars_top);
+                    defer bound_vars_view.deinit();
                     for (body_free_vars_slice) |fv| {
-                        if (!self.scratch_bound_vars.containsFrom(branch_bound_vars_top, fv)) {
+                        if (!bound_vars_view.contains(fv)) {
                             try self.scratch_free_vars.append(fv);
                         }
                     }
@@ -5752,8 +5756,10 @@ fn canonicalizeForLoop(
 
         // Copy free vars into captures, excluding pattern-bound vars
         const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars);
+        var bound_vars_view = self.scratch_bound_vars.setViewFrom(for_bound_vars_top);
+        defer bound_vars_view.deinit();
         for (body_free_vars_slice) |fv| {
-            if (!self.scratch_bound_vars.containsFrom(for_bound_vars_top, fv)) {
+            if (!bound_vars_view.contains(fv)) {
                 try captures.put(self.env.gpa, fv, {});
             }
         }
