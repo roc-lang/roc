@@ -3,7 +3,7 @@
 //! This module defines IO specs for all fx platform tests that can be run
 //! using the --test mode. These specs are shared between:
 //! - Native Zig tests (fx_platform_test.zig)
-//! - Cross-compilation test runner (fx_cross_runner.zig)
+//! - Unified test platform runner (test_runner.zig)
 //!
 //! IO Spec Format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
 //! - 0<text: stdin input

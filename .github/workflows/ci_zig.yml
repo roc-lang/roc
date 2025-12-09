@@ -159,7 +159,7 @@ jobs:
       - name: Build Test Platforms (cross-compile)
         if: runner.os != 'Windows'
         run: |
-          ./zig-out/bin/int_cross_runner ./zig-out/bin/roc
+          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'

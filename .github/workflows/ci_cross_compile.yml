@@ -38,7 +38,7 @@ jobs:
         with:
           arch: x64
 
-      - name: Build roc compiler and fx_cross_runner
+      - name: Build roc compiler and test_runner
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build'
@@ -49,13 +49,13 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
-          ./zig-out/bin/fx_cross_runner ./zig-out/bin/roc ${{ matrix.target }}
+          ./zig-out/bin/test_runner ./zig-out/bin/roc fx --target=${{ matrix.target }} --mode=cross
 
       - name: Run fx platform cross-compilation tests (Windows)
         if: runner.os == 'Windows'
         run: |
           echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
-          zig-out\bin\fx_cross_runner.exe zig-out\bin\roc.exe ${{ matrix.target }}
+          zig-out\bin\test_runner.exe zig-out\bin\roc.exe fx --target=${{ matrix.target }} --mode=cross
 
       - name: Cross-compile int platform test app (Unix)
         if: runner.os != 'Windows'

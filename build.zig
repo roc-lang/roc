@@ -1339,27 +1339,16 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
-    // Add fx cross-compilation test runner (used by CI)
-    const fx_cross_runner_exe = b.addExecutable(.{
-        .name = "fx_cross_runner",
+    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
+    const test_runner_exe = b.addExecutable(.{
+        .name = "test_runner",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/test/fx_cross_runner.zig"),
+            .root_source_file = b.path("src/cli/test/test_runner.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
-    b.installArtifact(fx_cross_runner_exe);
-
-    // Add int cross-compilation test runner (used by CI)
-    const int_cross_runner_exe = b.addExecutable(.{
-        .name = "int_cross_runner",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/test/int_cross_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(int_cross_runner_exe);
+    b.installArtifact(test_runner_exe);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
