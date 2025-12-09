@@ -38,6 +38,69 @@ pub fn Scratch(comptime T: type) type {
             return false;
         }
 
+        /// Check if a value is in the array starting from a given position.
+        /// Note: If checking multiple values against the same range, use `setViewFrom()`
+        /// to build a SetView once and call `contains()` on it multiple times.
+        pub fn containsFrom(self: *const Self, start: u32, val: T) bool {
+            const range = self.items.items[@intCast(start)..];
+            for (range) |item| {
+                if (item == val) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// A view into a range of the scratch buffer optimized for membership queries.
+        /// For small ranges, uses linear scan. For larger ranges, uses a hash set.
+        pub const SetView = struct {
+            range: []const T,
+            set: ?std.AutoHashMapUnmanaged(T, void),
+
+            const hash_threshold = 16;
+
+            pub fn init(items: []const T) SetView {
+                if (items.len <= hash_threshold) {
+                    return .{ .range = items, .set = null };
+                }
+                var set = std.AutoHashMapUnmanaged(T, void){};
+                set.ensureTotalCapacity(std.heap.page_allocator, @intCast(items.len)) catch {
+                    // Fall back to linear scan on allocation failure
+                    return .{ .range = items, .set = null };
+                };
+                for (items) |item| {
+                    set.putAssumeCapacity(item, {});
+                }
+                return .{ .range = items, .set = set };
+            }
+
+            pub fn deinit(self: *SetView) void {
+                if (self.set) |*set| {
+                    set.deinit(std.heap.page_allocator);
+                }
+            }
+
+            pub fn contains(self: *const SetView, val: T) bool {
+                if (self.set) |set| {
+                    return set.contains(val);
+                }
+                for (self.range) |item| {
+                    if (item == val) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        };
+
+        /// Create a SetView for efficient repeated membership queries on a range.
+        /// For small ranges, the SetView uses linear scan.
+        /// For larger ranges, it builds a hash set for O(1) lookups.
+        /// Remember to call deinit() on the returned SetView when done.
+        pub fn setViewFrom(self: *const Self, start: u32) SetView {
+            return SetView.init(self.items.items[@intCast(start)..]);
+        }
+
         /// Places a new index of type `T` in the scratch
         pub fn append(self: *Self, idx: T) std.mem.Allocator.Error!void {
             try self.items.append(idx);

@@ -1019,7 +1019,6 @@ test "hex literal parsing logic integration" {
 }
 
 // number req tests //
-// TODO: Review, claude generated
 
 test "IntValue.toIntRequirements - boundary values for each type" {
     // u8 boundary: 255/256

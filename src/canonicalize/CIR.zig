@@ -365,7 +365,6 @@ pub const SmallDecValue = struct {
     denominator_power_of_ten: u8,
 
     /// Convert a small dec to f64 (use for size comparisons)
-    /// TODO: Review, claude generated
     pub fn toF64(self: @This()) f64 {
         const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
         const divisor = std.math.pow(f64, 10, @as(f64, @floatFromInt(self.denominator_power_of_ten)));
@@ -485,7 +484,6 @@ pub const IntValue = struct {
     }
 
     /// Calculate the int requirements of an IntValue
-    /// TODO: Review, claude generated
     pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
@@ -528,8 +526,6 @@ pub const IntValue = struct {
         };
     }
 
-    /// Calculate the frac requirements of an IntValue
-    /// TODO: Review, claude generated
     /// Calculate the frac requirements of an IntValue
     pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
