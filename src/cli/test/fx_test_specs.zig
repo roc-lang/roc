@@ -191,6 +191,13 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Result: 1",
         .description = "Inspect with wrong signature",
     },
+
+    // Memory leak regression tests
+    .{
+        .roc_file = "test/fx/fold_toplevel_list_leak.roc",
+        .io_spec = "1>6.0",
+        .description = "List.fold with module-level list (leak regression test)",
+    },
 };
 
 /// Get the total number of IO spec tests
