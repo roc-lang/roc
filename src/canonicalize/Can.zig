@@ -4839,7 +4839,7 @@ pub fn canonicalizeExpr(
 
                 const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
                 for (body_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.contains(fv)) {
+                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.containsFrom(bound_vars_top, fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -5631,7 +5631,7 @@ pub fn canonicalizeExpr(
                     self.scratch_free_vars.clearFrom(body_free_vars_start);
                     // Re-add only filtered vars (not bound by branch patterns)
                     for (body_free_vars_slice) |fv| {
-                        if (!self.scratch_bound_vars.contains(fv)) {
+                        if (!self.scratch_bound_vars.containsFrom(branch_bound_vars_top, fv)) {
                             try self.scratch_free_vars.append(fv);
                         }
                     }
@@ -5801,7 +5801,7 @@ fn canonicalizeForLoop(
         // Copy free vars into captures, excluding pattern-bound vars
         const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body_expr.free_vars);
         for (body_free_vars_slice) |fv| {
-            if (!self.scratch_bound_vars.contains(fv)) {
+            if (!self.scratch_bound_vars.containsFrom(for_bound_vars_top, fv)) {
                 try captures.put(self.env.gpa, fv, {});
             }
         }
@@ -8780,7 +8780,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 // Collect free vars from the statement into the block's scratch space
                 const stmt_free_vars_slice = self.scratch_free_vars.sliceFromSpan(canonicailzed_stmt.free_vars);
                 for (stmt_free_vars_slice) |fv| {
-                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.contains(fv)) {
+                    if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.containsFrom(bound_vars_top, fv)) {
                         try self.scratch_captures.append(fv);
                     }
                 }
@@ -8810,7 +8810,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     // Add free vars from the final expression to the block's scratch space
     const final_expr_free_vars_slice = self.scratch_free_vars.sliceFromSpan(final_expr.free_vars);
     for (final_expr_free_vars_slice) |fv| {
-        if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.contains(fv)) {
+        if (!self.scratch_captures.contains(fv) and !self.scratch_bound_vars.containsFrom(bound_vars_top, fv)) {
             try self.scratch_captures.append(fv);
         }
     }

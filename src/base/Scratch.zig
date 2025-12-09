@@ -38,6 +38,16 @@ pub fn Scratch(comptime T: type) type {
             return false;
         }
 
+        /// Check if a value is in the array starting from a given position
+        pub fn containsFrom(self: *const Self, start: u32, val: T) bool {
+            for (self.items.items[@intCast(start)..]) |item| {
+                if (item == val) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// Places a new index of type `T` in the scratch
         pub fn append(self: *Self, idx: T) std.mem.Allocator.Error!void {
             try self.items.append(idx);
