@@ -62,15 +62,24 @@
             pname = "roc";
             version = "0.0.0";
             src = pkgs.lib.cleanSource ./..;
-            deps = pkgs.callPackage ../build.zig.zon.nix {};
-            nativeBuildInputs = [ zig.hook pkgs.pkg-config ];
-            buildInputs = [ ];
+            deps = pkgs.callPackage ../build.zig.zon.nix { };
+            nativeBuildInputs = [
+              zig.hook
+              pkgs.pkg-config
+            ]
+            ++ pkgs.lib.lists.optional pkgs.stdenv.isDarwin [ pkgs.apple-sdk ];
+            buildInputs = [];
             dontConfigure = true;
             zigBuildFlags = [
               "--system"
               "${finalAttrs.deps}"
             ];
-
+            env.NIX_CFLAGS_COMPILE = "";
+            env.NIX_LDFLAGS = "";
+            env.NIX_CFLAGS_LINK = "";
+            env.LD_LIBRARY_PATH="";
+            env.LIBRARY_PATH="";
+            
             meta.mainProgram = "roc";
           });
         };
