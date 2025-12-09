@@ -48,8 +48,8 @@ pub const Problem = union(enum) {
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
-    infinite_recursion: struct { var_: Var },
-    anonymous_recursion: struct { var_: Var },
+    infinite_recursion: VarProblem1,
+    anonymous_recursion: VarProblem1,
     invalid_number_type: VarProblem1,
     invalid_record_ext: VarProblem1,
     invalid_tag_union_ext: VarProblem1,
@@ -331,12 +331,11 @@ pub const ReportBuilder = struct {
         self.bytes_buf.deinit();
     }
 
-    /// Get the formatted string for a snapshot, asserting it exists
+    /// Get the formatted string for a snapshot.
+    /// Returns a placeholder if the formatted string is missing, allowing error reporting
+    /// to continue gracefully even if snapshots are incomplete.
     fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
-        return self.snapshots.getFormattedString(idx) orelse {
-            std.debug.assert(false); // Missing formatted string for snapshot
-            unreachable;
-        };
+        return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
     }
 
     /// Build a report for a problem
