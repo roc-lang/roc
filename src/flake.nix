@@ -8,6 +8,11 @@
 
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
+
+    gitignore = {
+      url = "github:hercules-ci/gitignore.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -15,6 +20,7 @@
       self,
       nixpkgs,
       flake-utils,
+      gitignore,
       ...
     }@inputs:
     let
@@ -83,7 +89,7 @@
           roc = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "roc";
             version = "0.0.0";
-            src = pkgs.lib.cleanSource ./..;
+            src = gitignore.lib.gitignoreSource ./..;
             deps = pkgs.callPackage ../build.zig.zon.nix { };
             nativeBuildInputs = [
               zig.hook
