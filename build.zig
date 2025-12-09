@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
+const roc_target = @import("src/target/mod.zig");
 const Dependency = std.Build.Dependency;
 const Import = std.Build.Module.Import;
 const InstallDir = std.Build.InstallDir;
@@ -9,6 +10,34 @@ const LazyPath = std.Build.LazyPath;
 const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
+
+// =============================================================================
+// Cross-compile target definitions
+// =============================================================================
+
+/// Cross-compile target specification
+const CrossTarget = struct {
+    name: []const u8,
+    query: std.Target.Query,
+};
+
+/// Musl-only cross-compile targets (static linking)
+const musl_cross_targets = [_]CrossTarget{
+    .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+    .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+};
+
+/// Glibc cross-compile targets (dynamic linking)
+const glibc_cross_targets = [_]CrossTarget{
+    .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+    .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+};
+
+/// All Linux cross-compile targets (musl + glibc)
+const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
+
+/// Test platform directories that need host libraries built
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
@@ -622,32 +651,49 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
         }
     }.lessThan);
 
-    // Read fx_platform_test.zig to extract tested files
-    const test_file_path = "src/cli/test/fx_platform_test.zig";
-    const test_file_contents = try std.fs.cwd().readFileAlloc(allocator, test_file_path, 1024 * 1024);
-    defer allocator.free(test_file_contents);
-
-    // Find all references to test/fx/*.roc files in the test file
+    // Find all references to test/fx/*.roc files in test source files
     var tested_files = std.StringHashMap(void).init(allocator);
-    defer tested_files.deinit();
+    defer {
+        var key_iter = tested_files.keyIterator();
+        while (key_iter.next()) |key| {
+            allocator.free(key.*);
+        }
+        tested_files.deinit();
+    }
 
-    var line_iter = std.mem.splitScalar(u8, test_file_contents, '\n');
-    while (line_iter.next()) |line| {
-        // Look for patterns like "test/fx/filename.roc"
-        var search_start: usize = 0;
-        while (std.mem.indexOfPos(u8, line, search_start, "test/fx/")) |idx| {
-            const rest_of_line = line[idx..];
-            // Find the end of the filename
-            if (std.mem.indexOf(u8, rest_of_line, ".roc")) |roc_pos| {
-                const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
-                // Extract just the filename (after "test/fx/")
-                const filename = full_path["test/fx/".len..];
-                // Only count files in test/fx (not subdirectories like test/fx/subdir/)
-                if (std.mem.indexOf(u8, filename, "/") == null) {
-                    try tested_files.put(filename, {});
+    // Scan both the test file and the shared specs file
+    const test_files_to_scan = [_][]const u8{
+        "src/cli/test/fx_platform_test.zig",
+        "src/cli/test/fx_test_specs.zig",
+    };
+
+    for (test_files_to_scan) |test_file_path| {
+        const test_file_contents = std.fs.cwd().readFileAlloc(allocator, test_file_path, 1024 * 1024) catch |err| {
+            std.debug.print("Warning: Could not read {s}: {}\n", .{ test_file_path, err });
+            continue;
+        };
+        defer allocator.free(test_file_contents);
+
+        var line_iter = std.mem.splitScalar(u8, test_file_contents, '\n');
+        while (line_iter.next()) |line| {
+            // Look for patterns like "test/fx/filename.roc"
+            var search_start: usize = 0;
+            while (std.mem.indexOfPos(u8, line, search_start, "test/fx/")) |idx| {
+                const rest_of_line = line[idx..];
+                // Find the end of the filename
+                if (std.mem.indexOf(u8, rest_of_line, ".roc")) |roc_pos| {
+                    const full_path = rest_of_line[0 .. roc_pos + 4]; // Include ".roc"
+                    // Extract just the filename (after "test/fx/")
+                    const filename = full_path["test/fx/".len..];
+                    // Only count files in test/fx (not subdirectories like test/fx/subdir/)
+                    if (std.mem.indexOf(u8, filename, "/") == null) {
+                        // Dupe the filename since the source buffer will be freed
+                        const duped_filename = try allocator.dupe(u8, filename);
+                        try tested_files.put(duped_filename, {});
+                    }
                 }
+                search_start = idx + 1;
             }
-            search_start = idx + 1;
         }
     }
 
@@ -663,11 +709,11 @@ fn checkFxPlatformTestCoverage(step: *Step) !void {
 
     // Report results
     if (missing_tests.items.len > 0) {
-        std.debug.print("\nERROR: The following .roc files in test/fx/ do not have tests in {s}:\n", .{test_file_path});
+        std.debug.print("\nERROR: The following .roc files in test/fx/ do not have tests:\n", .{});
         for (missing_tests.items) |missing_file| {
             std.debug.print("  - {s}\n", .{missing_file});
         }
-        std.debug.print("\nPlease add tests for these files or remove them from test/fx/.\n", .{});
+        std.debug.print("\nPlease add tests in fx_platform_test.zig or fx_test_specs.zig, or remove these files from test/fx/.\n", .{});
         return step.fail("{d} .roc file(s) in test/fx/ are missing tests", .{missing_tests.items.len});
     }
 
@@ -908,6 +954,36 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+/// Builds a test platform host library and sets up a step to copy it to the target-specific directory.
+/// Returns the copy step for dependency wiring.
+fn buildAndCopyTestPlatformHostLib(
+    b: *std.Build,
+    platform_dir: []const u8,
+    target: ResolvedTarget,
+    target_name: []const u8,
+    optimize: OptimizeMode,
+    roc_modules: modules.RocModules,
+) *Step.UpdateSourceFiles {
+    const lib = createTestPlatformHostLib(
+        b,
+        b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, target_name }),
+        b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+        target,
+        optimize,
+        roc_modules,
+    );
+
+    // Use correct filename for target platform
+    const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(
+        lib.getEmittedBin(),
+        b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename }),
+    );
+    return copy_step;
+}
+
 /// Custom build step that clears the Roc cache directory.
 /// Uses Zig's native filesystem APIs for cross-platform support.
 const ClearRocCacheStep = struct {
@@ -1026,80 +1102,40 @@ fn setupTestPlatforms(
 ) void {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
+    const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
 
-    // Create test platform host static library (str)
-    const test_platform_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_str_host",
-        "test/str/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
-
-    // Copy the test platform host library to the source directory
-    const copy_test_host = b.addUpdateSourceFiles();
-    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
-    // Clear cache after copying new host library
-    clear_cache_step.dependOn(&copy_test_host.step);
-    b.getInstallStep().dependOn(clear_cache_step);
-    test_platforms_step.dependOn(clear_cache_step);
-
-    // Create test platform host static libraries for int, fx, and fx-open - native target
-    const test_platform_dirs = [_][]const u8{ "int", "fx", "fx-open" };
-
-    for (test_platform_dirs) |platform_dir| {
-        const host_lib = createTestPlatformHostLib(
+    // Build all test platforms for native target
+    for (all_test_platform_dirs) |platform_dir| {
+        const copy_step = buildAndCopyTestPlatformHostLib(
             b,
-            b.fmt("test_platform_{s}_host", .{platform_dir}),
-            b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+            platform_dir,
             target,
+            native_target_name,
             optimize,
             roc_modules,
         );
-
-        const copy_host = b.addUpdateSourceFiles();
-        copy_host.addCopyFileToSource(host_lib.getEmittedBin(), b.pathJoin(&.{ "test", platform_dir, "platform", test_host_filename }));
-        clear_cache_step.dependOn(&copy_host.step);
+        clear_cache_step.dependOn(&copy_step.step);
     }
 
-    // Cross-compile test platform host libraries for musl and glibc targets
-    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
-        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
-        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
-    };
-
-    for (cross_compile_targets) |cross_target| {
+    // Cross-compile for musl targets (glibc not needed for test-platforms step)
+    for (musl_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Create cross-compiled host libraries for all test platforms
-        for (test_platform_dirs) |platform_dir| {
-            const cross_host_lib = createTestPlatformHostLib(
+        for (all_test_platform_dirs) |platform_dir| {
+            const copy_step = buildAndCopyTestPlatformHostLib(
                 b,
-                b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, cross_target.name }),
-                b.pathJoin(&.{ "test", platform_dir, "platform/host.zig" }),
+                platform_dir,
                 cross_resolved_target,
+                cross_target.name,
                 optimize,
                 roc_modules,
             );
-
-            const copy_cross_host = b.addUpdateSourceFiles();
-            copy_cross_host.addCopyFileToSource(cross_host_lib.getEmittedBin(), b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "libhost.a" }));
-            clear_cache_step.dependOn(&copy_cross_host.step);
-        }
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
-                test_platforms_step.dependOn(&stub.step);
-            }
+            clear_cache_step.dependOn(&copy_step.step);
         }
     }
+
+    b.getInstallStep().dependOn(clear_cache_step);
+    test_platforms_step.dependOn(clear_cache_step);
 }
 
 pub fn build(b: *std.Build) void {
@@ -1355,6 +1391,17 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
+
+    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
+    const test_runner_exe = b.addExecutable(.{
+        .name = "test_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/test/test_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(test_runner_exe);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -1630,6 +1677,11 @@ pub fn build(b: *std.Build) void {
                 .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
                 else => .{ target, null },
             },
+            .windows => switch (target.result.cpu.arch) {
+                .x86_64 => .{ target, "x64win" },
+                .aarch64 => .{ target, "arm64win" },
+                else => .{ target, null },
+            },
             else => .{ target, null },
         };
 
@@ -1649,11 +1701,11 @@ pub fn build(b: *std.Build) void {
         copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
         b.getInstallStep().dependOn(&copy_test_fx_host.step);
 
-        // On Linux, also copy to the target-specific directory so findHostLibrary finds it
+        // Also copy to the target-specific directory so findHostLibrary finds it
         if (fx_host_target_dir) |target_dir| {
             copy_test_fx_host.addCopyFileToSource(
                 test_platform_fx_host_lib.getEmittedBin(),
-                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, "libhost.a" }),
+                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, test_fx_host_filename }),
             );
         }
 
@@ -1857,78 +1909,38 @@ fn addMainExe(
     });
     configureBackend(exe, target);
 
-    // Create test platform host static library (str)
-    const test_platform_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_str_host",
-        "test/str/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
+    // Build str and int test platform host libraries for native target
+    // (fx and fx-open are only built via test-platforms step)
+    const main_build_platforms = [_][]const u8{ "str", "int" };
+    const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
 
-    // Copy the test platform host library to the source directory
-    const copy_test_host = b.addUpdateSourceFiles();
-    const test_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_host.addCopyFileToSource(test_platform_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform", test_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_host.step);
+    for (main_build_platforms) |platform_dir| {
+        const copy_step = buildAndCopyTestPlatformHostLib(
+            b,
+            platform_dir,
+            target,
+            native_target_name,
+            optimize,
+            roc_modules,
+        );
+        b.getInstallStep().dependOn(&copy_step.step);
+    }
 
-    // Create test platform host static library (int) - native target
-    const test_platform_int_host_lib = createTestPlatformHostLib(
-        b,
-        "test_platform_int_host",
-        "test/int/platform/host.zig",
-        target,
-        optimize,
-        roc_modules,
-    );
-
-    // Copy the int test platform host library to the source directory
-    const copy_test_int_host = b.addUpdateSourceFiles();
-    const test_int_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-    copy_test_int_host.addCopyFileToSource(test_platform_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform", test_int_host_filename }));
-    b.getInstallStep().dependOn(&copy_test_int_host.step);
-
-    // Cross-compile int platform host libraries for musl and glibc targets
-    const cross_compile_targets = [_]struct { name: []const u8, query: std.Target.Query }{
-        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
-        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
-        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
-    };
-
-    for (cross_compile_targets) |cross_target| {
+    // Cross-compile for all Linux targets (musl + glibc)
+    for (linux_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
-        // Create cross-compiled int host library
-        const cross_int_host_lib = createTestPlatformHostLib(
-            b,
-            b.fmt("test_platform_int_host_{s}", .{cross_target.name}),
-            "test/int/platform/host.zig",
-            cross_resolved_target,
-            optimize,
-            roc_modules,
-        );
-
-        // Copy to target-specific directory
-        const copy_cross_int_host = b.addUpdateSourceFiles();
-        copy_cross_int_host.addCopyFileToSource(cross_int_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", cross_target.name, "libhost.a" }));
-        b.getInstallStep().dependOn(&copy_cross_int_host.step);
-
-        // Create cross-compiled str host library
-        const cross_str_host_lib = createTestPlatformHostLib(
-            b,
-            b.fmt("test_platform_str_host_{s}", .{cross_target.name}),
-            "test/str/platform/host.zig",
-            cross_resolved_target,
-            optimize,
-            roc_modules,
-        );
-
-        // Copy to target-specific directory
-        const copy_cross_str_host = b.addUpdateSourceFiles();
-        copy_cross_str_host.addCopyFileToSource(cross_str_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/str/platform/targets", cross_target.name, "libhost.a" }));
-        b.getInstallStep().dependOn(&copy_cross_str_host.step);
+        for (main_build_platforms) |platform_dir| {
+            const copy_step = buildAndCopyTestPlatformHostLib(
+                b,
+                platform_dir,
+                cross_resolved_target,
+                cross_target.name,
+                optimize,
+                roc_modules,
+            );
+            b.getInstallStep().dependOn(&copy_step.step);
+        }
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
@@ -1986,6 +1998,59 @@ fn addMainExe(
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
+
+    // Cross-compile interpreter shim for all supported targets
+    // This allows `roc build --target=X` to work for cross-compilation
+    const cross_compile_shim_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+    };
+
+    for (cross_compile_shim_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Build builtins object for this target
+        const cross_builtins_obj = b.addObject(.{
+            .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = optimize != .Debug,
+                .pic = true,
+            }),
+        });
+        configureBackend(cross_builtins_obj, cross_resolved_target);
+
+        // Build interpreter shim library for this target
+        const cross_shim_lib = b.addLibrary(.{
+            .name = b.fmt("roc_interpreter_shim_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/interpreter_shim/main.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = optimize != .Debug,
+                .pic = true,
+            }),
+            .linkage = .static,
+        });
+        configureBackend(cross_shim_lib, cross_resolved_target);
+        roc_modules.addAll(cross_shim_lib);
+        cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
+        cross_shim_lib.addObject(cross_builtins_obj);
+        cross_shim_lib.bundle_compiler_rt = true;
+
+        // Copy to target-specific directory for embedding
+        const copy_cross_shim = b.addUpdateSourceFiles();
+        copy_cross_shim.addCopyFileToSource(
+            cross_shim_lib.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, "libroc_interpreter_shim.a" }),
+        );
+        exe.step.dependOn(&copy_cross_shim.step);
+    }
 
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
@@ -2536,8 +2601,12 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
         const libc_so = write_stub.add("libc.so", stub_content);
 
         const copy_stubs = b.addUpdateSourceFiles();
-        copy_stubs.addCopyFileToSource(libc_so_6, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so.6" }));
-        copy_stubs.addCopyFileToSource(libc_so, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so" }));
+        // Platforms that need glibc stubs
+        const glibc_platforms = [_][]const u8{ "int", "str" };
+        for (glibc_platforms) |platform| {
+            copy_stubs.addCopyFileToSource(libc_so_6, b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so.6" }));
+            copy_stubs.addCopyFileToSource(libc_so, b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so" }));
+        }
         copy_stubs.step.dependOn(&write_stub.step);
 
         return copy_stubs;
@@ -2550,11 +2619,16 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     // Compile the assembly into a proper shared library using Zig's build system
     const libc_stub = glibc_stub_build.compileAssemblyStub(b, asm_file, target, .ReleaseSmall);
 
-    // Copy the generated files to the target directory
+    // Copy the generated files to all platforms that use glibc targets
     const copy_stubs = b.addUpdateSourceFiles();
-    copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so.6" }));
-    copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so" }));
-    copy_stubs.addCopyFileToSource(asm_file, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc_stub.s" }));
+
+    // Platforms that need glibc stubs (have glibc targets defined in their .roc files)
+    const glibc_platforms = [_][]const u8{ "int", "str" };
+    for (glibc_platforms) |platform| {
+        copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so.6" }));
+        copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so" }));
+        copy_stubs.addCopyFileToSource(asm_file, b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc_stub.s" }));
+    }
     copy_stubs.step.dependOn(&libc_stub.step);
     copy_stubs.step.dependOn(&write_stub.step);
 

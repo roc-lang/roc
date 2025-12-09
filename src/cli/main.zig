@@ -34,10 +34,14 @@ const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
+pub const targets_validator = @import("targets_validator.zig");
+const platform_validation = @import("platform_validation.zig");
 
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(targets_validator);
+        std.testing.refAllDecls(platform_validation);
     }
 }
 const bench = @import("bench.zig");
@@ -69,7 +73,40 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 const TestOpsEnv = eval.TestOpsEnv;
 const Allocators = base.Allocators;
 
-const roc_interpreter_shim_lib = if (builtin.is_test) &[_]u8{} else if (builtin.target.os.tag == .windows) @embedFile("roc_interpreter_shim.lib") else @embedFile("libroc_interpreter_shim.a");
+/// Embedded interpreter shim libraries for different targets.
+/// The native shim is used for roc run and native builds.
+/// Cross-compilation shims are used for roc build --target=<target>.
+const ShimLibraries = struct {
+    /// Native shim (for host platform builds and roc run)
+    const native = if (builtin.is_test)
+        &[_]u8{}
+    else if (builtin.target.os.tag == .windows)
+        @embedFile("roc_interpreter_shim.lib")
+    else
+        @embedFile("libroc_interpreter_shim.a");
+
+    /// Cross-compilation target shims (Linux musl targets)
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_interpreter_shim.a");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_interpreter_shim.a");
+
+    /// Cross-compilation target shims (Linux glibc targets)
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_interpreter_shim.a");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_interpreter_shim.a");
+
+    /// Get the appropriate shim library bytes for the given target
+    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
+        return switch (target) {
+            .x64musl => x64musl,
+            .arm64musl => arm64musl,
+            .x64glibc => x64glibc,
+            .arm64glibc => arm64glibc,
+            // Native/host targets use the native shim
+            .x64mac, .arm64mac, .x64win, .arm64win => native,
+            // Fallback for other targets (will use native, may not work for cross-compilation)
+            else => native,
+        };
+    }
+};
 
 test "main cli tests" {
     _ = @import("libc_finder.zig");
@@ -680,7 +717,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
             try rocRun(allocs, run_args);
         },
         .check => |check_args| rocCheck(allocs, check_args),
-        .build => |build_args| rocBuild(allocs, build_args),
+        .build => |build_args| try rocBuild(allocs, build_args),
         .bundle => |bundle_args| rocBundle(allocs, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(allocs, unbundle_args),
         .fmt => |format_args| rocFormat(allocs, format_args),
@@ -713,7 +750,10 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
 /// Generate platform host shim object file using LLVM.
 /// Returns the path to the generated object file (allocated from arena, no need to free), or null if LLVM unavailable.
-fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget) !?[]const u8 {
+/// If serialized_module is provided, it will be embedded in the binary (for roc build).
+/// If serialized_module is null, the binary will use IPC to get module data (for roc run).
+/// If debug is true, include debug information in the generated object file.
+fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -742,7 +782,8 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
 
     // Create the complete platform shim
     // Note: Symbol names include platform-specific prefixes (underscore for macOS)
-    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
+    // serialized_module is null for roc run (IPC mode) or contains data for roc build (embedded mode)
+    platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target, serialized_module) catch |err| {
         std.log.err("Failed to create interpreter shim: {}", .{err});
         return err;
     };
@@ -789,6 +830,7 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
         .output_path = object_path,
         .optimization = .speed,
         .target = target,
+        .debug = debug, // Use the debug flag passed from caller
     };
 
     if (builder.compileBitcodeToObject(allocs.gpa, compile_config)) |success| {
@@ -897,8 +939,42 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         return err;
     };
 
-    // Use native detection (typically musl) for shim generation to match embedded shim library
+    // Use native detection for shim generation to match embedded shim library
     const shim_target = builder.RocTarget.detectNative();
+
+    // Validate platform header has targets section and supports native target
+    if (platform_paths.platform_source_path) |platform_source| {
+        if (platform_validation.validatePlatformHeader(allocs.arena, platform_source)) |validation| {
+            // Validate that the native target is supported
+            platform_validation.validateTargetSupported(validation.config, shim_target, .exe) catch |err| {
+                switch (err) {
+                    error.UnsupportedTarget => {
+                        // Create a nice formatted error report
+                        const result = platform_validation.createUnsupportedTargetResult(
+                            platform_source,
+                            shim_target,
+                            .exe,
+                            validation.config,
+                        );
+                        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                        return error.UnsupportedTarget;
+                    },
+                    else => {},
+                }
+            };
+        } else |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    // Warning only - platform may still work for native builds
+                    // Don't block execution, just inform the user
+                    std.log.debug("Platform at '{s}' has no targets section", .{platform_source});
+                },
+                else => {
+                    std.log.debug("Could not validate platform header: {}", .{err});
+                },
+            }
+        }
+    }
 
     // Extract entrypoints from platform source file
     var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch |err| {
@@ -945,15 +1021,17 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
         };
 
         // Always extract to temp dir (unique per process, no race condition)
-        extractReadRocFilePathShimLibrary(allocs, shim_path) catch |err| {
+        // For roc run, we always use the native shim (null target)
+        extractReadRocFilePathShimLibrary(allocs, shim_path, null) catch |err| {
             std.log.err("Failed to extract read roc file path shim library: {}", .{err});
             return err;
         };
 
         // Generate platform host shim using the detected entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
-
-        const platform_shim_path = generatePlatformHostShim(allocs, temp_dir_path, entrypoints.items, shim_target) catch |err| {
+        // Pass null for serialized_module since roc run uses IPC mode
+        // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
+        const platform_shim_path = generatePlatformHostShim(allocs, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug) catch |err| {
             std.log.err("Failed to generate platform host shim: {}", .{err});
             return err;
         };
@@ -1074,15 +1152,22 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
         linker.link(allocs, link_config) catch |err| switch (err) {
             linker.LinkError.LLVMNotAvailable => {
-                std.log.err("LLD linker not available -- this is likely a test executable that was built without LLVM", .{});
+                const result = platform_validation.targets_validator.ValidationResult{ .linker_not_available = {} };
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                 return err;
             },
             linker.LinkError.LinkFailed => {
-                std.log.err("LLD linker failed to create executable", .{});
+                const result = platform_validation.targets_validator.ValidationResult{
+                    .linker_failed = .{ .reason = "LLD linker failed" },
+                };
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                 return err;
             },
             else => {
-                std.log.err("Failed to link executable: {}", .{err});
+                const result = platform_validation.targets_validator.ValidationResult{
+                    .linker_failed = .{ .reason = @errorName(err) },
+                };
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
                 return err;
             },
         };
@@ -1274,9 +1359,15 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     if (exit_code != 0) {
         std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
         if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
-            std.log.err("Child process crashed with access violation (segfault)", .{});
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
-            std.log.err("Child process crashed with exception code: 0x{X}", .{exit_code});
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -1364,14 +1455,11 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             }
         },
         .Signal => |signal| {
-            std.log.err("Child process {s} killed by signal: {}", .{ exe_path, signal });
-            if (signal == 11) { // SIGSEGV
-                std.log.err("Child process crashed with segmentation fault (SIGSEGV)", .{});
-            } else if (signal == 6) { // SIGABRT
-                std.log.err("Child process aborted (SIGABRT)", .{});
-            } else if (signal == 9) { // SIGKILL
-                std.log.err("Child process was killed (SIGKILL)", .{});
-            }
+            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, signal });
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_signaled = .{ .signal = signal },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
@@ -1814,7 +1902,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // The platform wraps app-provided functions (from `requires`) and exports them for the host.
     // For example: `provides { main_for_host!: "main" }` where `main_for_host! = main!`
     const platform_env = platform_main_env orelse {
-        std.log.err("No platform found. Every Roc app requires a platform.", .{});
+        const result = platform_validation.targets_validator.ValidationResult{
+            .no_platform_found = .{ .app_path = roc_file_path },
+        };
+        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
         return error.NoPlatformFound;
     };
     const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
@@ -1928,6 +2019,10 @@ fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const
     // Check if this is a platform file with a platform header
     switch (header) {
         .platform => |platform_header| {
+            // Validate platform header has targets section (non-blocking warning)
+            // This helps platform authors know they need to add targets
+            _ = validatePlatformHeader(allocs, &parse_ast, roc_file_path);
+
             // Get the exposes collection
             const exposes_coll = parse_ast.store.getCollection(platform_header.exposes);
             const exposes_items = parse_ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
@@ -1947,6 +2042,32 @@ fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const
         },
         else => {
             return error.NotPlatformFile;
+        },
+    }
+}
+
+/// Validate a platform header and report any errors/warnings
+/// Returns true if valid, false if there are validation issues
+/// This currently only warns about missing targets sections - it doesn't block compilation
+fn validatePlatformHeader(allocs: *Allocators, parse_ast: *const parse.AST, platform_path: []const u8) bool {
+    const validation_result = targets_validator.validatePlatformHasTargets(parse_ast.*, platform_path);
+
+    switch (validation_result) {
+        .valid => return true,
+        else => {
+            // Create and render the validation report
+            var report = targets_validator.createValidationReport(allocs.gpa, validation_result) catch {
+                std.log.warn("Platform at {s} is missing targets section", .{platform_path});
+                return false;
+            };
+            defer report.deinit();
+
+            // Render to stderr
+            if (!builtin.is_test) {
+                const stderr = stderrWriter();
+                reporting.renderReportToTerminal(&report, stderr, .ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+            }
+            return false;
         },
     }
 }
@@ -2556,9 +2677,11 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
     }
 }
 
-/// Extract the embedded roc_shim library to the specified path
-/// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory
-pub fn extractReadRocFilePathShimLibrary(allocs: *Allocators, output_path: []const u8) !void {
+/// Extract the embedded roc_shim library to the specified path for the given target.
+/// This library contains the shim code that runs in child processes to read ModuleEnv from shared memory.
+/// For native builds and roc run, use the native shim (pass null or native target).
+/// For cross-compilation, pass the target to get the appropriate shim.
+pub fn extractReadRocFilePathShimLibrary(allocs: *Allocators, output_path: []const u8, target: ?roc_target.RocTarget) !void {
     _ = allocs; // unused but kept for consistency
 
     if (builtin.is_test) {
@@ -2568,11 +2691,17 @@ pub fn extractReadRocFilePathShimLibrary(allocs: *Allocators, output_path: []con
         return;
     }
 
+    // Get the appropriate shim for the target (or native if not specified)
+    const shim_data = if (target) |t|
+        ShimLibraries.forTarget(t)
+    else
+        ShimLibraries.native;
+
     // Write the embedded shim library to the output path
     const shim_file = try std.fs.cwd().createFile(output_path, .{});
     defer shim_file.close();
 
-    try shim_file.writeAll(roc_interpreter_shim_lib);
+    try shim_file.writeAll(shim_data);
 }
 
 /// Format a bundle path validation reason into a user-friendly error message
@@ -2714,6 +2843,43 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
                 const temp = file_paths.items[0];
                 file_paths.items[0] = file_paths.items[idx];
                 file_paths.items[idx] = temp;
+            }
+        }
+    }
+
+    // Validate platform header if the first file looks like a platform
+    // This ensures bundles have proper targets sections
+    const main_file = file_paths.items[0];
+    if (std.mem.endsWith(u8, main_file, ".roc")) {
+        if (platform_validation.validatePlatformHeader(allocs.arena, main_file)) |validation| {
+            // Platform validation succeeded - validate all target files exist
+            if (platform_validation.validateAllTargetFilesExist(
+                allocs.arena,
+                validation.config,
+                validation.platform_dir,
+            )) |result| {
+                // Render the validation error with nice formatting
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderr);
+                return switch (result) {
+                    .missing_target_file => error.MissingTargetFile,
+                    .missing_files_directory => error.MissingFilesDirectory,
+                    else => error.MissingTargetFile,
+                };
+            }
+            std.log.debug("Platform validation passed for: {s}", .{main_file});
+        } else |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    // Only warn - file might be an app, not a platform
+                    std.log.debug("File {s} has no targets section (may be an app)", .{main_file});
+                },
+                error.ParseError, error.FileReadError => {
+                    // Parsing failed - could be invalid syntax or not a Roc file
+                    std.log.debug("Could not parse {s} as platform: {}", .{ main_file, err });
+                },
+                else => {
+                    std.log.warn("Platform validation warning: {}", .{err});
+                },
             }
         }
     }
@@ -2896,211 +3062,69 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         return;
     }
 
-    // Import needed modules
+    // Use embedded interpreter build approach
+    // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
+    try rocBuildEmbedded(allocs, args);
+}
+
+/// Build a standalone executable with the interpreter and embedded module data.
+/// This is the primary build path that creates executables without requiring IPC.
+fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
-    const app_stub = @import("app_stub.zig");
-    const cross_compilation = @import("cross_compilation.zig");
 
-    std.log.info("Building {s} for cross-compilation", .{args.path});
+    std.log.info("Building {s} with embedded interpreter", .{args.path});
 
-    // Detect host target
-    const host_target = cross_compilation.detectHostTarget();
-    std.log.info("Host: {} ({s})", .{ host_target, host_target.toTriple() });
-
-    // Parse target if provided, otherwise use native with musl preference
+    // Parse target if provided, otherwise use native
     const target = if (args.target) |target_str| blk: {
         break :blk target_mod.RocTarget.fromString(target_str) orelse {
-            std.log.err("Invalid target: {s}", .{target_str});
-            std.log.err("Valid targets: x64musl, x64glibc, arm64musl, arm64glibc, etc.", .{});
+            const result = platform_validation.targets_validator.ValidationResult{
+                .invalid_target = .{ .target_str = target_str },
+            };
+            _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
             return error.InvalidTarget;
         };
     } else target_mod.RocTarget.detectNative();
 
-    std.log.info("Target: {} ({s})", .{ target, target.toTriple() });
+    std.log.debug("Target: {} ({s})", .{ target, target.toTriple() });
 
-    // Validate cross-compilation support
-    const cross_validation = cross_compilation.validateCrossCompilation(host_target, target);
-    switch (cross_validation) {
-        .supported => {
-            std.log.info("Cross-compilation from {s} to {s} is supported", .{ @tagName(host_target), @tagName(target) });
-        },
-        .unsupported_host_target, .unsupported_cross_compilation, .missing_toolchain => {
-            const stderr = stderrWriter();
-            try cross_compilation.printCrossCompilationError(stderr, cross_validation);
-            return error.UnsupportedCrossCompilation;
-        },
-    }
-
-    // Only support int test platform for cross-compilation
-    // Check if path contains "int" directory using cross-platform path handling
-    const path_contains_int = blk: {
-        var iter = std.fs.path.componentIterator(args.path) catch break :blk false;
-        while (iter.next()) |component| {
-            if (std.mem.eql(u8, component.name, "int")) {
-                break :blk true;
-            }
-        }
-        break :blk false;
-    };
-
-    const platform_type = if (path_contains_int)
-        "int"
-    else {
-        std.log.err("roc build cross-compilation currently only supports the int test platform", .{});
-        std.log.err("Your app path: {s}", .{args.path});
-        std.log.err("For str platform and other platforms, please use regular 'roc' command", .{});
-        return error.UnsupportedPlatform;
-    };
-
-    std.log.info("Detected platform type: {s}", .{platform_type});
-
-    // Get platform directory path
-    const platform_dir = if (std.mem.eql(u8, platform_type, "int"))
-        try std.fs.path.join(allocs.arena, &.{ "test", "int", "platform" })
-    else
-        try std.fs.path.join(allocs.arena, &.{ "test", "str", "platform" });
-
-    // Check that platform exists
-    std.fs.cwd().access(platform_dir, .{}) catch |err| {
-        std.log.err("Platform directory not found: {s} ({})", .{ platform_dir, err });
-        return err;
-    };
-
-    // Get target-specific host library path
-    // Use target OS to determine library filename, not host OS
-    const host_lib_filename = if (target.toOsTag() == .windows) "host.lib" else "libhost.a";
-    const host_lib_path = blk: {
-        // Try target-specific host library first
-        const target_specific_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, "targets", @tagName(target), host_lib_filename });
-        std.fs.cwd().access(target_specific_path, .{}) catch {
-            // Fallback to generic host library
-            std.log.warn("Target-specific host library not found, falling back to generic: {s}", .{target_specific_path});
-            break :blk try std.fs.path.join(allocs.arena, &.{ platform_dir, host_lib_filename });
+    // Check for unsupported cross-compilation scenarios
+    // glibc targets require a full libc for linking, which is only available on Linux hosts
+    const host_os = builtin.target.os.tag;
+    if (target.isDynamic() and host_os != .linux) {
+        const result = platform_validation.targets_validator.ValidationResult{
+            .unsupported_glibc_cross = .{
+                .target = target,
+                .host_os = @tagName(host_os),
+            },
         };
-        break :blk target_specific_path;
-    };
+        _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+        return error.UnsupportedCrossCompilation;
+    }
 
-    std.fs.cwd().access(host_lib_path, .{}) catch |err| {
-        std.log.err("Host library not found: {s} ({})", .{ host_lib_path, err });
+    // Set up shared memory with ModuleEnv (same as roc run)
+    std.log.debug("Compiling Roc file: {s}", .{args.path});
+    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
+        std.log.err("Failed to compile Roc file: {}", .{err});
         return err;
     };
+    std.log.debug("Compilation complete, serialized size: {} bytes", .{shm_handle.handle.size});
 
-    // Get expected entrypoints for this platform
-    const entrypoints = try app_stub.getTestPlatformEntrypoints(allocs.gpa, platform_type);
-    defer allocs.gpa.free(entrypoints);
-
-    std.log.info("Expected entrypoints: {}", .{entrypoints.len});
-    for (entrypoints, 0..) |ep, i| {
-        std.log.info("  {}: roc__{s}", .{ i, ep.name });
-    }
-
-    // Create temp directory for build artifacts using Roc's cache system
-    const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
-    };
-    var cache_manager = CacheManager.init(allocs.gpa, cache_config, Filesystem.default());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(allocs.arena);
-    const temp_dir = try std.fs.path.join(allocs.arena, &.{ cache_dir, "roc_build" });
-
-    std.fs.cwd().makePath(temp_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Generate app stub object file
-    const app_stub_obj = try app_stub.generateAppStubObject(allocs.arena, temp_dir, entrypoints, target);
-
-    // Get CRT files for the target
-    const crt_files = try target_mod.getVendoredCRTFiles(allocs.arena, target, platform_dir);
-
-    // Create object files list for linking
-    var object_files = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
-
-    // Add our app stub and host library
-    try object_files.append(app_stub_obj);
-    try object_files.append(host_lib_path);
-
-    // Setup platform files based on target
-    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
-    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16);
-    var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32);
-
-    // Add CRT files in correct order
-    if (crt_files.crt1_o) |crt1| try platform_files_pre.append(crt1);
-    if (crt_files.crti_o) |crti| try platform_files_pre.append(crti);
-    if (crt_files.crtn_o) |crtn| try platform_files_post.append(crtn);
-
-    // For static linking with musl, add libc.a
-    if (crt_files.libc_a) |libc| {
-        try platform_files_post.append(libc);
-    } else if (target.isDynamic()) {
-        // For dynamic linking with glibc, generate stub library for cross-compilation
-        // Check if we're doing actual cross-compilation
-        const is_cross_compiling = host_target != target;
-
-        if (is_cross_compiling) {
-            // For cross-compilation, use pre-built vendored stubs from the platform targets folder
-            const target_name = switch (target) {
-                .x64glibc => "x64glibc",
-                .arm64glibc => "arm64glibc",
-                else => {
-                    std.log.err("Cross-compilation target {} not supported for glibc", .{target});
-                    return error.UnsupportedTarget;
-                },
-            };
-
-            // Check if vendored stubs exist in the platform targets folder
-            const stub_dir = try std.fmt.allocPrint(allocs.arena, "test/int/platform/targets/{s}", .{target_name});
-
-            const stub_so_path = try std.fmt.allocPrint(allocs.arena, "{s}/libc.so.6", .{stub_dir});
-
-            // Verify the vendored stub exists
-            std.fs.cwd().access(stub_so_path, .{}) catch |err| {
-                std.log.err("Pre-built glibc stub not found: {s}", .{stub_so_path});
-                std.log.err("Error: {}", .{err});
-                std.log.err("This suggests the build system didn't generate the required stubs.", .{});
-                std.log.err("Try running 'zig build' first to generate platform target files.", .{});
-                return err;
-            };
-
-            // Use the vendored stub library
-            const stub_dir_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{stub_dir});
-            try extra_args.append(stub_dir_arg);
-            try extra_args.append("-lc");
-            std.log.info("Using pre-built glibc stub from platform targets: {s}", .{stub_dir});
+    // Clean up shared memory when done (we'll copy the data)
+    defer {
+        if (comptime is_windows) {
+            _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.handle.ptr);
+            _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.handle.fd));
         } else {
-            // For native compilation, use system libraries
-            const common_lib_paths = [_][]const u8{
-                "/lib/x86_64-linux-gnu",
-                "/usr/lib/x86_64-linux-gnu",
-                "/lib/aarch64-linux-gnu",
-                "/usr/lib/aarch64-linux-gnu",
-                "/lib64",
-                "/usr/lib64",
-                "/lib",
-                "/usr/lib",
-            };
-
-            for (common_lib_paths) |lib_path| {
-                // Check if the directory exists before adding it
-                std.fs.cwd().access(lib_path, .{}) catch continue;
-                const search_arg = try std.fmt.allocPrint(allocs.arena, "-L{s}", .{lib_path});
-                try extra_args.append(search_arg);
-            }
-
-            try extra_args.append("-lc");
+            _ = posix.munmap(shm_handle.handle.ptr, shm_handle.handle.size);
+            _ = c.close(shm_handle.handle.fd);
         }
-
-        // Add dynamic linker path
-        if (target.getDynamicLinkerPath()) |dl_path| {
-            const dl_arg = try std.fmt.allocPrint(allocs.arena, "--dynamic-linker={s}", .{dl_path});
-            try extra_args.append(dl_arg);
-        } else |_| {}
     }
+
+    // Extract serialized module data for embedding
+    const serialized_module = @as([*]u8, @ptrCast(shm_handle.handle.ptr))[0..shm_handle.handle.size];
 
     // Determine output path
-    const base_output_path = if (args.output) |output|
+    const output_path = if (args.output) |output|
         try allocs.arena.dupe(u8, output)
     else blk: {
         const basename = std.fs.path.basename(args.path);
@@ -3111,13 +3135,188 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         break :blk try allocs.arena.dupe(u8, name_without_ext);
     };
 
-    // Add .exe extension on Windows if not already present
-    const output_path = if (target.toOsTag() == .windows and !std.mem.endsWith(u8, base_output_path, ".exe"))
-        try std.fmt.allocPrint(allocs.arena, "{s}.exe", .{base_output_path})
-    else
-        try allocs.arena.dupe(u8, base_output_path);
+    // Set up cache directory for build artifacts
+    const cache_config = CacheConfig{
+        .enabled = true,
+        .verbose = false,
+    };
+    var cache_manager = CacheManager.init(allocs.gpa, cache_config, Filesystem.default());
+    const cache_dir = try cache_manager.config.getCacheEntriesDir(allocs.arena);
+    const build_cache_dir = try std.fs.path.join(allocs.arena, &.{ cache_dir, "roc_build" });
 
-    // Use LLD for linking
+    std.fs.cwd().makePath(build_cache_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Get platform directory and host library (do this first to get platform source)
+    const app_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_spec = extractPlatformSpecFromApp(allocs, args.path) catch |err| {
+        std.log.err("Failed to extract platform spec: {}", .{err});
+        return err;
+    };
+    std.log.debug("Platform spec: {s}", .{platform_spec});
+
+    // Resolve platform path
+    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
+        resolvePlatformSpecToPaths(allocs, platform_spec, app_dir) catch |err| blk: {
+            std.log.err("Failed to resolve platform paths: {}", .{err});
+            break :blk null;
+        }
+    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://"))
+        resolveUrlPlatform(allocs, platform_spec) catch null
+    else
+        null;
+
+    // Validate platform header has targets section and get link configuration
+    // The targets section is REQUIRED - it defines exactly what to link
+    const platform_source = if (platform_paths) |pp| pp.platform_source_path else null;
+    const validation = if (platform_source) |ps|
+        platform_validation.validatePlatformHeader(allocs.arena, ps) catch |err| {
+            switch (err) {
+                error.MissingTargetsSection => {
+                    const result = platform_validation.ValidationResult{
+                        .missing_targets_section = .{ .platform_path = ps },
+                    };
+                    _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                    return error.MissingTargetsSection;
+                },
+                else => {
+                    std.log.err("Failed to validate platform header: {}", .{err});
+                    return err;
+                },
+            }
+        }
+    else {
+        std.log.err("Platform source not found - cannot determine link configuration", .{});
+        return error.NoPlatformSource;
+    };
+
+    const targets_config = validation.config;
+    const platform_dir = validation.platform_dir;
+
+    // Validate that the requested target is supported and get its link spec
+    platform_validation.validateTargetSupported(targets_config, target, .exe) catch |err| {
+        switch (err) {
+            error.UnsupportedTarget => {
+                const result = platform_validation.createUnsupportedTargetResult(
+                    platform_source.?,
+                    target,
+                    .exe,
+                    targets_config,
+                );
+                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                return error.UnsupportedTarget;
+            },
+            else => return err,
+        }
+    };
+
+    // Get the link spec for this target - tells us exactly what files to link
+    const link_spec = targets_config.getLinkSpec(target, .exe) orelse {
+        std.log.err("No link spec for target {s} - this shouldn't happen after validation", .{@tagName(target)});
+        return error.UnsupportedTarget;
+    };
+
+    // Build link file lists from the link spec
+    // Files before 'app' go in pre, files after 'app' go in post
+    const target_name = @tagName(target);
+    const files_dir = targets_config.files_dir orelse "targets";
+    var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    var hit_app = false;
+
+    for (link_spec.items) |item| {
+        switch (item) {
+            .file_path => |path| {
+                // Build full path: platform_dir/files_dir/target_name/path
+                const full_path = try std.fs.path.join(allocs.arena, &.{ platform_dir, files_dir, target_name, path });
+
+                // Validate the file exists
+                std.fs.cwd().access(full_path, .{}) catch {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .missing_target_file = .{
+                            .target = target,
+                            .link_type = .exe,
+                            .file_path = path,
+                            .expected_full_path = full_path,
+                        },
+                    };
+                    _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
+                    return error.MissingTargetFile;
+                };
+
+                if (!hit_app) {
+                    try platform_files_pre.append(full_path);
+                } else {
+                    try platform_files_post.append(full_path);
+                }
+            },
+            .app => {
+                hit_app = true;
+            },
+            .win_gui => {
+                // Windows subsystem flag - will be handled by linker
+            },
+        }
+    }
+
+    std.log.debug("Link spec: {} files before app, {} files after app", .{ platform_files_pre.items.len, platform_files_post.items.len });
+
+    // Extract entrypoints from the platform source file
+    std.log.debug("Extracting entrypoints from platform...", .{});
+    var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch {
+        std.log.err("Failed to allocate entrypoints list", .{});
+        return error.OutOfMemory;
+    };
+
+    extractEntrypointsFromPlatform(allocs, platform_source.?, &entrypoints) catch |err| {
+        std.log.err("Failed to extract entrypoints: {}", .{err});
+        return err;
+    };
+    std.log.debug("Found {} entrypoints", .{entrypoints.items.len});
+
+    // Extract shim library (interpreter shim)
+    // Include target name in filename to support different targets in the same cache
+    const shim_filename = try std.fmt.allocPrint(allocs.arena, "libroc_shim_{s}.a", .{target_name});
+    const shim_path = try std.fs.path.join(allocs.arena, &.{ build_cache_dir, shim_filename });
+
+    std.fs.cwd().access(shim_path, .{}) catch {
+        // Shim not found, extract it
+        // For roc build, use the target-specific shim for cross-compilation support
+        std.log.debug("Extracting shim library for target {s} to {s}...", .{ target_name, shim_path });
+        extractReadRocFilePathShimLibrary(allocs, shim_path, target) catch |err| {
+            std.log.err("Failed to extract shim library: {}", .{err});
+            return err;
+        };
+    };
+
+    // Generate platform host shim with embedded module data
+    // Enable debug if explicitly requested via --debug OR if roc is built in debug mode
+    const enable_debug = args.debug or (builtin.mode == .Debug);
+    std.log.debug("Generating platform host shim with {} bytes of embedded data (debug={})...", .{ serialized_module.len, enable_debug });
+    const platform_shim_path = generatePlatformHostShim(allocs, build_cache_dir, entrypoints.items, target, serialized_module, enable_debug) catch |err| {
+        std.log.err("Failed to generate platform host shim: {}", .{err});
+        return err;
+    };
+    std.log.debug("Platform shim generated: {?s}", .{platform_shim_path});
+
+    // Link everything together
+    // object_files = the Roc application (interpreter shim + platform shim with embedded module)
+    // platform_files_pre/post = files declared in link spec before/after 'app'
+    var object_files = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 4);
+    try object_files.append(shim_path);
+    if (platform_shim_path) |psp| {
+        try object_files.append(psp);
+    }
+
+    // Extra linker args for system libraries (not platform-provided)
+    var extra_args = try std.array_list.Managed([]const u8).initCapacity(allocs.arena, 8);
+    if (target.isMacOS()) {
+        // macOS requires linking with system libraries
+        try extra_args.append("-lSystem");
+    }
+
     const linker_mod = @import("linker.zig");
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
     const link_config = linker_mod.LinkConfig{
@@ -3134,7 +3333,27 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     try linker_mod.link(allocs, link_config);
 
-    std.log.info("Successfully built executable: {s}", .{output_path});
+    std.log.info("Successfully built standalone executable: {s}", .{output_path});
+}
+
+/// Derive the base platform directory from a host library path.
+/// If the path contains "/targets/<target>/", extract the directory before "targets".
+/// This handles the case where the native host lib is in targets/x64musl/libhost.a
+/// and we need to find targets/arm64musl/libhost.a for cross-compilation.
+fn deriveBasePlatformDir(host_lib_path: []const u8) []const u8 {
+    var platform_dir = std.fs.path.dirname(host_lib_path) orelse ".";
+
+    // Check if we're already inside a targets/<native>/ directory
+    // by looking for the "targets" component in the path
+    if (std.mem.indexOf(u8, platform_dir, "/targets/")) |targets_idx| {
+        // Truncate to get the directory containing "targets"
+        return platform_dir[0..targets_idx];
+    } else if (std.mem.startsWith(u8, platform_dir, "targets/")) {
+        // Path starts with targets/, use current directory
+        return ".";
+    }
+
+    return platform_dir;
 }
 
 /// Information about a test (expect statement) to be evaluated

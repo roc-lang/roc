@@ -2417,18 +2417,12 @@ pub const Interpreter = struct {
                 // will decref their elements (if they're unique), resulting in net-zero
                 // refcount change for shared elements.
                 //
-                // IMPORTANT: Check if both arguments point to the same underlying allocation.
-                // If they share the same allocation, we must only decref once to avoid double-free.
-                const same_allocation = blk: {
-                    const alloc_a = list_a.getAllocationDataPtr();
-                    const alloc_b = list_b.getAllocationDataPtr();
-                    break :blk (alloc_a != null and alloc_a == alloc_b);
-                };
-
+                // Both arguments must be decref'd even if they point to the same allocation.
+                // Each lookup/copy created its own reference via copyToPtr incref, so each
+                // StackValue holds its own reference that must be released. The underlying
+                // list won't be freed until its refcount reaches 0, so decrefing both is safe.
                 list_a_arg.decref(&self.runtime_layout_store, roc_ops);
-                if (!same_allocation) {
-                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
-                }
+                list_b_arg.decref(&self.runtime_layout_store, roc_ops);
 
                 return out;
             },
@@ -11709,7 +11703,15 @@ pub const Interpreter = struct {
                 };
                 self.def_stack.append(new_entry) catch return null;
                 defer _ = self.def_stack.pop();
-                return self.eval(def.expr, roc_ops) catch null;
+                const result = self.eval(def.expr, roc_ops) catch return null;
+                // Store the result as a binding so subsequent lookups don't re-evaluate
+                self.bindings.append(.{
+                    .pattern_idx = def.pattern,
+                    .value = result,
+                    .expr_idx = def.expr,
+                    .source_env = self.env,
+                }) catch return null;
+                return result;
             }
         }
         return null;

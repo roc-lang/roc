@@ -1,3 +1,5 @@
+//! Document storage for tracking open text documents in the LSP server.
+
 const std = @import("std");
 
 /// Stores the latest contents of each open text document.

@@ -33,6 +33,7 @@ pub const CompileConfig = struct {
     target: RocTarget,
     cpu: []const u8 = "",
     features: []const u8 = "",
+    debug: bool = false, // Enable debug info generation in output
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -284,7 +285,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     coverage_options.CoverageType = .ZigLLVMCoverageType_None;
 
     const emit_options = ZigLLVMEmitOptions{
-        .is_debug = false,
+        // Auto-enable debug when roc is built in debug mode, OR when explicitly requested via --debug
+        .is_debug = (builtin.mode == .Debug) or config.debug,
         .is_small = config.optimization == .size,
         .time_report_out = null,
         .tsan = false,

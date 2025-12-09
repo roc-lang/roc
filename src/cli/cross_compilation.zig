@@ -1,8 +1,7 @@
 //! Cross-compilation support and validation for Roc CLI
-//! Handles host detection, target validation, and capability matrix
+//! Handles target validation and capability matrix
 
 const std = @import("std");
-const builtin = @import("builtin");
 const target_mod = @import("target.zig");
 
 const RocTarget = target_mod.RocTarget;
@@ -32,59 +31,9 @@ pub const CrossCompilationMatrix = struct {
     pub const musl_targets = [_]RocTarget{
         .x64musl,
         .arm64musl,
-    };
-
-    /// Targets that require dynamic linking (glibc) - more complex cross-compilation
-    pub const glibc_targets = [_]RocTarget{
-        .x64glibc,
-        .arm64glibc,
-    };
-
-    /// Windows targets - require MinGW or similar toolchain
-    pub const windows_targets = [_]RocTarget{
-        // Future: .x64windows, .arm64windows
-    };
-
-    /// macOS targets - require OSXCross or similar toolchain
-    pub const macos_targets = [_]RocTarget{
-        // Future: .x64macos, .arm64macos
+        .arm32musl,
     };
 };
-
-/// Detect the host target platform
-pub fn detectHostTarget() RocTarget {
-    return switch (builtin.target.cpu.arch) {
-        .x86_64 => switch (builtin.target.os.tag) {
-            .linux => .x64glibc, // Default to glibc on Linux hosts
-            .windows => .x64win,
-            .macos => .x64mac,
-            else => .x64glibc,
-        },
-        .aarch64 => switch (builtin.target.os.tag) {
-            .linux => .arm64glibc,
-            .windows => .arm64win,
-            .macos => .arm64mac,
-            else => .arm64glibc,
-        },
-        else => .x64glibc, // Fallback
-    };
-}
-
-/// Check if a target is supported for static linking (musl)
-pub fn isMuslTarget(target: RocTarget) bool {
-    return switch (target) {
-        .x64musl, .arm64musl => true,
-        else => false,
-    };
-}
-
-/// Check if a target requires dynamic linking (glibc)
-pub fn isGlibcTarget(target: RocTarget) bool {
-    return switch (target) {
-        .x64glibc, .arm64glibc => true,
-        else => false,
-    };
-}
 
 /// Validate cross-compilation from host to target
 pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompilationResult {
@@ -93,17 +42,17 @@ pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompila
         return CrossCompilationResult{ .supported = {} };
     }
 
-    // Support both musl and glibc targets for cross-compilation
-    if (isMuslTarget(target) or isGlibcTarget(target)) {
+    // Support musl targets for cross-compilation (statically linked)
+    if (target.isStatic()) {
         return CrossCompilationResult{ .supported = {} };
     }
 
-    // Windows and macOS cross-compilation not yet supported
+    // glibc, Windows and macOS cross-compilation not yet supported
     return CrossCompilationResult{
         .unsupported_cross_compilation = .{
             .host = host,
             .target = target,
-            .reason = "Windows and macOS cross-compilation not yet implemented. Please use Linux targets (x64musl, arm64musl, x64glibc, arm64glibc) or log an issue at https://github.com/roc-lang/roc/issues",
+            .reason = "Only Linux musl targets (x64musl, arm64musl, arm32musl) are currently supported for cross-compilation. glibc, Windows and macOS support coming in a future release. Log an issue at https://github.com/roc-lang/roc/issues",
         },
     };
 }
@@ -112,9 +61,8 @@ pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompila
 pub fn getHostCapabilities(host: RocTarget) []const RocTarget {
     _ = host; // For now, all hosts have the same capabilities
 
-    // Support both musl and glibc targets from any host
-    const all_targets = CrossCompilationMatrix.musl_targets ++ CrossCompilationMatrix.glibc_targets;
-    return &all_targets;
+    // Only musl targets are supported for cross-compilation
+    return &CrossCompilationMatrix.musl_targets;
 }
 
 /// Print supported targets for the current host
@@ -128,6 +76,7 @@ pub fn printSupportedTargets(writer: anytype, host: RocTarget) !void {
 
     try writer.print("\nUnsupported targets (not yet implemented):\n", .{});
     const unsupported = [_][]const u8{
+        "x64glibc, arm64glibc (Linux glibc cross-compilation)",
         "x64windows, arm64windows (Windows cross-compilation)",
         "x64macos, arm64macos (macOS cross-compilation)",
     };
