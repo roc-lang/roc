@@ -55,6 +55,14 @@ const targets_musl_only = [_]TargetInfo{
     .{ .name = "arm64musl", .requires_linux = false },
 };
 
+/// Targets for fx platforms (musl + Windows)
+const targets_fx = [_]TargetInfo{
+    .{ .name = "x64musl", .requires_linux = false },
+    .{ .name = "arm64musl", .requires_linux = false },
+    .{ .name = "x64win", .requires_linux = false },
+    .{ .name = "arm64win", .requires_linux = false },
+};
+
 /// All platform configurations
 pub const platforms = [_]PlatformConfig{
     // INT PLATFORM - Integer operations
@@ -83,7 +91,7 @@ pub const platforms = [_]PlatformConfig{
     .{
         .name = "fx",
         .base_dir = "test/fx",
-        .targets = &targets_musl_only,
+        .targets = &targets_fx,
         .test_apps = .{ .spec_list = &fx_test_specs.io_spec_tests },
         .supports_native_exec = true,
         .supports_io_specs = true,
@@ -94,7 +102,7 @@ pub const platforms = [_]PlatformConfig{
     .{
         .name = "fx-open",
         .base_dir = "test/fx-open",
-        .targets = &targets_musl_only,
+        .targets = &targets_fx,
         .test_apps = .{ .single = "app.roc" },
         .supports_native_exec = true,
         .supports_io_specs = false,

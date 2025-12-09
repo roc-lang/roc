@@ -973,10 +973,13 @@ fn buildAndCopyTestPlatformHostLib(
         roc_modules,
     );
 
+    // Use correct filename for target platform
+    const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(
         lib.getEmittedBin(),
-        b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, "libhost.a" }),
+        b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename }),
     );
     return copy_step;
 }
@@ -1674,6 +1677,11 @@ pub fn build(b: *std.Build) void {
                 .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
                 else => .{ target, null },
             },
+            .windows => switch (target.result.cpu.arch) {
+                .x86_64 => .{ target, "x64win" },
+                .aarch64 => .{ target, "arm64win" },
+                else => .{ target, null },
+            },
             else => .{ target, null },
         };
 
@@ -1693,11 +1701,11 @@ pub fn build(b: *std.Build) void {
         copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
         b.getInstallStep().dependOn(&copy_test_fx_host.step);
 
-        // On Linux, also copy to the target-specific directory so findHostLibrary finds it
+        // Also copy to the target-specific directory so findHostLibrary finds it
         if (fx_host_target_dir) |target_dir| {
             copy_test_fx_host.addCopyFileToSource(
                 test_platform_fx_host_lib.getEmittedBin(),
-                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, "libhost.a" }),
+                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, test_fx_host_filename }),
             );
         }
 
@@ -2593,8 +2601,12 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
         const libc_so = write_stub.add("libc.so", stub_content);
 
         const copy_stubs = b.addUpdateSourceFiles();
-        copy_stubs.addCopyFileToSource(libc_so_6, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so.6" }));
-        copy_stubs.addCopyFileToSource(libc_so, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so" }));
+        // Platforms that need glibc stubs
+        const glibc_platforms = [_][]const u8{ "int", "str" };
+        for (glibc_platforms) |platform| {
+            copy_stubs.addCopyFileToSource(libc_so_6, b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so.6" }));
+            copy_stubs.addCopyFileToSource(libc_so, b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so" }));
+        }
         copy_stubs.step.dependOn(&write_stub.step);
 
         return copy_stubs;
@@ -2607,11 +2619,16 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     // Compile the assembly into a proper shared library using Zig's build system
     const libc_stub = glibc_stub_build.compileAssemblyStub(b, asm_file, target, .ReleaseSmall);
 
-    // Copy the generated files to the target directory
+    // Copy the generated files to all platforms that use glibc targets
     const copy_stubs = b.addUpdateSourceFiles();
-    copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so.6" }));
-    copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc.so" }));
-    copy_stubs.addCopyFileToSource(asm_file, b.pathJoin(&.{ "test/int/platform/targets", target_name, "libc_stub.s" }));
+
+    // Platforms that need glibc stubs (have glibc targets defined in their .roc files)
+    const glibc_platforms = [_][]const u8{ "int", "str" };
+    for (glibc_platforms) |platform| {
+        copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so.6" }));
+        copy_stubs.addCopyFileToSource(libc_stub.getEmittedBin(), b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc.so" }));
+        copy_stubs.addCopyFileToSource(asm_file, b.pathJoin(&.{ "test", platform, "platform/targets", target_name, "libc_stub.s" }));
+    }
     copy_stubs.step.dependOn(&libc_stub.step);
     copy_stubs.step.dependOn(&write_stub.step);
 

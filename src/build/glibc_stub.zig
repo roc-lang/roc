@@ -22,8 +22,16 @@ pub fn generateComprehensiveStub(
         else => try writer.writeAll("    ret\n\n"),
     }
 
-    // Essential libc symbols that must be present
-    const essential_symbols = [_][]const u8{ "__libc_start_main", "abort", "getauxval" };
+    // Essential libc symbols that must be present for linking
+    // These are resolved at runtime from real glibc
+    const essential_symbols = [_][]const u8{
+        "__libc_start_main",
+        "abort",
+        "getauxval",
+        "__tls_get_addr", // Thread-local storage
+        "memcpy", // Memory operations
+        "memmove",
+    };
 
     for (essential_symbols) |symbol| {
         try writer.print(".balign 8\n.globl {s}\n.type {s}, %function\n{s}:\n", .{ symbol, symbol, symbol });
@@ -36,7 +44,7 @@ pub fn generateComprehensiveStub(
                 else => try writer.writeAll("    ret\n\n"),
             }
         } else {
-            // Other symbols return 0
+            // Other symbols return 0 or are no-ops (resolved at runtime)
             switch (target_arch) {
                 .x86_64 => try writer.writeAll("    xor %rax, %rax\n    ret\n\n"),
                 .aarch64 => try writer.writeAll("    mov x0, #0\n    ret\n\n"),

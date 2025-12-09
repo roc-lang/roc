@@ -10,6 +10,8 @@ platform ""
             arm64mac: ["libhost.a", app],
             x64musl: ["crt1.o", "libhost.a", app, "libc.a"],
             arm64musl: ["crt1.o", "libhost.a", app, "libc.a"],
+            x64win: ["host.lib", app],
+            arm64win: ["host.lib", app],
         }
     }
 
