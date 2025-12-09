@@ -267,6 +267,8 @@ pub const Interpreter = struct {
     cached_list_u8_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
+    // Scratch map for type instantiation (reused to avoid repeated allocations)
+    instantiate_scratch: std.AutoHashMap(types.Var, types.Var),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
     def_stack: std.array_list.Managed(DefInProgress),
@@ -425,6 +427,7 @@ pub const Interpreter = struct {
             .canonical_str_rt_var = null,
             .cached_list_u8_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
+            .instantiate_scratch = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
@@ -7318,6 +7321,7 @@ pub const Interpreter = struct {
         self.active_closures.deinit();
         self.def_stack.deinit();
         self.scratch_tags.deinit();
+        self.instantiate_scratch.deinit();
         // Free all constant/static strings at once - they were never freed individually
         self.constant_strings_arena.deinit();
     }
@@ -8591,139 +8595,31 @@ pub const Interpreter = struct {
     }
 
     /// Instantiate a type by replacing rigid variables with fresh flex variables.
-    /// This is used when calling generic functions - it allows rigid type parameters
-    /// to be unified with concrete argument types.
+    /// Uses the standard Instantiator, filtering its output to only rigid->flex mappings
+    /// (the Instantiator maps all types, but layout computation only needs rigids).
     fn instantiateType(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!types.Var {
-        const resolved = self.runtime_types.resolveVar(type_var);
+        self.instantiate_scratch.clearRetainingCapacity();
 
-        // Check if we've already instantiated this variable
-        if (subst_map.get(resolved.var_)) |instantiated| {
-            return instantiated;
+        var instantiator = types.instantiate.Instantiator{
+            .store = self.runtime_types,
+            .idents = self.env.getIdentStoreConst(),
+            .var_map = &self.instantiate_scratch,
+            .current_rank = types.Rank.top_level,
+            .rigid_behavior = .fresh_flex,
+        };
+        const result = try instantiator.instantiateVar(type_var);
+
+        // Filter to only rigid->flex mappings for the output
+        subst_map.clearRetainingCapacity();
+        var iter = self.instantiate_scratch.iterator();
+        while (iter.next()) |entry| {
+            const key_resolved = self.runtime_types.resolveVar(entry.key_ptr.*);
+            if (key_resolved.desc.content == .rigid) {
+                try subst_map.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
         }
 
-        const instantiated = switch (resolved.desc.content) {
-            .rigid => |rigid| blk: {
-                // Replace rigid with fresh flex that can be unified
-                // IMPORTANT: Copy the rigid's constraints so numeric constraints are preserved
-                const fresh = try self.runtime_types.freshFromContent(.{
-                    .flex = .{ .name = rigid.name, .constraints = rigid.constraints },
-                });
-                try subst_map.put(resolved.var_, fresh);
-                break :blk fresh;
-            },
-            .structure => |st| blk_struct: {
-                // Recursively instantiate type arguments in structures
-                const new_var = switch (st) {
-                    .fn_pure => |f| blk_fn: {
-                        const arg_vars = self.runtime_types.sliceVars(f.args);
-                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-                        defer self.allocator.free(new_args);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-                        const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncPure(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .fn_effectful => |f| blk_fn: {
-                        const arg_vars = self.runtime_types.sliceVars(f.args);
-                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-                        defer self.allocator.free(new_args);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-                        const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncEffectful(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .fn_unbound => |f| blk_fn: {
-                        const arg_vars = self.runtime_types.sliceVars(f.args);
-                        var new_args = try self.allocator.alloc(types.Var, arg_vars.len);
-                        defer self.allocator.free(new_args);
-                        for (arg_vars, 0..) |arg_var, i| {
-                            new_args[i] = try self.instantiateType(arg_var, subst_map);
-                        }
-                        const new_ret = try self.instantiateType(f.ret, subst_map);
-                        const content = try self.runtime_types.mkFuncUnbound(new_args, new_ret);
-                        break :blk_fn try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .tuple => |tuple| blk_tuple: {
-                        // Recursively instantiate tuple element types
-                        const elem_vars = self.runtime_types.sliceVars(tuple.elems);
-                        var new_elems = try self.allocator.alloc(types.Var, elem_vars.len);
-                        defer self.allocator.free(new_elems);
-                        for (elem_vars, 0..) |elem_var, i| {
-                            new_elems[i] = try self.instantiateType(elem_var, subst_map);
-                        }
-                        const new_elems_range = try self.runtime_types.appendVars(new_elems);
-                        const content = types.Content{ .structure = .{ .tuple = .{ .elems = new_elems_range } } };
-                        break :blk_tuple try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .record => |record| blk_record: {
-                        // Recursively instantiate record field types
-                        const fields = self.runtime_types.record_fields.sliceRange(record.fields);
-                        var new_fields = try self.allocator.alloc(types.RecordField, fields.len);
-                        defer self.allocator.free(new_fields);
-                        var i: usize = 0;
-                        while (i < fields.len) : (i += 1) {
-                            const field = fields.get(i);
-                            new_fields[i] = .{
-                                .name = field.name,
-                                .var_ = try self.instantiateType(field.var_, subst_map),
-                            };
-                        }
-                        const new_fields_range = try self.runtime_types.appendRecordFields(new_fields);
-                        const new_ext = try self.instantiateType(record.ext, subst_map);
-                        const content = types.Content{ .structure = .{ .record = .{ .fields = new_fields_range, .ext = new_ext } } };
-                        break :blk_record try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                    },
-                    .nominal_type => |nt| blk_nominal: {
-                        // Add placeholder to prevent infinite recursion on recursive types
-                        try subst_map.put(resolved.var_, type_var);
-
-                        // Recursively process type args to find and map any rigids
-                        const type_args = self.runtime_types.sliceNominalArgs(nt);
-                        for (type_args) |arg_var| {
-                            _ = try self.instantiateType(arg_var, subst_map);
-                        }
-
-                        // Also process the backing type to find any rigids there
-                        const backing = self.runtime_types.getNominalBackingVar(nt);
-                        _ = try self.instantiateType(backing, subst_map);
-
-                        // Return original - substitution handled via rigid_subst during layout
-                        break :blk_nominal type_var;
-                    },
-                    .tag_union => |tu| blk_tag_union: {
-                        // Add placeholder to prevent infinite recursion
-                        try subst_map.put(resolved.var_, type_var);
-
-                        // Recursively process each tag's argument types to find rigids
-                        const tags_slice = self.runtime_types.getTagsSlice(tu.tags);
-                        for (tags_slice.items(.args)) |args_range| {
-                            const arg_vars = self.runtime_types.sliceVars(args_range);
-                            for (arg_vars) |arg_var| {
-                                _ = try self.instantiateType(arg_var, subst_map);
-                            }
-                        }
-
-                        // Also process the extension
-                        _ = try self.instantiateType(tu.ext, subst_map);
-
-                        // Return original - substitution handled via rigid_subst during layout
-                        break :blk_tag_union type_var;
-                    },
-                    // For other structures (str, num, empty_record, etc.), return as-is
-                    else => type_var,
-                };
-                try subst_map.put(resolved.var_, new_var);
-                break :blk_struct new_var;
-            },
-            // For other content types, return as-is
-            else => type_var,
-        };
-
-        return instantiated;
+        return result;
     }
 
     /// Recursively expand a tag union's tags, returning an array list
@@ -14782,7 +14678,16 @@ pub const Interpreter = struct {
                     // and we should use that, properly instantiated with argument types.
                     const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                     const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
-                    const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                    // CRITICAL: Instantiate the function type to replace rigid type variables with
+                    // fresh flex vars. The method signature from Builtin has rigid type parameters
+                    // (e.g., `List.append : List(a), a -> List(a)` where `a` is rigid).
+                    // Rigid types cannot unify with concrete types - unification returns TypeMismatch.
+                    // Instantiation creates fresh flex copies that CAN be unified.
+                    var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                    defer subst_map.deinit();
+                    const instantiated_func_var = try self.instantiateType(lambda_rt_var, &subst_map);
+                    const lambda_resolved = self.runtime_types.resolveVar(instantiated_func_var);
 
                     // Extract return type from function signature and unify with argument types
                     const return_rt_var: types.Var = if (lambda_resolved.desc.content == .structure) blk: {
@@ -14795,10 +14700,20 @@ pub const Interpreter = struct {
                         };
 
                         if (func_info) |info| {
-                            // Unify parameter types with actual argument types to instantiate type variables
+                            // Unify parameter types with actual argument types to instantiate type variables.
+                            // IMPORTANT: We must create copies of argument types because unification modifies
+                            // BOTH sides, which would corrupt the argument values' types. We create fresh
+                            // copies that share the same content but have independent vars.
                             const param_vars = self.runtime_types.sliceVars(info.args);
                             const arg_count_to_unify = @min(param_vars.len, all_args.len);
                             for (0..arg_count_to_unify) |unify_idx| {
+                                // Create a fresh copy of the argument's type to avoid corrupting the original
+                                const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
+                                const arg_copy = try self.runtime_types.register(.{
+                                    .content = arg_resolved.desc.content,
+                                    .rank = arg_resolved.desc.rank,
+                                    .mark = types.Mark.none,
+                                });
                                 _ = unify.unifyWithConf(
                                     self.env,
                                     self.runtime_types,
@@ -14808,7 +14723,7 @@ pub const Interpreter = struct {
                                     &self.unify_scratch,
                                     &self.unify_scratch.occurs_scratch,
                                     param_vars[unify_idx],
-                                    all_args[unify_idx].rt_var,
+                                    arg_copy,
                                     unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                                 ) catch {};
                             }
