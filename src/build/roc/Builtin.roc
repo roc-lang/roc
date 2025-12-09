@@ -37,6 +37,9 @@ Builtin :: [].{
 		join_with : List(Str), Str -> Str
 
 		is_eq : Str, Str -> Bool
+
+		inspekt : _val -> Str
+		inspekt = |val| inspect val
 	}
 
 	List(_item) :: [ProvidedByCompiler].{

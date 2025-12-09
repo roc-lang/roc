@@ -626,6 +626,8 @@ pub const Store = struct {
                 .alias => |alias| {
                     current_ext = self.types_store.getAliasBackingVar(alias);
                 },
+                // flex and rigid are valid terminal extensions for open unions
+                .flex, .rigid => break,
                 else => return LayoutError.InvalidRecordExtension,
             }
         }

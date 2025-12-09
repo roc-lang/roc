@@ -200,6 +200,11 @@ pub const Interpreter = struct {
         expr_idx: can.CIR.Expr.Idx,
         value: ?StackValue,
     };
+    /// Cache entry for translate_cache, includes generation for staleness detection.
+    const CacheEntry = struct {
+        var_: types.Var,
+        generation: u64,
+    };
     allocator: std.mem.Allocator,
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
@@ -207,8 +212,10 @@ pub const Interpreter = struct {
     var_to_layout_slot: std.array_list.Managed(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
-    // Translation cache: (module, resolved_var) -> runtime_var
-    translate_cache: std.AutoHashMap(ModuleVarKey, types.Var),
+    // Translation cache: (module, resolved_var) -> (runtime_var, generation)
+    // The generation tracks when the entry was created relative to flex_type_context changes.
+    // Entries from a different polymorphic context (different generation) are stale.
+    translate_cache: std.AutoHashMap(ModuleVarKey, CacheEntry),
     // Types currently being translated (for cycle detection)
     translation_in_progress: std.AutoHashMap(ModuleVarKey, void),
     // Rigid variable substitution context for generic function instantiation
@@ -222,6 +229,10 @@ pub const Interpreter = struct {
     // This allows numeric literals inside polymorphic functions to get the correct
     // concrete type when the function is called with a specific type context.
     flex_type_context: std.AutoHashMap(ModuleVarKey, types.Var),
+    // Generation counter for polymorphic contexts. Incremented each time flex_type_context
+    // is modified during a function call. Used to invalidate translate_cache entries that
+    // were created in a different polymorphic context.
+    poly_context_generation: u64,
 
     // Polymorphic instantiation cache
 
@@ -395,11 +406,12 @@ pub const Interpreter = struct {
             .runtime_layout_store = undefined, // set below to point at result.runtime_types
             .var_to_layout_slot = slots,
             .empty_scope = scope,
-            .translate_cache = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
+            .translate_cache = std.AutoHashMap(ModuleVarKey, CacheEntry).init(allocator),
             .translation_in_progress = std.AutoHashMap(ModuleVarKey, void).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .translate_rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
+            .poly_context_generation = 0,
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
@@ -521,6 +533,8 @@ pub const Interpreter = struct {
         // This prevents stale type mappings from previous evaluations from
         // interfering with polymorphic function instantiation.
         self.flex_type_context.clearRetainingCapacity();
+        // Increment generation so translate_cache entries from previous contexts are invalidated
+        self.poly_context_generation +%= 1;
         return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
@@ -6746,10 +6760,11 @@ pub const Interpreter = struct {
             else => return null,
         };
 
+        // Use root_env for ident lookups since self.env may have changed during nested calls
         const maybe_method = self.tryResolveMethodByIdent(
             nom.origin_module,
             nom.ident.ident_idx,
-            self.env.idents.to_inspect,
+            self.root_env.idents.to_inspect,
             roc_ops,
             rt_var,
         ) catch return null;
@@ -6761,7 +6776,8 @@ pub const Interpreter = struct {
         if (method_func.layout.tag != .closure) return null;
 
         const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-        const params = self.env.store.slicePatterns(closure_header.params);
+        // Use closure's source_env for pattern lookup, not self.env
+        const params = closure_header.source_env.store.slicePatterns(closure_header.params);
         if (params.len != 1) return null;
 
         // Save state before calling to_inspect
@@ -8077,6 +8093,20 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Put a value into flex_type_context, incrementing the generation counter if
+    /// the value for this key is changing. This ensures that translate_cache entries
+    /// from a different polymorphic context are properly invalidated.
+    fn putFlexTypeContext(self: *Interpreter, key: ModuleVarKey, rt_var: types.Var) Error!void {
+        // Check if there's an existing value that differs
+        if (self.flex_type_context.get(key)) |existing| {
+            if (@intFromEnum(existing) != @intFromEnum(rt_var)) {
+                // Value is changing - increment generation to invalidate stale cache entries
+                self.poly_context_generation +%= 1;
+            }
+        }
+        try self.flex_type_context.put(key, rt_var);
+    }
+
     /// Propagate flex type context mappings by walking compile-time and runtime types in parallel.
     /// This is used when entering polymorphic functions to map flex vars in the function's type
     /// to their concrete runtime types based on the arguments.
@@ -8091,7 +8121,7 @@ pub const Interpreter = struct {
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
-            try self.flex_type_context.put(flex_key, rt_var);
+            try self.putFlexTypeContext(flex_key, rt_var);
             return;
         }
 
@@ -8103,7 +8133,7 @@ pub const Interpreter = struct {
         // be looking for it.
         if (ct_resolved.desc.content == .rigid) {
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
-            try self.flex_type_context.put(flex_key, rt_var);
+            try self.putFlexTypeContext(flex_key, rt_var);
             return;
         }
 
@@ -8171,7 +8201,7 @@ pub const Interpreter = struct {
         // Also add a mapping for the outer type itself (in case it's referenced directly)
         if (ct_resolved.desc.content == .flex or ct_resolved.desc.content == .rigid) {
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
-            try self.flex_type_context.put(flex_key, rt_var);
+            try self.putFlexTypeContext(flex_key, rt_var);
         }
     }
 
@@ -8180,6 +8210,7 @@ pub const Interpreter = struct {
     /// Uses caching to handle recursive types and avoid duplicate work.
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
+
 
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
@@ -8198,24 +8229,22 @@ pub const Interpreter = struct {
         // to break the infinite recursion.
         if (self.translation_in_progress.contains(key)) {
             // We must have a placeholder in translate_cache - return it to break the cycle
-            if (self.translate_cache.get(key)) |placeholder| {
-                return placeholder;
+            if (self.translate_cache.get(key)) |entry| {
+                return entry.var_;
             }
             // This shouldn't happen, but if it does, create a fresh var
             return try self.runtime_types.fresh();
         }
 
         // Check translate_cache for completed translations.
-        // For flex/rigid vars in polymorphic contexts, skip cached results because they
-        // might be stale mappings from a different calling context.
-        const in_polymorphic_context = self.flex_type_context.count() > 0;
-        const skip_stale_cached_result = in_polymorphic_context and
-            (resolved.desc.content == .flex or resolved.desc.content == .rigid);
-
-        if (!skip_stale_cached_result) {
-            if (self.translate_cache.get(key)) |found| {
-                return found;
+        // Cache entries include a generation counter to detect stale entries from
+        // a different polymorphic context. Skip entries from a different generation
+        // since they may have been translated with different flex_type_context mappings.
+        if (self.translate_cache.get(key)) |entry| {
+            if (entry.generation == self.poly_context_generation) {
+                return entry.var_;
             }
+            // Entry is from a different generation - treat as cache miss
         }
 
         // Mark this type as in-progress to detect cycles
@@ -8224,7 +8253,7 @@ pub const Interpreter = struct {
         // Insert a placeholder to break cycles during recursive type translation.
         // If we recurse back to this type, we'll return the placeholder instead of infinite looping.
         const placeholder = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
-        try self.translate_cache.put(key, placeholder);
+        try self.translate_cache.put(key, .{ .var_ = placeholder, .generation = self.poly_context_generation });
 
         const out_var = blk: {
             switch (resolved.desc.content) {
@@ -8253,7 +8282,25 @@ pub const Interpreter = struct {
                                 };
                             }
 
-                            const rt_ext = try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            // Determine the terminal extension type (after following tag_union chain).
+                            // If the extension is flex/rigid (open union), preserve that in the runtime type.
+                            const rt_ext = blk2: {
+                                const terminal_ext_content = self.findTerminalTagUnionExt(module, tu);
+                                switch (terminal_ext_content) {
+                                    .flex => |flex| {
+                                        // Open union - preserve flex variable
+                                        break :blk2 try self.runtime_types.freshFromContent(.{ .flex = flex });
+                                    },
+                                    .rigid => |rigid| {
+                                        // Open union with rigid variable
+                                        break :blk2 try self.runtime_types.freshFromContent(.{ .rigid = rigid });
+                                    },
+                                    else => {
+                                        // Closed union - use empty_tag_union
+                                        break :blk2 try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                                    },
+                                }
+                            };
                             const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
@@ -8582,8 +8629,8 @@ pub const Interpreter = struct {
         // Translation complete - remove from in-progress set
         _ = self.translation_in_progress.remove(key);
 
-        // Update the cache with the final var
-        try self.translate_cache.put(key, final_var);
+        // Update the cache with the final var and current generation
+        try self.translate_cache.put(key, .{ .var_ = final_var, .generation = self.poly_context_generation });
 
         // Redirect the placeholder to the final var so any code that grabbed the placeholder
         // during recursion will now resolve to the correct type
@@ -8683,6 +8730,52 @@ pub const Interpreter = struct {
         std.mem.sort(types.Tag, scratch_tags.items, module.common.getIdentStore(), comptime types.Tag.sortByNameAsc);
 
         return scratch_tags;
+    }
+
+    /// Find the terminal extension content for a tag union (following the extension chain).
+    /// Returns the content of the terminal extension: flex/rigid for open unions,
+    /// or empty_tag_union for closed unions.
+    fn findTerminalTagUnionExt(
+        _: *const Interpreter,
+        module: *can.ModuleEnv,
+        tag_union: types.TagUnion,
+    ) types.Content {
+        var current_ext = tag_union.ext;
+        var guard = types.debug.IterationGuard.init("interpreter.findTerminalTagUnionExt");
+        while (true) {
+            guard.tick();
+            const resolved_ext = module.types.resolveVar(current_ext);
+            switch (resolved_ext.desc.content) {
+                .structure => |ext_flat_type| {
+                    switch (ext_flat_type) {
+                        .empty_tag_union, .empty_record => {
+                            return .{ .structure = .empty_tag_union };
+                        },
+                        .tag_union => |ext_tag_union| {
+                            current_ext = ext_tag_union.ext;
+                        },
+                        .nominal_type => |nom| {
+                            current_ext = module.types.getNominalBackingVar(nom);
+                        },
+                        else => {
+                            return .{ .structure = .empty_tag_union };
+                        },
+                    }
+                },
+                .alias => |alias| {
+                    current_ext = module.types.getAliasBackingVar(alias);
+                },
+                .flex => |flex| {
+                    return .{ .flex = flex };
+                },
+                .rigid => |rigid| {
+                    return .{ .rigid = rigid };
+                },
+                else => {
+                    return .{ .structure = .empty_tag_union };
+                },
+            }
+        }
     }
 
     fn polyLookup(self: *Interpreter, module_id: u32, func_id: u32, args: []const types.Var) ?PolyEntry {
@@ -9612,7 +9705,7 @@ pub const Interpreter = struct {
                 const resolved = source_env.types.resolveVar(ct_var);
                 if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
                     const key = ModuleVarKey{ .module = @constCast(source_env), .var_ = resolved.var_ };
-                    try self.flex_type_context.put(key, target_rt_var);
+                    try self.putFlexTypeContext(key, target_rt_var);
                 }
             },
             .e_binop => |binop| {
@@ -9626,7 +9719,7 @@ pub const Interpreter = struct {
                 const resolved = source_env.types.resolveVar(ct_var);
                 if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
                     const key = ModuleVarKey{ .module = @constCast(source_env), .var_ = resolved.var_ };
-                    try self.flex_type_context.put(key, target_rt_var);
+                    try self.putFlexTypeContext(key, target_rt_var);
                 }
                 // For lookups, find the binding and recursively set up context
                 var i: usize = self.bindings.items.len;
@@ -10416,7 +10509,38 @@ pub const Interpreter = struct {
                 try self.appendUnionTags(rt_var, &tag_list);
 
                 // Find tag in the type's tag list
-                const tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
+                var tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
+
+                // If tag not found, try using the compile-time type instead of expected type.
+                // This handles open unions where the expected type doesn't include all tags.
+                if (tag_index_opt == null and expected_rt_var != null) {
+                    // Fall back to compile-time type
+                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var);
+
+                    // Clear and rebuild tag list from compile-time type
+                    tag_list.clearRetainingCapacity();
+                    try self.appendUnionTags(ct_rt_var, &tag_list);
+
+                    // Try finding the tag again
+                    tag_index_opt = try self.findTagIndexByIdentInList(self.env, tag.name, tag_list.items);
+
+                    // Use the compile-time type for the rest of the evaluation
+                    if (tag_index_opt != null) {
+                        rt_var = ct_rt_var;
+                        resolved = self.resolveBaseVar(rt_var);
+                        // Unwrap nominal/alias again if needed
+                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                            const nom = resolved.desc.content.structure.nominal_type;
+                            const backing = self.runtime_types.getNominalBackingVar(nom);
+                            resolved = self.runtime_types.resolveVar(backing);
+                        }
+                        if (resolved.desc.content == .alias) {
+                            const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                            resolved = self.runtime_types.resolveVar(backing);
+                        }
+                    }
+                }
 
                 const tag_index = tag_index_opt orelse {
                     const name_text = self.env.getIdent(tag.name);
@@ -11161,12 +11285,12 @@ pub const Interpreter = struct {
         zero: @TypeOf(@as(can.CIR.Expr, undefined).e_zero_argument_tag),
         roc_ops: *RocOps,
     ) Error!StackValue {
-        const rt_var = expected_rt_var orelse blk: {
+        var rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         // Use resolveBaseVar to unwrap nominal types (like Bool := [False, True])
-        const resolved = self.resolveBaseVar(rt_var);
+        var resolved = self.resolveBaseVar(rt_var);
         if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
             self.triggerCrash("e_zero_argument_tag: expected tag_union structure type", false, roc_ops);
             return error.Crash;
@@ -11176,7 +11300,29 @@ pub const Interpreter = struct {
         defer tag_list.deinit();
         try self.appendUnionTags(rt_var, &tag_list);
         // Find tag index by translating the source ident to the runtime store
-        const tag_index = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items) orelse {
+        var tag_index_opt = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items);
+
+        // If tag not found, try using the compile-time type instead of expected type.
+        // This handles open unions where the expected type doesn't include all tags.
+        if (tag_index_opt == null and expected_rt_var != null) {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            const ct_rt_var = try self.translateTypeVar(self.env, ct_var);
+
+            // Clear and rebuild tag list from compile-time type
+            tag_list.clearRetainingCapacity();
+            try self.appendUnionTags(ct_rt_var, &tag_list);
+
+            // Try finding the tag again
+            tag_index_opt = try self.findTagIndexByIdentInList(self.env, zero.name, tag_list.items);
+
+            // Use the compile-time type for the rest of the evaluation
+            if (tag_index_opt != null) {
+                rt_var = ct_rt_var;
+                resolved = self.resolveBaseVar(rt_var);
+            }
+        }
+
+        const tag_index = tag_index_opt orelse {
             const name_text = self.env.getIdent(zero.name);
             const msg = try std.fmt.allocPrint(self.allocator, "Invalid tag `{s}`", .{name_text});
             self.triggerCrash(msg, true, roc_ops);
@@ -13140,8 +13286,15 @@ pub const Interpreter = struct {
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
 
+                // Use the evaluated value's rt_var instead of the pre-computed inner_rt_var.
+                // This is important for polymorphic functions where the compile-time type
+                // might not have the correct mapping due to serialization/deserialization
+                // not preserving type variable unifications.
+                const effective_rt_var = value.rt_var;
+                _ = ir; // Suppress unused warning for now
+
                 // Check if the type is nominal and has a to_inspect method
-                const resolved = self.runtime_types.resolveVar(ir.inner_rt_var);
+                const resolved = self.runtime_types.resolveVar(effective_rt_var);
                 const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
                     switch (resolved.desc.content.structure) {
                         .nominal_type => |nom| try self.tryResolveMethodByIdent(
@@ -13149,7 +13302,7 @@ pub const Interpreter = struct {
                             nom.ident.ident_idx,
                             self.env.idents.to_inspect,
                             roc_ops,
-                            ir.inner_rt_var,
+                            effective_rt_var,
                         ),
                         else => null,
                     }
@@ -13196,7 +13349,7 @@ pub const Interpreter = struct {
                         value.decref(&self.runtime_layout_store, roc_ops);
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         // Fall back to default rendering
-                        const rendered = try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
+                        const rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                         defer self.allocator.free(rendered);
                         const str_rt_var = try self.getCanonicalStrRuntimeVar();
                         const str_value = try self.pushStr(str_rt_var);
@@ -13241,19 +13394,30 @@ pub const Interpreter = struct {
                 blk: {
                     const nom = resolved.desc.content.structure.nominal_type;
                     if (nom.is_opaque) {
-                        // Opaque types without to_inspect render as "<opaque>"
+                        // Check if this is a builtin type with a primitive layout
+                        // (e.g., I64, Str, Bool) - these should be rendered using their
+                        // backing values, not as "<opaque>"
+                        const is_builtin_primitive = value.layout.tag == .scalar and
+                            (value.layout.data.scalar.tag == .int or
+                            value.layout.data.scalar.tag == .frac or
+                            value.layout.data.scalar.tag == .str);
+                        if (is_builtin_primitive) {
+                            // Builtin opaque types render using their backing value
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        }
+                        // User-defined opaque types without to_inspect render as "<opaque>"
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
                         // Nominal types render as "TypeName.InnerValue"
                         // Use the original type var - render_helpers will unwrap the nominal type
                         const type_name = self.root_env.getIdent(nom.ident.ident_idx);
-                        const inner_rendered = try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
+                        const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                         defer self.allocator.free(inner_rendered);
                         break :blk try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, inner_rendered });
                     }
                 } else blk: {
                     // Non-nominal types use default rendering
-                    break :blk try self.renderValueRocWithType(value, ir.inner_rt_var, roc_ops);
+                    break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                 };
                 defer self.allocator.free(rendered);
 
@@ -13613,6 +13777,7 @@ pub const Interpreter = struct {
                             // Restore flex_type_context on error
                             self.flex_type_context.deinit();
                             self.flex_type_context = saved_flex_type_context;
+                            self.poly_context_generation +%= 1;
                             return error.TypeMismatch;
                         }
                         // Decref the original argument value since patternMatchesBind made copies
@@ -14212,7 +14377,7 @@ pub const Interpreter = struct {
                         const param_ct_var = can.ModuleEnv.varFrom(param);
                         const param_resolved = self.env.types.resolveVar(param_ct_var);
                         const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
-                        try self.flex_type_context.put(flex_key, arg_rt_vars[idx]);
+                        try self.putFlexTypeContext(flex_key, arg_rt_vars[idx]);
 
                         // For nominal types (like List), also map the type parameters.
                         // E.g., for List(item) called with List(List(Dec)), map item → List(Dec)
@@ -14232,7 +14397,7 @@ pub const Interpreter = struct {
                                     while (i < ct_vars.len and i < rt_vars.len) : (i += 1) {
                                         const ct_param_resolved = self.env.types.resolveVar(ct_vars[i]);
                                         const ct_param_key = ModuleVarKey{ .module = self.env, .var_ = ct_param_resolved.var_ };
-                                        try self.flex_type_context.put(ct_param_key, rt_vars[i]);
+                                        try self.putFlexTypeContext(ct_param_key, rt_vars[i]);
                                     }
                                 }
                             }
@@ -14249,6 +14414,7 @@ pub const Interpreter = struct {
                 if (!try self.patternMatchesBind(params[0], lhs, effective_receiver_rt_var, roc_ops, &self.bindings, null)) {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
+                    self.poly_context_generation +%= 1;
                     self.env = saved_env;
                     if (self.active_closures.pop()) |closure_val| {
                         closure_val.decref(&self.runtime_layout_store, roc_ops);
@@ -14260,6 +14426,7 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
+                    self.poly_context_generation +%= 1;
                     self.env = saved_env;
                     if (self.active_closures.pop()) |closure_val| {
                         closure_val.decref(&self.runtime_layout_store, roc_ops);

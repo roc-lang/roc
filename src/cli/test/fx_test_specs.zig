@@ -173,6 +173,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_nested_test.roc",
+        // Note: field order may differ from expected - record fields are rendered in their internal order
         .io_spec = "1>{ color: Color::Red, count: 42, name: \"test\" }|1>Expected: { color: Color::Red, count: 42, name: \"test\" }",
         .description = "Nested struct inspection",
     },
