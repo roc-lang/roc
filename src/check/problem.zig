@@ -928,7 +928,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("These two types can't never match!");
+        try report.document.addText("These two types can never match!");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 

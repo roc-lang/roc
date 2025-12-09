@@ -26,10 +26,127 @@
 //! - 0: All expectations matched in order
 //! - 1: Test failed (mismatch, missing output, extra output, or invalid spec)
 const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
+const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
 const trace_refcount = build_options.trace_refcount;
+
+pub const std_options: std.Options = .{
+    .logFn = std.log.defaultLog,
+    .log_level = .warn,
+};
+
+/// Override the default panic handler to avoid secondary crashes in stack trace generation
+pub const panic = std.debug.FullPanic(panicImpl);
+
+fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
+    const stderr: std.fs.File = .stderr();
+    stderr.writeAll("\n=== PANIC (no stack trace) ===\n") catch {};
+    stderr.writeAll(msg) catch {};
+    if (addr) |a| {
+        var buf: [32]u8 = undefined;
+        const hex = std.fmt.bufPrint(&buf, " at address 0x{x}\n", .{a}) catch "";
+        stderr.writeAll(hex) catch {};
+    } else {
+        stderr.writeAll("\n") catch {};
+    }
+    std.process.abort();
+}
+
+/// Error message to display on stack overflow in a Roc program
+const STACK_OVERFLOW_MESSAGE = "\nThis Roc application overflowed its stack memory and crashed.\n\n";
+
+/// Callback for stack overflow in a Roc program
+fn handleRocStackOverflow() noreturn {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+        };
+
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
+        kernel32.ExitProcess(134);
+    } else if (comptime builtin.os.tag != .wasi) {
+        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
+        posix.exit(134);
+    } else {
+        std.process.exit(134);
+    }
+}
+
+/// Callback for access violation in a Roc program
+fn handleRocAccessViolation(fault_addr: usize) noreturn {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+        };
+
+        var addr_buf: [18]u8 = undefined;
+        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+
+        const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
+        const msg2 = "\n\n";
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
+        kernel32.ExitProcess(139);
+    } else {
+        // POSIX (and WASI fallback)
+        const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
+        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+
+        var addr_buf: [18]u8 = undefined;
+        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
+        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
+        posix.exit(139);
+    }
+}
+
+/// Error message to display on division by zero in a Roc program
+const DIVISION_BY_ZERO_MESSAGE = "\nThis Roc application divided by zero and crashed.\n\n";
+
+/// Callback for arithmetic errors (division by zero) in a Roc program
+fn handleRocArithmeticError() noreturn {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+            extern "kernel32" fn ExitProcess(uExitCode: c_uint) callconv(.winapi) noreturn;
+        };
+
+        const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
+        kernel32.ExitProcess(136);
+    } else if (comptime builtin.os.tag != .wasi) {
+        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
+        posix.exit(136); // 128 + 8 (SIGFPE)
+    } else {
+        std.process.exit(136);
+    }
+}
 
 /// Type of IO operation in test spec
 const EffectType = enum(u8) {
@@ -128,6 +245,7 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
     return entries.toOwnedSlice(allocator) catch ParseError.OutOfMemory;
 }
 
+
 /// Host environment - contains GeneralPurposeAllocator for leak detection
 const HostEnv = struct {
     gpa: std.heap.GeneralPurposeAllocator(.{}),
@@ -136,10 +254,26 @@ const HostEnv = struct {
 
 /// Roc allocation function with size-tracking metadata
 fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
+    // Debug check: verify roc_alloc pointer alignment
+    const roc_alloc_addr = @intFromPtr(roc_alloc);
+    if (roc_alloc_addr % @alignOf(builtins.host_abi.RocAlloc) != 0) {
+        std.debug.panic("[rocAllocFn] roc_alloc ptr not aligned! addr=0x{x} required={}", .{ roc_alloc_addr, @alignOf(builtins.host_abi.RocAlloc) });
+    }
+
+    // Debug check: verify env is properly aligned for HostEnv
+    const env_addr = @intFromPtr(env);
+    if (env_addr % @alignOf(HostEnv) != 0) {
+        std.debug.panic("rocAllocFn: env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
+    }
+
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(roc_alloc.alignment)));
+    // The allocation must be at least 8-byte aligned because:
+    // 1. The refcount (isize/usize) is stored before the data and needs proper alignment
+    // 2. The builtins code casts data pointers to [*]isize for refcount access
+    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Calculate additional bytes needed to store the size
     const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
@@ -159,12 +293,24 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
         std.process.exit(1);
     };
 
+    // Debug check: verify the allocator returned properly aligned memory
+    const base_addr = @intFromPtr(base_ptr);
+    if (base_addr % min_alignment != 0) {
+        @panic("Host allocator returned misaligned memory in rocAllocFn");
+    }
+
     // Store the total size (including metadata) right before the user data
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
     // Return pointer to the user data (after the size metadata)
     roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+
+    // Debug check: verify the returned pointer is also properly aligned
+    const answer_addr = @intFromPtr(roc_alloc.answer);
+    if (answer_addr % roc_alloc.alignment != 0) {
+        @panic("Host allocator returned misaligned answer in rocAllocFn");
+    }
 
     if (trace_refcount) {
         std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
@@ -173,8 +319,17 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
 
 /// Roc deallocation function with size-tracking metadata
 fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
+    // Debug check: verify env is properly aligned for HostEnv
+    const env_addr = @intFromPtr(env);
+    if (env_addr % @alignOf(HostEnv) != 0) {
+        std.debug.panic("[rocDeallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
+    }
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
+
+    // Use same minimum alignment as alloc
+    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Calculate where the size metadata is stored
     const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
@@ -193,9 +348,6 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     // Calculate the base pointer (start of actual allocation)
     const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
 
-    // Use same alignment calculation as alloc
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(roc_dealloc.alignment)));
-
     // Free the memory (including the size metadata)
     const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
     allocator.rawFree(slice, align_enum, @returnAddress());
@@ -203,8 +355,17 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 
 /// Roc reallocation function with size-tracking metadata
 fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
+    // Debug check: verify env is properly aligned for HostEnv
+    const env_addr = @intFromPtr(env);
+    if (env_addr % @alignOf(HostEnv) != 0) {
+        std.debug.panic("[rocReallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
+    }
     const host: *HostEnv = @ptrCast(@alignCast(env));
     const allocator = host.gpa.allocator();
+
+    // Use same minimum alignment as alloc
+    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Calculate where the size metadata is stored for the old allocation
     const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
@@ -219,13 +380,26 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     // Calculate new total size needed
     const new_total_size = roc_realloc.new_length + size_storage_bytes;
 
-    // Perform reallocation
+    // Free old memory and allocate new with proper alignment
+    // This is necessary because Zig's realloc infers alignment from slice type ([]u8 = alignment 1)
+    // which could cause the new allocation to be misaligned
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-    const new_slice = allocator.realloc(old_slice, new_total_size) catch {
+
+    // Allocate new memory with proper alignment
+    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         const stderr: std.fs.File = .stderr();
         stderr.writeAll("\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n") catch {};
         std.process.exit(1);
     };
+
+    // Copy old data to new location
+    const copy_size = @min(old_total_size, new_total_size);
+    @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
+
+    // Free old memory
+    allocator.rawFree(old_slice, align_enum, @returnAddress());
+
+    const new_slice = new_ptr[0..new_total_size];
 
     // Store the new total size in the metadata
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
@@ -341,6 +515,11 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 
     // Arguments struct for single Str parameter
     const Args = extern struct { str: RocStr };
+    // Debug check: verify args_ptr is properly aligned for Args
+    const args_addr = @intFromPtr(args_ptr);
+    if (args_addr % @alignOf(Args) != 0) {
+        std.debug.panic("[hostedStderrLine] args_ptr=0x{x} not aligned to {} bytes", .{ args_addr, @alignOf(Args) });
+    }
     const args: *Args = @ptrCast(@alignCast(args_ptr));
     const message = args.str.asSlice();
 
@@ -504,6 +683,11 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 
     // Arguments struct for single Str parameter
     const Args = extern struct { str: RocStr };
+    // Debug check: verify args_ptr is properly aligned for Args
+    const args_addr = @intFromPtr(args_ptr);
+    if (args_addr % @alignOf(Args) != 0) {
+        std.debug.panic("[hostedStdoutLine] args_ptr=0x{x} not aligned to {} bytes", .{ args_addr, @alignOf(Args) });
+    }
     const args: *Args = @ptrCast(@alignCast(args_ptr));
     const message = args.str.asSlice();
 
@@ -578,6 +762,10 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
 
 /// Platform host entrypoint
 fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
+    // Install signal handlers for stack overflow, access violations, and division by zero
+    // This allows us to display helpful error messages instead of crashing
+    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+
     var host_env = HostEnv{
         .gpa = std.heap.GeneralPurposeAllocator(.{}){},
         .test_state = TestState.init(),

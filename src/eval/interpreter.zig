@@ -264,6 +264,7 @@ pub const Interpreter = struct {
     active_closures: std.array_list.Managed(StackValue),
     canonical_bool_rt_var: ?types.Var,
     canonical_str_rt_var: ?types.Var,
+    cached_list_u8_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
@@ -422,6 +423,7 @@ pub const Interpreter = struct {
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
             .canonical_bool_rt_var = null,
             .canonical_str_rt_var = null,
+            .cached_list_u8_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
@@ -669,10 +671,12 @@ pub const Interpreter = struct {
         // and what the Roc code returns. This should have been caught at compile
         // time, but if the type checking didn't enforce the constraint, we catch
         // it here at runtime.
-        const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
-        const ret_addr = @intFromPtr(ret_ptr);
-        if (ret_addr % required_alignment.toByteUnits() != 0) {
-            return error.TypeMismatch;
+        if (comptime builtin.mode == .Debug) {
+            const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+            const ret_addr = @intFromPtr(ret_ptr);
+            if (ret_addr % required_alignment.toByteUnits() != 0) {
+                return error.TypeMismatch;
+            }
         }
 
         return true;
@@ -1488,19 +1492,36 @@ pub const Interpreter = struct {
                 // Get the result layout - should be List(U8).
                 // If return_rt_var is a flex that would default to a scalar,
                 // we need to ensure we get a proper list layout for correct refcounting.
-                const result_rt_var = return_rt_var orelse {
+                const provided_rt_var = return_rt_var orelse {
                     self.triggerCrash("str_to_utf8 requires return type info", false, roc_ops);
                     return error.Crash;
                 };
-                const result_layout = blk: {
-                    const maybe_layout = try self.getRuntimeLayout(result_rt_var);
-                    // If the layout is a list, use it
-                    if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) {
-                        break :blk maybe_layout;
+
+                // Get the result layout - should be List(U8).
+                // If the provided_rt_var leads to a non-list layout, we need to create
+                // a proper List(U8) type to ensure correct method dispatch.
+                const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
+                const list_u8_layout = Layout.list(u8_layout_idx);
+
+                const maybe_layout = try self.getRuntimeLayout(provided_rt_var);
+                const result_rt_var, const result_layout = if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) blk: {
+                    // Layout is already a list - check if the type is also a List
+                    const resolved_rt = self.runtime_types.resolveVar(provided_rt_var);
+                    const is_list_type = switch (resolved_rt.desc.content) {
+                        .structure => |s| switch (s) {
+                            .nominal_type => true,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    if (is_list_type) {
+                        break :blk .{ provided_rt_var, maybe_layout };
                     }
-                    // Fallback: create a proper List(U8) layout
-                    const u8_layout_idx = try self.runtime_layout_store.insertLayout(Layout.int(.u8));
-                    break :blk Layout.list(u8_layout_idx);
+                    // Layout is list but type is not nominal - create proper List(U8) type
+                    break :blk .{ try self.createListU8Type(), list_u8_layout };
+                } else blk: {
+                    // Layout is not a list - create both proper layout and type
+                    break :blk .{ try self.createListU8Type(), list_u8_layout };
                 };
 
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
@@ -2035,7 +2056,19 @@ pub const Interpreter = struct {
                 const len_u64: u64 = @intCast(len_usize);
 
                 const result_layout = layout.Layout.int(.u64);
-                const result_rt_var = try self.runtime_types.fresh();
+                // Use return_rt_var if it's a concrete type, otherwise create U64 nominal type.
+                // This ensures method dispatch works when the CT return type was a flex var.
+                const result_rt_var = blk: {
+                    if (return_rt_var) |rt_var| {
+                        const resolved = self.runtime_types.resolveVar(rt_var);
+                        if (resolved.desc.content != .flex and resolved.desc.content != .rigid) {
+                            break :blk rt_var;
+                        }
+                    }
+                    // Create canonical U64 type for method dispatch
+                    const u64_content = try self.mkNumberTypeContentRuntime("U64");
+                    break :blk try self.runtime_types.freshFromContent(u64_content);
+                };
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
                 try out.setInt(@intCast(len_u64));
@@ -2383,8 +2416,19 @@ pub const Interpreter = struct {
                 // The elements were already increffed above, and decref on the lists
                 // will decref their elements (if they're unique), resulting in net-zero
                 // refcount change for shared elements.
+                //
+                // IMPORTANT: Check if both arguments point to the same underlying allocation.
+                // If they share the same allocation, we must only decref once to avoid double-free.
+                const same_allocation = blk: {
+                    const alloc_a = list_a.getAllocationDataPtr();
+                    const alloc_b = list_b.getAllocationDataPtr();
+                    break :blk (alloc_a != null and alloc_a == alloc_b);
+                };
+
                 list_a_arg.decref(&self.runtime_layout_store, roc_ops);
-                list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                if (!same_allocation) {
+                    list_b_arg.decref(&self.runtime_layout_store, roc_ops);
+                }
 
                 return out;
             },
@@ -5236,6 +5280,17 @@ pub const Interpreter = struct {
         roc_ops.crash(message);
     }
 
+    /// The canonical error message for stack overflow.
+    /// Used by all stack overflow detection to ensure consistent user-facing messaging.
+    const stack_overflow_message = "This Roc program overflowed its stack memory. This usually means there is infinite recursion somewhere in the code.";
+
+    /// Trigger a stack overflow error.
+    /// This is the single entry point for all stack overflow handling in the interpreter.
+    fn triggerStackOverflow(self: *Interpreter, roc_ops: *RocOps) Error {
+        self.triggerCrash(stack_overflow_message, false, roc_ops);
+        return error.StackOverflow;
+    }
+
     fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) void {
         const region = self.env.store.getExprRegion(snippet_expr_idx);
         const source_bytes = self.env.getSource(region);
@@ -6027,8 +6082,8 @@ pub const Interpreter = struct {
 
         var index: usize = 0;
         while (index < lhs_header.len()) : (index += 1) {
-            const lhs_elem = try lhs_acc.getElement(index);
-            const rhs_elem = try rhs_acc.getElement(index);
+            const lhs_elem = try lhs_acc.getElement(index, elem_var);
+            const rhs_elem = try rhs_acc.getElement(index, elem_var);
             const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
             if (!elems_equal) {
                 return false;
@@ -6158,16 +6213,66 @@ pub const Interpreter = struct {
         }
 
         const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-        // All is_eq methods are low-level lambdas (builtins). If a type doesn't have
-        // is_eq, the type-checker catches it as a missing method error before we get here.
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
-        if (lambda_expr != .e_low_level_lambda) {
-            unreachable; // is_eq methods are always low-level builtins
+
+        if (lambda_expr == .e_low_level_lambda) {
+            // Low-level builtin is_eq (e.g., for simple types)
+            const low_level = lambda_expr.e_low_level_lambda;
+            var args = [2]StackValue{ lhs, rhs };
+            const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+                return error.NotImplemented;
+            };
+            defer result.decref(&self.runtime_layout_store, roc_ops);
+            return self.boolValueEquals(true, result);
         }
-        const low_level = lambda_expr.e_low_level_lambda;
-        var args = [2]StackValue{ lhs, rhs };
-        const result = self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null) catch {
+
+        // Regular Roc closure (e.g., List.is_eq which is defined in Roc, not as a low-level builtin)
+        // We need to evaluate this synchronously. This requires setting up bindings and evaluating the body.
+        const saved_env = self.env;
+        const saved_bindings_len = self.bindings.items.len;
+        self.env = @constCast(closure_header.source_env);
+        defer {
+            self.env = saved_env;
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+        }
+
+        const params = self.env.store.slicePatterns(closure_header.params);
+        if (params.len != 2) {
+            return error.TypeMismatch;
+        }
+
+        // Bind parameters - create copies for proper ownership
+        const lhs_copy = self.pushCopy(lhs) catch return error.OutOfMemory;
+        const rhs_copy = self.pushCopy(rhs) catch {
+            lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.OutOfMemory;
+        };
+
+        // patternMatchesBind will create its own copies
+        const lhs_matched = self.patternMatchesBind(params[0], lhs_copy, lhs.rt_var, roc_ops, &self.bindings, null) catch {
+            lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.OutOfMemory;
+        };
+        if (!lhs_matched) {
+            lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.TypeMismatch;
+        }
+        lhs_copy.decref(&self.runtime_layout_store, roc_ops);
+
+        const rhs_matched = self.patternMatchesBind(params[1], rhs_copy, rhs.rt_var, roc_ops, &self.bindings, null) catch {
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.OutOfMemory;
+        };
+        if (!rhs_matched) {
+            rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+            return error.TypeMismatch;
+        }
+        rhs_copy.decref(&self.runtime_layout_store, roc_ops);
+
+        // Evaluate the function body synchronously
+        const result = self.evalWithExpectedType(closure_header.body_idx, roc_ops, null) catch {
             return error.NotImplemented;
         };
         defer result.decref(&self.runtime_layout_store, roc_ops);
@@ -6669,7 +6774,8 @@ pub const Interpreter = struct {
 
         defer {
             self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Copy the value to pass to the method
@@ -7172,6 +7278,20 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Clean up any remaining bindings before deinit.
+    /// This should be called after eval() completes to ensure no leaked allocations.
+    /// Block expressions clean up their own bindings via trim_bindings, but this
+    /// serves as a safety net for any bindings that might remain.
+    pub fn cleanupBindings(self: *Interpreter, roc_ops: *RocOps) void {
+        // Decref all remaining bindings in reverse order
+        var i = self.bindings.items.len;
+        while (i > 0) {
+            i -= 1;
+            self.bindings.items[i].value.decref(&self.runtime_layout_store, roc_ops);
+        }
+        self.bindings.items.len = 0;
+    }
+
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
         self.translate_cache.deinit();
@@ -7337,8 +7457,8 @@ pub const Interpreter = struct {
         self.env = @constCast(origin_env);
         defer {
             self.env = saved_env;
-            // Restore bindings
-            self.bindings.items.len = saved_bindings_len;
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Propagate receiver type to flex_type_context BEFORE translating the method's type.
@@ -7425,8 +7545,8 @@ pub const Interpreter = struct {
         self.env = @constCast(origin_env);
         defer {
             self.env = saved_env;
-            // Restore bindings
-            self.bindings.items.len = saved_bindings_len;
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Propagate receiver type to flex_type_context BEFORE translating the method's type.
@@ -7544,6 +7664,28 @@ pub const Interpreter = struct {
         const type_args: [1]types.Var = .{fresh_elem_var};
         const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id, false);
         return try self.runtime_types.freshFromContent(list_content);
+    }
+
+    /// Create List(U8) type for runtime type propagation.
+    /// Used by str_to_utf8 to ensure correct method dispatch.
+    fn createListU8Type(self: *Interpreter) !types.Var {
+        // Return cached value if available
+        if (self.cached_list_u8_rt_var) |cached| return cached;
+
+        const origin_module_id = self.root_env.idents.builtin_module;
+
+        // Create U8 type
+        const u8_type_name = "U8";
+        const u8_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(u8_type_name));
+        const u8_type_ident = types.TypeIdent{ .ident_idx = u8_type_name_ident };
+        const u8_backing_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
+        const u8_content = try self.runtime_types.mkNominal(u8_type_ident, u8_backing_var, &.{}, origin_module_id, false);
+        const u8_rt_var = try self.runtime_types.freshFromContent(u8_content);
+
+        // Create List(U8) type and cache it
+        const list_u8_var = try self.createListTypeWithElement(u8_rt_var);
+        self.cached_list_u8_rt_var = list_u8_var;
+        return list_u8_var;
     }
 
     /// Create a type variable from a layout. Used as a fallback when type info is corrupted.
@@ -8314,48 +8456,23 @@ pub const Interpreter = struct {
                     // before the translate_cache lookup. If we reach here, there was no
                     // contextual override.
                     //
-                    // However, if we're in a polymorphic function context (flex_type_context is non-empty)
-                    // and there's exactly one mapping, we should use it. This handles the case where
-                    // a flex var inside a function body (e.g., the element type of an empty list)
-                    // was unified with the function's type parameter at compile time, but the
-                    // union-find structure wasn't preserved during serialization.
+                    // IMPORTANT: We intentionally do NOT apply a broad heuristic here.
+                    // Previously, this code would use flex_type_context entries for ANY
+                    // unrelated flex var if all entries mapped to the same type. This caused
+                    // bugs where numeric literals in record fields (e.g., { start: 0, len: 2 })
+                    // would incorrectly inherit types from unrelated expressions (e.g., 11.to_str()).
                     //
-                    // For example, in `range_to = |current, end| { var answer = [] ... }`:
-                    // - The function has type `Num a, Num a -> List (Num a)` with rigid `a`
-                    // - The empty list `[]` has element type `Num flex_b` where `flex_b` was unified with `a`
-                    // - After serialization, `flex_b` and `a` are different vars
-                    // - If we mapped `a -> U8` from the call arguments, we should use U8 for `flex_b` too
+                    // The original intent was to handle empty lists in polymorphic functions
+                    // where the element type was unified with a type parameter at compile time
+                    // but the union-find structure wasn't preserved during serialization.
+                    // However, that heuristic was too aggressive and caused incorrect type
+                    // propagation. For now, we only apply context-based type resolution when
+                    // there's a SPECIFIC entry for this flex var (checked at the top of this
+                    // function), not based on unrelated context entries.
                     //
-                    // Check if all entries in flex_type_context map to the same runtime type.
-                    // This handles the case where multiple var entries exist (e.g., from parameters
-                    // and internal type vars) but they all represent the same type parameter.
-                    const ctx_count = self.flex_type_context.count();
-                    if (ctx_count > 0) {
-                        var it = self.flex_type_context.iterator();
-                        var first_rt_var: ?types.Var = null;
-                        var all_same = true;
-                        while (it.next()) |entry| {
-                            const rt_var = entry.value_ptr.*;
-                            if (first_rt_var) |first| {
-                                // Check if this entry maps to the same runtime type
-                                // by comparing the resolved root var
-                                const first_resolved = self.runtime_types.resolveVar(first);
-                                const this_resolved = self.runtime_types.resolveVar(rt_var);
-                                // If they resolve to the same root var, they're the same type
-                                if (first_resolved.var_ != this_resolved.var_) {
-                                    all_same = false;
-                                    break;
-                                }
-                            } else {
-                                first_rt_var = rt_var;
-                            }
-                        }
-                        if (all_same) {
-                            if (first_rt_var) |rt_var| {
-                                break :blk rt_var;
-                            }
-                        }
-                    }
+                    // If we need to fix the empty list case in the future, we should use a
+                    // more targeted approach that only applies to list element types, not
+                    // arbitrary numeric literals.
 
                     // Translate the flex's name from source module's ident store to runtime ident store (if present)
                     const rt_name: ?base_pkg.Ident.Idx = if (flex.name) |name| blk_name: {
@@ -8902,6 +9019,9 @@ pub const Interpreter = struct {
         /// Binary operation - apply method after both operands are evaluated.
         binop_apply: BinopApply,
 
+        /// Dot access - await receiver evaluation and capture immediately.
+        dot_access_await_receiver: DotAccessAwaitReceiver,
+
         /// Dot access - resolve field or method after receiver is evaluated.
         dot_access_resolve: DotAccessResolve,
 
@@ -9231,7 +9351,23 @@ pub const Interpreter = struct {
             negate_result: bool,
         };
 
-        /// Dot access - resolve field or method after receiver is evaluated
+        /// Dot access - await receiver evaluation, then capture receiver for resolve.
+        /// This prevents value stack interleaving issues by ensuring the receiver is captured
+        /// immediately after evaluation, before other work items can push values.
+        pub const DotAccessAwaitReceiver = struct {
+            /// Field/method name
+            field_name: base_pkg.Ident.Idx,
+            /// Optional method arguments (null for field access)
+            method_args: ?can.CIR.Expr.Span,
+            /// Receiver runtime type variable
+            receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Dot access - resolve field or method with receiver carried in continuation.
+        /// The receiver value is stored directly in this struct to avoid value stack
+        /// ordering issues that can occur with nested evaluations.
         pub const DotAccessResolve = struct {
             /// Field/method name
             field_name: base_pkg.Ident.Idx,
@@ -9241,6 +9377,9 @@ pub const Interpreter = struct {
             receiver_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
+            /// Receiver value, captured immediately after evaluation to prevent
+            /// interleaving with other value stack operations
+            receiver_value: StackValue,
         };
 
         /// Dot access method call - collect arguments after receiver is evaluated
@@ -9407,6 +9546,11 @@ pub const Interpreter = struct {
     pub const WorkStack = struct {
         items: std.array_list.AlignedManaged(WorkItem, null),
 
+        /// Maximum stack size to prevent infinite recursion from hanging.
+        /// When exceeded, triggers a stack overflow error.
+        /// 10,000 allows deep but not infinite recursion.
+        pub const max_size: usize = 10_000;
+
         pub fn init(allocator: std.mem.Allocator) !WorkStack {
             return .{ .items = try std.array_list.AlignedManaged(WorkItem, null).initCapacity(allocator, 64) };
         }
@@ -9506,6 +9650,11 @@ pub const Interpreter = struct {
                         }
                     }
                 },
+            }
+
+            // Check for stack overflow (infinite recursion)
+            if (work_stack.items.items.len > WorkStack.max_size) {
+                return self.triggerStackOverflow(roc_ops);
             }
         }
 
@@ -9819,7 +9968,8 @@ pub const Interpreter = struct {
                         self.env = @constCast(app_env);
                         defer {
                             self.env = saved_env;
-                            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+                            // Use trimBindingList to properly decref bindings before removing them
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
                         }
 
                         // Evaluate the app's exported expression synchronously
@@ -10103,8 +10253,13 @@ pub const Interpreter = struct {
                 };
 
                 if (elems.len == 0) {
-                    // Empty list - create immediately
-                    const list_layout = try self.getRuntimeLayout(list_rt_var);
+                    // Empty list - create immediately.
+                    // IMPORTANT: Always use list_of_zst layout for empty lists.
+                    // We cannot use getRuntimeLayout here because:
+                    // 1. For flex rt_vars, it would return Dec (scalar) layout instead of list
+                    // 2. We have no elements to determine element layout from anyway
+                    // The list_of_zst layout is the correct representation for empty lists.
+                    const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
                     const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                     if (dest.ptr != null) {
                         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
@@ -10750,26 +10905,54 @@ pub const Interpreter = struct {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
                 var receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
 
-                // If the receiver type is a flex/rigid var, default to Dec
-                // (Unsuffixed numeric literals default to Dec in Roc)
+                // Check if the translated type is flex/rigid (unresolved)
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-                if (receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid) {
+                const is_flex_or_rigid = receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid;
+
+                // If the receiver type is a flex/rigid var, default to Dec for evaluation.
+                // This ensures numeric literals get proper type resolution.
+                // (Unsuffixed numeric literals default to Dec in Roc)
+                if (is_flex_or_rigid) {
                     const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    const dec_var = try self.runtime_types.freshFromContent(dec_content);
-                    receiver_rt_var = dec_var;
+                    receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
                 }
 
-                // Schedule: first evaluate receiver, then resolve field/method
-                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
+                // Evaluate receiver synchronously with isolated stacks to prevent value stack interleaving.
+                // This ensures the receiver is captured immediately before other dot_access expressions
+                // can push values that would corrupt the expected stack order.
+                const receiver_value = try self.evalWithExpectedType(dot_access.receiver, roc_ops, receiver_rt_var);
+
+                // Copy receiver to persistent memory (evalWithExpectedType uses temporary stacks that are freed)
+                const copied_receiver = try self.pushCopy(receiver_value);
+
+                // Decref the original receiver_value since we made a copy.
+                // This is necessary for records/tuples containing refcounted values like lists.
+                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // After evaluation, prefer the actual runtime type from the receiver value
+                // over the translated/defaulted compile-time type. This handles cases like:
+                // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
+                //   runtime value has the concrete String type from dec_to_str
+                // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
+                //   will be Dec (from evalNum's concrete type assignment)
+                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
+                const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
+                    // Use the concrete type from evaluation (handles bindings to non-numeric results)
+                    copied_receiver.rt_var
+                else
+                    // Evaluation result is still flex/rigid - use the (possibly Dec-defaulted) receiver_rt_var
+                    receiver_rt_var;
+
+                // Push to outer value_stack so dot_access_await_receiver can pop it
+                try value_stack.push(copied_receiver);
+
+                // Schedule await_receiver which will pop from value stack and create resolve with carried value
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_await_receiver = .{
                     .field_name = dot_access.field_name,
                     .method_args = dot_access.args,
-                    .receiver_rt_var = receiver_rt_var,
+                    .receiver_rt_var = final_receiver_rt_var,
                     .expr_idx = expr_idx,
                 } } });
-                try work_stack.push(.{ .eval_expr = .{
-                    .expr_idx = dot_access.receiver,
-                    .expected_rt_var = receiver_rt_var,
-                } });
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
@@ -11401,7 +11584,11 @@ pub const Interpreter = struct {
             field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
 
             const cap_val = self.resolveCapture(cap, roc_ops) orelse {
-                self.triggerCrash("e_closure: failed to resolve capture value", false, roc_ops);
+                // Include capture name, module, expr_idx, and pattern_idx in error for debugging
+                var buf: [512]u8 = undefined;
+                const module_name = self.env.module_name;
+                const msg = std.fmt.bufPrint(&buf, "e_closure(expr={d}): failed to resolve capture '{s}' (pattern_idx={d}) in module '{s}', bindings.len={d}", .{ @intFromEnum(expr_idx), name_text, @intFromEnum(cap.pattern_idx), module_name, self.bindings.items.len }) catch "e_closure: failed to resolve capture value";
+                self.triggerCrash(msg, false, roc_ops);
                 return error.Crash;
             };
             capture_values[i] = cap_val;
@@ -11487,6 +11674,7 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == cap.pattern_idx) {
+                // Check if this def is already being evaluated (to handle self-referential captures)
                 var k: usize = self.def_stack.items.len;
                 while (k > 0) {
                     k -= 1;
@@ -11495,6 +11683,22 @@ pub const Interpreter = struct {
                         if (entry.value) |val| {
                             return val;
                         }
+                        // Self-referential capture detected (def is in progress but value not ready yet)
+                        // For recursive functions, we need to create a placeholder closure
+                        const def_expr = self.env.store.getExpr(def.expr);
+                        if (def_expr == .e_lambda or def_expr == .e_closure) {
+                            // Add placeholder for the recursive function
+                            self.addClosurePlaceholder(def.pattern, def.expr) catch return null;
+                            // Return the placeholder we just added
+                            const bindings_len = self.bindings.items.len;
+                            if (bindings_len > 0) {
+                                const last_binding = self.bindings.items[bindings_len - 1];
+                                if (last_binding.pattern_idx == def.pattern) {
+                                    return last_binding.value;
+                                }
+                            }
+                        }
+                        return null;
                     }
                 }
                 // Found the def! Evaluate it to get the captured value
@@ -11618,7 +11822,11 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == lookup.pattern_idx) {
-                // Evaluate the definition on demand and cache the result in bindings
+                // For top-level recursive functions, we need to add a placeholder BEFORE
+                // evaluating the lambda body, so recursive calls can find the binding.
+                // This mirrors what addClosurePlaceholders does for block-level definitions.
+                //
+                // Evaluate the definition normally - no placeholder handling for now
                 const result = try self.evalWithExpectedType(def.expr, roc_ops, null);
                 try self.bindings.append(.{
                     .pattern_idx = def.pattern,
@@ -11659,7 +11867,8 @@ pub const Interpreter = struct {
         self.env = @constCast(other_env);
         defer {
             self.env = saved_env;
-            self.bindings.shrinkRetainingCapacity(saved_bindings_len);
+            // Use trimBindingList to properly decref bindings before removing them
+            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
         }
 
         // Evaluate the definition's expression in the other module's context
@@ -13657,13 +13866,9 @@ pub const Interpreter = struct {
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => {
-                            return error.InvalidMethodReceiver;
-                        },
+                        else => return error.InvalidMethodReceiver,
                     },
-                    else => {
-                        return error.InvalidMethodReceiver;
-                    },
+                    else => return error.InvalidMethodReceiver,
                 };
 
                 // Resolve the method function
@@ -14032,10 +14237,13 @@ pub const Interpreter = struct {
                     roc_ops,
                     effective_receiver_rt_var,
                 );
-                defer method_func.decref(&self.runtime_layout_store, roc_ops);
+                // Note: method_func decref is handled differently for low-level vs regular closures:
+                // - Low-level: decref explicitly below after the call
+                // - Regular closures: call_cleanup handles it via active_closures
 
                 // Call the method closure
                 if (method_func.layout.tag != .closure) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
 
@@ -14062,6 +14270,8 @@ pub const Interpreter = struct {
                         }
                     }
 
+                    // Decref the method closure (for low-level, we handle it here)
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
 
                     // For != operator, negate boolean result
@@ -14078,6 +14288,7 @@ pub const Interpreter = struct {
                 // Regular closure invocation
                 const params = self.env.store.slicePatterns(closure_header.params);
                 if (params.len != 2) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
                     self.env = saved_env;
                     return error.TypeMismatch;
                 }
@@ -14141,7 +14352,9 @@ pub const Interpreter = struct {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
-                    _ = self.active_closures.pop();
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
                     return error.TypeMismatch;
                 }
                 if (!try self.patternMatchesBind(params[1], rhs, rhs.rt_var, roc_ops, &self.bindings, null)) {
@@ -14150,7 +14363,9 @@ pub const Interpreter = struct {
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.env = saved_env;
-                    _ = self.active_closures.pop();
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
                     return error.TypeMismatch;
                 }
 
@@ -14176,9 +14391,23 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
-            .dot_access_resolve => |da| {
-                // Dot access: receiver is on stack, resolve field or method
+            .dot_access_await_receiver => |da| {
+                // Pop the receiver from value stack (pushed by e_dot_access after evalWithExpectedType)
+                // and schedule dot_access_resolve with the receiver carried directly
                 const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
+                    .field_name = da.field_name,
+                    .method_args = da.method_args,
+                    .receiver_rt_var = da.receiver_rt_var,
+                    .expr_idx = da.expr_idx,
+                    .receiver_value = receiver_value,
+                } } });
+                return true;
+            },
+            .dot_access_resolve => |da| {
+                // Dot access: receiver is carried in continuation to avoid value stack interleaving
+                const receiver_value = da.receiver_value;
 
                 if (da.method_args == null) {
                     // Field access on a record
@@ -14255,28 +14484,96 @@ pub const Interpreter = struct {
                 const method_args = da.method_args.?;
                 const arg_exprs = self.env.store.sliceExpr(method_args);
 
-                // Get nominal type info
-                const nominal_info = switch (resolved_receiver.desc.content) {
+                // Get nominal type info, or handle structural/numeric types for is_eq
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (resolved_receiver.desc.content) {
                     .structure => |s| switch (s) {
                         .nominal_type => |nom| .{
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        else => {
-                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                            return error.InvalidMethodReceiver;
+                        .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                            // Structural types have implicit is_eq - handle directly
+                            if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                                // Evaluate the RHS argument
+                                const rhs_expr_idx = arg_exprs[0];
+                                const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                                defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Use structural equality
+                                const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
+                                const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                                const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
+                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                    if (err == error.NotImplemented) {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    }
+                                    return err;
+                                };
+                                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                const result_val = try self.makeBoolValue(result);
+                                try value_stack.push(result_val);
+                                return true;
+                            }
+                            break :blk null;
                         },
+                        else => null,
                     },
-                    else => {
-                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                        return error.InvalidMethodReceiver;
+                    .flex, .rigid, .err => blk: {
+                        // For flex/rigid types, check if it's numeric is_eq that we can handle directly
+                        if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                            // Check if receiver is numeric
+                            if (receiver_value.layout.tag == .scalar) {
+                                const scalar_tag = receiver_value.layout.data.scalar.tag;
+                                const is_numeric = scalar_tag == .int or scalar_tag == .frac;
+                                if (is_numeric) {
+                                    // Evaluate the RHS argument
+                                    const rhs_expr_idx = arg_exprs[0];
+                                    const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                                    defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                    // Use numeric comparison
+                                    const result = try self.compareNumericValues(receiver_value, rhs_value, .eq);
+                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                    const result_val = try self.makeBoolValue(result);
+                                    try value_stack.push(result_val);
+                                    return true;
+                                }
+                            }
+                            // For non-numeric flex/rigid, try structural equality
+                            const rhs_expr_idx = arg_exprs[0];
+                            const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                            defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                            const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
+                            const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                            const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
+                                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                if (err == error.NotImplemented) {
+                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                    return error.Crash;
+                                }
+                                return err;
+                            };
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                            const result_val = try self.makeBoolValue(result);
+                            try value_stack.push(result_val);
+                            return true;
+                        }
+                        break :blk null;
                     },
+                    else => null,
                 };
+
+                if (nominal_info == null) {
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    return error.InvalidMethodReceiver;
+                }
 
                 // Resolve the method function
                 const method_func = self.resolveMethodFunction(
-                    nominal_info.origin,
-                    nominal_info.ident,
+                    nominal_info.?.origin,
+                    nominal_info.?.ident,
                     da.field_name,
                     roc_ops,
                     effective_receiver_rt_var,
@@ -14287,7 +14584,7 @@ pub const Interpreter = struct {
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
                             layout_env.common.getIdentStore(),
-                            nominal_info.ident,
+                            nominal_info.?.ident,
                         );
                         const method_name = self.env.getIdent(da.field_name);
                         const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
@@ -14478,11 +14775,53 @@ pub const Interpreter = struct {
                         all_args[1 + idx] = arg;
                     }
 
-                    // Get return type from the dot access expression for low-level builtins that need it.
-                    // Use saved_env (the caller's module) since dac.expr_idx is from that module,
-                    // not from self.env which has been switched to the closure's source module.
-                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    // Get the return type from the method's function type signature, not from the
+                    // call site. The method has a type annotation (e.g., `List.concat : List(a), List(a) -> List(a)`)
+                    // and we should use that, properly instantiated with argument types.
+                    const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
+                    const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+
+                    // Extract return type from function signature and unify with argument types
+                    const return_rt_var: types.Var = if (lambda_resolved.desc.content == .structure) blk: {
+                        const func_struct = lambda_resolved.desc.content.structure;
+                        const func_info: ?struct { args: types.Var.SafeList.Range, ret: types.Var } = switch (func_struct) {
+                            .fn_pure => |f| .{ .args = f.args, .ret = f.ret },
+                            .fn_effectful => |f| .{ .args = f.args, .ret = f.ret },
+                            .fn_unbound => |f| .{ .args = f.args, .ret = f.ret },
+                            else => null,
+                        };
+
+                        if (func_info) |info| {
+                            // Unify parameter types with actual argument types to instantiate type variables
+                            const param_vars = self.runtime_types.sliceVars(info.args);
+                            const arg_count_to_unify = @min(param_vars.len, all_args.len);
+                            for (0..arg_count_to_unify) |unify_idx| {
+                                _ = unify.unifyWithConf(
+                                    self.env,
+                                    self.runtime_types,
+                                    &self.problems,
+                                    &self.snapshots,
+                                    &self.type_writer,
+                                    &self.unify_scratch,
+                                    &self.unify_scratch.occurs_scratch,
+                                    param_vars[unify_idx],
+                                    all_args[unify_idx].rt_var,
+                                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                                ) catch {};
+                            }
+                            // Return type is now properly instantiated through unification
+                            break :blk info.ret;
+                        }
+                        // Fallback to call site type if no function structure
+                        const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                        break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                    } else blk: {
+                        // Fallback to call site type
+                        const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                        break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                    };
+
                     const result = try self.callLowLevelBuiltin(low_level.op, all_args, roc_ops, return_rt_var);
 
                     // Decref arguments based on ownership semantics

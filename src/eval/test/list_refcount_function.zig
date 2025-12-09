@@ -96,3 +96,32 @@ test "list refcount function - nested function calls with lists" {
         \\}
     , 10, .no_trace);
 }
+
+test "list refcount function - same list twice in tuple returned from function" {
+    // This tests the exact pattern that causes the segfault in fx platform tests:
+    // A function that takes a list and returns a tuple containing that list twice.
+    // When the tuple is destructured and the first element is used, it should work.
+    try runExpectInt(
+        \\{
+        \\    make_pair = |lst| (lst, lst)
+        \\    x = [1, 2]
+        \\    t = make_pair(x)
+        \\    match t { (first, _) => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
+        \\}
+    , 3, .no_trace);
+}
+
+test "list refcount function - same list twice passed to function" {
+    // Tests passing the same list twice as arguments to a function
+    try runExpectInt(
+        \\{
+        \\    add_lens = |a, b|
+        \\        match a {
+        \\            [first, ..] => match b { [second, ..] => first + second, _ => 0 },
+        \\            _ => 0
+        \\        }
+        \\    x = [1, 2]
+        \\    add_lens(x, x)
+        \\}
+    , 2, .no_trace);
+}

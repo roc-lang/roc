@@ -288,6 +288,19 @@ pub const Store = struct {
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
+            // Check struct sizes - if Store > Serialized, we'd write past the end!
+            comptime {
+                const store_size = @sizeOf(Store);
+                const serialized_size = @sizeOf(Serialized);
+                if (store_size > serialized_size) {
+                    @compileError(std.fmt.comptimePrint(
+                        "STRUCT SIZE MISMATCH: Store ({d} bytes) > Serialized ({d} bytes). " ++
+                            "Writing Store to Serialized memory will corrupt adjacent data!",
+                        .{ store_size, serialized_size },
+                    ));
+                }
+            }
+
             store.* = Store{
                 .interner = self.interner.deserialize(offset).*,
                 .attributes = self.attributes.deserialize(offset).*,

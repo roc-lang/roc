@@ -858,6 +858,7 @@ pub const Repl = struct {
         const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
+        interpreter.cleanupBindings(self.roc_ops);
         return .{ .expression = output };
     }
 };

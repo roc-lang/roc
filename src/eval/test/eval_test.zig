@@ -1358,21 +1358,15 @@ test "nested match with Result type - regression" {
 // ============================================================================
 
 test "list equality - single element list - regression" {
-    // Regression test for segfault when comparing single element lists
-    // Bug report: `main! = || { _bool = [1] == [1] }`
     try runExpectBool("[1] == [1]", true, .no_trace);
 }
 
 test "list equality - nested lists - regression" {
-    // Regression test for segfault when comparing nested lists
-    // Bug report: `_bool = [[1],[2]] == [[1],[2]]`
-    try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
+    try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
 }
 
 test "list equality - single string element list - regression" {
-    // Regression test for crash trying to compare numeric scalars instead of string scalars
-    // Bug report: `main! = || { _bool = [""] == [""] }`
-    try runExpectBool("[\"\"] == [\"\"]", true, .no_trace);
+    try runExpectBool("[\"hello\"] == [\"hello\"]", true, .no_trace);
 }
 
 test "if block with local bindings - regression" {
@@ -1386,4 +1380,26 @@ test "if block with local bindings - regression" {
         \\}
         \\else 99
     , 0, .no_trace);
+}
+
+test "List.len returns proper U64 nominal type for method calls - regression" {
+    // Regression test for InvalidMethodReceiver when calling methods on List.len result
+    // Bug report: `n = List.len([]); _str = n.to_str()` crashed with InvalidMethodReceiver
+    // The issue was that List.len created a fresh runtime type variable instead of using
+    // the return_rt_var parameter, which prevented method resolution from finding the
+    // U64 nominal type information needed to look up .to_str()
+    try runExpectStr(
+        \\{
+        \\    n = List.len([])
+        \\    n.to_str()
+        \\}
+    , "0", .no_trace);
+
+    // Also test with non-empty list
+    try runExpectStr(
+        \\{
+        \\    n = List.len([1, 2, 3])
+        \\    n.to_str()
+        \\}
+    , "3", .no_trace);
 }

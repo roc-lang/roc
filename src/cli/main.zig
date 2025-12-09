@@ -203,7 +203,7 @@ fn stderrWriter() *std.Io.Writer {
 const posix = if (!is_windows) struct {
     extern "c" fn shm_open(name: [*:0]const u8, oflag: c_int, mode: std.c.mode_t) c_int;
     extern "c" fn shm_unlink(name: [*:0]const u8) c_int;
-    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) ?*anyopaque;
+    extern "c" fn mmap(addr: ?*anyopaque, len: usize, prot: c_int, flags: c_int, fd: c_int, offset: std.c.off_t) *anyopaque;
     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
 
@@ -211,6 +211,9 @@ const posix = if (!is_windows) struct {
     const F_GETFD = 1;
     const F_SETFD = 2;
     const FD_CLOEXEC = 1;
+
+    // MAP_FAILED is (void*)-1, not NULL
+    const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
 
 // Windows shared memory functions
@@ -1182,7 +1185,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Set up shared memory with ModuleEnv
     std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
         std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
         return err;
     };
@@ -1540,7 +1543,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
-pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8) !SharedMemoryResult {
+pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -1556,6 +1559,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
 
     const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
+
+    // Check for absolute paths and reject them early
+    try validatePlatformSpec(platform_spec);
 
     // Resolve platform path based on type:
     // - Relative paths (./...) -> join with app directory
@@ -1768,10 +1774,39 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     app_env.module_name = app_module_name;
     try app_env.common.calcLineStarts(shm_allocator);
 
+    var error_count: usize = 0;
+
     var app_parse_ast = try parse.parse(&app_env.common, allocs.gpa);
     defer app_parse_ast.deinit(allocs.gpa);
-    app_parse_ast.store.emptyScratch();
+    if (app_parse_ast.hasErrors()) {
+        const stderr = stderrWriter();
+        defer stderr.flush() catch {};
+        for (app_parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            error_count += 1;
+            var report = app_parse_ast.tokenizeDiagnosticToReport(diagnostic, allocs.gpa, roc_file_path) catch continue;
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+        for (app_parse_ast.parse_diagnostics.items) |diagnostic| {
+            error_count += 1;
+            var report = app_parse_ast.parseDiagnosticToReport(&app_env.common, diagnostic, allocs.gpa, roc_file_path) catch continue;
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+        // If errors are not allowed then we should not move past parsing. return early and let caller handle error/exit
+        if (!allow_errors) {
+            return SharedMemoryResult{
+                .handle = SharedMemoryHandle{
+                    .fd = shm.handle,
+                    .ptr = shm.base_ptr,
+                    .size = shm.getUsedSize(),
+                },
+                .error_count = error_count,
+            };
+        }
+    }
 
+    app_parse_ast.store.emptyScratch();
     try app_env.initCIRFields(app_module_name);
 
     var app_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
@@ -1930,7 +1965,7 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Render all type problems (errors and warnings) exactly as roc check would
     // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
-    const error_count = if (!builtin.is_test)
+    error_count += if (!builtin.is_test)
         renderTypeProblems(allocs.gpa, &app_checker, &app_env, roc_file_path)
     else
         0;
@@ -2158,10 +2193,12 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
         0x0001, // MAP_SHARED
         shm_fd,
         0,
-    ) orelse {
+    );
+    // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
+    if (mapped_ptr == posix.MAP_FAILED) {
         _ = c.close(shm_fd);
         return error.SharedMemoryMapFailed;
-    };
+    }
     const mapped_memory = @as([*]u8, @ptrCast(mapped_ptr))[0..total_size];
 
     // Write length at the beginning
@@ -2254,6 +2291,15 @@ fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
     };
 }
 
+/// Check if platform spec is an absolute path and reject it with a helpful error message.
+/// Returns error.PlatformNotSupported if absolute, otherwise returns void.
+fn validatePlatformSpec(platform_spec: []const u8) error{PlatformNotSupported}!void {
+    if (std.fs.path.isAbsolute(platform_spec)) {
+        std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
+        return error.PlatformNotSupported;
+    }
+}
+
 /// Resolve a platform specification to both host library and platform source paths
 fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
 
@@ -2334,11 +2380,11 @@ fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, ba
         return resolveUrlPlatform(allocs, platform_spec);
     }
 
-    // Try to interpret as a file path (resolve relative to base_dir)
-    const resolved_path = if (std.fs.path.isAbsolute(platform_spec))
-        try allocs.arena.dupe(u8, platform_spec)
-    else
-        try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
+    // Check for absolute paths and reject them
+    try validatePlatformSpec(platform_spec);
+
+    // Try to interpret as a file path (must be relative, resolve relative to base_dir)
+    const resolved_path = try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
 
     std.fs.cwd().access(resolved_path, .{}) catch {
         return error.PlatformNotSupported;
