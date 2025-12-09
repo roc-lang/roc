@@ -6339,6 +6339,7 @@ fn canonicalizePatternOrMalformed(
     }
 }
 
+/// Converts an AST pattern into a canonical pattern, introducing identifiers into scope.
 pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
