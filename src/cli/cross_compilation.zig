@@ -1,8 +1,7 @@
 //! Cross-compilation support and validation for Roc CLI
-//! Handles host detection, target validation, and capability matrix
+//! Handles target validation and capability matrix
 
 const std = @import("std");
-const builtin = @import("builtin");
 const target_mod = @import("target.zig");
 
 const RocTarget = target_mod.RocTarget;
@@ -32,57 +31,9 @@ pub const CrossCompilationMatrix = struct {
     pub const musl_targets = [_]RocTarget{
         .x64musl,
         .arm64musl,
-    };
-
-    /// Targets that require dynamic linking (glibc) - not currently supported for cross-compilation
-    /// glibc cross-compilation is complex and will be added in a future release
-    pub const glibc_targets = [_]RocTarget{};
-
-    /// Windows targets - require MinGW or similar toolchain
-    pub const windows_targets = [_]RocTarget{
-        // Future: .x64windows, .arm64windows
-    };
-
-    /// macOS targets - require OSXCross or similar toolchain
-    pub const macos_targets = [_]RocTarget{
-        // Future: .x64macos, .arm64macos
+        .arm32musl,
     };
 };
-
-/// Detect the host target platform
-pub fn detectHostTarget() RocTarget {
-    return switch (builtin.target.cpu.arch) {
-        .x86_64 => switch (builtin.target.os.tag) {
-            .linux => .x64glibc, // Default to glibc on Linux hosts
-            .windows => .x64win,
-            .macos => .x64mac,
-            else => .x64glibc,
-        },
-        .aarch64 => switch (builtin.target.os.tag) {
-            .linux => .arm64glibc,
-            .windows => .arm64win,
-            .macos => .arm64mac,
-            else => .arm64glibc,
-        },
-        else => .x64glibc, // Fallback
-    };
-}
-
-/// Check if a target is supported for static linking (musl)
-pub fn isMuslTarget(target: RocTarget) bool {
-    return switch (target) {
-        .x64musl, .arm64musl => true,
-        else => false,
-    };
-}
-
-/// Check if a target requires dynamic linking (glibc)
-pub fn isGlibcTarget(target: RocTarget) bool {
-    return switch (target) {
-        .x64glibc, .arm64glibc => true,
-        else => false,
-    };
-}
 
 /// Validate cross-compilation from host to target
 pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompilationResult {
@@ -92,7 +43,7 @@ pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompila
     }
 
     // Support musl targets for cross-compilation (statically linked)
-    if (isMuslTarget(target)) {
+    if (target.isStatic()) {
         return CrossCompilationResult{ .supported = {} };
     }
 
@@ -101,7 +52,7 @@ pub fn validateCrossCompilation(host: RocTarget, target: RocTarget) CrossCompila
         .unsupported_cross_compilation = .{
             .host = host,
             .target = target,
-            .reason = "Only Linux musl targets (x64musl, arm64musl) are currently supported for cross-compilation. glibc, Windows and macOS support coming in a future release. Log an issue at https://github.com/roc-lang/roc/issues",
+            .reason = "Only Linux musl targets (x64musl, arm64musl, arm32musl) are currently supported for cross-compilation. glibc, Windows and macOS support coming in a future release. Log an issue at https://github.com/roc-lang/roc/issues",
         },
     };
 }
