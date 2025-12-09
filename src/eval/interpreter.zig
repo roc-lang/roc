@@ -267,6 +267,8 @@ pub const Interpreter = struct {
     cached_list_u8_rt_var: ?types.Var,
     // Used to unwrap extensible tags
     scratch_tags: std.array_list.Managed(types.Tag),
+    // Scratch map for type instantiation (reused to avoid repeated allocations)
+    instantiate_scratch: std.AutoHashMap(types.Var, types.Var),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
     def_stack: std.array_list.Managed(DefInProgress),
@@ -425,6 +427,7 @@ pub const Interpreter = struct {
             .canonical_str_rt_var = null,
             .cached_list_u8_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
+            .instantiate_scratch = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
@@ -7324,6 +7327,7 @@ pub const Interpreter = struct {
         self.active_closures.deinit();
         self.def_stack.deinit();
         self.scratch_tags.deinit();
+        self.instantiate_scratch.deinit();
         // Free all constant/static strings at once - they were never freed individually
         self.constant_strings_arena.deinit();
     }
@@ -8597,33 +8601,25 @@ pub const Interpreter = struct {
     }
 
     /// Instantiate a type by replacing rigid variables with fresh flex variables.
-    /// This uses the standard Instantiator from the types module.
-    /// The subst_map will be populated with old_var -> new_var mappings ONLY for
-    /// rigid type variables that were instantiated (useful for updating rigid_subst).
-    /// Note: The Instantiator creates mappings for all types, but we filter to only
-    /// keep rigid->flex mappings since that's what the interpreter needs for layout.
+    /// Uses the standard Instantiator, filtering its output to only rigid->flex mappings
+    /// (the Instantiator maps all types, but layout computation only needs rigids).
     fn instantiateType(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!types.Var {
-        // Use a temporary map for the Instantiator since it adds all types, not just rigids
-        var full_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
-        defer full_map.deinit();
+        self.instantiate_scratch.clearRetainingCapacity();
 
         var instantiator = types.instantiate.Instantiator{
             .store = self.runtime_types,
             .idents = self.env.getIdentStoreConst(),
-            .var_map = &full_map,
+            .var_map = &self.instantiate_scratch,
             .current_rank = types.Rank.top_level,
             .rigid_behavior = .fresh_flex,
         };
         const result = try instantiator.instantiateVar(type_var);
 
-        // Filter to only include rigid->flex mappings in the output subst_map
-        // The Instantiator adds entries for ALL types it visits, but the interpreter
-        // only needs the rigid substitutions for layout computation.
+        // Filter to only rigid->flex mappings for the output
         subst_map.clearRetainingCapacity();
-        var iter = full_map.iterator();
+        var iter = self.instantiate_scratch.iterator();
         while (iter.next()) |entry| {
             const key_resolved = self.runtime_types.resolveVar(entry.key_ptr.*);
-            // Only include mappings where the original type was a rigid
             if (key_resolved.desc.content == .rigid) {
                 try subst_map.put(entry.key_ptr.*, entry.value_ptr.*);
             }
