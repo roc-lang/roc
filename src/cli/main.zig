@@ -3097,7 +3097,7 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     // Set up shared memory with ModuleEnv (same as roc run)
     std.log.debug("Compiling Roc file: {s}", .{args.path});
-    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path) catch |err| {
+    const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
         std.log.err("Failed to compile Roc file: {}", .{err});
         return err;
     };
