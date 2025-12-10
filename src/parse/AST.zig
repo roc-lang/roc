@@ -2094,6 +2094,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
+        ext: ?TypeAnno.Idx,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2234,6 +2235,15 @@ pub const TypeAnno = union(enum) {
                         },
                     };
                     try field.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                // Output extension if present
+                if (a.ext) |ext_idx| {
+                    const ext_begin = tree.beginNode();
+                    try tree.pushStaticAtom("ty-record-ext");
+                    const ext_attrs = tree.beginNode();
+                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
+                    try tree.endNode(ext_begin, ext_attrs);
                 }
 
                 try tree.endNode(begin, attrs);
