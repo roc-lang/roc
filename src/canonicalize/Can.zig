@@ -95,6 +95,8 @@ scratch_free_vars: base.Scratch(Pattern.Idx),
 scratch_captures: base.Scratch(Pattern.Idx),
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
 scratch_bound_vars: base.Scratch(Pattern.Idx),
+/// Counter for generating unique malformed import placeholder names
+malformed_import_count: u32 = 0,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -3157,8 +3159,11 @@ fn canonicalizeImportStatement(
                     .region = region,
                 } });
 
-                // Use a placeholder identifier instead
-                const placeholder_text = "MALFORMED_IMPORT";
+                // Use a unique placeholder identifier that starts with '#' to ensure it can't
+                // collide with user-defined identifiers (# starts a comment in Roc)
+                var buf: [32]u8 = undefined;
+                const placeholder_text = std.fmt.bufPrint(&buf, "#malformed_import_{d}", .{self.malformed_import_count}) catch unreachable;
+                self.malformed_import_count += 1;
                 break :blk try self.env.insertIdent(base.Ident.for_text(placeholder_text));
             }
         } else {
@@ -6334,7 +6339,8 @@ fn canonicalizePatternOrMalformed(
     }
 }
 
-fn canonicalizePattern(
+/// Converts an AST pattern into a canonical pattern, introducing identifiers into scope.
+pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?Pattern.Idx {

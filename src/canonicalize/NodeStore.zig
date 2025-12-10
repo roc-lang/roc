@@ -46,7 +46,6 @@ const Scratch = struct {
     if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
     where_clauses: base.Scratch(CIR.WhereClause.Idx),
     patterns: base.Scratch(CIR.Pattern.Idx),
-    pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
     record_destructs: base.Scratch(CIR.Pattern.RecordDestruct.Idx),
     type_annos: base.Scratch(CIR.TypeAnno.Idx),
     anno_record_fields: base.Scratch(CIR.TypeAnno.RecordField.Idx),
@@ -67,7 +66,6 @@ const Scratch = struct {
             .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
             .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
             .patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
-            .pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
             .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
             .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
             .anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
@@ -89,7 +87,6 @@ const Scratch = struct {
         self.if_branches.deinit();
         self.where_clauses.deinit();
         self.patterns.deinit();
-        self.pattern_record_fields.deinit();
         self.record_destructs.deinit();
         self.type_annos.deinit();
         self.anno_record_fields.deinit();
@@ -1127,12 +1124,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
     }
 }
 
-/// Retrieves a pattern record field from the store.
-pub fn getPatternRecordField(_: *NodeStore, _: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
-    // Return empty placeholder since PatternRecordField has no fields yet
-    return CIR.PatternRecordField{};
-}
-
 /// Retrieves a type annotation from the store.
 pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeAnno));
@@ -2137,11 +2128,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
-}
-
-/// Adds a pattern record field to the store.
-pub fn addPatternRecordField(_: *NodeStore, _: CIR.PatternRecordField) Allocator.Error!CIR.PatternRecordField.Idx {
-    @panic("TODO: addPatternRecordField not implemented");
 }
 
 /// Adds a type annotation to the store.

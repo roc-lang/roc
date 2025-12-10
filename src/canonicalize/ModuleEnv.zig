@@ -1246,7 +1246,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         },
         .f64_pattern_literal => |data| blk: {
             // Extract the literal text from the source
-            const literal_text = self.getSourceAll()[data.region.start.offset..data.region.end.offset];
+            const literal_text = self.getSource(data.region);
 
             var report = Report.init(allocator, "F64 NOT ALLOWED IN PATTERN", .runtime_error);
 
@@ -2224,14 +2224,6 @@ pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, re
     return expr_idx;
 }
 
-/// Add a new pattern record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addPatternRecordField(self: *Self, expr: CIR.PatternRecordField) std.mem.Allocator.Error!CIR.PatternRecordField.Idx {
-    const expr_idx = try self.store.addPatternRecordField(expr);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
-
 /// Add a new type variable to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addTypeSlot(
@@ -2583,14 +2575,18 @@ pub fn getSource(self: *const Self, region: Region) []const u8 {
     return self.common.getSource(region);
 }
 
-/// TODO this is a code smell... we should track down the places using this
-/// and replace with something more sensible -- need to refactor diagnostics a little.
+/// Get the entire source text. This is primarily needed for diagnostic output
+/// where `addSourceRegion` requires access to the full source and line starts
+/// to render error messages with context lines.
+///
+/// For extracting source text for a specific region, prefer `getSource(region)` instead.
 pub fn getSourceAll(self: *const Self) []const u8 {
     return self.common.getSourceAll();
 }
 
-/// TODO this is a code smell... we should track down the places using this
-/// and replace with something more sensible -- need to refactor diagnostics a little.
+/// Get all line start offsets. This is primarily needed for diagnostic output
+/// where `addSourceRegion` requires access to the full source and line starts
+/// to render error messages with context lines.
 pub fn getLineStartsAll(self: *const Self) []const u32 {
     return self.common.getLineStartsAll();
 }
