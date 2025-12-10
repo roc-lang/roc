@@ -269,8 +269,11 @@ pub const CannotAccessOpaqueNominal = struct {
     nominal_type_name: Ident.Idx,
 };
 
-/// Error when a nominal type variable doesn't resolve to a nominal_type structure
-/// This indicates an internal error in how the nominal type was defined or stored
+/// Compiler bug: a nominal type variable doesn't resolve to a nominal_type structure.
+/// This should never happen because:
+/// 1. The canonicalizer only creates nominal patterns/expressions for s_nominal_decl statements
+/// 2. generateNominalDecl always sets the decl_var to a nominal_type structure
+/// 3. instantiateVar and copyVar preserve the nominal_type structure
 pub const NominalTypeResolutionFailed = struct {
     var_: Var,
     nominal_type_decl_var: Var,
@@ -1968,18 +1971,19 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for when a nominal type variable doesn't resolve properly
+    /// Build a report for when a nominal type variable doesn't resolve properly.
+    /// This is a compiler bug - it should never happen in correctly compiled code.
     fn buildNominalTypeResolutionFailed(
         self: *Self,
         data: NominalTypeResolutionFailed,
     ) !Report {
-        var report = Report.init(self.gpa, "NOMINAL TYPE RESOLUTION FAILED", .runtime_error);
+        var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
         errdefer report.deinit();
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("This expression tried to use a nominal type, but the type couldn't be resolved correctly:");
+        try report.document.addReflowingText("An internal compiler error occurred while checking this nominal type usage:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -1991,7 +1995,7 @@ pub const ReportBuilder = struct {
         );
 
         try report.document.addLineBreak();
-        try report.document.addReflowingText("This is likely an internal compiler error. The nominal type declaration variable did not resolve to a nominal type structure.");
+        try report.document.addReflowingText("The nominal type declaration variable did not resolve to a nominal type structure. This indicates a bug in the Roc compiler. Please report this issue at https://github.com/roc-lang/roc/issues");
 
         return report;
     }
