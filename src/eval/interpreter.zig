@@ -2059,7 +2059,7 @@ pub const Interpreter = struct {
                 return out;
             },
             .str_inspekt => {
-                // Str.inspekt : _val -> Str
+                // Str.inspect : _val -> Str
                 // Renders any value to its string representation
                 std.debug.assert(args.len == 1);
                 const value = args[0];

@@ -15,6 +15,6 @@ BadColor := [Red, Green, Blue].{
 main! = || {
     red : BadColor
     red = Red
-    result = Str.inspekt(red)
+    result = Str.inspect(red)
     Stdout.line!("Result: ${result}")
 }

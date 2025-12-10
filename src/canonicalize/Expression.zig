@@ -841,7 +841,7 @@ pub const Expr = union(enum) {
                 // String parsing - list consumed
                 .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
 
-                // Str.inspekt - borrows the value to render it
+                // Str.inspect - borrows the value to render it
                 .str_inspekt => &.{.borrow},
 
                 // Numeric to_str - value types (no ownership)

@@ -19,16 +19,16 @@ main! = || {
     # Test with to_inspect
     c1 : ColorWithInspect
     c1 = Red
-    result1 = Str.inspekt(c1)
+    result1 = Str.inspect(c1)
     Stdout.line!("With to_inspect: ${result1}")
 
     # Test without to_inspect
     c2 : ColorWithoutInspect
     c2 = Red
-    result2 = Str.inspekt(c2)
+    result2 = Str.inspect(c2)
     Stdout.line!("Without to_inspect: ${result2}")
 
     # Test primitive
-    result3 = Str.inspekt(42)
+    result3 = Str.inspect(42)
     Stdout.line!("Primitive: ${result3}")
 }

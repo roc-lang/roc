@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Using Str.inspekt on an open union type variable should work
+description=Using Str.inspect on an open union type variable should work
 type=snippet
 ~~~
 # SOURCE
@@ -9,8 +9,8 @@ main_for_host : Try({}, [Exit(I32), ..others]) -> Str
 main_for_host = |result|
     match result {
         Ok({}) => "ok"
-        Err(Exit(code)) => Str.inspekt(code)
-        Err(other) => Str.inspekt(other)
+        Err(Exit(code)) => Str.inspect(code)
+        Err(other) => Str.inspect(other)
     }
 ~~~
 # EXPECTED
@@ -63,13 +63,13 @@ EndOfFile,
 								(p-tag (raw "Exit")
 									(p-ident (raw "code"))))
 							(e-apply
-								(e-ident (raw "Str.inspekt"))
+								(e-ident (raw "Str.inspect"))
 								(e-ident (raw "code"))))
 						(branch
 							(p-tag (raw "Err")
 								(p-ident (raw "other")))
 							(e-apply
-								(e-ident (raw "Str.inspekt"))
+								(e-ident (raw "Str.inspect"))
 								(e-ident (raw "other"))))))))))
 ~~~
 # FORMATTED
@@ -78,8 +78,8 @@ main_for_host : Try({}, [Exit(I32), ..others]) -> Str
 main_for_host = |result|
 	match result {
 		Ok({}) => "ok"
-		Err(Exit(code)) => Str.inspekt(code)
-		Err(other) => Str.inspekt(other)
+		Err(Exit(code)) => Str.inspect(code)
+		Err(other) => Str.inspect(other)
 	}
 ~~~
 # CANONICALIZE

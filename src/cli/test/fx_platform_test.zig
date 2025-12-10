@@ -849,14 +849,14 @@ test "run allows warnings without blocking execution" {
 }
 
 test "fx platform method inspect on string" {
-    // Tests that Str.inspekt works correctly on a string value
+    // Tests that Str.inspect works correctly on a string value
     const allocator = testing.allocator;
 
     const run_result = try runRoc(allocator, "test/fx/test_method_inspect.roc", .{});
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // Str.inspekt now exists - this should succeed and output the inspected string
+    // Str.inspect now exists - this should succeed and output the inspected string
     try checkSuccess(run_result);
 
     // Should output the inspected string value

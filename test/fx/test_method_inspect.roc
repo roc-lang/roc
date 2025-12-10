@@ -4,5 +4,5 @@ import pf.Stdout
 
 main! = || {
     x = "hello"
-    Stdout.line!(Str.inspekt(x))
+    Stdout.line!(Str.inspect(x))
 }

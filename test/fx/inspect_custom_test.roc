@@ -16,8 +16,8 @@ main! = || {
     red : Color
     red = Red
 
-    # Test Str.inspekt with custom to_inspect method
-    result = Str.inspekt(red)
+    # Test Str.inspect with custom to_inspect method
+    result = Str.inspect(red)
     Stdout.line!(result)
 
     # Compare with what the default would be
