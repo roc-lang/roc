@@ -8469,8 +8469,8 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     // Check if this is a builtin type
     // Allow builtin type names to be redeclared in the Builtin module
     // (e.g., Str := ... within Builtin.roc)
-    // TODO: Can we compare idents or something here? The byte slice comparison is ineffecient
-    if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(name_ident))) |_| {
+    // Use identifier index comparison instead of string comparison for efficiency
+    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
         const is_builtin_module = std.mem.eql(u8, self.env.module_name, "Builtin");
         if (!is_builtin_module) {
             return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
