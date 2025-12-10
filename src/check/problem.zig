@@ -49,6 +49,7 @@ pub const Problem = union(enum) {
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
+    recursive_alias: RecursiveAlias,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     invalid_number_type: VarWithSnapshot,
@@ -290,6 +291,13 @@ pub const TypeApplyArityMismatch = struct {
     num_actual_args: u32,
 };
 
+/// Error when a type alias references itself (aliases cannot be recursive)
+/// Use nominal types (:=) for recursive types instead
+pub const RecursiveAlias = struct {
+    type_name: base.Ident.Idx,
+    region: base.Region,
+};
+
 // bug //
 
 /// A bug that occurred during unification
@@ -439,6 +447,9 @@ pub const ReportBuilder = struct {
             },
             .unused_value => |data| {
                 return self.buildUnusedValueReport(data);
+            },
+            .recursive_alias => |data| {
+                return self.buildRecursiveAliasReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
@@ -1727,6 +1738,44 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when a type alias references itself recursively
+    fn buildRecursiveAliasReport(
+        self: *Self,
+        data: RecursiveAlias,
+    ) !Report {
+        var report = Report.init(self.gpa, "RECURSIVE ALIAS", .runtime_error);
+        errdefer report.deinit();
+
+        // Look up display name in import mapping (handles auto-imported builtin types)
+        const type_name_ident = if (self.import_mapping.get(data.type_name)) |display_ident|
+            self.can_ir.getIdent(display_ident)
+        else
+            self.can_ir.getIdent(data.type_name);
+        const type_name = try report.addOwnedString(type_name_ident);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+
+        try report.document.addReflowingText("The type alias ");
+        try report.document.addAnnotated(type_name, .type_variable);
+        try report.document.addReflowingText(" references itself, which is not allowed:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("Type aliases cannot be recursive. If you need a recursive type, use a nominal type (:=) instead of an alias (:).");
         try report.document.addLineBreak();
 
         return report;
