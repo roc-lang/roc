@@ -183,12 +183,6 @@ fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_modul
     // Use opaque pointer type for globals - LLVM sizes them correctly based on target data layout
     const ptr_type = try builder.ptrType(.default);
 
-    // Determine usize type based on target pointer width
-    const usize_type: Builder.Type = switch (target.ptrBitWidth()) {
-        32 => .i32,
-        64 => .i64,
-        else => unreachable,
-    };
 
     // Create platform-specific name for base_ptr
     // Add underscore prefix for macOS (required for MachO symbol names)
@@ -228,8 +222,8 @@ fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_modul
         base_ptr_var.setLinkage(.external, builder);
 
         // Create the external size variable
-        const size_const = try builder.intConst(usize_type, bytes.len);
-        const size_var = try builder.addVariable(size_name, usize_type, .default);
+        const size_const = try builder.intConst(.i32, bytes.len);
+        const size_var = try builder.addVariable(size_name, .i32, .default);
         try size_var.setInitializer(size_const, builder);
         size_var.setLinkage(.external, builder);
     } else {
@@ -240,8 +234,8 @@ fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_modul
         base_ptr_var.setLinkage(.external, builder);
 
         // Create zero size
-        const zero_size = try builder.intConst(usize_type, 0);
-        const size_var = try builder.addVariable(size_name, usize_type, .default);
+        const zero_size = try builder.intConst(.i32, 0);
+        const size_var = try builder.addVariable(size_name, .i32, .default);
         try size_var.setInitializer(zero_size, builder);
         size_var.setLinkage(.external, builder);
     }

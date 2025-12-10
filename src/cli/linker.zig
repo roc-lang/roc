@@ -284,8 +284,12 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
             // Set initial memory size (64KB pages)
             // With the interpreter shim embedded, we need ~2.5MB for code + data
-            // Use 4MB to provide room for interpreter, bytecode, and runtime stack
-            try args.append("--initial-memory=4194304");
+            // Use 16MB to provide room for interpreter, bytecode, and runtime stack
+            try args.append("--initial-memory=16777216");
+
+            // Set stack size to 8MB (Debug builds need more stack due to no inlining)
+            try args.append("-z");
+            try args.append("stack-size=8388608");
         },
         else => {
             // Generic ELF linker

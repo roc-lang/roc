@@ -73,7 +73,7 @@ const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllo
 // If null at runtime, we're in IPC mode (roc run) and read from shared memory.
 // If non-null, we're in embedded mode (roc build) and data is compiled into the binary.
 extern var roc__serialized_base_ptr: ?[*]align(1) u8;
-extern var roc__serialized_size: usize;
+extern var roc__serialized_size: u32;
 
 // Global state for shared memory - initialized once per process
 // For wasm32: No threading, so simple bool instead of atomic
@@ -104,7 +104,7 @@ const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes pad
 // Header structure that matches the one in main.zig (multi-module format)
 // For embedded mode: parent_base_addr == 0
 // For IPC mode: parent_base_addr == actual parent address
-const Header = struct {
+const Header = extern struct {
     parent_base_addr: u64,
     module_count: u32,
     entry_count: u32,
@@ -223,7 +223,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
 
         // setup base pointer
         roc__serialized_base_ptr = shm.getBasePtr();
-        roc__serialized_size = shm.total_size;
+        roc__serialized_size = @intCast(shm.total_size);
     }
 
     // For wasm32 embedded mode: roc__serialized_base_ptr must be set by linker
@@ -480,7 +480,7 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 
 /// Set up ModuleEnv from portable serialized format (cross-architecture builds)
 /// This format uses ModuleEnv.Serialized with fixed-size types
-fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allocator: std.mem.Allocator) ShimError!SetupResult {
+noinline fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allocator: std.mem.Allocator) ShimError!SetupResult {
     var buf: [256]u8 = undefined;
 
     // Read the serialized header (use unaligned reads since embedded data may not be aligned)
