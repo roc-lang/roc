@@ -2503,3 +2503,63 @@ test "check type - try return with match and error propagation should type-check
     // Expected: should pass type-checking with combined error type (open tag union)
     try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
 }
+
+// record extension in type annotations //
+
+test "check type - record extension - basic open record annotation" {
+    // Test that a function accepting { name: Str, ..others } can take records with extra fields
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, name: Str } -> Str");
+}
+
+test "check type - record extension - closed record satisfies open record" {
+    // A closed record { name: Str, age: I64 } should satisfy { name: Str, ..others }
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+        \\
+        \\result = getName({ name: "Alice", age: 30 })
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - record extension - multiple fields with extension" {
+    // Test with multiple required fields and an extension
+    const source =
+        \\getFullName : { first: Str, last: Str, ..others } -> Str
+        \\getFullName = |record| Str.concat(Str.concat(record.first, " "), record.last)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, first: Str, last: Str } -> Str");
+}
+
+test "check type - record extension - nested records with extension" {
+    // Test record extension with nested record types
+    const source =
+        \\getPersonName : { person: { name: Str, ..inner }, ..outer } -> Str
+        \\getPersonName = |record| record.person.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..outer, person: { ..inner, name: Str } } -> Str");
+}
+
+test "check type - record extension - empty record with extension" {
+    // An empty record with extension means "any record"
+    const source =
+        \\takeAnyRecord : { ..others } -> Str
+        \\takeAnyRecord = |_record| "got a record"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others } -> Str");
+}
+
+test "check type - record extension - mismatch should fail" {
+    // Test that a record missing a required field should fail
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+        \\
+        \\result = getName({ age: 30 })
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
