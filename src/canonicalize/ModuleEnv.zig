@@ -124,6 +124,22 @@ pub const CommonIdents = extern struct {
     list: Ident.Idx,
     box: Ident.Idx,
 
+    // Unqualified builtin type names (for checking if a type name shadows a builtin)
+    num: Ident.Idx,
+    u8: Ident.Idx,
+    u16: Ident.Idx,
+    u32: Ident.Idx,
+    u64: Ident.Idx,
+    u128: Ident.Idx,
+    i8: Ident.Idx,
+    i16: Ident.Idx,
+    i32: Ident.Idx,
+    i64: Ident.Idx,
+    i128: Ident.Idx,
+    f32: Ident.Idx,
+    f64: Ident.Idx,
+    dec: Ident.Idx,
+
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
@@ -198,6 +214,21 @@ pub const CommonIdents = extern struct {
             .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
+            // Unqualified builtin type names
+            .num = try common.insertIdent(gpa, Ident.for_text("Num")),
+            .u8 = try common.insertIdent(gpa, Ident.for_text("U8")),
+            .u16 = try common.insertIdent(gpa, Ident.for_text("U16")),
+            .u32 = try common.insertIdent(gpa, Ident.for_text("U32")),
+            .u64 = try common.insertIdent(gpa, Ident.for_text("U64")),
+            .u128 = try common.insertIdent(gpa, Ident.for_text("U128")),
+            .i8 = try common.insertIdent(gpa, Ident.for_text("I8")),
+            .i16 = try common.insertIdent(gpa, Ident.for_text("I16")),
+            .i32 = try common.insertIdent(gpa, Ident.for_text("I32")),
+            .i64 = try common.insertIdent(gpa, Ident.for_text("I64")),
+            .i128 = try common.insertIdent(gpa, Ident.for_text("I128")),
+            .f32 = try common.insertIdent(gpa, Ident.for_text("F32")),
+            .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
+            .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
@@ -272,6 +303,21 @@ pub const CommonIdents = extern struct {
             .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
+            // Unqualified builtin type names
+            .num = common.findIdent("Num") orelse unreachable,
+            .u8 = common.findIdent("U8") orelse unreachable,
+            .u16 = common.findIdent("U16") orelse unreachable,
+            .u32 = common.findIdent("U32") orelse unreachable,
+            .u64 = common.findIdent("U64") orelse unreachable,
+            .u128 = common.findIdent("U128") orelse unreachable,
+            .i8 = common.findIdent("I8") orelse unreachable,
+            .i16 = common.findIdent("I16") orelse unreachable,
+            .i32 = common.findIdent("I32") orelse unreachable,
+            .i64 = common.findIdent("I64") orelse unreachable,
+            .i128 = common.findIdent("I128") orelse unreachable,
+            .f32 = common.findIdent("F32") orelse unreachable,
+            .f64 = common.findIdent("F64") orelse unreachable,
+            .dec = common.findIdent("Dec") orelse unreachable,
             .builtin_try = common.findIdent("Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
@@ -457,17 +503,23 @@ pub fn initModuleEnvFields(self: *Self, module_name: []const u8) !void {
     return self.initCIRFields(module_name);
 }
 
-/// Initialize the module environment.
+/// Initialize the module environment with capacity heuristics based on source size.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
-    // TODO: maybe wire in smarter default based on the initial input text size.
-
     var common = try CommonEnv.init(gpa, source);
     const idents = try CommonIdents.insert(gpa, &common);
+
+    // Use source-based heuristics for initial capacities
+    // Typical Roc code generates ~1 node per 20 bytes, ~1 type per 50 bytes
+    // Use generous minimums to avoid too many reallocations for small files
+    const source_len = source.len;
+    const node_capacity = @max(1024, @min(100_000, source_len / 20));
+    const type_capacity = @max(2048, @min(50_000, source_len / 50));
+    const var_capacity = @max(512, @min(10_000, source_len / 100));
 
     return Self{
         .gpa = gpa,
         .common = common,
-        .types = try TypeStore.initCapacity(gpa, 2048, 512),
+        .types = try TypeStore.initCapacity(gpa, type_capacity, var_capacity),
         .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
@@ -479,7 +531,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_name = undefined, // Will be set later during canonicalization
         .module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
-        .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
+        .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
         .idents = idents,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),

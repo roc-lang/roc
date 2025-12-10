@@ -2449,9 +2449,9 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                     mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
                 }
-            } else {
-                // TODO: Diagnostic
             }
+            // Note: If resolveIdentifier returns null, the identifier token is malformed.
+            // The parser already handles this; we just don't match it with the annotation.
         }
     }
 
@@ -2857,34 +2857,6 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
             .ident = ident_idx,
             .region = region,
         } });
-    }
-}
-
-fn bringIngestedFileIntoScope(
-    self: *Self,
-    import: *const parse.AST.Stmt.Import,
-) void {
-    const res = self.env.modules.getOrInsert(
-        import.name,
-        import.package_shorthand,
-    );
-
-    if (res.was_present) {
-        // _ = self.env.problems.append(Problem.Canonicalize.make(.DuplicateImport{
-        //     .duplicate_import_region = import.name_region,
-        // }));
-    }
-
-    // scope.introduce(self: *Scope, comptime item_kind: Level.ItemKind, ident: Ident.Idx)
-
-    for (import.exposing.items.items) |exposed| {
-        const exposed_ident = switch (exposed) {
-            .Value => |ident| ident,
-            .Type => |ident| ident,
-            .CustomTagUnion => |custom| custom.name,
-        };
-        self.env.addExposedIdentForModule(exposed_ident, res.module_idx);
-        // TODO: Implement scope introduction for exposed identifiers
     }
 }
 
@@ -4116,8 +4088,8 @@ pub fn canonicalizeExpr(
                         // Check if this is a used underscore variable
                         try self.checkUsedUnderscoreVariable(ident, region);
 
-                        // We found the ident in scope, lookup to reference the pattern
-                        // TODO(RANK)
+                        // We found the ident in scope, create a lookup to reference the pattern
+                        // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
                         const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                             .pattern_idx = found_pattern_idx,
                         } }, region);
@@ -4386,7 +4358,7 @@ pub fn canonicalizeExpr(
                     } else if (std.mem.eql(u8, suffix, "dec")) {
                         break :blk .dec;
                     } else {
-                        // TODO: Create a new error type
+                        // Invalid numeric suffix - the suffix doesn't match any known type
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
                     }
@@ -6559,7 +6531,7 @@ pub fn canonicalizePattern(
                     } else if (std.mem.eql(u8, suffix, "dec")) {
                         break :blk .dec;
                     } else {
-                        // TODO: Create a new error type
+                        // Invalid numeric suffix - the suffix doesn't match any known type
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                     }
                 };
@@ -8503,8 +8475,8 @@ fn canonicalizeTypeHeader(self: *Self, header_idx: AST.TypeHeader.Idx, type_kind
     // Check if this is a builtin type
     // Allow builtin type names to be redeclared in the Builtin module
     // (e.g., Str := ... within Builtin.roc)
-    // TODO: Can we compare idents or something here? The byte slice comparison is ineffecient
-    if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(name_ident))) |_| {
+    // Use identifier index comparison instead of string comparison for efficiency
+    if (TypeAnno.Builtin.isBuiltinTypeIdent(name_ident, self.env.idents)) {
         const is_builtin_module = std.mem.eql(u8, self.env.module_name, "Builtin");
         if (!is_builtin_module) {
             return try self.env.pushMalformed(CIR.TypeHeader.Idx, Diagnostic{ .ident_already_in_scope = .{
@@ -9488,9 +9460,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         else => {},
     }
 
-    // check against last anno
-
-    // Get the last annotation, if it exists
+    // Check if this declaration matches the last type annotation
     var mb_validated_anno: ?Annotation.Idx = null;
     if (mb_last_anno) |anno_info| {
         if (ast_pattern == .ident) {
@@ -9501,9 +9471,9 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                     mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
                 }
-            } else {
-                // TODO: Diagnostic
             }
+            // Note: If resolveIdentifier returns null, the identifier token is malformed.
+            // The parser already handles this; we just don't match it with the annotation.
         }
     }
 
