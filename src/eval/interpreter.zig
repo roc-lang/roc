@@ -9733,10 +9733,32 @@ pub const Interpreter = struct {
         while (work_stack.pop()) |work_item| {
             switch (work_item) {
                 .eval_expr => |eval_item| {
-                    try self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops);
+                    self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops) catch |err| {
+                        if (err == error.EarlyReturn) {
+                            // An early return propagated up from a nested evalWithExpectedType.
+                            // Check if there's a call_cleanup on our stack that should handle it.
+                            if (self.findAndHandleEarlyReturn(&work_stack, &value_stack, roc_ops)) {
+                                continue; // Found call_cleanup, it pushed the return value, continue processing
+                            }
+                            // No call_cleanup found, propagate the error up
+                            return error.EarlyReturn;
+                        }
+                        return err;
+                    };
                 },
                 .apply_continuation => |cont| {
-                    const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
+                    const should_continue = self.applyContinuation(&work_stack, &value_stack, cont, roc_ops) catch |err| {
+                        if (err == error.EarlyReturn) {
+                            // An early return propagated up from a nested evalWithExpectedType.
+                            // Check if there's a call_cleanup on our stack that should handle it.
+                            if (self.findAndHandleEarlyReturn(&work_stack, &value_stack, roc_ops)) {
+                                continue; // Found call_cleanup, it pushed the return value, continue processing
+                            }
+                            // No call_cleanup found, propagate the error up
+                            return error.EarlyReturn;
+                        }
+                        return err;
+                    };
                     if (!should_continue) {
                         // return_result continuation signals completion
                         if (value_stack.pop()) |val| {
@@ -9850,6 +9872,106 @@ pub const Interpreter = struct {
             },
             else => {},
         }
+    }
+
+    /// Handle an early return that propagated up from a nested evalWithExpectedType.
+    /// Searches this work_stack for a call_cleanup continuation and handles the early return there.
+    /// Returns true if a call_cleanup was found and handled, false otherwise.
+    fn findAndHandleEarlyReturn(self: *Interpreter, work_stack: *WorkStack, value_stack: *ValueStack, roc_ops: *RocOps) bool {
+        const return_value = self.early_return_value orelse return false;
+
+        // Drain work stack looking for call_cleanup
+        while (work_stack.pop()) |pending_item| {
+            switch (pending_item) {
+                .apply_continuation => |pending_cont| {
+                    switch (pending_cont) {
+                        .call_cleanup => {
+                            // Found function boundary - put it back and let it handle the early return
+                            work_stack.push(pending_item) catch return false;
+                            // Push the return value to the value stack
+                            value_stack.push(return_value) catch return false;
+                            self.early_return_value = null;
+                            return true;
+                        },
+                        .return_result => {
+                            // Found evaluation root without call_cleanup - no function boundary on this stack
+                            // Put it back and return false to propagate the error
+                            work_stack.push(pending_item) catch {};
+                            return false;
+                        },
+                        // Clean up other continuations as we skip them
+                        .call_invoke_closure => |ci| {
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (ci.saved_rigid_subst) |saved| {
+                                var saved_copy = saved;
+                                saved_copy.deinit();
+                            }
+                        },
+                        .for_iterate => |fl| {
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .for_body_done => |fl| {
+                            self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
+                            fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                        },
+                        .str_collect => |sc| {
+                            for (0..sc.collected_count) |_| {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                        },
+                        .tuple_collect => |tc| {
+                            for (0..tc.collected_count) |_| {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                        },
+                        .list_collect => |lc| {
+                            for (0..lc.collected_count) |_| {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                        },
+                        .record_collect => |rc| {
+                            for (0..rc.collected_count) |_| {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                            if (rc.has_extension) {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                        },
+                        .tag_collect => |tc| {
+                            for (0..tc.collected_count) |_| {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                        },
+                        .call_collect_args => |cc| {
+                            for (0..cc.collected_count) |_| {
+                                if (value_stack.pop()) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                            }
+                            if (value_stack.pop()) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
+                        },
+                        else => {},
+                    }
+                },
+                .eval_expr => {},
+            }
+        }
+        // Didn't find call_cleanup or return_result - shouldn't happen, but return false
+        return false;
     }
 
     /// Clean up any pending allocations in the work stack when an error occurs.
@@ -12874,7 +12996,7 @@ pub const Interpreter = struct {
                 const return_value = value_stack.pop() orelse return error.Crash;
                 self.early_return_value = return_value;
 
-                // Drain work stack until we find call_cleanup (function boundary)
+                // Drain work stack until we find call_cleanup (function boundary) or return_result (evaluation root)
                 // This skips any remaining work items for the current function body
                 while (work_stack.pop()) |pending_item| {
                     switch (pending_item) {
@@ -12885,9 +13007,21 @@ pub const Interpreter = struct {
                                     try work_stack.push(pending_item);
                                     break;
                                 },
+                                .return_result => {
+                                    // Found evaluation root without call_cleanup - this means we're in a
+                                    // nested evalWithExpectedType call. We need to propagate the early
+                                    // return up to the enclosing function. Keep early_return_value set
+                                    // and return EarlyReturn error to propagate up.
+                                    // The early_return_value is already set, so just return the error.
+                                    return error.EarlyReturn;
+                                },
                                 .call_invoke_closure => |ci| {
-                                    // Free arg_rt_vars if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                    if (ci.saved_rigid_subst) |saved| {
+                                        var saved_copy = saved;
+                                        saved_copy.deinit();
+                                    }
                                 },
                                 .for_iterate => |fl| {
                                     // Decref the list value when skipping a for loop
@@ -12897,6 +13031,65 @@ pub const Interpreter = struct {
                                     // Decref the list value and clean up bindings
                                     self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .str_collect => |sc| {
+                                    // Clean up any already-collected string segments on the value stack
+                                    for (0..sc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .tuple_collect => |tc| {
+                                    // Clean up any already-collected tuple elements on the value stack
+                                    for (0..tc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .list_collect => |lc| {
+                                    // Clean up any already-collected list elements on the value stack
+                                    for (0..lc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .record_collect => |rc| {
+                                    // Clean up any already-collected record fields on the value stack
+                                    // Also clean up base record value if present (from record extension)
+                                    for (0..rc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                    if (rc.has_extension) {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .tag_collect => |tc| {
+                                    // Clean up any already-collected tag arguments on the value stack
+                                    for (0..tc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .call_collect_args => |cc| {
+                                    // Clean up any already-collected arguments on the value stack
+                                    // Also clean up function value
+                                    for (0..cc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                    // Function value is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
                                 },
                                 else => {
                                     // Skip this continuation - it's part of the function body being early-returned from
