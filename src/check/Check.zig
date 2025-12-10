@@ -1622,32 +1622,27 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                                 // If so, then update this annotation to be an instance
                                 // of this type using the same backing variable
-                                try self.unifyWith(anno_var, blk: {
-                                    switch (this_decl.type_) {
-                                        .alias => {
-                                            // TODO: Recursion is not allowed in aliases.
-                                            //
-                                            // If this type i used anywhere,
-                                            // then the user _should_ get an
-                                            // error, but we should proactively
-                                            // emit on here too
-                                            break :blk try self.types.mkAlias(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                &.{},
-                                            );
-                                        },
-                                        .nominal => {
-                                            break :blk try self.types.mkNominal(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                &.{},
-                                                self.builtin_ctx.module_name,
-                                                false, // Default to non-opaque for error case
-                                            );
-                                        },
-                                    }
-                                }, env);
+                                switch (this_decl.type_) {
+                                    .alias => {
+                                        // Recursion is not allowed in aliases - emit error
+                                        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                            .type_name = this_decl.name,
+                                            .region = anno_region,
+                                        } });
+                                        try self.unifyWith(anno_var, .err, env);
+                                        return;
+                                    },
+                                    .nominal => {
+                                        // Nominal types can be recursive
+                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                            .{ .ident_idx = this_decl.name },
+                                            this_decl.backing_var,
+                                            &.{},
+                                            self.builtin_ctx.module_name,
+                                            false, // Default to non-opaque for error case
+                                        ), env);
+                                    },
+                                }
 
                                 return;
                             }
@@ -1717,32 +1712,27 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                                 // If so, then update this annotation to be an instance
                                 // of this type using the same backing variable
-                                try self.unifyWith(anno_var, blk: {
-                                    switch (this_decl.type_) {
-                                        .alias => {
-                                            // TODO: Recursion is not allowed in aliases.
-                                            //
-                                            // If this type i used anywhere,
-                                            // then the user _should_ get an
-                                            // error, but we should proactively
-                                            // emit on here too
-                                            break :blk try self.types.mkAlias(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                anno_arg_vars,
-                                            );
-                                        },
-                                        .nominal => {
-                                            break :blk try self.types.mkNominal(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                anno_arg_vars,
-                                                self.builtin_ctx.module_name,
-                                                false, // Default to non-opaque for error case
-                                            );
-                                        },
-                                    }
-                                }, env);
+                                switch (this_decl.type_) {
+                                    .alias => {
+                                        // Recursion is not allowed in aliases - emit error
+                                        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                            .type_name = this_decl.name,
+                                            .region = anno_region,
+                                        } });
+                                        try self.unifyWith(anno_var, .err, env);
+                                        return;
+                                    },
+                                    .nominal => {
+                                        // Nominal types can be recursive
+                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                            .{ .ident_idx = this_decl.name },
+                                            this_decl.backing_var,
+                                            anno_arg_vars,
+                                            self.builtin_ctx.module_name,
+                                            false, // Default to non-opaque for error case
+                                        ), env);
+                                    },
+                                }
 
                                 return;
                             }
