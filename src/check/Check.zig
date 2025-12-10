@@ -399,18 +399,17 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         }
     }
 
-    // Set regions and add to the current rank all variables created during unification
+    // Set regions and add to the current rank all variables created during unification.
     //
-    // TODO: Setting all fresh var regions to be the same as the root var region
-    // is fine if this unification doesn't go very deep (ie doesn't recurse
-    // that much).
+    // We assign all fresh variables the region of `b` (the "actual" type), since `a` is
+    // typically the "expected" type from an annotation. This heuristic works well for
+    // most cases but can be imprecise for deeply nested unifications where fresh variables
+    // are created for sub-components (e.g., record fields, tag payloads). In those cases,
+    // error messages may point to the outer expression rather than the specific field.
     //
-    // But if it does, this region may be imprecise. We can explore
-    // ways around this (like maybe capurting the origin var for each of unify's
-    // fresh var) and setting region that way
-    //
-    // Note that we choose `b`s region here, since `b` is the "actual" type
-    // (whereas `a` is the "expected" type, like from an annotation)
+    // A more precise solution would track the origin of each fresh variable during
+    // unification and propagate that back, but the current approach is sufficient for
+    // typical error reporting scenarios.
     const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(b));
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         // Set the rank
@@ -2264,148 +2263,35 @@ fn checkPatternHelp(
             try self.unifyWith(pattern_var, tag_union_content, env);
         },
         // nominal //
-        .nominal => |nominal| blk: {
-            // TODO: Merge this with e_nominal_external
-
-            // First, check the type inside the expr
+        .nominal => |nominal| {
+            // Check the backing pattern first
             const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, .no_expectation, out_var);
 
-            // Then, we need an instance of the nominal type being referenced
-            // E.g. ConList.Cons(...)
-            //      ^^^^^^^
-            const nominal_var = try self.instantiateVar(ModuleEnv.varFrom(nominal.nominal_type_decl), env, .{ .explicit = pattern_region });
-            const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
-
-            if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
-                const nominal_type = nominal_resolved.structure.nominal_type;
-
-                // If this nominal type is opaque and we're not in the defining module
-                // then report an error
-                if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
-                        .var_ = pattern_var,
-                        .nominal_type_name = nominal_type.ident.ident_idx,
-                    } });
-
-                    // Mark the entire expression as having a type error
-                    try self.unifyWith(pattern_var, .err, env);
-                    break :blk;
-                }
-
-                // Then, we extract the variable of the nominal type
-                // E.g. ConList(a) := [Cons(a, ConstList), Nil]
-                //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-
-                // Now we unify what the user wrote with the backing type of the nominal was
-                // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
-                //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
-                const result = try self.unify(nominal_backing_var, actual_backing_var, env);
-
-                // Then, we handle the result of unification
-                switch (result) {
-                    .ok => {
-                        // If that unify call succeeded, then we this is a valid instance
-                        // of this nominal type. So we set the expr's type to be the
-                        // nominal type
-                        _ = try self.unify(pattern_var, nominal_var, env);
-                    },
-                    .problem => |problem_idx| {
-                        // Unification failed - the constructor is incompatible with the nominal type
-                        // Set a specific error message based on the backing type kind
-                        switch (nominal.backing_type) {
-                            .tag => {
-                                // Constructor doesn't exist or has wrong arity/types
-                                self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                            },
-                            else => {
-                                // TODO: Add specific error messages for records, tuples, etc.
-                            },
-                        }
-
-                        // Mark the entire expression as having a type error
-                        try self.unifyWith(pattern_var, .err, env);
-                    },
-                }
-            } else {
-                // If the nominal type is actually something else, then set the
-                // whole expression to be an error.
-                //
-                // TODO: Report a nice problem here
-                try self.unifyWith(pattern_var, .err, env);
-            }
+            // Use shared nominal type checking logic
+            _ = try self.checkNominalTypeUsage(
+                pattern_var,
+                actual_backing_var,
+                ModuleEnv.varFrom(nominal.nominal_type_decl),
+                nominal.backing_type,
+                pattern_region,
+                env,
+            );
         },
-        .nominal_external => |nominal| blk: {
-            // TODO: Merge this with e_nominal
-
-            // First, check the type inside the expr
+        .nominal_external => |nominal| {
+            // Check the backing pattern first
             const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, .no_expectation, out_var);
 
+            // Resolve the external type declaration
             if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
-                // Then, we need an instance of the nominal type being referenced
-                // E.g. ConList.Cons(...)
-                //      ^^^^^^^
-                const nominal_var = try self.instantiateVar(ext_ref.local_var, env, .{ .explicit = pattern_region });
-                const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
-
-                if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
-                    const nominal_type = nominal_resolved.structure.nominal_type;
-
-                    // If this nominal type is opaque and we're not in the defining module
-                    // then report an error
-                    if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
-                        _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
-                            .var_ = pattern_var,
-                            .nominal_type_name = nominal_type.ident.ident_idx,
-                        } });
-
-                        // Mark the entire expression as having a type error
-                        try self.unifyWith(pattern_var, .err, env);
-                        break :blk;
-                    }
-
-                    // Then, we extract the variable of the nominal type
-                    // E.g. ConList(a) := [Cons(a, ConstList), Nil]
-                    //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-
-                    // Now we unify what the user wrote with the backing type of the nominal was
-                    // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
-                    //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
-                    const result = try self.unify(nominal_backing_var, actual_backing_var, env);
-
-                    // Then, we handle the result of unification
-                    switch (result) {
-                        .ok => {
-                            // If that unify call succeeded, then we this is a valid instance
-                            // of this nominal type. So we set the expr's type to be the
-                            // nominal type
-                            _ = try self.unify(pattern_var, nominal_var, env);
-                        },
-                        .problem => |problem_idx| {
-                            // Unification failed - the constructor is incompatible with the nominal type
-                            // Set a specific error message based on the backing type kind
-                            switch (nominal.backing_type) {
-                                .tag => {
-                                    // Constructor doesn't exist or has wrong arity/types
-                                    self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                                },
-                                else => {
-                                    // TODO: Add specific error messages for records, tuples, etc.
-                                },
-                            }
-
-                            // Mark the entire expression as having a type error
-                            try self.unifyWith(pattern_var, .err, env);
-                        },
-                    }
-                } else {
-                    // If the nominal type is actually something else, then set the
-                    // whole expression to be an error.
-                    //
-                    // TODO: Report a nice problem here
-                    try self.unifyWith(pattern_var, .err, env);
-                }
+                // Use shared nominal type checking logic
+                _ = try self.checkNominalTypeUsage(
+                    pattern_var,
+                    actual_backing_var,
+                    ext_ref.local_var,
+                    nominal.backing_type,
+                    pattern_region,
+                    env,
+                );
             } else {
                 try self.unifyWith(pattern_var, .err, env);
             }
@@ -2920,150 +2806,37 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.unifyWith(expr_var, tag_union_content, env);
         },
         // nominal //
-        .e_nominal => |nominal| blk: {
-            // TODO: Merge this with e_nominal_external
-
-            // First, check the type inside the expr
+        .e_nominal => |nominal| {
+            // Check the backing expression first
             does_fx = try self.checkExpr(nominal.backing_expr, env, .no_expectation) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
-            // Then, we need an instance of the nominal type being referenced
-            // E.g. ConList.Cons(...)
-            //      ^^^^^^^
-            const nominal_var = try self.instantiateVar(ModuleEnv.varFrom(nominal.nominal_type_decl), env, .{ .explicit = expr_region });
-            const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
-
-            if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
-                const nominal_type = nominal_resolved.structure.nominal_type;
-
-                // If this nominal type is opaque and we're not in the defining module
-                // then report an error
-                if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
-                        .var_ = expr_var,
-                        .nominal_type_name = nominal_type.ident.ident_idx,
-                    } });
-
-                    // Mark the entire expression as having a type error
-                    try self.unifyWith(expr_var, .err, env);
-                    break :blk;
-                }
-
-                // Then, we extract the variable of the nominal type
-                // E.g. ConList(a) := [Cons(a, ConstList), Nil]
-                //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-
-                // Now we unify what the user wrote with the backing type of the nominal was
-                // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
-                //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
-                const result = try self.unify(nominal_backing_var, actual_backing_var, env);
-
-                // Then, we handle the result of unification
-                switch (result) {
-                    .ok => {
-                        // If that unify call succeeded, then we this is a valid instance
-                        // of this nominal type. So we set the expr's type to be the
-                        // nominal type
-                        _ = try self.unify(expr_var, nominal_var, env);
-                    },
-                    .problem => |problem_idx| {
-                        // Unification failed - the constructor is incompatible with the nominal type
-                        // Set a specific error message based on the backing type kind
-                        switch (nominal.backing_type) {
-                            .tag => {
-                                // Constructor doesn't exist or has wrong arity/types
-                                self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                            },
-                            else => {
-                                // TODO: Add specific error messages for records, tuples, etc.
-                            },
-                        }
-
-                        // Mark the entire expression as having a type error
-                        try self.unifyWith(expr_var, .err, env);
-                    },
-                }
-            } else {
-                // If the nominal type is actually something else, then set the
-                // whole expression to be an error.
-                //
-                // TODO: Report a nice problem here
-                try self.unifyWith(expr_var, .err, env);
-            }
+            // Use shared nominal type checking logic
+            _ = try self.checkNominalTypeUsage(
+                expr_var,
+                actual_backing_var,
+                ModuleEnv.varFrom(nominal.nominal_type_decl),
+                nominal.backing_type,
+                expr_region,
+                env,
+            );
         },
-        .e_nominal_external => |nominal| blk: {
-            // TODO: Merge this with e_nominal
-
-            // First, check the type inside the expr
+        .e_nominal_external => |nominal| {
+            // Check the backing expression first
             does_fx = try self.checkExpr(nominal.backing_expr, env, .no_expectation) or does_fx;
             const actual_backing_var = ModuleEnv.varFrom(nominal.backing_expr);
 
+            // Resolve the external type declaration
             if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
-                // Then, we need an instance of the nominal type being referenced
-                // E.g. ConList.Cons(...)
-                //      ^^^^^^^
-                const nominal_var = try self.instantiateVar(ext_ref.local_var, env, .{ .explicit = expr_region });
-                const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
-
-                if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
-                    const nominal_type = nominal_resolved.structure.nominal_type;
-
-                    // If this nominal type is opaque and we're not in the defining module
-                    // then report an error
-                    if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
-                        _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
-                            .var_ = expr_var,
-                            .nominal_type_name = nominal_type.ident.ident_idx,
-                        } });
-
-                        // Mark the entire expression as having a type error
-                        try self.unifyWith(expr_var, .err, env);
-                        break :blk;
-                    }
-
-                    // Then, we extract the variable of the nominal type
-                    // E.g. ConList(a) := [Cons(a, ConstList), Nil]
-                    //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-                    const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
-
-                    // Now we unify what the user wrote with the backing type of the nominal was
-                    // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
-                    //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
-                    const result = try self.unify(nominal_backing_var, actual_backing_var, env);
-
-                    // Then, we handle the result of unification
-                    switch (result) {
-                        .ok => {
-                            // If that unify call succeeded, then we this is a valid instance
-                            // of this nominal type. So we set the expr's type to be the
-                            // nominal type
-                            _ = try self.unify(expr_var, nominal_var, env);
-                        },
-                        .problem => |problem_idx| {
-                            // Unification failed - the constructor is incompatible with the nominal type
-                            // Set a specific error message based on the backing type kind
-                            switch (nominal.backing_type) {
-                                .tag => {
-                                    // Constructor doesn't exist or has wrong arity/types
-                                    self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                                },
-                                else => {
-                                    // TODO: Add specific error messages for records, tuples, etc.
-                                },
-                            }
-
-                            // Mark the entire expression as having a type error
-                            try self.unifyWith(expr_var, .err, env);
-                        },
-                    }
-                } else {
-                    // If the nominal type is actually something else, then set the
-                    // whole expression to be an error.
-                    //
-                    // TODO: Report a nice problem here
-                    try self.unifyWith(expr_var, .err, env);
-                }
+                // Use shared nominal type checking logic
+                _ = try self.checkNominalTypeUsage(
+                    expr_var,
+                    actual_backing_var,
+                    ext_ref.local_var,
+                    nominal.backing_type,
+                    expr_region,
+                    env,
+                );
             } else {
                 try self.unifyWith(expr_var, .err, env);
             }
@@ -3661,13 +3434,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
-        .e_inspect => |inspect| {
-            // inspect evaluates its inner expression and returns Str
-            // Note: does NOT set does_fx because inspect is pure
-            _ = try self.checkExpr(inspect.expr, env, .no_expectation);
-            const str_var = try self.freshStr(env, expr_region);
-            _ = try self.unify(expr_var, str_var, env);
-        },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
@@ -4019,12 +3785,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
-            .s_inspect => |expr| {
-                // inspect returns Str (not the inner expression type)
-                _ = try self.checkExpr(expr.expr, env, .no_expectation);
-                const str_var = try self.freshStr(env, stmt_region);
-                _ = try self.unify(stmt_var, str_var, env);
-            },
             .s_expect => |expr_stmt| {
                 does_fx = try self.checkExpr(expr_stmt.body, env, .no_expectation) or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
@@ -4140,9 +3900,6 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.body, return_var, env);
         },
         .s_dbg => |s| {
-            try self.unifyEarlyReturns(s.expr, return_var, env);
-        },
-        .s_inspect => |s| {
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
@@ -4913,6 +4670,99 @@ fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEn
     self.debugAssertArraysInSync();
 
     return copied_var;
+}
+
+// nominal type checking helpers //
+
+/// Result of checking a nominal type usage
+const NominalCheckResult = enum {
+    /// Successfully checked the nominal type
+    ok,
+    /// An error occurred (already reported and target_var set to error)
+    err,
+};
+
+/// Check a nominal type usage (either in pattern or expression context).
+/// This is the shared logic for `.nominal`, `.nominal_external`, `.e_nominal`, and `.e_nominal_external`.
+///
+/// Parameters:
+/// - target_var: The type variable to unify with (pattern_var or expr_var)
+/// - actual_backing_var: The type variable of the backing expression/pattern
+/// - nominal_type_decl_var: The type variable from the nominal type declaration
+/// - backing_type: The kind of backing type (tag, record, tuple, value)
+/// - region: The source region for instantiation
+/// - env: The type checking environment
+fn checkNominalTypeUsage(
+    self: *Self,
+    target_var: Var,
+    actual_backing_var: Var,
+    nominal_type_decl_var: Var,
+    backing_type: CIR.Expr.NominalBackingType,
+    region: Region,
+    env: *Env,
+) std.mem.Allocator.Error!NominalCheckResult {
+    // Instantiate the nominal type declaration
+    const nominal_var = try self.instantiateVar(nominal_type_decl_var, env, .{ .explicit = region });
+    const nominal_resolved = self.types.resolveVar(nominal_var).desc.content;
+
+    if (nominal_resolved == .structure and nominal_resolved.structure == .nominal_type) {
+        const nominal_type = nominal_resolved.structure.nominal_type;
+
+        // If this nominal type is opaque and we're not in the defining module
+        // then report an error
+        if (!nominal_type.canLiftInner(self.cir.module_name_idx)) {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .cannot_access_opaque_nominal = .{
+                .var_ = target_var,
+                .nominal_type_name = nominal_type.ident.ident_idx,
+            } });
+
+            // Mark the entire expression as having a type error
+            try self.unifyWith(target_var, .err, env);
+            return .err;
+        }
+
+        // Extract the backing type variable from the nominal type
+        // E.g. ConList(a) := [Cons(a, ConstList), Nil]
+        //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+        const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
+
+        // Unify what the user wrote with the backing type of the nominal
+        // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
+        //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
+        const result = try self.unify(nominal_backing_var, actual_backing_var, env);
+
+        // Handle the result of unification
+        switch (result) {
+            .ok => {
+                // If unification succeeded, this is a valid instance of the nominal type
+                // So we set the target's type to be the nominal type
+                _ = try self.unify(target_var, nominal_var, env);
+                return .ok;
+            },
+            .problem => |problem_idx| {
+                // Unification failed - the constructor is incompatible with the nominal type
+                // Set a specific error message based on the backing type kind
+                switch (backing_type) {
+                    .tag => {
+                        // Constructor doesn't exist or has wrong arity/types
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
+                    },
+                    .record, .tuple, .value => {
+                        // Other backing types - no specific error message yet
+                    },
+                }
+
+                // Mark the entire expression as having a type error
+                try self.unifyWith(target_var, .err, env);
+                return .err;
+            },
+        }
+    } else {
+        // If the nominal type resolves to something other than a nominal_type structure,
+        // set the whole expression to be an error
+        try self.unifyWith(target_var, .err, env);
+        return .err;
+    }
 }
 
 // validate static dispatch constraints //

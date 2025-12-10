@@ -3,6 +3,17 @@ platform ""
     exposes []
     packages {}
     provides { add_ints_for_host: "add_ints", multiply_ints_for_host: "multiply_ints" }
+    targets: {
+        files: "targets/",
+        exe: {
+            x64mac: ["libhost.a", app],
+            arm64mac: ["libhost.a", app],
+            x64musl: ["crt1.o", "libhost.a", app, "libc.a"],
+            arm64musl: ["crt1.o", "libhost.a", app, "libc.a"],
+            x64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
+            arm64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
+        }
+    }
 
 add_ints_for_host : I64, I64 -> I64
 add_ints_for_host = add_ints

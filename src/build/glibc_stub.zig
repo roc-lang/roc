@@ -22,8 +22,55 @@ pub fn generateComprehensiveStub(
         else => try writer.writeAll("    ret\n\n"),
     }
 
-    // Essential libc symbols that must be present
-    const essential_symbols = [_][]const u8{ "__libc_start_main", "abort", "getauxval" };
+    // Essential libc symbols that must be present for linking
+    // These are resolved at runtime from real glibc
+    const essential_symbols = [_][]const u8{
+        // Core libc
+        "__libc_start_main",
+        "abort",
+        "getauxval",
+        "__tls_get_addr", // Thread-local storage
+        "__errno_location", // Thread-safe errno access
+        // Memory operations
+        "memcpy",
+        "memmove",
+        "mmap",
+        "mmap64",
+        "munmap",
+        "mremap",
+        "msync",
+        // File I/O
+        "close",
+        "read",
+        "write",
+        "readv",
+        "writev",
+        "openat64",
+        "lseek64",
+        "pread64",
+        "pwritev64",
+        "flock",
+        "copy_file_range",
+        "sendfile64",
+        // Path operations
+        "realpath",
+        "readlink",
+        // Environment
+        "getenv",
+        "isatty",
+        "sysconf", // System configuration (page size, etc.)
+        // Signal handling
+        "sigaction",
+        "sigemptyset",
+        // Dynamic linker
+        "dl_iterate_phdr",
+        "getcontext",
+        // Math functions
+        "fmod",
+        "fmodf",
+        "trunc",
+        "truncf",
+    };
 
     for (essential_symbols) |symbol| {
         try writer.print(".balign 8\n.globl {s}\n.type {s}, %function\n{s}:\n", .{ symbol, symbol, symbol });
@@ -36,7 +83,7 @@ pub fn generateComprehensiveStub(
                 else => try writer.writeAll("    ret\n\n"),
             }
         } else {
-            // Other symbols return 0
+            // Other symbols return 0 or are no-ops (resolved at runtime)
             switch (target_arch) {
                 .x86_64 => try writer.writeAll("    xor %rax, %rax\n    ret\n\n"),
                 .aarch64 => try writer.writeAll("    mov x0, #0\n    ret\n\n"),
@@ -52,6 +99,14 @@ pub fn generateComprehensiveStub(
         try writer.writeAll(".quad 1\n");
     } else {
         try writer.writeAll(".long 1\n");
+    }
+
+    // environ is a global variable (char **environ)
+    try writer.writeAll(".globl environ\n.type environ, %object\nenviron: ");
+    if (ptr_width == 8) {
+        try writer.writeAll(".quad 0\n");
+    } else {
+        try writer.writeAll(".long 0\n");
     }
 }
 

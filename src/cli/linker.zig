@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const base = @import("base");
 const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
+const RocTarget = @import("roc_target").RocTarget;
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -54,14 +55,8 @@ pub const TargetAbi = enum {
     gnu,
 
     /// Convert from RocTarget to TargetAbi
-    pub fn fromRocTarget(roc_target: anytype) TargetAbi {
-        // Use string matching to avoid circular imports
-        const target_str = @tagName(roc_target);
-        if (std.mem.endsWith(u8, target_str, "musl")) {
-            return .musl;
-        } else {
-            return .gnu;
-        }
+    pub fn fromRocTarget(roc_target: RocTarget) TargetAbi {
+        return if (roc_target.isStatic()) .musl else .gnu;
     }
 };
 

@@ -266,21 +266,38 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 
         // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
         const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={} body_idx={}", .{
+                closure_ptr_val,
+                idx_as_usize,
+                @intFromEnum(closure_header.body_idx),
+            });
+        }
         if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
             std.debug.panic("decrefLayoutPtr: closure has invalid captures_layout_idx=0x{x} (likely uninitialized or corrupted closure header at ptr={*})", .{ idx_as_usize, ptr.? });
         }
 
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
 
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF closure captures_layout.tag={}", .{@intFromEnum(captures_layout.tag)});
+        }
+
         // Only decref if there are actual captures (record with fields)
         if (captures_layout.tag == .record) {
             const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF closure record fields={}", .{record_data.fields.count});
+            }
             if (record_data.fields.count > 0) {
                 const header_size = @sizeOf(layout_mod.Closure);
                 const cap_align = captures_layout.alignment(layout_cache.targetUsize());
                 const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
                 const base_ptr: [*]u8 = @ptrCast(@alignCast(ptr.?));
                 const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                if (comptime trace_refcount) {
+                    traceRefcount("DECREF closure rec_ptr=0x{x}", .{@intFromPtr(rec_ptr)});
+                }
                 decrefLayoutPtr(captures_layout, rec_ptr, layout_cache, ops);
             }
         }
@@ -1676,6 +1693,32 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
         increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache);
         return;
     }
+    // Handle closures by incref'ing their captures (symmetric with decref)
+    if (self.layout.tag == .closure) {
+        if (self.ptr == null) return;
+        const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(self.ptr.?));
+        const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+
+        // Only incref if there are actual captures (record with fields)
+        if (captures_layout.tag == .record) {
+            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (record_data.fields.count > 0) {
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
+                        @intFromPtr(self.ptr),
+                        record_data.fields.count,
+                    });
+                }
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                increfLayoutPtr(captures_layout, rec_ptr, layout_cache);
+            }
+        }
+        return;
+    }
 }
 
 /// Trace helper for refcount operations. Only active when built with -Dtrace-refcount=true.
@@ -1860,6 +1903,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .closure => {
             decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF closure DONE ptr=0x{x}", .{@intFromPtr(self.ptr)});
+            }
             return;
         },
         .tag_union => {

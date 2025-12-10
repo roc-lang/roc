@@ -248,7 +248,7 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
 
 /// Host environment - contains GeneralPurposeAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.GeneralPurposeAllocator(.{ .safety = true }),
     test_state: TestState,
 };
 
@@ -767,7 +767,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) !c_int {
     _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
 
     var host_env = HostEnv{
-        .gpa = std.heap.GeneralPurposeAllocator(.{}){},
+        .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
         .test_state = TestState.init(),
     };
 

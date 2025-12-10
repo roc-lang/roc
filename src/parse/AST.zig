@@ -729,6 +729,30 @@ pub const Diagnostic = struct {
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
         where_clause_not_allowed_in_type_declaration,
+
+        // Targets section parse errors
+        expected_targets,
+        expected_targets_colon,
+        expected_targets_open_curly,
+        expected_targets_close_curly,
+        expected_targets_field_name,
+        expected_targets_field_colon,
+        expected_targets_files_string,
+        unknown_targets_field,
+
+        // Target entry parse errors
+        expected_target_link_open_curly,
+        expected_target_link_close_curly,
+        expected_target_name,
+        expected_target_colon,
+        expected_target_files_open_square,
+        expected_target_files_close_square,
+        expected_target_file,
+        expected_target_file_string_end,
+
+        // Semantic warnings (detected at CLI time, not parse time)
+        targets_exe_empty,
+        targets_duplicate_target,
     };
 };
 
@@ -861,10 +885,6 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     },
     dbg: struct {
-        expr: Expr.Idx,
-        region: TokenizedRegion,
-    },
-    inspect: struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
@@ -1086,16 +1106,6 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .inspect => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-inspect");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
             .expect => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-expect");
@@ -1189,7 +1199,6 @@ pub const Statement = union(enum) {
             .type_decl => |s| s.region,
             .crash => |s| s.region,
             .dbg => |s| s.region,
-            .inspect => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
             .@"while" => |s| s.region,
@@ -1620,6 +1629,7 @@ pub const Header = union(enum) {
         exposes: Collection.Idx,
         packages: Collection.Idx,
         provides: Collection.Idx,
+        targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
         region: TokenizedRegion,
     },
     hosted: struct {
@@ -1987,6 +1997,44 @@ pub const ExposedItem = union(enum) {
             .malformed => |m| m.region,
         };
     }
+};
+
+/// A targets section in a platform header
+pub const TargetsSection = struct {
+    files_path: ?Token.Idx, // "files:" directive string literal
+    exe: ?TargetLinkType.Idx, // exe: { ... }
+    // static_lib and shared_lib to be added later
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// A link type section (exe, static_lib, shared_lib)
+pub const TargetLinkType = struct {
+    entries: TargetEntry.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// Single target entry: x64musl: ["crt1.o", "host.o", app]
+pub const TargetEntry = struct {
+    target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
+    files: TargetFile.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// File item in target list
+pub const TargetFile = union(enum) {
+    string_literal: Token.Idx, // "crt1.o"
+    special_ident: Token.Idx, // app, win_gui
+    malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
 };
 
 /// TODO
@@ -2423,10 +2471,6 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
-    inspect: struct {
-        expr: Expr.Idx,
-        region: TokenizedRegion,
-    },
     record_builder: struct {
         mapper: Expr.Idx,
         fields: RecordField.Idx,
@@ -2487,7 +2531,6 @@ pub const Expr = union(enum) {
             .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
-            .inspect => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
@@ -2741,15 +2784,6 @@ pub const Expr = union(enum) {
             .dbg => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-dbg");
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
-            .inspect => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-inspect");
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);

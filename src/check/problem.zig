@@ -48,11 +48,11 @@ pub const Problem = union(enum) {
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
-    infinite_recursion: struct { var_: Var },
-    anonymous_recursion: struct { var_: Var },
-    invalid_number_type: VarProblem1,
-    invalid_record_ext: VarProblem1,
-    invalid_tag_union_ext: VarProblem1,
+    infinite_recursion: VarWithSnapshot,
+    anonymous_recursion: VarWithSnapshot,
+    invalid_number_type: VarWithSnapshot,
+    invalid_record_ext: VarWithSnapshot,
+    invalid_tag_union_ext: VarWithSnapshot,
     bug: Bug,
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
@@ -80,8 +80,9 @@ pub const ComptimeEvalError = struct {
     region: base.Region,
 };
 
-/// A single var problem
-pub const VarProblem1 = struct {
+/// A problem involving a single type variable, with a snapshot for error reporting.
+/// Used for recursion errors, invalid extension types, etc.
+pub const VarWithSnapshot = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
 };
@@ -331,12 +332,11 @@ pub const ReportBuilder = struct {
         self.bytes_buf.deinit();
     }
 
-    /// Get the formatted string for a snapshot, asserting it exists
+    /// Get the formatted string for a snapshot.
+    /// Returns a placeholder if the formatted string is missing, allowing error reporting
+    /// to continue gracefully even if snapshots are incomplete.
     fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
-        return self.snapshots.getFormattedString(idx) orelse {
-            std.debug.assert(false); // Missing formatted string for snapshot
-            unreachable;
-        };
+        return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
     }
 
     /// Build a report for a problem

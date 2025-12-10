@@ -109,11 +109,6 @@ test "NodeStore round trip - Statements" {
             .expr = rand_idx(CIR.Expr.Idx),
         },
     });
-    try statements.append(gpa, CIR.Statement{
-        .s_inspect = .{
-            .expr = rand_idx(CIR.Expr.Idx),
-        },
-    });
 
     try statements.append(gpa, CIR.Statement{
         .s_expect = .{
@@ -365,11 +360,6 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_dbg = .{
-            .expr = rand_idx(CIR.Expr.Idx),
-        },
-    });
-    try expressions.append(gpa, CIR.Expr{
-        .e_inspect = .{
             .expr = rand_idx(CIR.Expr.Idx),
         },
     });

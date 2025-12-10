@@ -1,3 +1,5 @@
+//! LSP server capability definitions for the Roc language server.
+
 const std = @import("std");
 
 /// Aggregates all server capabilities supported by the Roc LSP.

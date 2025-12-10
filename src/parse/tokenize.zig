@@ -146,7 +146,6 @@ pub const Token = struct {
         KwIf,
         KwImplements,
         KwImport,
-        KwInspect,
         KwImports,
         KwIn,
         KwInterface,
@@ -158,6 +157,7 @@ pub const Token = struct {
         KwProvides,
         KwRequires,
         KwReturn,
+        KwTargets,
         KwVar,
         KwWhere,
         KwWhile,
@@ -185,7 +185,6 @@ pub const Token = struct {
                 .KwImport,
                 .KwImports,
                 .KwIn,
-                .KwInspect,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -195,6 +194,7 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwTargets,
                 .KwVar,
                 .KwWhere,
                 .KwWhile,
@@ -289,7 +289,6 @@ pub const Token = struct {
                 .KwImport,
                 .KwImports,
                 .KwIn,
-                .KwInspect,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -299,6 +298,7 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwTargets,
                 .KwVar,
                 .KwWhere,
                 .KwWhile,
@@ -383,7 +383,6 @@ pub const Token = struct {
         .{ "import", .KwImport },
         .{ "imports", .KwImports },
         .{ "in", .KwIn },
-        .{ "inspect", .KwInspect },
         .{ "interface", .KwInterface },
         .{ "match", .KwMatch },
         .{ "module", .KwModule },
@@ -394,6 +393,7 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
+        .{ "targets", .KwTargets },
         .{ "var", .KwVar },
         .{ "where", .KwWhere },
         .{ "while", .KwWhile },
@@ -2263,9 +2263,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .KwIn => {
                 try buf2.appendSlice("in");
             },
-            .KwInspect => {
-                try buf2.appendSlice("inspect");
-            },
             .KwInterface => {
                 try buf2.appendSlice("interface");
             },
@@ -2289,6 +2286,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwReturn => {
                 try buf2.appendSlice("return");
+            },
+            .KwTargets => {
+                try buf2.appendSlice("targets");
             },
             .KwVar => {
                 try buf2.appendSlice("var");

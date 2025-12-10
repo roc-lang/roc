@@ -191,6 +191,18 @@ pub const PackageEnv = struct {
     total_type_checking_ns: u64 = 0,
     total_check_diagnostics_ns: u64 = 0,
 
+    // Additional known modules (e.g., from platform exposes) to include in module_envs_map
+    // These are modules that exist in external directories (like URL platform cache)
+    additional_known_modules: std.ArrayList(KnownModule),
+
+    /// Info about a known module from a platform or other package
+    pub const KnownModule = struct {
+        /// Qualified module name (e.g., "pf.Stdout")
+        qualified_name: []const u8,
+        /// Import name for resolver lookup (e.g., "pf.Stdout")
+        import_name: []const u8,
+    };
+
     pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
         return .{
             .gpa = gpa,
@@ -206,6 +218,7 @@ pub const PackageEnv = struct {
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
+            .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
     }
 
@@ -237,7 +250,22 @@ pub const PackageEnv = struct {
             .injector = std.ArrayList(Task).empty,
             .modules = std.ArrayList(ModuleState).empty,
             .discovered = std.ArrayList(ModuleId).empty,
+            .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
+    }
+
+    /// Add a module that should be recognized during canonicalization.
+    /// This is used for platform-exposed modules in URL platforms where the
+    /// modules exist in a cache directory, not the app's directory.
+    /// `qualified_name` is the full name like "pf.Stdout"
+    /// `import_name` is the import path for resolver lookup (e.g., "pf.Stdout")
+    pub fn addKnownModule(self: *PackageEnv, qualified_name: []const u8, import_name: []const u8) !void {
+        const qualified_copy = try self.gpa.dupe(u8, qualified_name);
+        const import_copy = try self.gpa.dupe(u8, import_name);
+        try self.additional_known_modules.append(self.gpa, .{
+            .qualified_name = qualified_copy,
+            .import_name = import_copy,
+        });
     }
 
     pub fn deinit(self: *PackageEnv) void {
@@ -259,6 +287,13 @@ pub const PackageEnv = struct {
         self.injector.deinit(self.gpa);
         self.discovered.deinit(self.gpa);
         self.emitted.deinit(self.gpa);
+
+        // Free additional known module names
+        for (self.additional_known_modules.items) |km| {
+            self.gpa.free(km.qualified_name);
+            self.gpa.free(km.import_name);
+        }
+        self.additional_known_modules.deinit(self.gpa);
     }
 
     /// Get the root module's env (first module added)
@@ -630,6 +665,7 @@ pub const PackageEnv = struct {
         // Use shared canonicalization function to ensure consistency with snapshot tool
         // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
         // reported prematurely for modules that exist but haven't been loaded yet.
+        // Also include additional known modules from platform exposes (for URL platforms).
         try canonicalizeModuleWithSiblings(
             self.gpa,
             env,
@@ -637,6 +673,9 @@ pub const PackageEnv = struct {
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
             self.root_dir,
+            self.package_name,
+            self.resolver,
+            self.additional_known_modules.items,
         );
 
         const canon_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
@@ -892,7 +931,8 @@ pub const PackageEnv = struct {
         czer.deinit();
     }
 
-    /// Canonicalization function that also discovers sibling .roc files in the same directory.
+    /// Canonicalization function that also discovers sibling .roc files in the same directory
+    /// and includes additional known modules (e.g., from platform exposes).
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
     fn canonicalizeModuleWithSiblings(
         gpa: Allocator,
@@ -901,6 +941,9 @@ pub const PackageEnv = struct {
         builtin_module_env: *const ModuleEnv,
         builtin_indices: can.CIR.BuiltinIndices,
         root_dir: []const u8,
+        package_name: []const u8,
+        resolver: ?ImportResolver,
+        additional_known_modules: []const KnownModule,
     ) !void {
         // Create module_envs map for auto-importing builtin types
         var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
@@ -945,6 +988,23 @@ pub const PackageEnv = struct {
             // Only add if not already present
             if (!module_envs_map.contains(module_ident)) {
                 try module_envs_map.put(module_ident, .{ .env = builtin_module_env, .qualified_type_ident = qualified_ident });
+            }
+        }
+
+        // Add additional known modules (e.g., from platform exposes for URL platforms)
+        // Use the resolver to get the ACTUAL module env if available
+        for (additional_known_modules) |km| {
+            const module_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
+            if (!module_envs_map.contains(module_ident)) {
+                // Try to get the actual module env using the resolver
+                const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
+                    if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
+                        break :blk mod_env;
+                    }
+                    break :blk builtin_module_env;
+                } else builtin_module_env;
+                try module_envs_map.put(module_ident, .{ .env = actual_env, .qualified_type_ident = qualified_ident });
             }
         }
 

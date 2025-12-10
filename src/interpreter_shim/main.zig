@@ -18,6 +18,13 @@ var shim_import_mapping = import_mapping_mod.ImportMapping.init(std.heap.page_al
 
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
+// Global base pointer for the serialized header + env.
+// Is a weak extern that can be overwritten by `roc build` when embedding module data.
+// If null at runtime, we're in IPC mode (roc run) and read from shared memory.
+// If non-null, we're in embedded mode (roc build) and data is compiled into the binary.
+extern var roc__serialized_base_ptr: ?[*]align(1) u8;
+extern var roc__serialized_size: usize;
+
 // Global state for shared memory - initialized once per process
 var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var global_shm: ?SharedMemoryAllocator = null;
@@ -37,6 +44,8 @@ const FIRST_ALLOC_OFFSET = 504; // 0x1f8 - First allocation starts at this offse
 const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
 
 // Header structure that matches the one in main.zig (multi-module format)
+// For embedded mode: parent_base_addr == 0
+// For IPC mode: parent_base_addr == actual parent address
 const Header = struct {
     parent_base_addr: u64,
     module_count: u32,
@@ -75,14 +84,14 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
         // (errors like Crash and StackOverflow already triggered roc_crashed with details)
         if (err != error.Crash and err != error.StackOverflow) {
             var buf: [256]u8 = undefined;
-            const msg2 = std.fmt.bufPrint(&buf, "Error evaluating from shared memory: {s}", .{@errorName(err)}) catch "Error evaluating from shared memory";
+            const msg2 = std.fmt.bufPrint(&buf, "Error evaluating: {s}", .{@errorName(err)}) catch "Error evaluating";
             ops.crash(msg2);
         }
     };
 }
 
 /// Initialize shared memory and ModuleEnv once per process
-fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
+fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     // Fast path: if already initialized, return immediately
     if (shared_memory_initialized.load(.acquire)) {
         return;
@@ -100,18 +109,35 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     const allocator = std.heap.page_allocator;
     var buf: [256]u8 = undefined;
 
-    // Get page size
-    const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
+    if (roc__serialized_base_ptr == null) {
+        // Roc run path: Use the shared memory allocator.
 
-    // Create shared memory allocator from coordination info
-    var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
-        const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
-        roc_ops.crash(msg2);
-        return error.SharedMemoryError;
-    };
+        // Get page size
+        const page_size = SharedMemoryAllocator.getSystemPageSize() catch 4096;
 
-    // Set up ModuleEnv from shared memory
-    const setup_result = try setupModuleEnv(&shm, roc_ops);
+        // Create shared memory allocator from coordination info
+        // Note shm last the lifetime of the program and is never freed.
+        var shm = SharedMemoryAllocator.fromCoordination(allocator, page_size) catch |err| {
+            const msg2 = std.fmt.bufPrint(&buf, "Failed to create shared memory allocator: {s}", .{@errorName(err)}) catch "Failed to create shared memory allocator";
+            roc_ops.crash(msg2);
+            return error.SharedMemoryError;
+        };
+
+        // Validate memory layout - we need at least space for the header
+        const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
+        if (shm.total_size < min_required_size) {
+            const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
+            roc_ops.crash(msg);
+            return error.MemoryLayoutInvalid;
+        }
+
+        // setup base pointer
+        roc__serialized_base_ptr = shm.getBasePtr();
+        roc__serialized_size = shm.total_size;
+    }
+
+    // Set up ModuleEnv from serialized data (embedded or shared memory)
+    const setup_result = try setupModuleEnv(roc_ops);
 
     // Load builtin modules from compiled binary (same as CLI does)
     const builtin_modules = eval.BuiltinModules.init(allocator) catch |err| {
@@ -121,7 +147,6 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     };
 
     // Store globals
-    global_shm = shm;
     global_env_ptr = setup_result.primary_env;
     global_app_env_ptr = setup_result.app_env;
     global_builtin_modules = builtin_modules;
@@ -130,13 +155,12 @@ fn initializeSharedMemoryOnce(roc_ops: *RocOps) ShimError!void {
     shared_memory_initialized.store(true, .release);
 }
 
-/// Cross-platform shared memory evaluation
+/// Cross-platform evaluation (works for both IPC and embedded modes)
 fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
     // Initialize shared memory once per process
-    try initializeSharedMemoryOnce(roc_ops);
+    try initializeOnce(roc_ops);
 
     // Use the global shared memory and environment
-    const shm = global_shm.?;
     const env_ptr = global_env_ptr.?;
     const app_env = global_app_env_ptr;
 
@@ -148,7 +172,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     defer interpreter.deinit();
 
     // Get expression info from shared memory using entry_idx
-    const base_ptr = shm.getBasePtr();
+    const base_ptr = roc__serialized_base_ptr.?;
     var buf: [256]u8 = undefined;
 
     // Read the header structure from shared memory
@@ -161,7 +185,7 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     }
 
     const def_offset = header_ptr.def_indices_offset + entry_idx * @sizeOf(u32);
-    const def_idx_raw = safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), shm.total_size) catch |err| {
+    const def_idx_raw = safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), roc__serialized_size) catch |err| {
         const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
         roc_ops.crash(read_err);
         return error.MemoryLayoutInvalid;
@@ -182,23 +206,16 @@ const SetupResult = struct {
     app_env: *ModuleEnv, // App env (for e_lookup_required resolution)
 };
 
-/// Set up ModuleEnv from shared memory with proper relocation (multi-module format)
-fn setupModuleEnv(shm: *SharedMemoryAllocator, roc_ops: *RocOps) ShimError!SetupResult {
-    // Validate memory layout - we need at least space for the header
-    const min_required_size = FIRST_ALLOC_OFFSET + @sizeOf(Header);
-    if (shm.total_size < min_required_size) {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Invalid memory layout: size {} is too small (minimum required: {})", .{ shm.total_size, min_required_size }) catch "Invalid memory layout";
-        roc_ops.crash(msg);
-        return error.MemoryLayoutInvalid;
-    }
+/// Set up ModuleEnv from serialized data with proper relocation (multi-module format)
+/// Works for both IPC mode (roc run) and embedded mode (roc build)
+fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
     var buf: [256]u8 = undefined;
-
-    // Get base pointer
-    const base_ptr = shm.getBasePtr();
+    const base_ptr = roc__serialized_base_ptr.?;
     const allocator = std.heap.page_allocator;
 
     // Read parent's shared memory base address from header and calculate relocation offset
+    // For embedded mode: parent_base_addr == 0
+    // For IPC mode: parent_base_addr == actual parent address
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
     const header_ptr: *const Header = @ptrFromInt(header_addr);
     const parent_base_addr = header_ptr.parent_base_addr;

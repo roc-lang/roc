@@ -1,6 +1,6 @@
 //! List refcounting tests - Phase 4: Lists with Refcounted Elements (Strings)
 //!
-//! CRITICAL PHASE: This introduces two-level refcounting!
+//! This phase introduces two-level refcounting:
 //! - List container must be refcounted
 //! - String elements must be refcounted
 //!
