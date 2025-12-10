@@ -16,8 +16,8 @@ main! = || {
     red : Color
     red = Red
 
-    # Test inspect without custom to_inspect method - should use default rendering
-    result = inspect red
+    # Test Str.inspect without custom to_inspect method - should use default rendering
+    result = Str.inspect(red)
     Stdout.line!("Result: ${result}")
 
     # Default would show the underlying tag

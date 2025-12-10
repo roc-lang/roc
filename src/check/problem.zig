@@ -44,15 +44,17 @@ pub const Problem = union(enum) {
     type_apply_mismatch_arities: TypeApplyArityMismatch,
     static_dispach: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
+    nominal_type_resolution_failed: NominalTypeResolutionFailed,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
-    infinite_recursion: struct { var_: Var },
-    anonymous_recursion: struct { var_: Var },
-    invalid_number_type: VarProblem1,
-    invalid_record_ext: VarProblem1,
-    invalid_tag_union_ext: VarProblem1,
+    recursive_alias: RecursiveAlias,
+    infinite_recursion: VarWithSnapshot,
+    anonymous_recursion: VarWithSnapshot,
+    invalid_number_type: VarWithSnapshot,
+    invalid_record_ext: VarWithSnapshot,
+    invalid_tag_union_ext: VarWithSnapshot,
     bug: Bug,
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
@@ -80,8 +82,9 @@ pub const ComptimeEvalError = struct {
     region: base.Region,
 };
 
-/// A single var problem
-pub const VarProblem1 = struct {
+/// A problem involving a single type variable, with a snapshot for error reporting.
+/// Used for recursion errors, invalid extension types, etc.
+pub const VarWithSnapshot = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
 };
@@ -146,6 +149,9 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_branches: IncompatibleMatchBranches,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
+    invalid_nominal_record,
+    invalid_nominal_tuple,
+    invalid_nominal_value,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
@@ -264,6 +270,16 @@ pub const CannotAccessOpaqueNominal = struct {
     nominal_type_name: Ident.Idx,
 };
 
+/// Compiler bug: a nominal type variable doesn't resolve to a nominal_type structure.
+/// This should never happen because:
+/// 1. The canonicalizer only creates nominal patterns/expressions for s_nominal_decl statements
+/// 2. generateNominalDecl always sets the decl_var to a nominal_type structure
+/// 3. instantiateVar and copyVar preserve the nominal_type structure
+pub const NominalTypeResolutionFailed = struct {
+    var_: Var,
+    nominal_type_decl_var: Var,
+};
+
 // bug //
 
 /// Error when you try to apply the wrong number of arguments to a type in
@@ -273,6 +289,13 @@ pub const TypeApplyArityMismatch = struct {
     region: base.Region,
     num_expected_args: u32,
     num_actual_args: u32,
+};
+
+/// Error when a type alias references itself (aliases cannot be recursive)
+/// Use nominal types (:=) for recursive types instead
+pub const RecursiveAlias = struct {
+    type_name: base.Ident.Idx,
+    region: base.Region,
 };
 
 // bug //
@@ -331,12 +354,11 @@ pub const ReportBuilder = struct {
         self.bytes_buf.deinit();
     }
 
-    /// Get the formatted string for a snapshot, asserting it exists
+    /// Get the formatted string for a snapshot.
+    /// Returns a placeholder if the formatted string is missing, allowing error reporting
+    /// to continue gracefully even if snapshots are incomplete.
     fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
-        return self.snapshots.getFormattedString(idx) orelse {
-            std.debug.assert(false); // Missing formatted string for snapshot
-            unreachable;
-        };
+        return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
     }
 
     /// Build a report for a problem
@@ -375,6 +397,15 @@ pub const ReportBuilder = struct {
                         .invalid_nominal_tag => {
                             return self.buildInvalidNominalTag(mismatch.types);
                         },
+                        .invalid_nominal_record => {
+                            return self.buildInvalidNominalRecord(mismatch.types);
+                        },
+                        .invalid_nominal_tuple => {
+                            return self.buildInvalidNominalTuple(mismatch.types);
+                        },
+                        .invalid_nominal_value => {
+                            return self.buildInvalidNominalValue(mismatch.types);
+                        },
                         .cross_module_import => |data| {
                             return self.buildCrossModuleImportError(mismatch.types, data);
                         },
@@ -395,6 +426,9 @@ pub const ReportBuilder = struct {
             .cannot_access_opaque_nominal => |data| {
                 return self.buildCannotAccessOpaqueNominal(data);
             },
+            .nominal_type_resolution_failed => |data| {
+                return self.buildNominalTypeResolutionFailed(data);
+            },
             .static_dispach => |detail| {
                 switch (detail) {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
@@ -413,6 +447,9 @@ pub const ReportBuilder = struct {
             },
             .unused_value => |data| {
                 return self.buildUnusedValueReport(data);
+            },
+            .recursive_alias => |data| {
+                return self.buildRecursiveAliasReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
@@ -1350,6 +1387,126 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for invalid nominal record (record fields don't match)
+    fn buildInvalidNominalRecord(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL RECORD", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type that wraps a record:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The record I found is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal tuple (tuple elements don't match)
+    fn buildInvalidNominalTuple(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TUPLE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The tuple I found is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal value (value type doesn't match)
+    fn buildInvalidNominalValue(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The value I found has type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
     /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
@@ -1581,6 +1738,44 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when a type alias references itself recursively
+    fn buildRecursiveAliasReport(
+        self: *Self,
+        data: RecursiveAlias,
+    ) !Report {
+        var report = Report.init(self.gpa, "RECURSIVE ALIAS", .runtime_error);
+        errdefer report.deinit();
+
+        // Look up display name in import mapping (handles auto-imported builtin types)
+        const type_name_ident = if (self.import_mapping.get(data.type_name)) |display_ident|
+            self.can_ir.getIdent(display_ident)
+        else
+            self.can_ir.getIdent(data.type_name);
+        const type_name = try report.addOwnedString(type_name_ident);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+
+        try report.document.addReflowingText("The type alias ");
+        try report.document.addAnnotated(type_name, .type_variable);
+        try report.document.addReflowingText(" references itself, which is not allowed:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("Type aliases cannot be recursive. If you need a recursive type, use a nominal type (:=) instead of an alias (:).");
         try report.document.addLineBreak();
 
         return report;
@@ -1821,6 +2016,35 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(" instead of ");
         try report.document.addAnnotated("::", .emphasized);
         try report.document.addReflowingText(".");
+
+        return report;
+    }
+
+    /// Build a report for when a nominal type variable doesn't resolve properly.
+    /// This is a compiler bug - it should never happen in correctly compiled code.
+    fn buildNominalTypeResolutionFailed(
+        self: *Self,
+        data: NominalTypeResolutionFailed,
+    ) !Report {
+        var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
+        errdefer report.deinit();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("An internal compiler error occurred while checking this nominal type usage:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The nominal type declaration variable did not resolve to a nominal type structure. This indicates a bug in the Roc compiler. Please report this issue at https://github.com/roc-lang/roc/issues");
 
         return report;
     }

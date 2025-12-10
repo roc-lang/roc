@@ -915,16 +915,18 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
     }
 }
 
-/// Give a var, ensure it's not a redirect and set it's rank
+/// Give a var, ensure it's not a redirect and set its rank.
+/// If the var is already a redirect, this is a no-op - the root's rank was set when
+/// the redirect was created during unification. This can happen when a variable is
+/// unified with another before its rank is explicitly set, which is benign.
 fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(target_var);
     if (resolved.is_root) {
         self.types.setDescRank(resolved.desc_idx, env.rank());
         try env.var_pool.addVarToRank(target_var, env.rank());
-    } else {
-        // TODO: Unclear if this is an error or not
-        // try self.unifyWith(target_var, .err, env);
     }
+    // If not root, the variable is a redirect - its rank is determined by the root
+    // variable it points to, which was handled when the redirect was created.
 }
 
 // file //
@@ -1001,9 +1003,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, &env);
             },
-            .s_type_anno => |_| {
-                // TODO: Handle standalone type annotations
-                try self.unifyWith(stmt_var, .err, &env);
+            .s_type_anno => |type_anno| {
+                try self.generateStandaloneTypeAnno(stmt_var, type_anno, &env);
             },
             else => {
                 // All other stmt types are invalid at the top level
@@ -1375,6 +1376,37 @@ fn generateNominalDecl(
     );
 }
 
+/// Generate types for a standalone type annotation (one without a corresponding definition).
+/// These are typically used for FFI function declarations or forward declarations.
+fn generateStandaloneTypeAnno(
+    self: *Self,
+    stmt_var: Var,
+    type_anno: std.meta.fieldInfo(CIR.Statement, .s_type_anno).type,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    // Reset seen type annos
+    self.seen_annos.clearRetainingCapacity();
+
+    // Save top of scratch static dispatch constraints
+    const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
+    defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
+
+    // Iterate over where clauses (if they exist), adding them to scratch_static_dispatch_constraints
+    if (type_anno.where) |where_span| {
+        const where_slice = self.cir.store.sliceWhereClauses(where_span);
+        for (where_slice) |where_idx| {
+            try self.generateStaticDispatchConstraintFromWhere(where_idx, env);
+        }
+    }
+
+    // Generate the type from the annotation
+    const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
+    try self.generateAnnoTypeInPlace(type_anno.anno, env, .annotation);
+
+    // Unify the statement variable with the generated annotation type
+    _ = try self.unify(stmt_var, anno_var, env);
+}
+
 /// Generate types for type anno args
 fn generateHeaderVars(
     self: *Self,
@@ -1394,7 +1426,8 @@ fn generateHeaderVars(
                 try self.unifyWith(header_var, .err, env);
             },
             else => {
-                // This should never be possible
+                // The canonicalizer should only produce rigid_var, underscore, or malformed
+                // for header args. If we hit this, there's a compiler bug.
                 std.debug.assert(false);
                 try self.unifyWith(header_var, .err, env);
             },
@@ -1589,32 +1622,27 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                                 // If so, then update this annotation to be an instance
                                 // of this type using the same backing variable
-                                try self.unifyWith(anno_var, blk: {
-                                    switch (this_decl.type_) {
-                                        .alias => {
-                                            // TODO: Recursion is not allowed in aliases.
-                                            //
-                                            // If this type i used anywhere,
-                                            // then the user _should_ get an
-                                            // error, but we should proactively
-                                            // emit on here too
-                                            break :blk try self.types.mkAlias(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                &.{},
-                                            );
-                                        },
-                                        .nominal => {
-                                            break :blk try self.types.mkNominal(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                &.{},
-                                                self.builtin_ctx.module_name,
-                                                false, // Default to non-opaque for error case
-                                            );
-                                        },
-                                    }
-                                }, env);
+                                switch (this_decl.type_) {
+                                    .alias => {
+                                        // Recursion is not allowed in aliases - emit error
+                                        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                            .type_name = this_decl.name,
+                                            .region = anno_region,
+                                        } });
+                                        try self.unifyWith(anno_var, .err, env);
+                                        return;
+                                    },
+                                    .nominal => {
+                                        // Nominal types can be recursive
+                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                            .{ .ident_idx = this_decl.name },
+                                            this_decl.backing_var,
+                                            &.{},
+                                            self.builtin_ctx.module_name,
+                                            false, // Default to non-opaque for error case
+                                        ), env);
+                                    },
+                                }
 
                                 return;
                             }
@@ -1684,32 +1712,27 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
                                 // If so, then update this annotation to be an instance
                                 // of this type using the same backing variable
-                                try self.unifyWith(anno_var, blk: {
-                                    switch (this_decl.type_) {
-                                        .alias => {
-                                            // TODO: Recursion is not allowed in aliases.
-                                            //
-                                            // If this type i used anywhere,
-                                            // then the user _should_ get an
-                                            // error, but we should proactively
-                                            // emit on here too
-                                            break :blk try self.types.mkAlias(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                anno_arg_vars,
-                                            );
-                                        },
-                                        .nominal => {
-                                            break :blk try self.types.mkNominal(
-                                                .{ .ident_idx = this_decl.name },
-                                                this_decl.backing_var,
-                                                anno_arg_vars,
-                                                self.builtin_ctx.module_name,
-                                                false, // Default to non-opaque for error case
-                                            );
-                                        },
-                                    }
-                                }, env);
+                                switch (this_decl.type_) {
+                                    .alias => {
+                                        // Recursion is not allowed in aliases - emit error
+                                        _ = try self.problems.appendProblem(self.gpa, .{ .recursive_alias = .{
+                                            .type_name = this_decl.name,
+                                            .region = anno_region,
+                                        } });
+                                        try self.unifyWith(anno_var, .err, env);
+                                        return;
+                                    },
+                                    .nominal => {
+                                        // Nominal types can be recursive
+                                        try self.unifyWith(anno_var, try self.types.mkNominal(
+                                            .{ .ident_idx = this_decl.name },
+                                            this_decl.backing_var,
+                                            anno_arg_vars,
+                                            self.builtin_ctx.module_name,
+                                            false, // Default to non-opaque for error case
+                                        ), env);
+                                    },
+                                }
 
                                 return;
                             }
@@ -1736,6 +1759,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             try self.unifyWith(anno_var, .err, env);
                             return;
                         } else {
+                            // Type applications should only reference aliases or nominal types.
+                            // If we hit this, there's a compiler bug.
                             std.debug.assert(false);
                             try self.unifyWith(anno_var, .err, env);
                             return;
@@ -1923,8 +1948,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             try self.unifyWith(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), env);
         },
         .tag => {
-            // This indicates a malformed type annotation. Tags should only
-            // exist as direct children of tag_unions
+            // Tags should only exist as direct children of tag_unions in type annotations.
+            // If we encounter a standalone tag here, it's a compiler bug in canonicalization.
             std.debug.assert(false);
             try self.unifyWith(anno_var, .err, env);
         },
@@ -1952,17 +1977,13 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             std.mem.sort(types_mod.RecordField, record_fields_slice, self.cir.common.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
             const fields_type_range = try self.types.appendRecordFields(record_fields_slice);
 
-            // Process the ext if it exists. Absence means it's a closed union
-            // TODO: Capture ext in record field CIR
-            // const ext_var = inner_blk: {
-            //     if (rec.ext) |ext_anno_idx| {
-            //         try self.generateAnnoType(rigid_vars_ctx, ext_anno_idx);
-            //         break :inner_blk ModuleEnv.varFrom(ext_anno_idx);
-            //     } else {
-            //         break :inner_blk try self.freshFromContent(.{ .structure = .empty_record }, rank, anno_region);
-            //     }
-            // };
-            const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
+            // Process the ext if it exists. Absence (null) means it's a closed record.
+            const ext_var = if (rec.ext) |ext_anno_idx| blk: {
+                try self.generateAnnoTypeInPlace(ext_anno_idx, env, ctx);
+                break :blk ModuleEnv.varFrom(ext_anno_idx);
+            } else blk: {
+                break :blk try self.freshFromContent(.{ .structure = .empty_record }, env, anno_region);
+            };
 
             // Create the type for the anno in the store
             try self.unifyWith(
@@ -2054,10 +2075,9 @@ fn generateBuiltinTypeInstance(
             const box_content = try self.mkBoxContent(anno_args[0]);
             return try self.freshFromContent(box_content, env, anno_region);
         },
-        // Polymorphic number types (Num, Int, Frac) are no longer supported
-        // They have been replaced with concrete nominal types (U8, I32, F64, Dec, etc.)
-        .num, .int, .frac => {
-            // Return error - these should not be used anymore
+        // Polymorphic Num type is a module, not a type itself
+        .num => {
+            // Return error - Num is a module containing numeric types, not a type
             return try self.freshFromContent(.err, env, anno_region);
         },
     }
@@ -2853,7 +2873,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try self.checkDef(processing_def.def_idx, &sub_env);
                     },
                     .processing => {
-                        // TODO: Handle recursive defs
+                        // Recursive reference - the pattern variable is still at
+                        // top_level rank (not generalized), so the code below will
+                        // unify directly with it, which is the correct behavior.
                     },
                     .processed => {},
                 }
@@ -3307,7 +3329,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }
                 },
                 else => {
-                    // No other call types are currently supported in czer
+                    // The canonicalizer currently only produces CalledVia.apply for e_call expressions.
+                    // Other call types (binop, unary_op, string_interpolation, record_builder) are
+                    // represented as different expression types. If we hit this, there's a compiler bug.
                     std.debug.assert(false);
                     try self.unifyWith(expr_var, .err, env);
                 },
@@ -3433,13 +3457,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.checkExpr(dbg.expr, env, .no_expectation);
             does_fx = true;
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
-        },
-        .e_inspect => |inspect| {
-            // inspect evaluates its inner expression and returns Str
-            // Note: does NOT set does_fx because inspect is pure
-            _ = try self.checkExpr(inspect.expr, env, .no_expectation);
-            const str_var = try self.freshStr(env, expr_region);
-            _ = try self.unify(expr_var, str_var, env);
         },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
@@ -3792,12 +3809,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
-            .s_inspect => |expr| {
-                // inspect returns Str (not the inner expression type)
-                _ = try self.checkExpr(expr.expr, env, .no_expectation);
-                const str_var = try self.freshStr(env, stmt_region);
-                _ = try self.unify(stmt_var, str_var, env);
-            },
             .s_expect => |expr_stmt| {
                 does_fx = try self.checkExpr(expr_stmt.body, env, .no_expectation) or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
@@ -3913,9 +3924,6 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.body, return_var, env);
         },
         .s_dbg => |s| {
-            try self.unifyEarlyReturns(s.expr, return_var, env);
-        },
-        .s_inspect => |s| {
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
@@ -4763,8 +4771,17 @@ fn checkNominalTypeUsage(
                         // Constructor doesn't exist or has wrong arity/types
                         self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
                     },
-                    .record, .tuple, .value => {
-                        // Other backing types - no specific error message yet
+                    .record => {
+                        // Record fields don't match the nominal type's backing record
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_record);
+                    },
+                    .tuple => {
+                        // Tuple elements don't match the nominal type's backing tuple
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tuple);
+                    },
+                    .value => {
+                        // Value doesn't match the nominal type's backing type
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_value);
                     },
                 }
 
@@ -4775,7 +4792,11 @@ fn checkNominalTypeUsage(
         }
     } else {
         // If the nominal type resolves to something other than a nominal_type structure,
-        // set the whole expression to be an error
+        // report the error and set the expression to error type
+        _ = try self.problems.appendProblem(self.cir.gpa, .{ .nominal_type_resolution_failed = .{
+            .var_ = target_var,
+            .nominal_type_decl_var = nominal_type_decl_var,
+        } });
         try self.unifyWith(target_var, .err, env);
         return .err;
     }
@@ -5024,7 +5045,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                                 try self.checkDef(def_idx, &sub_env);
                             },
                             .processing => {
-                                // TODO: Handle recursive defs
+                                // Recursive reference during static dispatch resolution.
+                                // The def is still being processed, so we'll use its
+                                // current (non-generalized) type.
                             },
                             .processed => {},
                         }
@@ -5166,8 +5189,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     );
                 }
             } else {
-                // It should be impossible to have a deferred constraint check
-                // that has no constraints.
+                // Deferred constraint checks should always have at least one constraint.
+                // If we hit this, there's a compiler bug in how constraints are tracked.
                 std.debug.assert(false);
             }
         }
@@ -5181,7 +5204,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 /// A type supports is_eq if:
 /// - It's not a function type
 /// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
-/// - For nominal types, we assume they support is_eq (TODO: actually check for is_eq method)
+/// - For nominal types, check if their backing type supports is_eq
 fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
     return switch (flat_type) {
         // Function types do not support is_eq
@@ -5220,12 +5243,21 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
             return true;
         },
 
-        // Nominal types: TODO: actually check if they have an is_eq method
-        // For now, assume they do (numbers, Bool, Str, etc. all have is_eq)
-        .nominal_type => true,
+        // Nominal types support is_eq if their backing type supports is_eq
+        .nominal_type => |nominal| {
+            const backing_var = self.types.getNominalBackingVar(nominal);
+            return self.varSupportsIsEq(backing_var);
+        },
 
-        // Unbound records need to be resolved first
-        .record_unbound => true, // TODO: check resolved type
+        // Unbound records: resolve and check the resolved type
+        .record_unbound => |fields| {
+            // Check each field in the unbound record
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!self.varSupportsIsEq(field_var)) return false;
+            }
+            return true;
+        },
     };
 }
 
@@ -5234,12 +5266,14 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
     const resolved = self.types.resolveVar(var_);
     return switch (resolved.desc.content) {
         .structure => |s| self.typeSupportsIsEq(s),
-        // Flex/rigid vars could be anything, assume they support is_eq for now
-        // (the actual constraint will be checked when the type is known)
+        // Flex/rigid vars: we optimistically assume they support is_eq.
+        // This is sound because if the variable is later unified with a type
+        // that doesn't support is_eq (like a function), unification will fail.
         .flex, .rigid => true,
         // Aliases: check the underlying type
         .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
-        // Recursion vars: assume they support is_eq (recursive types like List are ok)
+        // Recursion vars: we must assume they support is_eq to avoid infinite loops.
+        // Recursive types like List support is_eq if their element type does.
         .recursion_var => true,
         // Error types: allow them to proceed
         .err => true,

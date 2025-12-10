@@ -663,17 +663,6 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(d.expr);
             },
-            .inspect => |d| {
-                try fmt.pushAll("inspect");
-                const body_region = fmt.nodeRegion(@intFromEnum(d.expr));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(d.expr);
-            },
             .@"return" => |r| {
                 try fmt.pushAll("return");
                 const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
@@ -1264,17 +1253,6 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(d.expr);
-            },
-            .inspect => |i| {
-                try fmt.pushAll("inspect");
-                const expr_node = fmt.nodeRegion(@intFromEnum(i.expr));
-                if (multiline and try fmt.flushCommentsBefore(expr_node.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatExpr(i.expr);
             },
             .block => |b| {
                 try fmt.formatBlock(b);

@@ -365,11 +365,6 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = @intFromEnum(d.expr);
             node.region = d.region;
         },
-        .inspect => |i| {
-            node.tag = .inspect;
-            node.data.lhs = @intFromEnum(i.expr);
-            node.region = i.region;
-        },
         .expect => |e| {
             node.tag = .expect;
             node.data.lhs = @intFromEnum(e.body);
@@ -751,11 +746,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.expr);
         },
-        .inspect => |i| {
-            node.tag = .inspect;
-            node.region = i.region;
-            node.data.lhs = @intFromEnum(i.expr);
-        },
         .record_builder => |rb| {
             node.tag = .record_builder;
             node.region = rb.region;
@@ -998,8 +988,26 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
         .record => |r| {
             node.tag = .ty_record;
             node.region = r.region;
-            node.data.lhs = r.fields.span.start;
-            node.data.rhs = r.fields.span.len;
+
+            // Store all data in extra_data:
+            // [fields.span.start, fields.span.len, ext?]
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            try store.extra_data.append(store.gpa, r.fields.span.start);
+            try store.extra_data.append(store.gpa, r.fields.span.len);
+
+            // Use packed struct similar to TagUnionRhs
+            const RecordRhs = packed struct { has_ext: u1, fields_len: u31 };
+            var rhs = RecordRhs{
+                .has_ext = 0,
+                .fields_len = @as(u31, @intCast(r.fields.span.len)),
+            };
+            if (r.ext) |ext| {
+                rhs.has_ext = 1;
+                try store.extra_data.append(store.gpa, @intFromEnum(ext));
+            }
+
+            node.data.lhs = data_start;
+            node.data.rhs = @as(u32, @bitCast(rhs));
         },
         .@"fn" => |f| {
             node.tag = .ty_fn;
@@ -1263,12 +1271,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         },
         .dbg => {
             return .{ .dbg = .{
-                .expr = @enumFromInt(node.data.lhs),
-                .region = node.region,
-            } };
-        },
-        .inspect => {
-            return .{ .inspect = .{
                 .expr = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
@@ -1714,12 +1716,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .expr = @enumFromInt(node.data.lhs),
             } };
         },
-        .inspect => {
-            return .{ .inspect = .{
-                .region = node.region,
-                .expr = @enumFromInt(node.data.lhs),
-            } };
-        },
         .bin_op => {
             return .{ .bin_op = .{
                 .left = @enumFromInt(node.data.lhs),
@@ -1938,12 +1934,23 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             } };
         },
         .ty_record => {
+            const RecordRhs = packed struct { has_ext: u1, fields_len: u31 };
+            const rhs = @as(RecordRhs, @bitCast(node.data.rhs));
+            const extra_idx = node.data.lhs;
+            const fields_start = store.extra_data.items[extra_idx];
+            const fields_len = store.extra_data.items[extra_idx + 1];
+            const ext: ?AST.TypeAnno.Idx = if (rhs.has_ext == 1)
+                @enumFromInt(store.extra_data.items[extra_idx + 2])
+            else
+                null;
+
             return .{ .record = .{
                 .region = node.region,
                 .fields = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
+                    .start = fields_start,
+                    .len = fields_len,
                 } },
+                .ext = ext,
             } };
         },
         .ty_fn => {

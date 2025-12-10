@@ -594,13 +594,70 @@ pub const Store = struct {
         const args = self.content_indexes.sliceRange(tag.args);
         for (args) |arg_idx| {
             try result.append(' ');
-            const formatted = self.getFormattedString(arg_idx) orelse {
-                std.debug.assert(false); // Missing formatted string for tag argument - snapshotVarForError must be called for all nested types
-                unreachable;
-            };
+            const formatted = self.getFormattedString(arg_idx) orelse "<unknown type>";
             try result.appendSlice(formatted);
         }
 
         return result.toOwnedSlice();
     }
 };
+
+// Tests
+
+test "formatTagString - gracefully handles missing formatted strings" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    // Create a tag with an argument that doesn't have a formatted string
+    // This should use the "<unknown type>" fallback instead of crashing
+    const unknown_content_idx = try store.contents.append(gpa, .err);
+    const args_range = try store.content_indexes.appendSlice(gpa, &[_]SnapshotContentIdx{unknown_content_idx});
+
+    // Create an ident store for the tag name
+    var ident_store = try Ident.Store.initCapacity(gpa, 64);
+    defer ident_store.deinit(gpa);
+    const tag_name = try ident_store.insert(gpa, Ident.for_text("MyTag"));
+
+    const tag = SnapshotTag{
+        .name = tag_name,
+        .args = args_range,
+    };
+
+    // Format should succeed and include the fallback placeholder
+    const result = try store.formatTagString(gpa, tag, &ident_store);
+    defer gpa.free(result);
+
+    try std.testing.expectEqualStrings("MyTag <unknown type>", result);
+}
+
+test "formatTagString - uses stored formatted strings when available" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    // Create a content index and store a formatted string for it
+    const content_idx = try store.contents.append(gpa, .err);
+    const formatted_str = try gpa.dupe(u8, "U64");
+    try store.formatted_strings.put(gpa, content_idx, formatted_str);
+
+    const args_range = try store.content_indexes.appendSlice(gpa, &[_]SnapshotContentIdx{content_idx});
+
+    // Create an ident store for the tag name
+    var ident_store = try Ident.Store.initCapacity(gpa, 64);
+    defer ident_store.deinit(gpa);
+    const tag_name = try ident_store.insert(gpa, Ident.for_text("Some"));
+
+    const tag = SnapshotTag{
+        .name = tag_name,
+        .args = args_range,
+    };
+
+    // Format should use the stored formatted string
+    const result = try store.formatTagString(gpa, tag, &ident_store);
+    defer gpa.free(result);
+
+    try std.testing.expectEqualStrings("Some U64", result);
+}

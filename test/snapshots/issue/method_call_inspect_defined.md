@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Method call syntax with .inspect() on string should give MISSING METHOD
+description=Method call syntax with .inspect() on string should work now that Str.inspect exists
 type=expr
 ~~~
 # SOURCE
@@ -10,7 +10,6 @@ type=expr
 # EXPECTED
 UNEXPECTED TOKEN IN EXPRESSION - method_call_inspect_defined.md:1:14:1:15
 UNRECOGNIZED SYNTAX - method_call_inspect_defined.md:1:14:1:15
-MISSING METHOD - method_call_inspect_defined.md:1:18:1:25
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **;** is not expected in an expression.
@@ -33,20 +32,6 @@ I don't recognize this syntax.
              ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
-
-**MISSING METHOD**
-This **inspect** method is being called on a value whose type doesn't have that method:
-**method_call_inspect_defined.md:1:18:1:25:**
-```roc
-{ x = "hello"; x.inspect() }
-```
-                 ^^^^^^^
-
-The value's type, which does not have a method named **inspect**, is:
-
-    _Str_
-
-**Hint:** For this to work, the type would need to have a method named **inspect** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -91,5 +76,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Str"))
 ~~~

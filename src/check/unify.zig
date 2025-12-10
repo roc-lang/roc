@@ -280,17 +280,17 @@ pub fn unifyWithConf(
                     if (unify_scratch.err) |unify_err| {
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .recursion_infinite => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .invalid_number_type => |var_| {
@@ -1272,54 +1272,54 @@ const Unifier = struct {
     ///
     /// **Case 1: Exactly the Same Fields**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - All fields are shared
-    /// - We unify `ext_a ~ ext_b`
+    /// - We unify `others_a ~ others_b`
     /// - Then unify each shared field pair
     ///
     /// ---
     ///
     /// **Case 2: `a` Extends `b`**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - `a` has additional fields not in `b`
-    /// - We generate a new var `only_in_a_var = { z }ext_a`
-    /// - Unify `only_in_a_var ~ ext_b`
+    /// - We generate a new var `only_in_a_var = { z, ..others_a }`
+    /// - Unify `only_in_a_var ~ others_b`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 3: `b` Extends `a`**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y, z }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, z, ..others_b }
     ///
     /// - Same as Case 2, but reversed
     /// - `b` has additional fields not in `a`
-    /// - We generate a new var `only_in_b_var = { z }ext_b`
-    /// - Unify `ext_a ~ only_in_b_var`
+    /// - We generate a new var `only_in_b_var = { z, ..others_b }`
+    /// - Unify `others_a ~ only_in_b_var`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 4: Both Extend Each Other**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y, w }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, w, ..others_b }
     ///
     /// - Each has unique fields the other lacks
     /// - Generate:
-    ///     - shared_ext = fresh flex_var
-    ///     - only_in_a_var = { z }shared_ext
-    ///     - only_in_b_var = { w }shared_ext
+    ///     - shared_others = fresh flex_var
+    ///     - only_in_a_var = { z, ..shared_others }
+    ///     - only_in_b_var = { w, ..shared_others }
     /// - Unify:
-    ///     - `ext_a ~ only_in_b_var`
-    ///     - `only_in_a_var ~ ext_b`
-    /// - Then unify shared fields into `{ x, y }shared_ext`
+    ///     - `others_a ~ only_in_b_var`
+    ///     - `only_in_a_var ~ others_b`
+    /// - Then unify shared fields into `{ x, y, ..shared_others }`
     ///
     /// ---
     ///
@@ -1506,10 +1506,13 @@ const Unifier = struct {
             record_fields,
         ) catch return Error.AllocatorError;
 
-        // TODO: Below if we run into a record with the same field, then we
-        // prefer the leftmost field. But we should probably unify the dups
+        // Note: If a field name appears multiple times (e.g., in both base and extension),
+        // we keep the leftmost field (left-bias semantics, like Haskell's Map.union).
+        // Duplicates within a single record's extension chain are rare and typically
+        // indicate a type system bug (e.g., malformed type like `{ name: Str, ..{ name: U32 } }`).
+        // The outer unification logic handles unifying fields across *different* records.
 
-        // then recursiv
+        // Recursively gather fields from extensions
         var ext = record_ext;
         var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
         while (true) {
@@ -2430,7 +2433,11 @@ pub const Scratch = struct {
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: Set these based on the heuristics
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // These values handle common cases without reallocation:
+        // - fresh_vars: 8 - most unifications create few fresh variables
+        // - fields/tags: 32 - typical records/unions have fewer than 32 members
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),

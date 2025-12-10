@@ -888,10 +888,6 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
-    inspect: struct {
-        expr: Expr.Idx,
-        region: TokenizedRegion,
-    },
 
     expect: struct {
         body: Expr.Idx,
@@ -1110,16 +1106,6 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .inspect => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-inspect");
-                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
             .expect => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-expect");
@@ -1213,7 +1199,6 @@ pub const Statement = union(enum) {
             .type_decl => |s| s.region,
             .crash => |s| s.region,
             .dbg => |s| s.region,
-            .inspect => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
             .@"while" => |s| s.region,
@@ -2095,6 +2080,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
+        ext: ?TypeAnno.Idx,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2235,6 +2221,15 @@ pub const TypeAnno = union(enum) {
                         },
                     };
                     try field.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                // Output extension if present
+                if (a.ext) |ext_idx| {
+                    const ext_begin = tree.beginNode();
+                    try tree.pushStaticAtom("ty-record-ext");
+                    const ext_attrs = tree.beginNode();
+                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
+                    try tree.endNode(ext_begin, ext_attrs);
                 }
 
                 try tree.endNode(begin, attrs);
@@ -2487,10 +2482,6 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
-    inspect: struct {
-        expr: Expr.Idx,
-        region: TokenizedRegion,
-    },
     record_builder: struct {
         mapper: Expr.Idx,
         fields: RecordField.Idx,
@@ -2551,7 +2542,6 @@ pub const Expr = union(enum) {
             .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
-            .inspect => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
@@ -2805,15 +2795,6 @@ pub const Expr = union(enum) {
             .dbg => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-dbg");
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
-            .inspect => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-inspect");
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);

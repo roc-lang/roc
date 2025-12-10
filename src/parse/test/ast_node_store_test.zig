@@ -432,6 +432,14 @@ test "NodeStore round trip - TypeAnno" {
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
             .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .ext = null,
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .record = .{
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .ext = rand_idx(AST.TypeAnno.Idx), // Test record with extension
             .region = rand_region(),
         },
     });
@@ -450,8 +458,10 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
 
-    // We don't include .malformed variant
+    // We don't include .malformed variant, but we do include an extra test case
+    // for record with extension (so record is tested both with and without ext)
     expected_test_count -= 1;
+    expected_test_count += 1; // record with ext
 
     for (ty_annos.items) |anno| {
         const idx = try store.addTypeAnno(anno);

@@ -118,6 +118,66 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
+/// Check if the current position looks like a type declaration with a valid type following.
+/// This peeks ahead without consuming tokens to determine if we have:
+/// - `Name :` followed by a valid type start token
+/// - `Name :=` followed by a valid type start token
+/// - `Name ::` followed by a valid type start token
+/// - `Name(a, b) :` etc. (with parenthesized type params)
+///
+/// The key insight is that after the `:` (or `:=` or `::`), we must see a token that
+/// can start a type annotation. If we see a string literal or other expression token,
+/// this is NOT a type declaration - it's likely a malformed expression.
+fn looksLikeTypeDecl(self: *Parser) bool {
+    std.debug.assert(self.peek() == .UpperIdent);
+
+    var lookahead: u32 = 1;
+    const next_tok = self.peekN(lookahead);
+
+    // Check for parenthesized type params: Name(a, b) :
+    if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
+        // Skip to matching close paren, counting nesting
+        lookahead += 1;
+        var depth: u32 = 1;
+        while (depth > 0) {
+            const tok = self.peekN(lookahead);
+            switch (tok) {
+                .OpenRound, .NoSpaceOpenRound => depth += 1,
+                .CloseRound => depth -= 1,
+                .EndOfFile => return false,
+                else => {},
+            }
+            lookahead += 1;
+        }
+    }
+    // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
+    // Only `Name(a, b) :` with parenthesized type params is supported.
+
+    // Now check for : or := or ::
+    const op_tok = self.peekN(lookahead);
+    if (op_tok != .OpColon and op_tok != .OpColonEqual and op_tok != .OpDoubleColon) {
+        return false;
+    }
+    lookahead += 1;
+
+    // Check if what follows is a valid type annotation start
+    const after_colon = self.peekN(lookahead);
+    return switch (after_colon) {
+        // Valid type annotation starts
+        .UpperIdent, // Type name: Str, List, etc.
+        .LowerIdent, // Type variable: a, b, etc.
+        .OpenRound, // Tuple or grouping: (a, b)
+        .NoSpaceOpenRound, // Tuple or grouping without space
+        .OpenSquare, // Tag union: [Ok(a), Err(e)]
+        .OpenCurly, // Record type: { name: Str }
+        .Underscore, // Wildcard type: _
+        .NamedUnderscore, // Named wildcard: _foo
+        => true,
+        // NOT valid type starts - this is probably a malformed expression
+        else => false,
+    };
+}
+
 const StackError = error{TooNested};
 
 /// The error set that methods of the Parser return
@@ -411,6 +471,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
     const signatures_span = try self.store.annoRecordFieldSpanFrom(signatures_top);
     const signatures = try self.store.addTypeAnno(.{ .record = .{
         .fields = signatures_span,
+        .ext = null,
         .region = .{
             .start = signatures_start,
             .end = self.pos,
@@ -1343,16 +1404,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
-        .KwInspect => {
-            const start = self.pos;
-            self.advance();
-            const expr = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .inspect = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            return statement_idx;
-        },
         .KwReturn => {
             const start = self.pos;
             self.advance();
@@ -1450,7 +1501,13 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
         // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
-            if (statementType == .top_level or statementType == .in_associated_block) {
+            // Support type declarations in top-level, associated blocks, and body contexts.
+            // For body contexts, we use looksLikeTypeDecl() to disambiguate from tag
+            // constructors in malformed expressions (e.g., `Tag: "value"` in a record).
+            const is_type_decl_context = statementType == .top_level or
+                statementType == .in_associated_block or
+                (statementType == .in_body and self.looksLikeTypeDecl());
+            if (is_type_decl_context) {
                 const header = try self.parseTypeHeader();
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")
@@ -2399,14 +2456,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .expr = e,
             } });
         },
-        .KwInspect => {
-            self.advance();
-            const e = try self.parseExpr();
-            expr = try self.store.addExpr(.{ .inspect = .{
-                .region = .{ .start = start, .end = self.pos },
-                .expr = e,
-            } });
-        },
         .KwFor => {
             self.advance();
             const patt = try self.parsePattern(.alternatives_forbidden);
@@ -2991,20 +3040,38 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
             const scratch_top = self.store.scratchAnnoRecordFieldTop();
-            self.parseCollectionSpan(AST.AnnoRecordField.Idx, .CloseCurly, NodeStore.addScratchAnnoRecordField, parseAnnoRecordField) catch |err| {
-                switch (err) {
-                    error.ExpectedNotFound => {
-                        self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
-                        return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                    },
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.TooNested => return error.TooNested,
+            var ext_anno: ?AST.TypeAnno.Idx = null;
+
+            // Parse record fields, with support for record extension
+            while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+                if (self.peek() == .DoubleDot) {
+                    // Handle record extension: { field: Type, ..ext }
+                    self.advance(); // consume DoubleDot
+
+                    if (self.peek() == .LowerIdent) {
+                        // Parse the extension type variable
+                        ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    }
+                    // If no identifier follows .., it's an anonymous extension (just ..)
+                    // Break out since .. must be the last element
+                    break;
+                } else {
+                    // Regular record field
+                    try NodeStore.addScratchAnnoRecordField(&self.store, try parseAnnoRecordField(self));
+                    self.expect(.Comma) catch {
+                        break;
+                    };
                 }
+            }
+            self.expect(.CloseCurly) catch {
+                self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
+                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
             };
             const fields = try self.store.annoRecordFieldSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .record = .{
                 .region = .{ .start = start, .end = self.pos },
                 .fields = fields,
+                .ext = ext_anno,
             } });
         },
         .OpenSquare => {
@@ -3063,9 +3130,12 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         const next_is_not_lower_ident = next_tok != .LowerIdent;
         const not_followed_by_colon = two_away_tok != .OpColon;
         const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
+        // Don't treat comma as function argument separator if followed by:
+        // - CloseCurly (end of record)
+        // - DoubleDot (record extension like { field: Type, ..ext })
         if ((looking_for_args == .not_looking_for_args) and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);
@@ -3339,7 +3409,7 @@ fn getTokenBP(tok: Token.Tag) ?BinOpBp {
         .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
         .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
         .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
-        .OpPlus => .{ .left = 22, .right = 23 }, // 23 LEFT
+        .OpPlus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
         .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT

@@ -21,7 +21,7 @@ main! = || {
     my_record = { name: "test", color: my_color, count: 42 }
 
     # Inspect the outer record - the Color field should use its custom to_inspect
-    result = inspect my_record
+    result = Str.inspect(my_record)
     Stdout.line!(result)
 
     # Expected output should include "Color::Red" for the color field

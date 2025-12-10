@@ -4,6 +4,6 @@ import pf.Stdout
 
 main! = || {
     my_record = { name: "test", count: 42 }
-    result = inspect my_record
+    result = Str.inspect(my_record)
     Stdout.line!(result)
 }
