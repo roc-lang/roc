@@ -13,7 +13,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const handlers = @import("builtins").handlers;
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
+const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi and builtin.os.tag != .freestanding) std.posix else undefined;
 
 /// Error message to display on stack overflow
 const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";

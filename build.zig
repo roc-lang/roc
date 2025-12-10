@@ -1134,6 +1134,20 @@ fn setupTestPlatforms(
         }
     }
 
+    // Build the wasm test platform host for wasm32-freestanding
+    {
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+        const copy_step = buildAndCopyTestPlatformHostLib(
+            b,
+            "wasm",
+            wasm_target,
+            "wasm32",
+            optimize,
+            roc_modules,
+        );
+        clear_cache_step.dependOn(&copy_step.step);
+    }
+
     b.getInstallStep().dependOn(clear_cache_step);
     test_platforms_step.dependOn(clear_cache_step);
 }
@@ -2006,6 +2020,7 @@ fn addMainExe(
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
     };
 
     for (cross_compile_shim_targets) |cross_target| {
@@ -2037,7 +2052,27 @@ fn addMainExe(
             .linkage = .static,
         });
         configureBackend(cross_shim_lib, cross_resolved_target);
-        roc_modules.addAll(cross_shim_lib);
+
+        // For wasm32, only add the modules needed by the interpreter shim
+        // (compile, watch, lsp, repl, ipc use threading/file I/O not available on freestanding)
+        if (cross_target.query.cpu_arch == .wasm32 and cross_target.query.os_tag == .freestanding) {
+            cross_shim_lib.root_module.addImport("base", roc_modules.base);
+            cross_shim_lib.root_module.addImport("collections", roc_modules.collections);
+            cross_shim_lib.root_module.addImport("types", roc_modules.types);
+            cross_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+            cross_shim_lib.root_module.addImport("can", roc_modules.can);
+            cross_shim_lib.root_module.addImport("check", roc_modules.check);
+            cross_shim_lib.root_module.addImport("parse", roc_modules.parse);
+            cross_shim_lib.root_module.addImport("layout", roc_modules.layout);
+            cross_shim_lib.root_module.addImport("eval", roc_modules.eval);
+            cross_shim_lib.root_module.addImport("reporting", roc_modules.reporting);
+            cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
+            cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
+            // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
+            // The interpreter shim main.zig has a stub for wasm32
+        } else {
+            roc_modules.addAll(cross_shim_lib);
+        }
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
         cross_shim_lib.addObject(cross_builtins_obj);

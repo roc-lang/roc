@@ -265,6 +265,28 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
         },
+        .wasi => {
+            // WebAssembly linker (wasm-ld)
+            try args.append("wasm-ld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Don't look for _start or _main entry point - we export specific functions
+            try args.append("--no-entry");
+
+            // Export all symbols (the Roc app exports its entrypoints)
+            try args.append("--export-all");
+
+            // Allow undefined symbols (imports from host environment)
+            try args.append("--allow-undefined");
+
+            // Set initial memory size (64KB pages)
+            // With the interpreter shim embedded, we need ~2.5MB for code + data
+            // Use 4MB to provide room for interpreter, bytecode, and runtime stack
+            try args.append("--initial-memory=4194304");
+        },
         else => {
             // Generic ELF linker
             try args.append("ld.lld");

@@ -13,7 +13,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
+const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi and builtin.os.tag != .freestanding) std.posix else undefined;
 
 // Windows types and constants
 const DWORD = u32;

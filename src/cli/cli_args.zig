@@ -142,7 +142,11 @@ pub const ExperimentalLspArgs = struct {
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
-    if (mem.eql(u8, args[0], "run")) return try parseRun(alloc, args[1..]);
+    // "run" is not a valid subcommand - give a helpful error
+    // The correct usage is: roc path/to/app.roc (without "run")
+    if (mem.eql(u8, args[0], "run")) {
+        return CliArgs{ .help = run_not_a_command_help };
+    }
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);
@@ -189,6 +193,20 @@ const main_help =
     \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache             Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\      --allow-errors         Allow execution even if there are type errors (warnings are always allowed)
+    \\
+;
+
+const run_not_a_command_help =
+    \\Error: 'run' is not a valid subcommand.
+    \\
+    \\To run a Roc application, use:
+    \\    roc path/to/app.roc
+    \\
+    \\For example:
+    \\    roc main.roc           Run main.roc in the current directory
+    \\    roc examples/hello.roc Run hello.roc from the examples folder
+    \\
+    \\Use 'roc help' to see all available commands.
     \\
 ;
 

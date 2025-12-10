@@ -2018,7 +2018,8 @@ pub const ExposedItem = union(enum) {
 pub const TargetsSection = struct {
     files_path: ?Token.Idx, // "files:" directive string literal
     exe: ?TargetLinkType.Idx, // exe: { ... }
-    // static_lib and shared_lib to be added later
+    static_lib: ?TargetLinkType.Idx, // static_lib: { ... }
+    // shared_lib to be added later
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
