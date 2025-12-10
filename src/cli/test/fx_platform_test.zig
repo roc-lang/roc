@@ -9,10 +9,19 @@
 //! IMPORTANT: Do NOT use --no-cache when running roc. The interpreted host doesn't change between
 //! tests (we're testing app behaviour, not the platform), so using --no-cache would force unnecessary
 //! re-linking on every test, making the test run much slower than is necessary.
+//!
+//! Test specs for IO-based tests are defined in fx_test_specs.zig and shared with
+//! the cross-compilation test runner.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
+const fx_test_specs = @import("fx_test_specs.zig");
+
+// Wire up tests from fx_test_specs module
+comptime {
+    std.testing.refAllDecls(fx_test_specs);
+}
 
 const roc_binary_path = if (builtin.os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
@@ -132,74 +141,47 @@ fn checkTestSuccess(result: std.process.Child.RunResult) !void {
     }
 }
 
-test "fx platform effectful functions" {
+// ============================================================================
+// IO Spec Tests (using shared specs from fx_test_specs.zig)
+// ============================================================================
+// These tests use the --test mode with IO specifications to verify that
+// roc applications produce the expected stdout/stderr output for given stdin.
+// The specs are defined in fx_test_specs.zig and shared with the cross-compile
+// test runner.
+
+test "fx platform IO spec tests" {
     const allocator = testing.allocator;
 
-    const result = try runRocTest(
-        allocator,
-        "test/fx/app.roc",
-        "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
-    );
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+    var passed: usize = 0;
+    var failed: usize = 0;
 
-    try checkTestSuccess(result);
-}
+    for (fx_test_specs.io_spec_tests) |spec| {
+        const result = runRocTest(allocator, spec.roc_file, spec.io_spec) catch |err| {
+            std.debug.print("\n[FAIL] {s}: failed to run: {}\n", .{ spec.roc_file, err });
+            failed += 1;
+            continue;
+        };
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
 
-test "fx platform with dotdot starting path" {
-    // Tests that relative paths starting with .. are handled correctly
-    const allocator = testing.allocator;
+        checkTestSuccess(result) catch |err| {
+            std.debug.print("\n[FAIL] {s}: {}\n", .{ spec.roc_file, err });
+            if (spec.description.len > 0) {
+                std.debug.print("       Description: {s}\n", .{spec.description});
+            }
+            failed += 1;
+            continue;
+        };
 
-    const result = try runRocTest(
-        allocator,
-        "test/fx/subdir/app.roc",
-        "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
-    );
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+        passed += 1;
+    }
 
-    try checkTestSuccess(result);
-}
-
-test "fx platform stdin to stdout" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/stdin_to_stdout.roc", "0<test input|1>test input");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform stdin echo" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/stdin_echo.roc", "0<hello world|1>hello world");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform stdin test with output" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/stdin_test.roc", "1>Before stdin|0<user input|1>After stdin");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform stdin simple" {
-    // stdin_simple reads from stdin and prints to stderr
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/stdin_simple.roc", "0<simple test|2>simple test");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
+    // Print summary
+    const total = passed + failed;
+    if (failed > 0) {
+        std.debug.print("\n{}/{} IO spec tests passed ({} failed)\n", .{ passed, total, failed });
+        return error.SomeTestsFailed;
+    }
 }
 
 test "fx platform expect with main" {
@@ -395,17 +377,6 @@ test "fx platform checked directly finds sibling modules" {
     }
 }
 
-test "fx platform opaque type with method" {
-    // Regression test: An opaque type with a method attached causes a segfault
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/opaque_with_method.roc", "1>My favourite color is Red");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
 test "fx platform string interpolation type mismatch" {
     const allocator = testing.allocator;
 
@@ -490,50 +461,6 @@ test "fx platform run from different cwd" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Hello from stdout!") != null);
 }
 
-test "question mark operator" {
-    // Tests the `?` operator for error propagation.
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/question_mark_operator.roc", "1>hello");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "numeric fold" {
-    // Tests List.fold with numeric accumulators.
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/numeric_fold.roc", "1>Sum: 15.0");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "List.for_each! with effectful callback" {
-    // Tests List.for_each! which iterates over a list and calls an effectful callback
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/list_for_each.roc", "1>Item: apple|1>Item: banana|1>Item: cherry");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "string literal pattern matching" {
-    // Tests pattern matching on string literals in match expressions.
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/string_pattern_matching.roc", "1>Hello Alice!|1>Hey Bob!");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
 test "drop_prefix segfault regression" {
     // Regression test: Calling drop_prefix on a string literal and assigning
     // the result to an unused variable causes a segfault.
@@ -606,66 +533,6 @@ test "big string equality regression" {
         std.debug.print("Detected memory safety panic in stderr:\n{s}\n", .{run_result.stderr});
         return error.UseAfterFree;
     }
-}
-
-test "fx platform hello world" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/hello_world.roc", "1>Hello, world!");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform function wrapper stdout" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/function_wrapper_stdout.roc", "1>Hello from stdout!");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform function wrapper multiline" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/function_wrapper_multiline.roc", "1>Hello from stdout!|1>Line 2");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform multiline stdout" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/multiline_stdout.roc", "1>Hello|1>World");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform empty_list_get" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/empty_list_get.roc", "1>is err");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform str_interp_valid" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/str_interp_valid.roc", "1>Hello, World!");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
 }
 
 test "fx platform expect with toplevel numeric" {
@@ -833,46 +700,6 @@ test "fx platform expect with toplevel numeric" {
 //     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
 // }
 
-test "fx platform numeric_lookup_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/numeric_lookup_test.roc", "1>done");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform string_lookup_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/string_lookup_test.roc", "1>hello");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform test_direct_string" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/test_direct_string.roc", "1>Hello");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform test_one_call" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/test_one_call.roc", "1>Hello");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
 test "fx platform test_type_mismatch" {
     const allocator = testing.allocator;
 
@@ -905,84 +732,6 @@ test "fx platform test_type_mismatch" {
             try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
         },
     }
-}
-
-test "fx platform test_with_wrapper" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/test_with_wrapper.roc", "1>Hello");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform inspect_compare_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(
-        allocator,
-        "test/fx/inspect_compare_test.roc",
-        "1>With to_inspect: Custom::Red|1>Without to_inspect: ColorWithoutInspect.Red|1>Primitive: 42",
-    );
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform inspect_custom_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/inspect_custom_test.roc", "1>Color::Red|1>Expected: Color::Red");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform inspect_nested_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(
-        allocator,
-        "test/fx/inspect_nested_test.roc",
-        "1>{ color: Color::Red, count: 42, name: \"test\" }|1>Expected: { color: Color::Red, count: 42, name: \"test\" }",
-    );
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform inspect_no_method_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/inspect_no_method_test.roc", "1>Result: Color.Red|1>(Default rendering)");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform inspect_record_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/inspect_record_test.roc", "1>{ count: 42, name: \"test\" }");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
-}
-
-test "fx platform inspect_wrong_sig_test" {
-    const allocator = testing.allocator;
-
-    const result = try runRocTest(allocator, "test/fx/inspect_wrong_sig_test.roc", "1>Result: 1");
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
-
-    try checkTestSuccess(result);
 }
 
 test "fx platform issue8433" {
@@ -1018,7 +767,7 @@ test "fx platform issue8433" {
     }
 }
 
-test "run aborts on errors by default" {
+test "run aborts on type errors by default" {
     // Tests that roc run aborts when there are type errors (without --allow-errors)
     const allocator = testing.allocator;
 
@@ -1039,7 +788,28 @@ test "run aborts on errors by default" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null);
 }
 
-test "run with --allow-errors attempts execution despite errors" {
+test "run aborts on parse errors by default" {
+    // Tests that roc run aborts when there are parse errors (without --allow-errors)
+    const allocator = testing.allocator;
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            "./zig-out/bin/roc",
+            "test/fx/parse_error.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Should fail with type errors
+    try checkFailure(run_result);
+
+    // Should show the errors
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "PARSE ERROR") != null);
+}
+
+test "run with --allow-errors attempts execution despite type errors" {
     // Tests that roc run --allow-errors attempts to execute even with type errors
     const allocator = testing.allocator;
 
@@ -1138,6 +908,21 @@ test "fx platform sublist method on inferred type" {
     try checkSuccess(run_result);
 }
 
+test "fx platform repeating pattern segfault" {
+    // Regression test: This test exposed a compiler bug where variables used multiple times
+    // in consuming positions didn't get proper refcount handling. Specifically,
+    // in `repeat_helper(acc.concat(list), list, n-1)`, the variable `list` is
+    // passed to both concat (consuming) and to the recursive call (consuming).
+    // The compiler must insert a copy/incref for the second use to avoid use-after-free.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/repeating_pattern_segfault.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}
+
 test "fx platform runtime stack overflow" {
     // Tests that stack overflow in a running Roc program is caught and reported
     // with a helpful error message instead of crashing with a raw signal.
@@ -1151,14 +936,18 @@ test "fx platform runtime stack overflow" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // After stack overflow handling is implemented, we expect:
-    // 1. The process exits with code 134 (indicating stack overflow was caught)
-    // 2. Stderr contains a helpful message about stack overflow
+    // Stack overflow can be caught by either:
+    // 1. The Roc interpreter (exit code 1, "overflowed its stack memory" message) - most common
+    // 2. The SIGABRT signal handler (exit code 134) - if native stack overflow handling is used
     switch (run_result.term) {
         .Exited => |code| {
             if (code == 134) {
-                // Stack overflow was caught and handled properly
+                // Stack overflow was caught by native signal handler
                 // Verify the helpful error message was printed
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") != null);
+            } else if (code == 1) {
+                // Stack overflow was caught by the interpreter - this is the expected case
+                // The interpreter detects excessive work stack depth and reports the error
                 try testing.expect(std.mem.indexOf(u8, run_result.stderr, "overflowed its stack memory") != null);
             } else if (code == 139) {
                 // Exit code 139 = 128 + 11 (SIGSEGV) - stack overflow was NOT handled
@@ -1166,7 +955,7 @@ test "fx platform runtime stack overflow" {
                 std.debug.print("\n", .{});
                 std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
                 std.debug.print("Process crashed with SIGSEGV (exit code 139).\n", .{});
-                std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
+                std.debug.print("Expected: exit code 1 or 134 with stack overflow message\n", .{});
                 return error.StackOverflowNotHandled;
             } else {
                 std.debug.print("Unexpected exit code: {}\n", .{code});
@@ -1179,7 +968,7 @@ test "fx platform runtime stack overflow" {
             std.debug.print("\n", .{});
             std.debug.print("Stack overflow handling NOT YET IMPLEMENTED for Roc programs.\n", .{});
             std.debug.print("Process was killed by signal: {}\n", .{sig});
-            std.debug.print("Expected: exit code 134 with stack overflow message\n", .{});
+            std.debug.print("Expected: exit code 1 or 134 with stack overflow message\n", .{});
             return error.StackOverflowNotHandled;
         },
         else => {

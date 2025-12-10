@@ -23,6 +23,7 @@
 
 # Ignore the following directories and file extensions
 target
+!src/target
 generated-docs
 
 zig-out

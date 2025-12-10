@@ -94,6 +94,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Check if this is an integer or Dec
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
@@ -132,6 +133,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // For boolean results, read the underlying byte value
     if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
@@ -171,6 +173,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     const actual = result.asF32();
     const epsilon: f32 = 0.0001;
@@ -204,6 +207,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     const actual = result.asF64();
     const epsilon: f64 = 0.000000001;
@@ -239,6 +243,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     const actual_dec = result.asDec();
     if (actual_dec.num != expected_dec_num) {
@@ -269,6 +274,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
+    defer interpreter.cleanupBindings(ops);
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.layout.data.scalar.tag == .str);
@@ -320,6 +326,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Verify we got a tuple layout
     try std.testing.expect(result.layout.tag == .tuple);
@@ -372,6 +379,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Verify we got a record layout
     try std.testing.expect(result.layout.tag == .record);
@@ -441,6 +449,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Verify we got a list layout
     try std.testing.expect(result.layout.tag == .list or result.layout.tag == .list_of_zst);
@@ -751,6 +760,7 @@ test "eval tag - already primitive" {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.ptr != null);
@@ -783,6 +793,7 @@ test "interpreter reuse across multiple evaluations" {
             const result = try interpreter.eval(resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
+            defer interpreter.cleanupBindings(ops);
 
             try std.testing.expect(result.layout.tag == .scalar);
 

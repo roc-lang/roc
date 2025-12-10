@@ -227,7 +227,13 @@ fn getNewZigFiles(allocator: Allocator) !PathList {
 }
 
 fn fileHasTopLevelComment(allocator: Allocator, file_path: []const u8) !bool {
-    const source = try readSourceFile(allocator, file_path);
+    const source = readSourceFile(allocator, file_path) catch |err| {
+        if (err == error.FileNotFound) {
+            // File was deleted but still shows in git diff - skip it
+            return true;
+        }
+        return err;
+    };
     defer allocator.free(source);
 
     return std.mem.indexOf(u8, source, "//!") != null;

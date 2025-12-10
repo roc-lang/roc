@@ -43,18 +43,39 @@ const StackValue = @This();
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         if (ptr == null) return;
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocStr) != 0) {
+                std.debug.panic("increfLayoutPtr(str): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocStr) });
+            }
+        }
         const roc_str = @as(*const RocStr, @ptrCast(@alignCast(ptr.?))).*;
         roc_str.incref(1);
         return;
     }
     if (layout.tag == .list) {
         if (ptr == null) return;
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocList) != 0) {
+                std.debug.panic("increfLayoutPtr(list): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+            }
+        }
         const list_value = @as(*const RocList, @ptrCast(@alignCast(ptr.?))).*;
         list_value.incref(1, false);
         return;
     }
     if (layout.tag == .box) {
         if (ptr == null) return;
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(usize) != 0) {
+                std.debug.panic("increfLayoutPtr(box): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(usize) });
+            }
+        }
         const slot: *usize = @ptrCast(@alignCast(ptr.?));
         if (slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
@@ -112,12 +133,26 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
 fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         if (ptr == null) return;
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocStr) != 0) {
+                std.debug.panic("decrefLayoutPtr(str): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocStr) });
+            }
+        }
         const roc_str = @as(*const RocStr, @ptrCast(@alignCast(ptr.?))).*;
         roc_str.decref(ops);
         return;
     }
     if (layout.tag == .list) {
         if (ptr == null) return;
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const ptr_int = @intFromPtr(ptr.?);
+            if (ptr_int % @alignOf(RocList) != 0) {
+                std.debug.panic("decrefLayoutPtr(list): ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+            }
+        }
         const list_header: *const RocList = @ptrCast(@alignCast(ptr.?));
         const list_value = list_header.*;
         const elem_layout = layout_cache.getLayout(layout.data.list);
@@ -141,6 +176,13 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .box) {
         if (ptr == null) return;
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const box_ptr_int = @intFromPtr(ptr.?);
+            if (box_ptr_int % @alignOf(usize) != 0) {
+                std.debug.panic("decrefLayoutPtr(box): ptr=0x{x} is not {}-byte aligned", .{ box_ptr_int, @alignOf(usize) });
+            }
+        }
         const slot: *usize = @ptrCast(@alignCast(ptr.?));
         const raw_ptr = slot.*;
         if (raw_ptr == 0) return;
@@ -152,8 +194,21 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const ptr_int = @intFromPtr(data_ptr);
         const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
         const unmasked_ptr = ptr_int & ~tag_mask;
+        const refcount_addr = unmasked_ptr - @sizeOf(isize);
+
+        // Verify alignment before @ptrFromInt for refcount
+        if (comptime builtin.mode == .Debug) {
+            if (refcount_addr % @alignOf(isize) != 0) {
+                std.debug.panic("decrefLayoutPtr: refcount_addr=0x{x} misaligned! unmasked=0x{x}, raw=0x{x}", .{
+                    refcount_addr,
+                    unmasked_ptr,
+                    raw_ptr,
+                });
+            }
+        }
+
         const payload_ptr = @as([*]u8, @ptrFromInt(unmasked_ptr));
-        const refcount_ptr: *isize = @as(*isize, @ptrFromInt(unmasked_ptr - @sizeOf(isize)));
+        const refcount_ptr: *isize = @as(*isize, @ptrFromInt(refcount_addr));
 
         if (builtins.utils.rcUnique(refcount_ptr.*)) {
             if (elem_layout.isRefcounted()) {
@@ -203,18 +258,46 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     if (layout.tag == .closure) {
         if (ptr == null) return;
         // Get the closure header to find the captures layout
+        const closure_ptr_val = @intFromPtr(ptr.?);
+        if (closure_ptr_val % @alignOf(layout_mod.Closure) != 0) {
+            std.debug.panic("[decrefLayoutPtr] closure alignment error: ptr=0x{x} not aligned to {}", .{ closure_ptr_val, @alignOf(layout_mod.Closure) });
+        }
         const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(ptr.?));
+
+        // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
+        const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={} body_idx={}", .{
+                closure_ptr_val,
+                idx_as_usize,
+                @intFromEnum(closure_header.body_idx),
+            });
+        }
+        if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
+            std.debug.panic("decrefLayoutPtr: closure has invalid captures_layout_idx=0x{x} (likely uninitialized or corrupted closure header at ptr={*})", .{ idx_as_usize, ptr.? });
+        }
+
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF closure captures_layout.tag={}", .{@intFromEnum(captures_layout.tag)});
+        }
 
         // Only decref if there are actual captures (record with fields)
         if (captures_layout.tag == .record) {
             const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF closure record fields={}", .{record_data.fields.count});
+            }
             if (record_data.fields.count > 0) {
                 const header_size = @sizeOf(layout_mod.Closure);
                 const cap_align = captures_layout.alignment(layout_cache.targetUsize());
                 const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
                 const base_ptr: [*]u8 = @ptrCast(@alignCast(ptr.?));
                 const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                if (comptime trace_refcount) {
+                    traceRefcount("DECREF closure rec_ptr=0x{x}", .{@intFromPtr(rec_ptr)});
+                }
                 decrefLayoutPtr(captures_layout, rec_ptr, layout_cache, ops);
             }
         }
@@ -260,7 +343,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                     if (!src_str.isSmallStr()) {
                         const alloc_ptr = src_str.getAllocationPtr();
                         const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                            if (@intFromPtr(ptr) % 8 != 0) break :blk -999;
+                            if (@intFromPtr(ptr) % @alignOf(usize) != 0) break :blk -999;
                             const isizes: [*]isize = @ptrCast(@alignCast(ptr));
                             break :blk (isizes - 1)[0];
                         } else 0;
@@ -280,24 +363,29 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 std.debug.assert(self.ptr != null);
                 const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
+                const dest_ptr_val = @intFromPtr(dest_ptr);
                 switch (precision) {
                     .u8 => {
                         const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
                     },
                     .u16 => {
+                        if (dest_ptr_val % @alignOf(u16) != 0) std.debug.panic("[copyToPtr] u16 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
                     },
                     .u32 => {
+                        if (dest_ptr_val % @alignOf(u32) != 0) std.debug.panic("[copyToPtr] u32 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
                     },
                     .u64 => {
+                        if (dest_ptr_val % @alignOf(u64) != 0) std.debug.panic("[copyToPtr] u64 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
                     },
                     .u128 => {
+                        if (dest_ptr_val % @alignOf(u128) != 0) std.debug.panic("[copyToPtr] u128 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
                     },
@@ -306,18 +394,22 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                         typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
                     },
                     .i16 => {
+                        if (dest_ptr_val % @alignOf(i16) != 0) std.debug.panic("[copyToPtr] i16 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
                     },
                     .i32 => {
+                        if (dest_ptr_val % @alignOf(i32) != 0) std.debug.panic("[copyToPtr] i32 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
                     },
                     .i64 => {
+                        if (dest_ptr_val % @alignOf(i64) != 0) std.debug.panic("[copyToPtr] i64 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
                     },
                     .i128 => {
+                        if (dest_ptr_val % @alignOf(i128) != 0) std.debug.panic("[copyToPtr] i128 alignment error: dest_ptr=0x{x}", .{dest_ptr_val});
                         const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));
                         typed_ptr.* = value;
                     },
@@ -329,6 +421,17 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box) {
+        // Verify alignment before @alignCast for usize
+        if (comptime builtin.mode == .Debug) {
+            const box_src_ptr_val = @intFromPtr(self.ptr.?);
+            const box_dest_ptr_val = @intFromPtr(dest_ptr);
+            if (box_src_ptr_val % @alignOf(usize) != 0) {
+                std.debug.panic("[copyToPtr box] src alignment error: ptr=0x{x} not {}-byte aligned", .{ box_src_ptr_val, @alignOf(usize) });
+            }
+            if (box_dest_ptr_val % @alignOf(usize) != 0) {
+                std.debug.panic("[copyToPtr box] dest alignment error: ptr=0x{x} not {}-byte aligned", .{ box_dest_ptr_val, @alignOf(usize) });
+            }
+        }
         const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
         const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
         dest_slot.* = src_slot.*;
@@ -340,6 +443,13 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box_of_zst) {
+        // Verify alignment before @alignCast for usize
+        if (comptime builtin.mode == .Debug) {
+            const box_zst_dest_ptr_val = @intFromPtr(dest_ptr);
+            if (box_zst_dest_ptr_val % @alignOf(usize) != 0) {
+                std.debug.panic("[copyToPtr box_of_zst] dest alignment error: ptr=0x{x} not {}-byte aligned", .{ box_zst_dest_ptr_val, @alignOf(usize) });
+            }
+        }
         const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
         dest_slot.* = 0;
         return;
@@ -348,6 +458,17 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list) {
         // Copy the list header and incref the underlying data
         std.debug.assert(self.ptr != null);
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const copyToPtr_src_ptr_int = @intFromPtr(self.ptr.?);
+            if (copyToPtr_src_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list): self.ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_src_ptr_int, @alignOf(builtins.list.RocList) });
+            }
+            const copyToPtr_dest_ptr_int = @intFromPtr(dest_ptr);
+            if (copyToPtr_dest_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list): dest_ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_dest_ptr_int, @alignOf(builtins.list.RocList) });
+            }
+        }
         const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
         const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
         dest_list.* = src_list.*;
@@ -362,7 +483,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         if (src_list.getAllocationDataPtr()) |alloc_ptr| {
             if (comptime trace_refcount) {
                 const rc_before: isize = blk: {
-                    if (@intFromPtr(alloc_ptr) % 8 != 0) break :blk -999;
+                    if (@intFromPtr(alloc_ptr) % @alignOf(usize) != 0) break :blk -999;
                     const isizes: [*]isize = @ptrCast(@alignCast(alloc_ptr));
                     break :blk (isizes - 1)[0];
                 };
@@ -383,6 +504,17 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list_of_zst) {
         // Copy the list header for ZST lists - no refcounting needed for ZSTs
         std.debug.assert(self.ptr != null);
+        // Verify alignment before @alignCast
+        if (comptime builtin.mode == .Debug) {
+            const copyToPtr_zst_src_ptr_int = @intFromPtr(self.ptr.?);
+            if (copyToPtr_zst_src_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list_of_zst): self.ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_zst_src_ptr_int, @alignOf(builtins.list.RocList) });
+            }
+            const copyToPtr_zst_dest_ptr_int = @intFromPtr(dest_ptr);
+            if (copyToPtr_zst_dest_ptr_int % @alignOf(builtins.list.RocList) != 0) {
+                std.debug.panic("copyToPtr(list_of_zst): dest_ptr=0x{x} is not {}-byte aligned", .{ copyToPtr_zst_dest_ptr_int, @alignOf(builtins.list.RocList) });
+            }
+        }
         const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
         const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
         dest_list.* = src_list.*;
@@ -500,10 +632,17 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 
         // Read discriminant to determine active variant
         const disc_ptr = base_ptr + tu_data.discriminant_offset;
+        const disc_ptr_val = @intFromPtr(disc_ptr);
         const discriminant: u32 = switch (tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            2 => blk: {
+                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[copyToPtr tag_union] u16 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            4 => blk: {
+                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[copyToPtr tag_union] u32 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
+            },
             else => unreachable,
         };
 
@@ -569,24 +708,30 @@ pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
     const precision = self.layout.data.scalar.data.int;
+    const ptr_val = @intFromPtr(self.ptr.?);
+
     return switch (precision) {
         .u8 => blk: {
             const typed_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .u16 => blk: {
+            if (ptr_val % @alignOf(u16) != 0) std.debug.panic("[asI128] u16 alignment error: ptr=0x{x} is not 2-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const u16, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .u32 => blk: {
+            if (ptr_val % @alignOf(u32) != 0) std.debug.panic("[asI128] u32 alignment error: ptr=0x{x} is not 4-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const u32, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .u64 => blk: {
+            if (ptr_val % @alignOf(u64) != 0) std.debug.panic("[asI128] u64 alignment error: ptr=0x{x} is not 8-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const u64, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .u128 => blk: {
+            if (ptr_val % @alignOf(u128) != 0) std.debug.panic("[asI128] u128 alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const u128, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, @intCast(typed_ptr.*));
         },
@@ -595,18 +740,22 @@ pub fn asI128(self: StackValue) i128 {
             break :blk @as(i128, typed_ptr.*);
         },
         .i16 => blk: {
+            if (ptr_val % @alignOf(i16) != 0) std.debug.panic("[asI128] i16 alignment error: ptr=0x{x} is not 2-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const i16, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .i32 => blk: {
+            if (ptr_val % @alignOf(i32) != 0) std.debug.panic("[asI128] i32 alignment error: ptr=0x{x} is not 4-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const i32, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .i64 => blk: {
+            if (ptr_val % @alignOf(i64) != 0) std.debug.panic("[asI128] i64 alignment error: ptr=0x{x} is not 8-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const i64, @ptrCast(@alignCast(self.ptr.?)));
             break :blk @as(i128, typed_ptr.*);
         },
         .i128 => blk: {
+            if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[asI128] i128 alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
             const typed_ptr = @as(*const i128, @ptrCast(@alignCast(self.ptr.?)));
             break :blk typed_ptr.*;
         },
@@ -629,6 +778,7 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
     std.debug.assert(!self.is_initialized);
 
     const precision = self.layout.data.scalar.data.int;
+    const ptr_val = @intFromPtr(self.ptr.?);
 
     // Inline integer writing logic with proper type casting and alignment
     // Use std.math.cast to safely check if value fits, returning error instead of panicking
@@ -638,18 +788,22 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
             typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
         },
         .u16 => {
+            if (ptr_val % @alignOf(u16) != 0) std.debug.panic("[setInt] u16 alignment error: ptr=0x{x} is not 2-byte aligned", .{ptr_val});
             const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
         },
         .u32 => {
+            if (ptr_val % @alignOf(u32) != 0) std.debug.panic("[setInt] u32 alignment error: ptr=0x{x} is not 4-byte aligned", .{ptr_val});
             const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
         },
         .u64 => {
+            if (ptr_val % @alignOf(u64) != 0) std.debug.panic("[setInt] u64 alignment error: ptr=0x{x} is not 8-byte aligned", .{ptr_val});
             const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
         },
         .u128 => {
+            if (ptr_val % @alignOf(u128) != 0) std.debug.panic("[setInt] u128 alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
             const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
         },
@@ -658,18 +812,22 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
             typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
         },
         .i16 => {
+            if (ptr_val % @alignOf(i16) != 0) std.debug.panic("[setInt] i16 alignment error: ptr=0x{x} is not 2-byte aligned", .{ptr_val});
             const typed_ptr: *i16 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
         },
         .i32 => {
+            if (ptr_val % @alignOf(i32) != 0) std.debug.panic("[setInt] i32 alignment error: ptr=0x{x} is not 4-byte aligned", .{ptr_val});
             const typed_ptr: *i32 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
         },
         .i64 => {
+            if (ptr_val % @alignOf(i64) != 0) std.debug.panic("[setInt] i64 alignment error: ptr=0x{x} is not 8-byte aligned", .{ptr_val});
             const typed_ptr: *i64 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
         },
         .i128 => {
+            if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[setInt] i128 alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
             const typed_ptr: *i128 = @ptrCast(@alignCast(self.ptr.?));
             typed_ptr.* = value;
         },
@@ -711,6 +869,8 @@ pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{In
                 typed_ptr.* = std.math.cast(u64, u128_value) orelse return error.IntegerOverflow;
             },
             .u128 => {
+                const u128_ptr_val = @intFromPtr(self.ptr.?);
+                if (u128_ptr_val % @alignOf(u128) != 0) std.debug.panic("[setIntFromBytes] u128 alignment error: ptr=0x{x} is not 16-byte aligned", .{u128_ptr_val});
                 const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
                 typed_ptr.* = u128_value;
             },
@@ -786,6 +946,9 @@ pub fn asDec(self: StackValue) RocDec {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .dec);
 
+    // RocDec contains i128 which requires 16-byte alignment
+    const ptr_val = @intFromPtr(self.ptr.?);
+    if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[asDec] alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
     const typed_ptr = @as(*const RocDec, @ptrCast(@alignCast(self.ptr.?)));
     return typed_ptr.*;
 }
@@ -841,6 +1004,10 @@ pub fn setDec(self: *StackValue, value: RocDec) void {
     //
     // Avoid accidental overwrite, manually toggle this if updating an already initialized value
     std.debug.assert(!self.is_initialized);
+
+    // RocDec contains i128 which requires 16-byte alignment
+    const ptr_val = @intFromPtr(self.ptr.?);
+    if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[setDec] alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
 
     // Write the Dec value
     const typed_ptr: *RocDec = @ptrCast(@alignCast(self.ptr.?));
@@ -967,11 +1134,21 @@ pub const TagUnionAccessor = struct {
     pub fn getDiscriminant(self: TagUnionAccessor) usize {
         const base_ptr: [*]u8 = @ptrCast(self.base_value.ptr.?);
         const disc_ptr = base_ptr + self.tu_data.discriminant_offset;
+        const disc_ptr_val = @intFromPtr(disc_ptr);
         return switch (self.tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-            8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
+            2 => blk: {
+                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[getDiscriminant] u16 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            4 => blk: {
+                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[getDiscriminant] u32 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            8 => blk: {
+                if (disc_ptr_val % @alignOf(u64) != 0) std.debug.panic("[getDiscriminant] u64 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*);
+            },
             else => 0,
         };
     }
@@ -1010,6 +1187,13 @@ pub fn asList(self: StackValue, layout_cache: *LayoutStore, element_layout: Layo
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
 
+    // Verify alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const ptr_int = @intFromPtr(self.ptr.?);
+        if (ptr_int % @alignOf(RocList) != 0) {
+            std.debug.panic("asList: self.ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+        }
+    }
     const header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
     return ListAccessor{
         .base_value = self,
@@ -1062,6 +1246,13 @@ pub const ListAccessor = struct {
 fn storeListElementCount(list: *RocList, elements_refcounted: bool) void {
     if (elements_refcounted and !list.isSeamlessSlice()) {
         if (list.getAllocationDataPtr()) |source| {
+            // Verify alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const source_int = @intFromPtr(source);
+                if (source_int % @alignOf(usize) != 0) {
+                    std.debug.panic("storeListElementCount: source=0x{x} is not {}-byte aligned", .{ source_int, @alignOf(usize) });
+                }
+            }
             const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
             ptr[0] = list.length;
         }
@@ -1074,6 +1265,13 @@ fn copyListValueToPtr(
     dest_ptr: *anyopaque,
     dest_layout: Layout,
 ) error{ TypeMismatch, NullStackPointer }!void {
+    // Verify dest_ptr alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const dest_ptr_int = @intFromPtr(dest_ptr);
+        if (dest_ptr_int % @alignOf(RocList) != 0) {
+            std.debug.panic("copyListValueToPtr: dest_ptr=0x{x} is not {}-byte aligned", .{ dest_ptr_int, @alignOf(RocList) });
+        }
+    }
     var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
 
     switch (dest_layout.tag) {
@@ -1082,6 +1280,13 @@ fn copyListValueToPtr(
             if (src.ptr == null) {
                 dest_list.* = RocList.empty();
                 return;
+            }
+            // Verify src.ptr alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const src_ptr_int_zst = @intFromPtr(src.ptr.?);
+                if (src_ptr_int_zst % @alignOf(RocList) != 0) {
+                    std.debug.panic("copyListValueToPtr(list_of_zst): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_zst, @alignOf(RocList) });
+                }
             }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
             dest_list.* = src_list;
@@ -1094,6 +1299,13 @@ fn copyListValueToPtr(
                 return;
             }
             if (src.layout.tag != .list) return error.TypeMismatch;
+            // Verify src.ptr alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const src_ptr_int_list = @intFromPtr(src.ptr.?);
+                if (src_ptr_int_list % @alignOf(RocList) != 0) {
+                    std.debug.panic("copyListValueToPtr(list): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_list, @alignOf(RocList) });
+                }
+            }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
             dest_list.* = src_list;
 
@@ -1244,6 +1456,11 @@ pub fn asRocStr(self: StackValue) *RocStr {
 pub fn asClosure(self: StackValue) *const Closure {
     std.debug.assert(self.layout.tag == .closure);
     std.debug.assert(self.ptr != null);
+    const ptr_val = @intFromPtr(self.ptr.?);
+    const required_align = @alignOf(Closure);
+    if (ptr_val % required_align != 0) {
+        std.debug.panic("[asClosure] ALIGNMENT MISMATCH: ptr=0x{x} required_align={} (mod={})", .{ ptr_val, required_align, ptr_val % required_align });
+    }
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
@@ -1279,7 +1496,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
             if (!src_str.isSmallStr()) {
                 const alloc_ptr = src_str.getAllocationPtr();
                 const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                    if (@intFromPtr(ptr) % 8 != 0) break :blk -999;
+                    if (@intFromPtr(ptr) % @alignOf(usize) != 0) break :blk -999;
                     const isizes: [*]isize = @ptrCast(@alignCast(ptr));
                     break :blk (isizes - 1)[0];
                 } else 0;
@@ -1387,7 +1604,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
             } else {
                 const alloc_ptr = roc_str.getAllocationPtr();
                 const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                    if (@intFromPtr(ptr) % 8 != 0) {
+                    if (@intFromPtr(ptr) % @alignOf(usize) != 0) {
                         traceRefcount("INCREF str ptr=0x{x} MISALIGNED!", .{@intFromPtr(ptr)});
                         break :blk -999;
                     }
@@ -1449,10 +1666,17 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
 
         // Read discriminant to determine active variant
         const disc_ptr = base_ptr + tu_data.discriminant_offset;
+        const disc_ptr_val = @intFromPtr(disc_ptr);
         const discriminant: u32 = switch (tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            2 => blk: {
+                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[copyToPtr tag_union] u16 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            4 => blk: {
+                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[copyToPtr tag_union] u32 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
+            },
             else => unreachable,
         };
 
@@ -1467,6 +1691,32 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
         }
 
         increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache);
+        return;
+    }
+    // Handle closures by incref'ing their captures (symmetric with decref)
+    if (self.layout.tag == .closure) {
+        if (self.ptr == null) return;
+        const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(self.ptr.?));
+        const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+
+        // Only incref if there are actual captures (record with fields)
+        if (captures_layout.tag == .record) {
+            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (record_data.fields.count > 0) {
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
+                        @intFromPtr(self.ptr),
+                        record_data.fields.count,
+                    });
+                }
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                increfLayoutPtr(captures_layout, rec_ptr, layout_cache);
+            }
+        }
         return;
     }
 }
@@ -1511,7 +1761,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                         const alloc_ptr = roc_str.getAllocationPtr();
                         // Only read refcount if pointer is aligned (safety check)
                         const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                            if (@intFromPtr(ptr) % 8 != 0) {
+                            if (@intFromPtr(ptr) % @alignOf(usize) != 0) {
                                 traceRefcount("DECREF str ptr=0x{x} MISALIGNED!", .{@intFromPtr(ptr)});
                                 break :blk -999;
                             }
@@ -1653,6 +1903,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .closure => {
             decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF closure DONE ptr=0x{x}", .{@intFromPtr(self.ptr)});
+            }
             return;
         },
         .tag_union => {

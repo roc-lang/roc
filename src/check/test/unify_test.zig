@@ -1324,6 +1324,16 @@ test "unify - fails on infinite type" {
         .problem => |problem_idx| {
             const problem = env.problems.get(problem_idx);
             try std.testing.expectEqual(.infinite_recursion, @as(Problem.Tag, problem));
+
+            // Verify that a snapshot was created for the recursion error
+            const snapshot_idx = problem.infinite_recursion.snapshot;
+            const snapshot_content = env.snapshots.getContent(snapshot_idx);
+            // The snapshot should be some valid content (not just err)
+            try std.testing.expect(snapshot_content != .err);
+
+            // Verify a formatted string was created
+            const formatted = env.snapshots.getFormattedString(snapshot_idx);
+            try std.testing.expect(formatted != null);
         },
     }
 }
@@ -1352,6 +1362,16 @@ test "unify - fails on anonymous recursion" {
         .problem => |problem_idx| {
             const problem = env.problems.get(problem_idx);
             try std.testing.expectEqual(.anonymous_recursion, @as(Problem.Tag, problem));
+
+            // Verify that a snapshot was created for the recursion error
+            const snapshot_idx = problem.anonymous_recursion.snapshot;
+            const snapshot_content = env.snapshots.getContent(snapshot_idx);
+            // The snapshot should be some valid content (not just err)
+            try std.testing.expect(snapshot_content != .err);
+
+            // Verify a formatted string was created
+            const formatted = env.snapshots.getFormattedString(snapshot_idx);
+            try std.testing.expect(formatted != null);
         },
     }
 }

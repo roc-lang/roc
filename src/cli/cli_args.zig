@@ -86,6 +86,8 @@ pub const BuildArgs = struct {
     opt: OptLevel, // the optimization level
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
+    debug: bool = false, // include debug information in the output binary
+    allow_errors: bool = false, // allow building even if there are type errors
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
 };
@@ -243,6 +245,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var opt: OptLevel = .dev;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
+    var debug: bool = false;
+    var allow_errors: bool = false;
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
     for (args) |arg| {
@@ -259,6 +263,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<size|speed|dev>         Optimize the build process for binary size, execution speed, or compilation speed. Defaults to compilation speed (dev)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
+            \\      --debug                        Include debug information in the output binary
+            \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
             \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
             \\      -h, --help                     Print help
@@ -298,6 +304,10 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--z-bench-parse" } } };
             }
+        } else if (mem.eql(u8, arg, "--debug")) {
+            debug = true;
+        } else if (mem.eql(u8, arg, "--allow-errors")) {
+            allow_errors = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -305,7 +315,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -917,6 +927,19 @@ test "roc build" {
         const result = try parse(gpa, &[_][]const u8{ "build", "foo.roc", "bar.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("bar.roc", result.problem.unexpected_argument.arg);
+    }
+    {
+        // Test --debug flag
+        const result = try parse(gpa, &[_][]const u8{ "build", "--debug", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("foo.roc", result.build.path);
+        try testing.expect(result.build.debug);
+    }
+    {
+        // Test that debug defaults to false
+        const result = try parse(gpa, &[_][]const u8{ "build", "foo.roc" });
+        defer result.deinit(gpa);
+        try testing.expect(!result.build.debug);
     }
     {
         const result = try parse(gpa, &[_][]const u8{ "build", "-h" });

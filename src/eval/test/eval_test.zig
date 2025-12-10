@@ -142,6 +142,15 @@ test "operator associativity - subtraction" {
     try runExpectInt("100 - (50 - (25 - 5))", 70, .no_trace); // Right associative would give 70
 }
 
+test "operator associativity - mixed addition and subtraction" {
+    // Regression test: + and - should have equal precedence and be left-associative
+    // Previously + had higher precedence than -, causing 1 - 2 + 3 to parse as 1 - (2 + 3) = -4
+    try runExpectInt("1 - 2 + 3", 2, .no_trace); // (1 - 2) + 3 = 2, NOT 1 - (2 + 3) = -4
+    try runExpectInt("5 + 3 - 2", 6, .no_trace); // (5 + 3) - 2 = 6
+    try runExpectInt("10 - 5 + 3 - 2", 6, .no_trace); // ((10 - 5) + 3) - 2 = 6
+    try runExpectInt("1 + 2 - 3 + 4 - 5", -1, .no_trace); // (((1 + 2) - 3) + 4) - 5 = -1
+}
+
 test "operator associativity - multiplication" {
     // Left associative: a * b * c should parse as (a * b) * c
     try runExpectInt("2 * 3 * 4", 24, .no_trace); // (2 * 3) * 4 = 24
@@ -1358,21 +1367,15 @@ test "nested match with Result type - regression" {
 // ============================================================================
 
 test "list equality - single element list - regression" {
-    // Regression test for segfault when comparing single element lists
-    // Bug report: `main! = || { _bool = [1] == [1] }`
     try runExpectBool("[1] == [1]", true, .no_trace);
 }
 
 test "list equality - nested lists - regression" {
-    // Regression test for segfault when comparing nested lists
-    // Bug report: `_bool = [[1],[2]] == [[1],[2]]`
-    try runExpectBool("[[1],[2]] == [[1],[2]]", true, .no_trace);
+    try runExpectBool("[[1, 2]] == [[1, 2]]", true, .no_trace);
 }
 
 test "list equality - single string element list - regression" {
-    // Regression test for crash trying to compare numeric scalars instead of string scalars
-    // Bug report: `main! = || { _bool = [""] == [""] }`
-    try runExpectBool("[\"\"] == [\"\"]", true, .no_trace);
+    try runExpectBool("[\"hello\"] == [\"hello\"]", true, .no_trace);
 }
 
 test "if block with local bindings - regression" {

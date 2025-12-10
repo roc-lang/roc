@@ -280,17 +280,17 @@ pub fn unifyWithConf(
                     if (unify_scratch.err) |unify_err| {
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .recursion_infinite => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .invalid_number_type => |var_| {
