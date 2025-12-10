@@ -1384,15 +1384,27 @@ fn generateStandaloneTypeAnno(
     type_anno: std.meta.fieldInfo(CIR.Statement, .s_type_anno).type,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    // Generate the type from the annotation
+    // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
+
+    // Save top of scratch static dispatch constraints
+    const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
+    defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
+
+    // Iterate over where clauses (if they exist), adding them to scratch_static_dispatch_constraints
+    if (type_anno.where) |where_span| {
+        const where_slice = self.cir.store.sliceWhereClauses(where_span);
+        for (where_slice) |where_idx| {
+            try self.generateStaticDispatchConstraintFromWhere(where_idx, env);
+        }
+    }
+
+    // Generate the type from the annotation
     const anno_var: Var = ModuleEnv.varFrom(type_anno.anno);
     try self.generateAnnoTypeInPlace(type_anno.anno, env, .annotation);
 
     // Unify the statement variable with the generated annotation type
     _ = try self.unify(stmt_var, anno_var, env);
-
-    // TODO: Handle where clauses if present (type_anno.where)
 }
 
 /// Generate types for type anno args
