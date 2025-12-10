@@ -4571,11 +4571,12 @@ pub fn canonicalizeExpr(
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             return self.canonicalizeTagExpr(e, null, region);
         },
-        .string_part => |_| {
+        .string_part => |sp| {
+            const region = self.parse_ir.tokenizedRegionToRegion(sp.region);
             const feature = try self.env.insertString("canonicalize string_part expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -4857,11 +4858,12 @@ pub fn canonicalizeExpr(
             const free_vars_span = self.scratch_free_vars.spanFrom(lambda_free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
         },
-        .record_updater => |_| {
+        .record_updater => |ru| {
+            const region = self.parse_ir.tokenizedRegionToRegion(ru.region);
             const feature = try self.env.insertString("canonicalize record_updater expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -5644,11 +5646,12 @@ pub fn canonicalizeExpr(
 
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
-        .record_builder => |_| {
+        .record_builder => |rb| {
+            const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
             const feature = try self.env.insertString("canonicalize record_builder expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -5861,7 +5864,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                     const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
-                        .region = Region.zero(),
+                        .region = type_tok_region,
                     } });
                     return CanonicalizedExpr{
                         .idx = malformed_idx,
@@ -5882,7 +5885,14 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     const import_idx = try self.getOrCreateAutoImport(module_name_text);
 
                     const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                        std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                        // Failed to find exposed node - return malformed expression with diagnostic
+                        const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                        const malformed = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_type_not_found = .{
+                            .parent_name = module_ident,
+                            .nested_name = type_tok_ident,
+                            .region = region,
+                        } });
+                        return CanonicalizedExpr{ .idx = malformed, .free_vars = DataSpan.empty() };
                     };
 
                     const expr_idx = try self.env.addExpr(CIR.Expr{
@@ -6055,7 +6065,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                     const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
-                        .region = Region.zero(),
+                        .region = type_tok_region,
                     } });
                     return CanonicalizedExpr{
                         .idx = malformed_idx,
@@ -6393,7 +6403,7 @@ pub fn canonicalizePattern(
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
-                    .region = Region.zero(),
+                    .region = region,
                 } });
                 return malformed_idx;
             }
@@ -6415,7 +6425,7 @@ pub fn canonicalizePattern(
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
-                    .region = Region.zero(),
+                    .region = region,
                 } });
                 return malformed_idx;
             }
@@ -6792,7 +6802,7 @@ pub fn canonicalizePattern(
                         const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                             .feature = feature,
-                            .region = Region.zero(),
+                            .region = type_tok_region,
                         } });
                     },
                 }
@@ -7134,13 +7144,14 @@ pub fn canonicalizePattern(
             } });
             return pattern_idx;
         },
-        .alternatives => |_| {
+        .alternatives => |alt| {
             // Alternatives patterns should only appear in match expressions and are handled there
             // If we encounter one here, it's likely a parser error or misplaced pattern
+            const region = self.parse_ir.tokenizedRegionToRegion(alt.region);
             const feature = try self.env.insertString("alternatives pattern outside match expression");
             const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return pattern_idx;
         },
@@ -7952,10 +7963,22 @@ fn canonicalizeTypeAnnoBasicType(
                     const stmt_idx = auto_imported_type.statement_idx orelse {
                         // Str doesn't have a statement_idx because it's a primitive builtin type
                         // It should be detected as a builtin type before reaching this code path
-                        std.debug.panic("AutoImportedType for '{s}' from module '{s}' is missing required statement_idx", .{ self.env.getIdent(type_name_ident), module_name_text });
+                        // Return malformed type annotation with diagnostic
+                        const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                        return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .nested_type_not_found = .{
+                            .parent_name = module_ident,
+                            .nested_name = type_name_ident,
+                            .region = region,
+                        } });
                     };
                     const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                        std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                        // Failed to find exposed node - return malformed type annotation with diagnostic
+                        const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                        return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .nested_type_not_found = .{
+                            .parent_name = module_ident,
+                            .nested_name = type_name_ident,
+                            .region = region,
+                        } });
                     };
 
                     return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
@@ -8960,14 +8983,77 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
         },
-        .type_decl => |s| {
-            // TODO type declarations in statement context
-            const feature = try self.env.insertString("type_decl in statement context");
-            const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = self.parse_ir.tokenizedRegionToRegion(s.region),
-            } });
-            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+        .type_decl => |type_decl| {
+            // Type declarations in statement context (inside blocks/functions)
+            // These introduce local type aliases/nominals scoped to the current block
+            const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+            // Canonicalize the type declaration header
+            const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+
+            // Check if the header is malformed
+            const header_node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+            if (header_node.tag == .malformed) {
+                // Header is malformed - return a malformed statement
+                const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .malformed_type_annotation = .{
+                    .region = region,
+                } });
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            } else {
+                // Get the type name from the header
+                const type_header = self.env.store.getTypeHeader(header_idx);
+
+                // Process type parameters and annotation in a type variable scope
+                const anno_idx = blk: {
+                    const type_var_scope = self.scopeEnterTypeVar();
+                    defer self.scopeExitTypeVar(type_var_scope);
+
+                    // Introduce type parameters from the header into the scope
+                    try self.introduceTypeParametersFromHeader(header_idx);
+
+                    // Canonicalize the type annotation with type parameters in scope
+                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+                };
+
+                // Create the CIR type declaration statement
+                const type_decl_stmt: Statement = switch (type_decl.kind) {
+                    .alias => .{
+                        .s_alias_decl = .{
+                            .header = header_idx,
+                            .anno = anno_idx,
+                        },
+                    },
+                    .nominal, .@"opaque" => .{
+                        .s_nominal_decl = .{
+                            .header = header_idx,
+                            .anno = anno_idx,
+                            .is_opaque = type_decl.kind == .@"opaque",
+                        },
+                    },
+                };
+
+                const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+
+                // Introduce the type into the current scope for local use
+                try self.introduceType(type_header.name, stmt_idx, region);
+
+                // Where clauses are not allowed in type declarations
+                if (type_decl.where) |_| {
+                    try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+                        .region = region,
+                    } });
+                }
+
+                // Associated blocks are not supported for local type declarations
+                if (type_decl.associated) |_| {
+                    try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
+                        .feature = try self.env.insertString("associated blocks in local type declarations"),
+                        .region = region,
+                    } });
+                }
+
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+            }
         },
         .type_anno => |ta| blk: {
             // Type annotation statement
@@ -10018,7 +10104,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
 }
 
 /// Introduce a type declaration into the current scope
-fn introduceType(
+pub fn introduceType(
     self: *Self,
     name_ident: Ident.Idx,
     type_decl_stmt: Statement.Idx,
@@ -10186,7 +10272,8 @@ fn scopeUpdateTypeDecl(
     try current_scope.updateTypeDecl(gpa, name_ident, new_type_decl_stmt);
 }
 
-fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
+/// Look up a type declaration by identifier, searching from innermost to outermost scope.
+pub fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
     while (i > 0) {
@@ -10984,7 +11071,13 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                 const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
 
                 const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                    std.debug.panic("Failed to find exposed node for statement index {} in module '{s}'", .{ stmt_idx, module_name_text });
+                    // Failed to find exposed node - return malformed expression with diagnostic
+                    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                    return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_type_not_found = .{
+                        .parent_name = module_ident,
+                        .nested_name = field_name,
+                        .region = region,
+                    } });
                 };
 
                 // Create the tag expression
