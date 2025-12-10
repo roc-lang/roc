@@ -41,48 +41,14 @@ PARSE ERROR - fuzz_crash_025.md:13:3:13:4
 PARSE ERROR - fuzz_crash_025.md:13:4:13:5
 # PROBLEMS
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_025.md:9:1:9:2:**
-```roc
-d = 18446744073709551615
-```
-^
-
-
-**PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_025.md:9:3:9:4:**
+**fuzz_crash_025.md:8:15:8:18:**
 ```roc
-d = 18446744073709551615
+c = 429496729 U64
 ```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_025.md:9:5:9:25:**
-```roc
-d = 18446744073709551615
-```
-    ^^^^^^^^^^^^^^^^^^^^
+              ^^^
 
 
 **PARSE ERROR**
@@ -97,48 +63,14 @@ e = 3402823669209384634633746074317682114553.14: I8
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**fuzz_crash_025.md:13:1:13:2:**
-```roc
-f =8
-```
-^
-
-
-**PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_025.md:13:3:13:4:**
+**fuzz_crash_025.md:12:50:12:52:**
 ```roc
-f =8
+e = 3402823669209384634633746074317682114553.14: I8
 ```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**fuzz_crash_025.md:13:4:13:5:**
-```roc
-f =8
-```
-   ^
+                                                 ^^
 
 
 # TOKENS
@@ -183,18 +115,20 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "c"))
 			(e-int (raw "429496729")))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-decl
+			(p-ident (raw "d"))
+			(e-int (raw "18446744073709551615")))
 		(s-type-anno (name "e")
 			(ty (name "U128")))
 		(s-decl
 			(p-ident (raw "e"))
 			(e-frac (raw "3402823669209384634633746074317682114553.14")))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-decl
+			(p-ident (raw "f"))
+			(e-int (raw "8")))
 		(s-type-anno (name "g")
 			(ty (name "I16")))
 		(s-decl
@@ -227,11 +161,12 @@ b = 65535
 c : U32
 c = 429496729
 
+d = 18446744073709551615
 
 e : U128
 e = 3402823669209384634633746074317682114553.14
 
-
+f = 8
 
 g : I16
 g = -32768
@@ -264,10 +199,16 @@ j = -17011687303715884105728
 		(annotation
 			(ty-lookup (name "U32") (builtin))))
 	(d-let
+		(p-assign (ident "d"))
+		(e-num (value "18446744073709551615")))
+	(d-let
 		(p-assign (ident "e"))
 		(e-frac-f64 (value "3.4028236692093846e39"))
 		(annotation
 			(ty-lookup (name "U128") (builtin))))
+	(d-let
+		(p-assign (ident "f"))
+		(e-num (value "8")))
 	(d-let
 		(p-assign (ident "g"))
 		(e-num (value "-32768"))
@@ -296,7 +237,9 @@ j = -17011687303715884105728
 		(patt (type "U8"))
 		(patt (type "U16"))
 		(patt (type "U32"))
+		(patt (type "k where [k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)])]"))
 		(patt (type "U128"))
+		(patt (type "k where [k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)])]"))
 		(patt (type "I16"))
 		(patt (type "I32"))
 		(patt (type "I64"))
@@ -305,7 +248,9 @@ j = -17011687303715884105728
 		(expr (type "U8"))
 		(expr (type "U16"))
 		(expr (type "U32"))
+		(expr (type "k where [k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)])]"))
 		(expr (type "U128"))
+		(expr (type "k where [k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)])]"))
 		(expr (type "I16"))
 		(expr (type "I32"))
 		(expr (type "I64"))

@@ -359,20 +359,19 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**everything.md:17:8:17:11:**
+```roc
+		) -> Str,
+```
+		     ^^^
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **everything.md:17:11:17:12:**
 ```roc
@@ -517,86 +516,19 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**everything.md:22:1:22:2:**
-```roc
-B(b) : b
-```
-^
-
-
-**PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**everything.md:22:2:22:3:**
+**everything.md:21:8:21:11:**
 ```roc
-B(b) : b
+		) -> Str
 ```
- ^
+		     ^^^
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:3:22:4:**
-```roc
-B(b) : b
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:4:22:5:**
-```roc
-B(b) : b
-```
-   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:6:22:7:**
-```roc
-B(b) : b
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:22:8:22:9:**
-```roc
-B(b) : b
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+**WHERE CLAUSE ERROR**
+Expected an opening bracket **[** after `where`.
+Where clauses should look like:     where [a.method : Type]
 
 **everything.md:23:2:23:7:**
 ```roc
@@ -741,20 +673,19 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**everything.md:27:8:27:11:**
+```roc
+		) -> Str,
+```
+		     ^^^
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **everything.md:27:11:27:12:**
 ```roc
@@ -899,147 +830,14 @@ Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**everything.md:33:1:33:2:**
-```roc
-C(
-```
-^
-
-
-**PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
-**everything.md:33:2:33:3:**
+**everything.md:31:8:31:11:**
 ```roc
-C(
+		) -> Str
 ```
- ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:34:2:34:3:**
-```roc
-	a,
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:34:3:34:4:**
-```roc
-	a,
-```
-	 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:35:2:35:3:**
-```roc
-	b
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:36:1:36:2:**
-```roc
-) : (
-```
-^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:36:3:36:4:**
-```roc
-) : (
-```
-  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:36:5:36:6:**
-```roc
-) : (
-```
-    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:37:2:37:3:**
-```roc
-	a,
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:37:3:37:4:**
-```roc
-	a,
-```
-	 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:38:2:38:3:**
-```roc
-	b
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:39:1:39:2:**
-```roc
-)
-```
-^
+		     ^^^
 
 
 **WHERE CLAUSE ERROR**
@@ -1196,15 +994,15 @@ A(a) : a
 ```
 
 
-**UNDECLARED TYPE**
-The type _C_ is not declared in this scope.
+**WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
+You cannot define a `where` clause inside a type declaration.
 
-This type is referenced here:
-**everything.md:43:5:43:6:**
+You're attempting do this here:
+**everything.md:22:1:23:7:**
 ```roc
-) : C(
+B(b) : b
+	where
 ```
-    ^
 
 
 **MODULE NOT FOUND**
@@ -1476,24 +1274,6 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "multi_arrow_needs_parens"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "multi_arrow_needs_parens"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1508,7 +1288,12 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "multi_arrow_needs_parens"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-decl
+			(header (name "B")
+				(args
+					(ty-var (raw "b"))))
+			(ty-var (raw "b")))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1521,7 +1306,6 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "multi_arrow_needs_parens"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1533,6 +1317,18 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "multi_arrow_needs_parens"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-type-decl
+			(header (name "C")
+				(args
+					(ty-var (raw "a"))
+					(ty-var (raw "b"))))
+			(ty-tuple
+				(ty-var (raw "a"))
+				(ty-var (raw "b"))))
 		(s-type-decl
 			(header (name "D")
 				(args
@@ -1667,6 +1463,8 @@ A(a) : a
 
 
 
+B(b) : b
+	where []
 
 
 
@@ -1676,15 +1474,13 @@ A(a) : a
 
 
 
-
-
-
-
-
-
-
-
-
+C(
+	a,
+	b,
+) : (
+	a,
+	b,
+)
 D(
 	a,
 	b,
@@ -1870,11 +1666,26 @@ h = |x, y| {
 				(ty-rigid-var (name "a"))))
 		(ty-rigid-var-lookup (ty-rigid-var (name "a"))))
 	(s-alias-decl
+		(ty-header (name "B")
+			(ty-args
+				(ty-rigid-var (name "b"))))
+		(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
+	(s-alias-decl
+		(ty-header (name "C")
+			(ty-args
+				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))))
+		(ty-tuple
+			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var (name "b")))))
+	(s-alias-decl
 		(ty-header (name "D")
 			(ty-args
 				(ty-rigid-var (name "a"))
 				(ty-rigid-var (name "b"))))
-		(ty-malformed))
+		(ty-apply (name "C") (local)
+			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+			(ty-rigid-var-lookup (ty-rigid-var (name "b")))))
 	(s-alias-decl
 		(ty-header (name "E"))
 		(ty-record
@@ -1907,6 +1718,15 @@ h = |x, y| {
 			(ty-header (name "A")
 				(ty-args
 					(ty-rigid-var (name "a")))))
+		(alias (type "B(b)")
+			(ty-header (name "B")
+				(ty-args
+					(ty-rigid-var (name "b")))))
+		(alias (type "C(a, b)")
+			(ty-header (name "C")
+				(ty-args
+					(ty-rigid-var (name "a"))
+					(ty-rigid-var (name "b")))))
 		(alias (type "D(a, b)")
 			(ty-header (name "D")
 				(ty-args

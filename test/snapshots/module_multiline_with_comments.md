@@ -51,20 +51,19 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**module_multiline_with_comments.md:3:3:3:11:**
+```roc
+		SomeType, # Comment after final exposed item
+```
+		^^^^^^^^
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **module_multiline_with_comments.md:3:11:3:12:**
 ```roc
@@ -100,12 +99,14 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))))
 ~~~
 # FORMATTED
 ~~~roc
 # Comment After exposes open
+# Comment after exposed item
 # Comment after final exposed item
 ~~~
 # CANONICALIZE

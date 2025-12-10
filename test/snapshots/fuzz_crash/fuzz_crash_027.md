@@ -252,20 +252,19 @@ This string is missing a closing quote.
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**fuzz_crash_027.md:40:1:40:5:**
+```roc
+Maya) : [ #
+```
+^^^^
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_027.md:40:5:40:6:**
 ```roc
@@ -1315,7 +1314,8 @@ EndOfFile,
 			(ty-record
 				(anno-record-field (name "bar")
 					(ty (name "Som")))))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1720,7 +1720,7 @@ Ml(a) : { # d
 
 Soine(a) : { # d
 	bar : Som,
-}
+} #
 #
 # se
 

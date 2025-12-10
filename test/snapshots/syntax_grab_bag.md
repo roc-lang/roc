@@ -2543,7 +2543,7 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "MALFORMED_IMPORT")
+	(s-import (module "#malformed_import_0")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))

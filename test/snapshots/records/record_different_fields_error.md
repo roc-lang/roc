@@ -163,15 +163,37 @@ Expressions can be identifiers, literals, function calls, or operators.
                                  ^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
+**UNEXPECTED TOKEN IN TYPE ANNOTATION**
+The token **"** is not expected in a type annotation.
+Type annotations should contain types like _Str_, _Num a_, or _List U64_.
 
-**record_different_fields_error.md:4:15:4:16:**
+**record_different_fields_error.md:4:17:4:18:**
 ```roc
     PascalCase: "pascal",
 ```
-              ^
+                ^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **pascal** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_different_fields_error.md:4:18:4:24:**
+```roc
+    PascalCase: "pascal",
+```
+                 ^^^^^^
+
+
+**UNEXPECTED TOKEN IN EXPRESSION**
+The token **"** is not expected in an expression.
+Expressions can be identifiers, literals, function calls, or operators.
+
+**record_different_fields_error.md:4:24:4:25:**
+```roc
+    PascalCase: "pascal",
+```
+                       ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -370,14 +392,35 @@ I don't recognize this syntax.
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
+**MALFORMED TYPE**
+This type annotation is malformed or contains invalid syntax.
 
-**record_different_fields_error.md:4:15:4:16:**
+**record_different_fields_error.md:4:17:4:18:**
 ```roc
     PascalCase: "pascal",
 ```
-              ^
+                ^
+
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:4:18:4:24:**
+```roc
+    PascalCase: "pascal",
+```
+                 ^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+**UNRECOGNIZED SYNTAX**
+I don't recognize this syntax.
+
+**record_different_fields_error.md:4:24:4:25:**
+```roc
+    PascalCase: "pascal",
+```
+                       ^
 
 This might be a syntax error, an unsupported language feature, or a typo.
 
@@ -549,28 +592,6 @@ The unused variable is declared here:
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**record_different_fields_error.md:4:5:4:15:**
-```roc
-    PascalCase: "pascal",
-```
-    ^^^^^^^^^^
-
-It has the type:
-    _[PascalCase, .._others]_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**record_different_fields_error.md:4:17:4:25:**
-```roc
-    PascalCase: "pascal",
-```
-                ^^^^^^^^
-
-It has the type:
-    _Str_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
 **record_different_fields_error.md:5:10:5:15:**
 ```roc
     kebab-case: "kebab",
@@ -628,10 +649,12 @@ EndOfFile,
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-tag (raw "PascalCase"))
+		(s-type-decl
+			(header (name "PascalCase")
+				(args))
+			(ty-malformed (tag "ty_anno_unexpected_token")))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-string
-			(e-string-part (raw "pascal")))
+		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "kebab"))
 		(unary "-"
@@ -659,9 +682,8 @@ EndOfFile,
 			
 	field_ : 
 			
-	PascalCase
-		"pascal"
-	
+	PascalCase : 
+			
 	kebab
 	-case
 		"kebab"
@@ -694,13 +716,13 @@ EndOfFile,
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr
-		(e-tag (name "PascalCase")))
+	(s-alias-decl
+		(ty-header (name "PascalCase"))
+		(ty-malformed))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "pascal"))))
+		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

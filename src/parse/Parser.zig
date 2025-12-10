@@ -118,6 +118,74 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
+/// Check if the current position looks like a type declaration with a valid type following.
+/// This peeks ahead without consuming tokens to determine if we have:
+/// - `Name :` followed by a valid type start token
+/// - `Name :=` followed by a valid type start token
+/// - `Name ::` followed by a valid type start token
+/// - `Name a b :` etc. (with type params)
+/// - `Name(a, b) :` etc. (with parenthesized type params)
+///
+/// The key insight is that after the `:` (or `:=` or `::`), we must see a token that
+/// can start a type annotation. If we see a string literal or other expression token,
+/// this is NOT a type declaration - it's likely a malformed expression.
+fn looksLikeTypeDecl(self: *Parser) bool {
+    std.debug.assert(self.peek() == .UpperIdent);
+
+    var lookahead: u32 = 1;
+    const next_tok = self.peekN(lookahead);
+
+    // Check for parenthesized type params: Name(a, b) :
+    if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
+        // Skip to matching close paren, counting nesting
+        lookahead += 1;
+        var depth: u32 = 1;
+        while (depth > 0) {
+            const tok = self.peekN(lookahead);
+            switch (tok) {
+                .OpenRound, .NoSpaceOpenRound => depth += 1,
+                .CloseRound => depth -= 1,
+                .EndOfFile => return false,
+                else => {},
+            }
+            lookahead += 1;
+        }
+    } else {
+        // Skip past any lowercase identifiers (type parameters like `a`, `b`)
+        while (true) {
+            const tok = self.peekN(lookahead);
+            switch (tok) {
+                .LowerIdent, .Underscore, .NamedUnderscore => lookahead += 1,
+                else => break,
+            }
+        }
+    }
+
+    // Now check for : or := or ::
+    const op_tok = self.peekN(lookahead);
+    if (op_tok != .OpColon and op_tok != .OpColonEqual and op_tok != .OpDoubleColon) {
+        return false;
+    }
+    lookahead += 1;
+
+    // Check if what follows is a valid type annotation start
+    const after_colon = self.peekN(lookahead);
+    return switch (after_colon) {
+        // Valid type annotation starts
+        .UpperIdent, // Type name: Str, List, etc.
+        .LowerIdent, // Type variable: a, b, etc.
+        .OpenRound, // Tuple or grouping: (a, b)
+        .NoSpaceOpenRound, // Tuple or grouping without space
+        .OpenSquare, // Tag union: [Ok a, Err e]
+        .OpenCurly, // Record type: { name: Str }
+        .Underscore, // Wildcard type: _
+        .NamedUnderscore, // Named wildcard: _foo
+        => true,
+        // NOT valid type starts - this is probably a malformed expression
+        else => false,
+    };
+}
+
 const StackError = error{TooNested};
 
 /// The error set that methods of the Parser return
@@ -1440,7 +1508,13 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
         // Type Annotation (e.g. `Foo a : (a,a)`)
         .UpperIdent => {
             const start = self.pos;
-            if (statementType == .top_level or statementType == .in_associated_block) {
+            // Support type declarations in top-level, associated blocks, and body contexts.
+            // For body contexts, we use looksLikeTypeDecl() to disambiguate from tag
+            // constructors in malformed expressions (e.g., `Tag: "value"` in a record).
+            const is_type_decl_context = statementType == .top_level or
+                statementType == .in_associated_block or
+                (statementType == .in_body and self.looksLikeTypeDecl());
+            if (is_type_decl_context) {
                 const header = try self.parseTypeHeader();
                 if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
                     // Point to the unexpected token (e.g., "U8" in "List U8")

@@ -65,7 +65,29 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:5:9:5:13:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			     ^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:5:13:5:14:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			         ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_029.md:5:14:5:17:**
@@ -76,20 +98,22 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**fuzz_crash_029.md:5:17:5:18:**
+```roc
+			n! : List(Str) => {}, # ure
+```
+			             ^
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
+**PARSE ERROR**
+Function types with multiple arrows need parentheses.
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
+        a -> (b -> c) for a **curried** function (a function that **returns** another function)
+        (a -> b) -> c for a **higher-order** function (a function that **takes** another function)
 
 **fuzz_crash_029.md:5:19:5:21:**
 ```roc
@@ -297,20 +321,52 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-Type applications require parentheses around their type arguments.
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+**fuzz_crash_029.md:15:5:15:7:**
+```roc
+		[ Ok(world), (n # pen
+```
+		  ^^
 
-Instead of:
-    **List U8**
 
-Use:
-    **List(U8)**
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
+**fuzz_crash_029.md:15:7:15:8:**
+```roc
+		[ Ok(world), (n # pen
+```
+		    ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:15:8:15:13:**
+```roc
+		[ Ok(world), (n # pen
+```
+		     ^^^^^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
+
+**fuzz_crash_029.md:15:13:15:14:**
+```roc
+		[ Ok(world), (n # pen
+```
+		          ^
+
+
+**PARSE ERROR**
+A parsing error occurred: `statement_unexpected_token`
+This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_029.md:15:14:15:15:**
 ```roc
@@ -410,7 +466,11 @@ EndOfFile,
 (file
 	(malformed-header (tag "expected_requires_rigids_close_curly"))
 	(statements
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "multi_arrow_needs_parens"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -430,7 +490,11 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
