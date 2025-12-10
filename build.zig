@@ -764,6 +764,7 @@ const MiniCiStep = struct {
         // Run the sequence of `zig build` commands that make up the
         // mini CI pipeline.
         try runSubBuild(step, "fmt", "zig build fmt");
+        try runZigLints(step);
         try checkTestWiring(step);
         try runSubBuild(step, null, "zig build");
         try checkBuiltinRocFormatting(step);
@@ -774,6 +775,36 @@ const MiniCiStep = struct {
         try runSubBuild(step, "test-playground", "zig build test-playground");
         try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
         try runSubBuild(step, "test-cli", "zig build test-cli");
+    }
+
+    fn runZigLints(step: *Step) !void {
+        const b = step.owner;
+        std.debug.print("---- minici: running zig lints ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, b.graph.zig_exe);
+        try child_argv.append(b.allocator, "run");
+        try child_argv.append(b.allocator, "ci/zig_lints.zig");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail("Zig lints failed. Run 'zig run ci/zig_lints.zig' to see details.", .{});
+                }
+            },
+            else => {
+                return step.fail("zig run ci/zig_lints.zig terminated abnormally", .{});
+            },
+        }
     }
 
     fn checkBuiltinRocFormatting(step: *Step) !void {
