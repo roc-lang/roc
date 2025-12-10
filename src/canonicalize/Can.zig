@@ -2860,34 +2860,6 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-fn bringIngestedFileIntoScope(
-    self: *Self,
-    import: *const parse.AST.Stmt.Import,
-) void {
-    const res = self.env.modules.getOrInsert(
-        import.name,
-        import.package_shorthand,
-    );
-
-    if (res.was_present) {
-        // _ = self.env.problems.append(Problem.Canonicalize.make(.DuplicateImport{
-        //     .duplicate_import_region = import.name_region,
-        // }));
-    }
-
-    // scope.introduce(self: *Scope, comptime item_kind: Level.ItemKind, ident: Ident.Idx)
-
-    for (import.exposing.items.items) |exposed| {
-        const exposed_ident = switch (exposed) {
-            .Value => |ident| ident,
-            .Type => |ident| ident,
-            .CustomTagUnion => |custom| custom.name,
-        };
-        self.env.addExposedIdentForModule(exposed_ident, res.module_idx);
-        // TODO: Implement scope introduction for exposed identifiers
-    }
-}
-
 /// Process a module import with common logic shared by explicit imports and auto-imports.
 /// This handles everything after module name and alias resolution.
 /// Process import with an alias (normal import like `import json.Json` or `import json.Json as J`)
@@ -4117,7 +4089,7 @@ pub fn canonicalizeExpr(
                         try self.checkUsedUnderscoreVariable(ident, region);
 
                         // We found the ident in scope, lookup to reference the pattern
-                        // TODO(RANK)
+                        // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
                         const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                             .pattern_idx = found_pattern_idx,
                         } }, region);
