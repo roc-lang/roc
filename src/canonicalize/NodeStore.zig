@@ -144,9 +144,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 40;
+pub const MODULEENV_EXPR_NODE_COUNT = 39;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -273,9 +273,6 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             .msg = @enumFromInt(node.data_1),
         } },
         .statement_dbg => return CIR.Statement{ .s_dbg = .{
-            .expr = @enumFromInt(node.data_1),
-        } },
-        .statement_inspect => return CIR.Statement{ .s_inspect = .{
             .expr = @enumFromInt(node.data_1),
         } },
         .statement_expr => return .{ .s_expr = .{
@@ -650,11 +647,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dbg => {
             return CIR.Expr{ .e_dbg = .{
-                .expr = @enumFromInt(node.data_1),
-            } };
-        },
-        .expr_inspect => {
-            return CIR.Expr{ .e_inspect = .{
                 .expr = @enumFromInt(node.data_1),
             } };
         },
@@ -1395,10 +1387,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_dbg;
             node.data_1 = @intFromEnum(s.expr);
         },
-        .s_inspect => |s| {
-            node.tag = .statement_inspect;
-            node.data_1 = @intFromEnum(s.expr);
-        },
         .s_expr => |s| {
             node.tag = .statement_expr;
             node.data_1 = @intFromEnum(s.expr);
@@ -1656,10 +1644,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_dbg => |d| {
             node.tag = .expr_dbg;
-            node.data_1 = @intFromEnum(d.expr);
-        },
-        .e_inspect => |d| {
-            node.tag = .expr_inspect;
             node.data_1 = @intFromEnum(d.expr);
         },
         .e_ellipsis => |_| {

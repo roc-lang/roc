@@ -2189,8 +2189,8 @@ pub const Interpreter = struct {
                         // Check if this is a builtin type with a primitive layout
                         const is_builtin_primitive = value.layout.tag == .scalar and
                             (value.layout.data.scalar.tag == .int or
-                            value.layout.data.scalar.tag == .frac or
-                            value.layout.data.scalar.tag == .str);
+                                value.layout.data.scalar.tag == .frac or
+                                value.layout.data.scalar.tag == .str);
                         if (is_builtin_primitive) {
                             break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
                         }
@@ -8366,7 +8366,6 @@ pub const Interpreter = struct {
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
         const resolved = module.types.resolveVar(compile_var);
 
-
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
         // Check flex_type_context BEFORE translate_cache for flex and rigid types.
@@ -9133,9 +9132,6 @@ pub const Interpreter = struct {
         /// Dbg print - print evaluated value and return {}.
         dbg_print: DbgPrint,
 
-        /// Inspect render - render value to Str and push result.
-        inspect_render: InspectRender,
-
         /// String interpolation - collect segment strings.
         str_collect: StrCollect,
 
@@ -9186,12 +9182,6 @@ pub const Interpreter = struct {
 
         /// Dbg statement - print value after evaluation.
         dbg_print_stmt: DbgPrintStmt,
-
-        /// Inspect statement - render value to Str after evaluation.
-        inspect_render_stmt: InspectRenderStmt,
-
-        /// Cleanup after to_inspect method call in statement context.
-        inspect_stmt_cleanup: InspectStmtCleanup,
 
         /// Sort - process comparison result and continue insertion sort.
         sort_compare_result: SortCompareResult,
@@ -9380,14 +9370,6 @@ pub const Interpreter = struct {
         /// Dbg continuation - after expression is evaluated, print and return {}
         pub const DbgPrint = struct {
             /// Original dbg expression index (for type info)
-            expr_idx: can.CIR.Expr.Idx,
-            /// Inner expression runtime type variable
-            inner_rt_var: types.Var,
-        };
-
-        /// Inspect continuation - after expression is evaluated, render to Str and push result
-        pub const InspectRender = struct {
-            /// Original inspect expression index (for type info)
             expr_idx: can.CIR.Expr.Idx,
             /// Inner expression runtime type variable
             inner_rt_var: types.Var,
@@ -9648,29 +9630,6 @@ pub const Interpreter = struct {
             /// Runtime type for rendering
             rt_var: types.Var,
             /// Remaining statements after dbg
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
-            /// Bindings length at block start (for cleanup)
-            bindings_start: usize,
-        };
-
-        /// Inspect statement - render value to Str (value is discarded unless final)
-        pub const InspectRenderStmt = struct {
-            /// Runtime type for rendering
-            rt_var: types.Var,
-            /// Remaining statements after inspect
-            remaining_stmts: []const can.CIR.Statement.Idx,
-            /// Final expression to evaluate after all statements
-            final_expr: can.CIR.Expr.Idx,
-            /// Bindings length at block start (for cleanup)
-            bindings_start: usize,
-        };
-
-        /// Cleanup after to_inspect method call in statement context
-        /// Discards the result and continues with remaining statements
-        pub const InspectStmtCleanup = struct {
-            /// Remaining statements after inspect
             remaining_stmts: []const can.CIR.Statement.Idx,
             /// Final expression to evaluate after all statements
             final_expr: can.CIR.Expr.Idx,
@@ -10800,20 +10759,6 @@ pub const Interpreter = struct {
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_expr.expr,
-                    .expected_rt_var = inner_rt_var,
-                } });
-            },
-
-            .e_inspect => |inspect_expr| {
-                const inner_ct_var = can.ModuleEnv.varFrom(inspect_expr.expr);
-                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-                // Schedule: first evaluate inner expression, then render to Str
-                try work_stack.push(.{ .apply_continuation = .{ .inspect_render = .{
-                    .expr_idx = expr_idx,
-                    .inner_rt_var = inner_rt_var,
-                } } });
-                try work_stack.push(.{ .eval_expr = .{
-                    .expr_idx = inspect_expr.expr,
                     .expected_rt_var = inner_rt_var,
                 } });
             },
@@ -12311,25 +12256,6 @@ pub const Interpreter = struct {
                     .expected_rt_var = inner_rt_var,
                 } });
             },
-            .s_inspect => |inspect_stmt| {
-                // Evaluate expression, then render to Str (value is discarded in stmt context)
-                const inner_ct_var = can.ModuleEnv.varFrom(inspect_stmt.expr);
-                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
-
-                // Push inspect_render_stmt continuation
-                try work_stack.push(.{ .apply_continuation = .{ .inspect_render_stmt = .{
-                    .rt_var = inner_rt_var,
-                    .remaining_stmts = remaining_stmts,
-                    .final_expr = final_expr,
-                    .bindings_start = bindings_start,
-                } } });
-
-                // Evaluate the expression
-                try work_stack.push(.{ .eval_expr = .{
-                    .expr_idx = inspect_stmt.expr,
-                    .expected_rt_var = inner_rt_var,
-                } });
-            },
             .s_return => |ret| {
                 // Early return: evaluate expression, then use early_return continuation
                 const expr_ct_var = can.ModuleEnv.varFrom(ret.expr);
@@ -13435,153 +13361,6 @@ pub const Interpreter = struct {
                 const layout_val = try self.getRuntimeLayout(rt_var);
                 const result = try self.pushRaw(layout_val, 0, rt_var);
                 try value_stack.push(result);
-                return true;
-            },
-            .inspect_render => |ir| {
-                // Pop evaluated value from stack
-                const value = value_stack.pop() orelse return error.Crash;
-
-                // Use the evaluated value's rt_var instead of the pre-computed inner_rt_var.
-                // This is important for polymorphic functions where the compile-time type
-                // might not have the correct mapping due to serialization/deserialization
-                // not preserving type variable unifications.
-                const effective_rt_var = value.rt_var;
-                _ = ir; // Suppress unused warning for now
-
-                // Check if the type is nominal and has a to_inspect method
-                const resolved = self.runtime_types.resolveVar(effective_rt_var);
-                const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
-                    switch (resolved.desc.content.structure) {
-                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
-                            nom.origin_module,
-                            nom.ident.ident_idx,
-                            self.env.idents.to_inspect,
-                            roc_ops,
-                            effective_rt_var,
-                        ),
-                        else => null,
-                    }
-                else
-                    null;
-
-                if (maybe_to_inspect) |method_func| {
-                    // Found to_inspect method - call it with the value
-                    if (method_func.layout.tag != .closure) {
-                        value.decref(&self.runtime_layout_store, roc_ops);
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        return error.TypeMismatch;
-                    }
-
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-                    const saved_env = self.env;
-                    const saved_bindings_len = self.bindings.items.len;
-                    self.env = @constCast(closure_header.source_env);
-
-                    // Check if low-level lambda (unlikely for user-defined to_inspect)
-                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-                        var args = [1]StackValue{value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
-
-                        // Decref based on ownership semantics
-                        const arg_ownership = low_level.op.getArgOwnership();
-                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
-                            value.decref(&self.runtime_layout_store, roc_ops);
-                        }
-
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        self.env = saved_env;
-                        try value_stack.push(result);
-                        return true;
-                    }
-
-                    const params = self.env.store.slicePatterns(closure_header.params);
-                    if (params.len != 1) {
-                        // to_inspect must take exactly one argument
-                        self.env = saved_env;
-                        value.decref(&self.runtime_layout_store, roc_ops);
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        // Fall back to default rendering
-                        const rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
-                        defer self.allocator.free(rendered);
-                        const str_rt_var = try self.getCanonicalStrRuntimeVar();
-                        const str_value = try self.pushStr(str_rt_var);
-                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
-                        roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
-                        try value_stack.push(str_value);
-                        return true;
-                    }
-
-                    try self.active_closures.append(method_func);
-                    try self.bindings.append(.{
-                        .pattern_idx = params[0],
-                        .value = value,
-                        .expr_idx = null, // expr_idx not used for inspect method parameter bindings
-                        .source_env = self.env,
-                    });
-
-                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
-                        .saved_env = saved_env,
-                        .saved_bindings_len = saved_bindings_len,
-                        .param_count = 1,
-                        .has_active_closure = true,
-                        .did_instantiate = false,
-                        .call_ret_rt_var = null,
-                        .saved_rigid_subst = null,
-                        .saved_flex_type_context = null,
-                        .arg_rt_vars_to_free = null,
-                    } } });
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = null,
-                    } });
-                    return true;
-                }
-
-                // No to_inspect method found - use default rendering
-                defer value.decref(&self.runtime_layout_store, roc_ops);
-
-                // Check if this is an opaque or nominal type (without to_inspect)
-                const rendered: []const u8 = if (resolved.desc.content == .structure and
-                    resolved.desc.content.structure == .nominal_type)
-                blk: {
-                    const nom = resolved.desc.content.structure.nominal_type;
-                    if (nom.is_opaque) {
-                        // Check if this is a builtin type with a primitive layout
-                        // (e.g., I64, Str, Bool) - these should be rendered using their
-                        // backing values, not as "<opaque>"
-                        const is_builtin_primitive = value.layout.tag == .scalar and
-                            (value.layout.data.scalar.tag == .int or
-                            value.layout.data.scalar.tag == .frac or
-                            value.layout.data.scalar.tag == .str);
-                        if (is_builtin_primitive) {
-                            // Builtin opaque types render using their backing value
-                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
-                        }
-                        // User-defined opaque types without to_inspect render as "<opaque>"
-                        break :blk try self.allocator.dupe(u8, "<opaque>");
-                    } else {
-                        // Nominal types render as "TypeName.InnerValue"
-                        // Use the original type var - render_helpers will unwrap the nominal type
-                        const type_name = self.root_env.getIdent(nom.ident.ident_idx);
-                        const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
-                        defer self.allocator.free(inner_rendered);
-                        break :blk try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, inner_rendered });
-                    }
-                } else blk: {
-                    // Non-nominal types use default rendering
-                    break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
-                };
-                defer self.allocator.free(rendered);
-
-                // Create a RocStr from the rendered bytes and push it
-                const str_rt_var = try self.getCanonicalStrRuntimeVar();
-                const str_value = try self.pushStr(str_rt_var);
-                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
-                roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
-                try value_stack.push(str_value);
                 return true;
             },
             .str_collect => |sc| {
@@ -15468,165 +15247,6 @@ pub const Interpreter = struct {
                 } else {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
                     try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, null, roc_ops);
-                }
-                return true;
-            },
-            .inspect_render_stmt => |ir| {
-                // Inspect statement: render value to Str (discarded in statement context)
-                const value = value_stack.pop() orelse return error.Crash;
-
-                // Check if the type is nominal and has a to_inspect method
-                const resolved = self.runtime_types.resolveVar(ir.rt_var);
-                const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
-                    switch (resolved.desc.content.structure) {
-                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
-                            nom.origin_module,
-                            nom.ident.ident_idx,
-                            self.env.idents.to_inspect,
-                            roc_ops,
-                            ir.rt_var,
-                        ),
-                        else => null,
-                    }
-                else
-                    null;
-
-                if (maybe_to_inspect) |method_func| {
-                    // Found to_inspect method - call it with the value
-                    if (method_func.layout.tag != .closure) {
-                        value.decref(&self.runtime_layout_store, roc_ops);
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        // Fall back to default rendering
-                        const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
-                        self.allocator.free(rendered);
-                        if (ir.remaining_stmts.len == 0) {
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = ir.final_expr,
-                                .expected_rt_var = null,
-                            } });
-                        } else {
-                            const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
-                            try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
-                        }
-                        return true;
-                    }
-
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
-
-                    const saved_env = self.env;
-                    const saved_bindings_len = self.bindings.items.len;
-                    self.env = @constCast(closure_header.source_env);
-
-                    // Check if low-level lambda
-                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
-                    if (lambda_expr == .e_low_level_lambda) {
-                        const low_level = lambda_expr.e_low_level_lambda;
-                        var args = [1]StackValue{value};
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
-
-                        const arg_ownership = low_level.op.getArgOwnership();
-                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
-                            value.decref(&self.runtime_layout_store, roc_ops);
-                        }
-
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        result.decref(&self.runtime_layout_store, roc_ops); // Discard result
-                        self.env = saved_env;
-
-                        if (ir.remaining_stmts.len == 0) {
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = ir.final_expr,
-                                .expected_rt_var = null,
-                            } });
-                        } else {
-                            const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
-                            try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
-                        }
-                        return true;
-                    }
-
-                    const params = self.env.store.slicePatterns(closure_header.params);
-                    if (params.len != 1) {
-                        // to_inspect must take exactly one argument - fall back to default
-                        self.env = saved_env;
-                        value.decref(&self.runtime_layout_store, roc_ops);
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
-                        self.allocator.free(rendered);
-                        if (ir.remaining_stmts.len == 0) {
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = ir.final_expr,
-                                .expected_rt_var = null,
-                            } });
-                        } else {
-                            const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
-                            try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
-                        }
-                        return true;
-                    }
-
-                    try self.active_closures.append(method_func);
-                    try self.bindings.append(.{
-                        .pattern_idx = params[0],
-                        .value = value,
-                        .expr_idx = null, // expr_idx not used for inspect method parameter bindings
-                        .source_env = self.env,
-                    });
-
-                    // Schedule cleanup to discard result and continue after method call
-                    try work_stack.push(.{ .apply_continuation = .{ .inspect_stmt_cleanup = .{
-                        .remaining_stmts = ir.remaining_stmts,
-                        .final_expr = ir.final_expr,
-                        .bindings_start = ir.bindings_start,
-                    } } });
-                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
-                        .saved_env = saved_env,
-                        .saved_bindings_len = saved_bindings_len,
-                        .param_count = 1,
-                        .has_active_closure = true,
-                        .did_instantiate = false,
-                        .call_ret_rt_var = null,
-                        .saved_rigid_subst = null,
-                        .saved_flex_type_context = null,
-                        .arg_rt_vars_to_free = null,
-                    } } });
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = null,
-                    } });
-                    return true;
-                }
-
-                // No to_inspect method - use default rendering
-                defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, ir.rt_var, roc_ops);
-                self.allocator.free(rendered);
-                // Continue with remaining statements
-                if (ir.remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = ir.final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(ir.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, ir.remaining_stmts[1..], ir.final_expr, ir.bindings_start, null, roc_ops);
-                }
-                return true;
-            },
-            .inspect_stmt_cleanup => |isc| {
-                // Discard the result from to_inspect method call and continue with statements
-                const result = value_stack.pop() orelse return error.Crash;
-                result.decref(&self.runtime_layout_store, roc_ops);
-
-                // Continue with remaining statements
-                if (isc.remaining_stmts.len == 0) {
-                    try work_stack.push(.{ .eval_expr = .{
-                        .expr_idx = isc.final_expr,
-                        .expected_rt_var = null,
-                    } });
-                } else {
-                    const next_stmt = self.env.store.getStatement(isc.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, isc.remaining_stmts[1..], isc.final_expr, isc.bindings_start, null, roc_ops);
                 }
                 return true;
             },

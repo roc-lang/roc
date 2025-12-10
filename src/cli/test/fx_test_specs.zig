@@ -192,6 +192,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Result: 1",
         .description = "Inspect with wrong signature",
     },
+    .{
+        .roc_file = "test/fx/inspect_open_tag_test.roc",
+        .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123",
+        .description = "Str.inspekt on tag unions",
+    },
 };
 
 /// Get the total number of IO spec tests

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Using inspect on an open union type variable should work
+description=Using Str.inspekt on an open union type variable should work
 type=snippet
 ~~~
 # SOURCE
@@ -9,8 +9,8 @@ main_for_host : Try({}, [Exit(I32), ..others]) -> Str
 main_for_host = |result|
     match result {
         Ok({}) => "ok"
-        Err(Exit(code)) => inspect code
-        Err(other) => inspect other
+        Err(Exit(code)) => Str.inspekt(code)
+        Err(other) => Str.inspekt(other)
     }
 ~~~
 # EXPECTED
@@ -23,8 +23,8 @@ LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,OpenSq
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,
 KwMatch,LowerIdent,OpenCurly,
 UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,CloseRound,OpFatArrow,StringStart,StringPart,StringEnd,
-UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,OpFatArrow,KwInspect,LowerIdent,
-UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpFatArrow,KwInspect,LowerIdent,
+UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,OpFatArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpFatArrow,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -62,12 +62,14 @@ EndOfFile,
 							(p-tag (raw "Err")
 								(p-tag (raw "Exit")
 									(p-ident (raw "code"))))
-							(e-inspect
+							(e-apply
+								(e-ident (raw "Str.inspekt"))
 								(e-ident (raw "code"))))
 						(branch
 							(p-tag (raw "Err")
 								(p-ident (raw "other")))
-							(e-inspect
+							(e-apply
+								(e-ident (raw "Str.inspekt"))
 								(e-ident (raw "other"))))))))))
 ~~~
 # FORMATTED
@@ -76,8 +78,8 @@ main_for_host : Try({}, [Exit(I32), ..others]) -> Str
 main_for_host = |result|
 	match result {
 		Ok({}) => "ok"
-		Err(Exit(code)) => inspect code
-		Err(other) => inspect other
+		Err(Exit(code)) => Str.inspekt(code)
+		Err(other) => Str.inspekt(other)
 	}
 ~~~
 # CANONICALIZE
@@ -106,7 +108,9 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-inspect
+								(e-call
+									(e-lookup-external
+										(builtin))
 									(e-lookup-local
 										(p-assign (ident "code"))))))
 						(branch
@@ -114,7 +118,9 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-inspect
+								(e-call
+									(e-lookup-external
+										(builtin))
 									(e-lookup-local
 										(p-assign (ident "other"))))))))))
 		(annotation

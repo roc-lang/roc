@@ -102,16 +102,6 @@ pub const Statement = union(enum) {
     s_dbg: struct {
         expr: Expr.Idx,
     },
-    /// An inspect statement that returns a string representation of a value.
-    ///
-    /// Not valid at the top level of a module
-    ///
-    /// ```roc
-    /// str = inspect someValue
-    /// ```
-    s_inspect: struct {
-        expr: Expr.Idx,
-    },
     /// Just an expression - usually the return value for a block
     ///
     /// Not valid at the top level of a module
@@ -277,17 +267,6 @@ pub const Statement = union(enum) {
             .s_dbg => |s| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-dbg");
-                const region = env.store.getStatementRegion(stmt_idx);
-                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-
-                try env.store.getExpr(s.expr).pushToSExprTree(env, tree, s.expr);
-
-                try tree.endNode(begin, attrs);
-            },
-            .s_inspect => |s| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("s-inspect");
                 const region = env.store.getStatementRegion(stmt_idx);
                 try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
