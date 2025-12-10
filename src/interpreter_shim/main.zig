@@ -79,13 +79,15 @@ extern var roc__serialized_size: usize;
 // For wasm32: No threading, so simple bool instead of atomic
 var shared_memory_initialized: if (is_wasm32) bool else std.atomic.Value(bool) =
     if (is_wasm32) false else std.atomic.Value(bool).init(false);
-var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32) {} else null;
+var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32)
+{} else null;
 var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (platform or app)
 var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
 // For wasm32: No threading, so no mutex needed
-var shm_mutex: if (is_wasm32) void else std.Thread.Mutex = if (is_wasm32) {} else .{};
+var shm_mutex: if (is_wasm32) void else std.Thread.Mutex = if (is_wasm32)
+{} else .{};
 
 // Cached header info (set during initialization, used for evaluation)
 var global_entry_count: u32 = 0;
