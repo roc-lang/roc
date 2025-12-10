@@ -11031,42 +11031,22 @@ pub const Interpreter = struct {
                     receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
                 }
 
-                // Evaluate receiver synchronously with isolated stacks to prevent value stack interleaving.
-                // This ensures the receiver is captured immediately before other dot_access expressions
-                // can push values that would corrupt the expected stack order.
-                const receiver_value = try self.evalWithExpectedType(dot_access.receiver, roc_ops, receiver_rt_var);
-
-                // Copy receiver to persistent memory (evalWithExpectedType uses temporary stacks that are freed)
-                const copied_receiver = try self.pushCopy(receiver_value);
-
-                // Decref the original receiver_value since we made a copy.
-                // This is necessary for records/tuples containing refcounted values like lists.
-                receiver_value.decref(&self.runtime_layout_store, roc_ops);
-
-                // After evaluation, prefer the actual runtime type from the receiver value
-                // over the translated/defaulted compile-time type. This handles cases like:
-                // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
-                //   runtime value has the concrete String type from dec_to_str
-                // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
-                //   will be Dec (from evalNum's concrete type assignment)
-                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
-                const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
-                    // Use the concrete type from evaluation (handles bindings to non-numeric results)
-                    copied_receiver.rt_var
-                else
-                    // Evaluation result is still flex/rigid - use the (possibly Dec-defaulted) receiver_rt_var
-                    receiver_rt_var;
-
-                // Push to outer value_stack so dot_access_await_receiver can pop it
-                try value_stack.push(copied_receiver);
-
-                // Schedule await_receiver which will pop from value stack and create resolve with carried value
+                // Schedule receiver evaluation on the same work_stack (not via nested evalWithExpectedType).
+                // This ensures early returns can find call_cleanup continuations properly.
+                // The dot_access_await_receiver continuation will pop the receiver from value_stack
+                // and transition to dot_access_resolve.
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_await_receiver = .{
                     .field_name = dot_access.field_name,
                     .method_args = dot_access.args,
-                    .receiver_rt_var = final_receiver_rt_var,
+                    .receiver_rt_var = receiver_rt_var,
                     .expr_idx = expr_idx,
                 } } });
+
+                // Push receiver evaluation - will be executed first, result goes on value_stack
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dot_access.receiver,
+                    .expected_rt_var = receiver_rt_var,
+                } });
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
@@ -12874,7 +12854,7 @@ pub const Interpreter = struct {
                 const return_value = value_stack.pop() orelse return error.Crash;
                 self.early_return_value = return_value;
 
-                // Drain work stack until we find call_cleanup (function boundary)
+                // Drain work stack until we find call_cleanup (function boundary) or return_result (evaluation root)
                 // This skips any remaining work items for the current function body
                 while (work_stack.pop()) |pending_item| {
                     switch (pending_item) {
@@ -12885,9 +12865,22 @@ pub const Interpreter = struct {
                                     try work_stack.push(pending_item);
                                     break;
                                 },
+                                .return_result => {
+                                    // This should never happen - we should always find call_cleanup
+                                    // before return_result during early_return processing.
+                                    // If we hit this, it means there's a bug in how we're structuring
+                                    // the work stack (likely a nested evalWithExpectedType call that
+                                    // shouldn't be nested).
+                                    self.triggerCrash("early_return hit return_result without finding call_cleanup - this indicates a work stack structure bug", false, roc_ops);
+                                    return error.Crash;
+                                },
                                 .call_invoke_closure => |ci| {
-                                    // Free arg_rt_vars if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                    if (ci.saved_rigid_subst) |saved| {
+                                        var saved_copy = saved;
+                                        saved_copy.deinit();
+                                    }
                                 },
                                 .for_iterate => |fl| {
                                     // Decref the list value when skipping a for loop
@@ -12897,6 +12890,65 @@ pub const Interpreter = struct {
                                     // Decref the list value and clean up bindings
                                     self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .str_collect => |sc| {
+                                    // Clean up any already-collected string segments on the value stack
+                                    for (0..sc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .tuple_collect => |tc| {
+                                    // Clean up any already-collected tuple elements on the value stack
+                                    for (0..tc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .list_collect => |lc| {
+                                    // Clean up any already-collected list elements on the value stack
+                                    for (0..lc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .record_collect => |rc| {
+                                    // Clean up any already-collected record fields on the value stack
+                                    // Also clean up base record value if present (from record extension)
+                                    for (0..rc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                    if (rc.has_extension) {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .tag_collect => |tc| {
+                                    // Clean up any already-collected tag arguments on the value stack
+                                    for (0..tc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .call_collect_args => |cc| {
+                                    // Clean up any already-collected arguments on the value stack
+                                    // Also clean up function value
+                                    for (0..cc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                    // Function value is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
                                 },
                                 else => {
                                     // Skip this continuation - it's part of the function body being early-returned from
@@ -14391,16 +14443,36 @@ pub const Interpreter = struct {
                 return true;
             },
             .dot_access_await_receiver => |da| {
-                // Pop the receiver from value stack (pushed by e_dot_access after evalWithExpectedType)
-                // and schedule dot_access_resolve with the receiver carried directly
+                // Pop the receiver from value stack (pushed by eval_expr for the receiver)
                 const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                // Copy receiver to persistent memory (the value from eval may be on temporary stack)
+                const copied_receiver = try self.pushCopy(receiver_value);
+
+                // Decref the original receiver_value since we made a copy.
+                // This is necessary for records/tuples containing refcounted values like lists.
+                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // After evaluation, prefer the actual runtime type from the receiver value
+                // over the translated/defaulted compile-time type. This handles cases like:
+                // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
+                //   runtime value has the concrete String type from dec_to_str
+                // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
+                //   will be Dec (from evalNum's concrete type assignment)
+                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
+                const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
+                    // Use the concrete type from evaluation (handles bindings to non-numeric results)
+                    copied_receiver.rt_var
+                else
+                    // Evaluation result is still flex/rigid - use the (possibly Dec-defaulted) receiver_rt_var
+                    da.receiver_rt_var;
 
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
                     .field_name = da.field_name,
                     .method_args = da.method_args,
-                    .receiver_rt_var = da.receiver_rt_var,
+                    .receiver_rt_var = final_receiver_rt_var,
                     .expr_idx = da.expr_idx,
-                    .receiver_value = receiver_value,
+                    .receiver_value = copied_receiver,
                 } } });
                 return true;
             },

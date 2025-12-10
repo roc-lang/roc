@@ -287,15 +287,24 @@ pub const Instantiator = struct {
     }
 
     fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
-        const fields_slice = self.store.getRecordFieldsSlice(fields);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing MultiArrayList, but instantiateVar
+        // can recursively call appendRecordFields which may reallocate the array,
+        // invalidating the slice pointers.
+        if (fields.count == 0) {
+            return try self.store.appendRecordFields(&.{});
+        }
 
         var fresh_fields = std.ArrayList(RecordField).empty;
         defer fresh_fields.deinit(self.store.gpa);
 
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-            const fresh_type = try self.instantiateVar(type_var);
+        const fields_start: usize = @intFromEnum(fields.start);
+        for (0..fields.count) |i| {
+            // Re-fetch the field data on each iteration since the backing array may have moved
+            const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
+            const fresh_type = try self.instantiateVar(field.var_);
             _ = try fresh_fields.append(self.store.gpa, RecordField{
-                .name = name,
+                .name = field.name,
                 .var_ = fresh_type,
             });
         }
@@ -304,15 +313,27 @@ pub const Instantiator = struct {
     }
 
     fn instantiateRecord(self: *Self, record: Record) std.mem.Allocator.Error!Record {
-        const fields_slice = self.store.getRecordFieldsSlice(record.fields);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing MultiArrayList, but instantiateVar
+        // can recursively call appendRecordFields which may reallocate the array,
+        // invalidating the slice pointers.
+        if (record.fields.count == 0) {
+            return Record{
+                .fields = try self.store.appendRecordFields(&.{}),
+                .ext = try self.instantiateVar(record.ext),
+            };
+        }
 
         var fresh_fields = std.ArrayList(RecordField).empty;
         defer fresh_fields.deinit(self.store.gpa);
 
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-            const fresh_type = try self.instantiateVar(type_var);
+        const fields_start: usize = @intFromEnum(record.fields.start);
+        for (0..record.fields.count) |i| {
+            // Re-fetch the field data on each iteration since the backing array may have moved
+            const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
+            const fresh_type = try self.instantiateVar(field.var_);
             _ = try fresh_fields.append(self.store.gpa, RecordField{
-                .name = name,
+                .name = field.name,
                 .var_ = fresh_type,
             });
         }
@@ -325,12 +346,27 @@ pub const Instantiator = struct {
     }
 
     fn instantiateTagUnion(self: *Self, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const tags_slice = self.store.getTagsSlice(tag_union.tags);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing MultiArrayList, but instantiateVar
+        // can recursively call appendTags which may reallocate the array,
+        // invalidating the slice pointers.
+        if (tag_union.tags.count == 0) {
+            return TagUnion{
+                .tags = try self.store.appendTags(&.{}),
+                .ext = try self.instantiateVar(tag_union.ext),
+            };
+        }
 
         var fresh_tags = std.ArrayList(Tag).empty;
         defer fresh_tags.deinit(self.store.gpa);
 
-        for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
+        const tags_start: usize = @intFromEnum(tag_union.tags.start);
+        for (0..tag_union.tags.count) |tag_i| {
+            // Re-fetch the tag data on each iteration since the backing array may have moved
+            const tag = self.store.tags.get(@enumFromInt(tags_start + tag_i));
+            const tag_name = tag.name;
+            const tag_args = tag.args;
+
             var fresh_args = std.ArrayList(Var).empty;
             defer fresh_args.deinit(self.store.gpa);
 

@@ -1019,3 +1019,32 @@ test "fx platform runtime division by zero" {
         },
     }
 }
+
+test "fx platform index out of bounds in instantiate regression" {
+    // Regression test: A specific combination of features causes an index out of bounds
+    // panic in the type instantiation code (instantiate.zig:344). The panic occurs during
+    // type checking when instantiating a tag union type.
+    //
+    // The crash requires:
+    // - A value alias (day_input = demo_input)
+    // - A print! function using split_on().for_each!()
+    // - Two similar effectful functions (part1!, part2!) with:
+    //   - for loop over input.trim().split_on()
+    //   - print! call inside the for loop
+    //   - parse_range call with ? operator
+    //   - while loop calling a function with sublist()
+    // - has_repeating_pattern using slice->repeat(n // $d) with mutable var $d
+    // - String interpolation calling part2!
+    //
+    // The bug manifests as: panic: index out of bounds: index 2863311530, len 1035
+    // The index 0xAAAAAAAA suggests uninitialized/corrupted memory.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/index_oob_instantiate.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The compiler should not panic/crash. Once the bug is fixed, this test will pass.
+    // Currently it fails with a panic in instantiate.zig.
+    try checkSuccess(run_result);
+}
