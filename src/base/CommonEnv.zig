@@ -57,7 +57,15 @@ pub fn relocate(self: *CommonEnv, offset: isize) void {
     self.strings.relocate(offset);
     self.exposed_items.relocate(offset);
     self.line_starts.relocate(offset);
-    // Note: source is not relocated - it should be set manually
+    // Relocate source slice pointer if it is non-empty.
+    // The underlying bytes live in the same allocation as the rest of the
+    // module data (e.g. shared memory used by the interpreter), so we can
+    // adjust the pointer by the same offset.
+    if (self.source.len > 0) {
+        const old_ptr = @intFromPtr(self.source.ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.source.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
 }
 
 /// Serialize this CommonEnv to the given CompactWriter.

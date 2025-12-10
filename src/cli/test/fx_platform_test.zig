@@ -1271,3 +1271,31 @@ test "fx platform runtime division by zero" {
         },
     }
 }
+
+test "fx platform inline expect fails as expected" {
+    // Regression test: inline expect inside main! should fail via the
+    // normal crash handler (Roc crashed: ...) instead of overflowing
+    // the stack and triggering the stack overflow handler.
+    const allocator = testing.allocator;
+    const run_result = try runRoc(allocator, "test/fx/issue8517.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Expect a clean failure (non-zero exit code, no signal)
+    try checkFailure(run_result);
+
+    const stderr = run_result.stderr;
+
+    // Should report a crash with the expect expression snippet
+    try testing.expect(std.mem.indexOf(u8, stderr, "1 == 2") != null);
+}
+
+test "fx platform inline expect succeeds as expected" {
+    const allocator = testing.allocator;
+
+    const result = try runRocTest(allocator, "test/fx/inline_expect_pass.roc", "1>All good.");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try checkTestSuccess(result);
+}
