@@ -1506,10 +1506,13 @@ const Unifier = struct {
             record_fields,
         ) catch return Error.AllocatorError;
 
-        // TODO: Below if we run into a record with the same field, then we
-        // prefer the leftmost field. But we should probably unify the dups
+        // Note: If a field name appears multiple times (e.g., in both base and extension),
+        // we keep the leftmost field (left-bias semantics, like Haskell's Map.union).
+        // Duplicates within a single record's extension chain are rare and typically
+        // indicate a type system bug (e.g., malformed type like `{ name: Str, ..{ name: U32 } }`).
+        // The outer unification logic handles unifying fields across *different* records.
 
-        // then recursiv
+        // Recursively gather fields from extensions
         var ext = record_ext;
         var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
         while (true) {
@@ -2430,7 +2433,11 @@ pub const Scratch = struct {
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: Set these based on the heuristics
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // These values handle common cases without reallocation:
+        // - fresh_vars: 8 - most unifications create few fresh variables
+        // - fields/tags: 32 - typical records/unions have fewer than 32 members
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),

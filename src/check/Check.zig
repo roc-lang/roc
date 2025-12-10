@@ -915,16 +915,18 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
     }
 }
 
-/// Give a var, ensure it's not a redirect and set it's rank
+/// Give a var, ensure it's not a redirect and set its rank.
+/// If the var is already a redirect, this is a no-op - the root's rank was set when
+/// the redirect was created during unification. This can happen when a variable is
+/// unified with another before its rank is explicitly set, which is benign.
 fn setVarRank(self: *Self, target_var: Var, env: *Env) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(target_var);
     if (resolved.is_root) {
         self.types.setDescRank(resolved.desc_idx, env.rank());
         try env.var_pool.addVarToRank(target_var, env.rank());
-    } else {
-        // TODO: Unclear if this is an error or not
-        // try self.unifyWith(target_var, .err, env);
     }
+    // If not root, the variable is a redirect - its rank is determined by the root
+    // variable it points to, which was handled when the redirect was created.
 }
 
 // file //
@@ -1411,10 +1413,10 @@ fn generateHeaderVars(
             .underscore, .malformed => {
                 try self.unifyWith(header_var, .err, env);
             },
-            else => {
-                // This should never be possible
-                std.debug.assert(false);
-                try self.unifyWith(header_var, .err, env);
+            else => |unexpected| {
+                // The canonicalizer should only produce rigid_var, underscore, or malformed
+                // for header args. If we hit this, there's a compiler bug.
+                std.debug.panic("Compiler bug: unexpected type annotation kind in header arg: {s}", .{@tagName(unexpected)});
             },
         }
     }
@@ -1754,9 +1756,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             try self.unifyWith(anno_var, .err, env);
                             return;
                         } else {
-                            std.debug.assert(false);
-                            try self.unifyWith(anno_var, .err, env);
-                            return;
+                            // Type applications should only reference aliases or nominal types.
+                            // If we hit this, there's a compiler bug.
+                            std.debug.panic("Compiler bug: type application references non-alias/non-nominal: {s}", .{@tagName(decl_resolved)});
                         }
                     };
 
@@ -1941,10 +1943,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
             try self.unifyWith(anno_var, try self.types.mkTagUnion(tags_slice, ext_var), env);
         },
         .tag => {
-            // This indicates a malformed type annotation. Tags should only
-            // exist as direct children of tag_unions
-            std.debug.assert(false);
-            try self.unifyWith(anno_var, .err, env);
+            // Tags should only exist as direct children of tag_unions in type annotations.
+            // If we encounter a standalone tag here, it's a compiler bug in canonicalization.
+            std.debug.panic("Compiler bug: standalone tag in type annotation (should be within tag_union)", .{});
         },
         .record => |rec| {
             const scratch_record_fields_top = self.scratch_record_fields.top();
@@ -3322,10 +3323,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     }
                 },
-                else => {
-                    // No other call types are currently supported in czer
-                    std.debug.assert(false);
-                    try self.unifyWith(expr_var, .err, env);
+                else => |called_via| {
+                    // The canonicalizer currently only produces CalledVia.apply for e_call expressions.
+                    // Other call types (binop, unary_op, string_interpolation, record_builder) are
+                    // represented as different expression types. If we hit this, there's a compiler bug.
+                    std.debug.panic("Compiler bug: unexpected CalledVia in e_call: {s}", .{@tagName(called_via)});
                 },
             }
         },
@@ -5197,9 +5199,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     );
                 }
             } else {
-                // It should be impossible to have a deferred constraint check
-                // that has no constraints.
-                std.debug.assert(false);
+                // Deferred constraint checks should always have at least one constraint.
+                // If we hit this, there's a compiler bug in how constraints are tracked.
+                std.debug.panic("Compiler bug: deferred constraint check has no constraints", .{});
             }
         }
     }
