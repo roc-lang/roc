@@ -1401,16 +1401,6 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
-        .KwInspect => {
-            const start = self.pos;
-            self.advance();
-            const expr = try self.parseExpr();
-            const statement_idx = try self.store.addStatement(.{ .inspect = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            return statement_idx;
-        },
         .KwReturn => {
             const start = self.pos;
             self.advance();
@@ -2463,14 +2453,6 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 .expr = e,
             } });
         },
-        .KwInspect => {
-            self.advance();
-            const e = try self.parseExpr();
-            expr = try self.store.addExpr(.{ .inspect = .{
-                .region = .{ .start = start, .end = self.pos },
-                .expr = e,
-            } });
-        },
         .KwFor => {
             self.advance();
             const patt = try self.parsePattern(.alternatives_forbidden);
@@ -3403,7 +3385,7 @@ fn getTokenBP(tok: Token.Tag) ?BinOpBp {
         .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
         .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
         .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
-        .OpPlus => .{ .left = 22, .right = 23 }, // 23 LEFT
+        .OpPlus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
         .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
         .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT

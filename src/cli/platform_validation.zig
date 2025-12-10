@@ -9,6 +9,7 @@
 //! This module is used by both `roc build` and `roc bundle` commands.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const parse = @import("parse");
 const base = @import("base");
 const reporting = @import("reporting");
@@ -20,6 +21,19 @@ const RocTarget = target_mod.RocTarget;
 const LinkType = target_mod.LinkType;
 const LinkItem = target_mod.LinkItem;
 const TargetLinkSpec = target_mod.TargetLinkSpec;
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 /// Re-export ValidationResult for callers that need to create reports
 pub const ValidationResult = targets_validator.ValidationResult;
@@ -58,7 +72,7 @@ pub fn validatePlatformHeader(
 ) ValidationError!PlatformValidation {
     // Read platform source
     const source = std.fs.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
-        std.log.err("Failed to read platform source: {s}", .{platform_source_path});
+        renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
     };
 
@@ -69,7 +83,7 @@ pub fn validatePlatformHeader(
     };
 
     const ast = parse.parse(&env, allocator) catch {
-        std.log.err("Failed to parse platform header: {s}", .{platform_source_path});
+        renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };
 
@@ -77,9 +91,7 @@ pub fn validatePlatformHeader(
     const config = TargetsConfig.fromAST(allocator, ast) catch {
         return error.ParseError;
     } orelse {
-        std.log.err("Platform at '{s}' does not have a 'targets:' section", .{platform_source_path});
-        std.log.err("Platform headers must declare supported targets. Example:", .{});
-        std.log.err("  targets: {{ exe: {{ x64musl: [app], arm64musl: [app] }} }}", .{});
+        renderMissingTargetsError(allocator, platform_source_path);
         return error.MissingTargetsSection;
     };
 
@@ -87,6 +99,84 @@ pub fn validatePlatformHeader(
         .config = config,
         .platform_dir = std.fs.path.dirname(platform_source_path) orelse ".",
     };
+}
+
+/// Render a file read error report to stderr.
+fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) void {
+    var report = reporting.Report.init(allocator, "FILE READ ERROR", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Failed to read platform source file:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    ") catch return;
+    report.document.addAnnotated(path, .path) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("Check that the file exists and you have read permissions.") catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+/// Render a parse error report to stderr.
+fn renderParseError(allocator: std.mem.Allocator, path: []const u8) void {
+    var report = reporting.Report.init(allocator, "PARSE ERROR", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Failed to parse platform header:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    ") catch return;
+    report.document.addAnnotated(path, .path) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("Check that the file contains valid Roc syntax.") catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+/// Render a missing targets section error report to stderr.
+fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) void {
+    var report = reporting.Report.init(allocator, "MISSING TARGETS SECTION", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Platform at ") catch return;
+    report.document.addAnnotated(path, .path) catch return;
+    report.document.addText(" does not have a 'targets:' section.") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("Platform headers must declare supported targets. Example:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addCodeBlock(
+        \\    targets: {
+        \\        files: "targets/",
+        \\        exe: {
+        \\            x64linux: ["host.o", app],
+        \\            arm64linux: ["host.o", app],
+        \\        }
+        \\    }
+    ) catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
 }
 
 /// Validate that a specific target is supported by the platform.
@@ -179,54 +269,6 @@ pub fn validateAllTargetFilesExist(
         .valid => return null,
         else => return result,
     }
-}
-
-/// Get the full path to a target's host library.
-/// Validates the file exists or returns an error.
-pub fn getHostLibraryPath(
-    allocator: std.mem.Allocator,
-    config: TargetsConfig,
-    platform_dir: []const u8,
-    target: RocTarget,
-) ValidationError![]const u8 {
-    const link_spec = config.getLinkSpec(target, .exe) orelse {
-        return error.UnsupportedTarget;
-    };
-
-    const files_dir = config.files_dir orelse "targets";
-    const target_name = @tagName(target);
-
-    // Find host library in link spec
-    for (link_spec.items) |item| {
-        switch (item) {
-            .file_path => |file| {
-                if (std.mem.endsWith(u8, file, "libhost.a") or std.mem.endsWith(u8, file, "host.o")) {
-                    const full_path = std.fs.path.join(allocator, &.{
-                        platform_dir, files_dir, target_name, file,
-                    }) catch return error.OutOfMemory;
-
-                    std.fs.cwd().access(full_path, .{}) catch {
-                        std.log.err("Missing required file: {s}", .{full_path});
-                        return error.MissingTargetFile;
-                    };
-                    return full_path;
-                }
-            },
-            .app, .win_gui => {},
-        }
-    }
-
-    // No explicit host library in spec - try default location
-    const default_path = std.fs.path.join(allocator, &.{
-        platform_dir, files_dir, target_name, "libhost.a",
-    }) catch return error.OutOfMemory;
-
-    std.fs.cwd().access(default_path, .{}) catch {
-        std.log.err("Missing host library: {s}", .{default_path});
-        return error.MissingTargetFile;
-    };
-
-    return default_path;
 }
 
 // Tests
