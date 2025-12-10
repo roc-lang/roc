@@ -12,12 +12,24 @@ PARSE ERROR - fuzz_crash_004.md:2:1:2:1
 MISSING MAIN! FUNCTION - fuzz_crash_004.md:1:1:1:2
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**fuzz_crash_004.md:1:1:1:2:**
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
+
+**fuzz_crash_004.md:2:1:2:1:**
 ```roc
-F
+
 ```
 ^
 
@@ -46,10 +58,11 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-malformed (tag "statement_unexpected_token"))))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
+
 ~~~
 # CANONICALIZE
 ~~~clojure

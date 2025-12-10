@@ -37,74 +37,20 @@ PARSE ERROR - underscore_type_decl.md:6:1:6:1
 MODULE NOT FOUND - underscore_type_decl.md:1:1:1:30
 # PROBLEMS
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**underscore_type_decl.md:3:1:3:6:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-^^^^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
 
-**underscore_type_decl.md:3:6:3:7:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:7:3:8:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:8:3:9:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:10:3:11:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:11:3:12:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **underscore_type_decl.md:3:13:3:14:**
 ```roc
@@ -114,29 +60,7 @@ Pair1(x, _) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:15:3:19:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-              ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:19:3:20:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 **underscore_type_decl.md:3:20:3:21:**
@@ -147,18 +71,7 @@ Pair1(x, _) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:21:3:22:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-                    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 **underscore_type_decl.md:3:23:3:24:**
@@ -169,19 +82,20 @@ Pair1(x, _) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**underscore_type_decl.md:3:24:3:25:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-                       ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **underscore_type_decl.md:4:1:4:6:**
 ```roc
@@ -257,29 +171,7 @@ Pair2(_, y) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:15:4:19:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-              ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:19:4:20:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 **underscore_type_decl.md:4:20:4:21:**
@@ -290,18 +182,7 @@ Pair2(_, y) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:21:4:22:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-                    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 **underscore_type_decl.md:4:23:4:24:**
@@ -312,19 +193,20 @@ Pair2(_, y) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**underscore_type_decl.md:4:24:4:25:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-                       ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **underscore_type_decl.md:5:1:5:6:**
 ```roc
@@ -400,29 +282,7 @@ Pair3(_, _) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:15:5:19:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-              ^^^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:19:5:20:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-                  ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 **underscore_type_decl.md:5:20:5:21:**
@@ -433,18 +293,7 @@ Pair3(_, _) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:21:5:22:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-                    ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `invalid_type_arg`
 This is an unexpected parsing error. Please check your syntax.
 
 **underscore_type_decl.md:5:23:5:24:**
@@ -455,14 +304,26 @@ Pair3(_, _) = Pair(0, 1)
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**underscore_type_decl.md:5:24:5:25:**
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
+
+Instead of:
+    **List U8**
+
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
+
+**underscore_type_decl.md:6:1:6:1:**
 ```roc
-Pair3(_, _) = Pair(0, 1)
+
 ```
-                       ^
+^
 
 
 **MODULE NOT FOUND**
@@ -492,45 +353,22 @@ EndOfFile,
 		(s-import (raw "Module")
 			(exposing
 				(exposed-upper-ident (text "Pair"))))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))))
+		(s-malformed (tag "expected_colon_after_type_annotation"))))
 ~~~
 # FORMATTED
 ~~~roc
