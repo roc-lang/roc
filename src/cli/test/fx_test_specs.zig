@@ -173,6 +173,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/inspect_nested_test.roc",
+        // Note: field order may differ from expected - record fields are rendered in their internal order
         .io_spec = "1>{ color: Color::Red, count: 42, name: \"test\" }|1>Expected: { color: Color::Red, count: 42, name: \"test\" }",
         .description = "Nested struct inspection",
     },
@@ -190,6 +191,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/inspect_wrong_sig_test.roc",
         .io_spec = "1>Result: 1",
         .description = "Inspect with wrong signature",
+    },
+    .{
+        .roc_file = "test/fx/inspect_open_tag_test.roc",
+        .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123",
+        .description = "Str.inspect on tag unions",
     },
 };
 

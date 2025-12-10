@@ -334,13 +334,17 @@ pub const Instantiator = struct {
             var fresh_args = std.ArrayList(Var).empty;
             defer fresh_args.deinit(self.store.gpa);
 
-            // Use index-based iteration to avoid iterator invalidation
-            // (see comment in instantiateFunc for details)
-            const args_start: usize = @intFromEnum(tag_args.start);
-            for (0..tag_args.count) |i| {
-                const arg_var = self.store.vars.items.items[args_start + i];
-                const fresh_arg = try self.instantiateVar(arg_var);
-                try fresh_args.append(self.store.gpa, fresh_arg);
+            // Skip the loop entirely for tags with no arguments.
+            // This avoids accessing tag_args.start which may be undefined when count is 0.
+            if (tag_args.count > 0) {
+                // Use index-based iteration to avoid iterator invalidation
+                // (see comment in instantiateFunc for details)
+                const args_start: usize = @intFromEnum(tag_args.start);
+                for (0..tag_args.count) |i| {
+                    const arg_var = self.store.vars.items.items[args_start + i];
+                    const fresh_arg = try self.instantiateVar(arg_var);
+                    try fresh_args.append(self.store.gpa, fresh_arg);
+                }
             }
 
             const fresh_args_range = try self.store.appendVars(fresh_args.items);

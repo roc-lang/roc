@@ -353,12 +353,6 @@ pub const ExposedItem = struct {
     }
 };
 
-/// Represents a field in a record pattern for pattern matching
-pub const PatternRecordField = struct {
-    pub const Idx = enum(u32) { _ };
-    pub const Span = extern struct { start: u32, len: u32 };
-};
-
 /// Represents an arbitrary precision smallish decimal value
 pub const SmallDecValue = struct {
     numerator: i16,
@@ -1026,7 +1020,6 @@ pub fn isCastable(comptime T: type) bool {
         TypeAnno.RecordField.Idx,
         ExposedItem.Idx,
         Expr.Match.BranchPattern.Idx,
-        PatternRecordField.Idx,
         Node.Idx,
         TypeVar,
         => true,
