@@ -15011,22 +15011,63 @@ pub const Interpreter = struct {
 
                 try self.active_closures.append(method_func);
 
-                // Bind receiver first
-                try self.bindings.append(.{
-                    .pattern_idx = params[0],
-                    .value = receiver_value,
-                    .expr_idx = null, // expr_idx not used for method call parameter bindings
-                    .source_env = self.env,
-                });
+                // Save the current flex_type_context before adding parameter mappings
+                // This will be restored in call_cleanup (like call_invoke_closure does)
+                var saved_flex_type_context = try self.flex_type_context.clone();
+                errdefer saved_flex_type_context.deinit();
 
-                // Bind explicit arguments
+                // Bind receiver using patternMatchesBind (like call_invoke_closure does)
+                // This creates a copy of the value for the binding
+                const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+
+                // Propagate flex mappings for receiver (needed for polymorphic type propagation)
+                const receiver_rt_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                if (receiver_rt_resolved.desc.content == .structure) {
+                    const receiver_param_ct_var = can.ModuleEnv.varFrom(params[0]);
+                    try self.propagateFlexMappings(self.env, receiver_param_ct_var, dac.receiver_rt_var);
+                }
+
+                if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
+                    // Pattern match failed - cleanup and error
+                    self.env = saved_env;
+                    _ = self.active_closures.pop();
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    if (saved_rigid_subst) |*saved| saved.deinit();
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved_flex_type_context;
+                    self.poly_context_generation +%= 1;
+                    return error.TypeMismatch;
+                }
+                // Decref the original receiver value since patternMatchesBind made a copy
+                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Bind explicit arguments using patternMatchesBind
                 for (arg_values, 0..) |arg, idx| {
-                    try self.bindings.append(.{
-                        .pattern_idx = params[1 + idx],
-                        .value = arg,
-                        .expr_idx = null, // expr_idx not used for method call parameter bindings
-                        .source_env = self.env,
-                    });
+                    const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[1 + idx]));
+
+                    // Propagate flex mappings for each argument (needed for polymorphic type propagation)
+                    const arg_rt_resolved = self.runtime_types.resolveVar(arg.rt_var);
+                    if (arg_rt_resolved.desc.content == .structure) {
+                        const param_ct_var = can.ModuleEnv.varFrom(params[1 + idx]);
+                        try self.propagateFlexMappings(self.env, param_ct_var, arg.rt_var);
+                    }
+
+                    if (!try self.patternMatchesBind(params[1 + idx], arg, param_rt_var, roc_ops, &self.bindings, null)) {
+                        // Pattern match failed - cleanup and error
+                        self.env = saved_env;
+                        _ = self.active_closures.pop();
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        for (arg_values[idx..]) |remaining_arg| remaining_arg.decref(&self.runtime_layout_store, roc_ops);
+                        if (saved_rigid_subst) |*saved| saved.deinit();
+                        self.flex_type_context.deinit();
+                        self.flex_type_context = saved_flex_type_context;
+                        self.poly_context_generation +%= 1;
+                        return error.TypeMismatch;
+                    }
+                    // Decref the original argument value since patternMatchesBind made a copy
+                    arg.decref(&self.runtime_layout_store, roc_ops);
                 }
 
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
@@ -15037,7 +15078,7 @@ pub const Interpreter = struct {
                     .did_instantiate = did_instantiate,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = saved_rigid_subst,
-                    .saved_flex_type_context = null,
+                    .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
