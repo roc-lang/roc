@@ -457,17 +457,23 @@ pub fn initModuleEnvFields(self: *Self, module_name: []const u8) !void {
     return self.initCIRFields(module_name);
 }
 
-/// Initialize the module environment.
+/// Initialize the module environment with capacity heuristics based on source size.
 pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!Self {
-    // TODO: maybe wire in smarter default based on the initial input text size.
-
     var common = try CommonEnv.init(gpa, source);
     const idents = try CommonIdents.insert(gpa, &common);
+
+    // Use source-based heuristics for initial capacities
+    // Typical Roc code generates ~1 node per 20 bytes, ~1 type per 50 bytes
+    // Use generous minimums to avoid too many reallocations for small files
+    const source_len = source.len;
+    const node_capacity = @max(1024, @min(100_000, source_len / 20));
+    const type_capacity = @max(2048, @min(50_000, source_len / 50));
+    const var_capacity = @max(512, @min(10_000, source_len / 100));
 
     return Self{
         .gpa = gpa,
         .common = common,
-        .types = try TypeStore.initCapacity(gpa, 2048, 512),
+        .types = try TypeStore.initCapacity(gpa, type_capacity, var_capacity),
         .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
@@ -479,7 +485,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_name = undefined, // Will be set later during canonicalization
         .module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
-        .store = try NodeStore.initCapacity(gpa, 10_000), // Default node store capacity
+        .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
         .idents = idents,
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),

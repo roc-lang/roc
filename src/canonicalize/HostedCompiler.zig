@@ -41,6 +41,10 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             if (pattern == .assign) {
                 const full_ident = pattern.assign.ident;
 
+                // Get the region from the original def for better error messages
+                const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+                const def_region = env.store.getRegionAt(def_node_idx);
+
                 // Extract the unqualified name (e.g., "line!" from "Stdout.line!")
                 // The pattern might contain a qualified name, but we need the unqualified one
                 const full_name = env.getIdent(full_ident);
@@ -72,13 +76,14 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 } else 0;
 
                 // Create dummy parameter patterns for the lambda (one for each argument)
+                // Use the def's region for better error diagnostics
                 const patterns_start = env.store.scratchTop("patterns");
                 var arg_i: usize = 0;
                 while (arg_i < num_args) : (arg_i += 1) {
                     const arg_name = try std.fmt.allocPrint(gpa, "_arg{}", .{arg_i});
                     defer gpa.free(arg_name);
                     const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
-                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, base.Region.zero());
+                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, def_region);
                     try env.store.scratch.?.patterns.append(arg_pattern_idx);
                 }
                 const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
@@ -87,9 +92,9 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 const error_msg_lit = try env.insertString("Hosted functions cannot be called in the interpreter");
                 const diagnostic_idx = try env.addDiagnostic(.{ .not_implemented = .{
                     .feature = error_msg_lit,
-                    .region = base.Region.zero(),
+                    .region = def_region,
                 } });
-                const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, base.Region.zero());
+                const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, def_region);
 
                 // Ensure types array has entries for all new expressions
                 const body_int = @intFromEnum(body_idx);
@@ -105,7 +110,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                         .args = args_span,
                         .body = body_idx,
                     },
-                }, base.Region.zero());
+                }, def_region);
 
                 // Ensure types array has an entry for this new expression
                 const expr_int = @intFromEnum(expr_idx);
@@ -116,7 +121,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 // Now replace the e_anno_only expression with the e_hosted_lambda
                 // We need to modify the def's expr field in extra_data (NOT data_2!)
                 // The expr is stored in extra_data[extra_start + 1]
-                const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
+                // (reuse def_node_idx from above)
                 const def_node = env.store.nodes.get(def_node_idx);
                 const extra_start = def_node.data_1;
 

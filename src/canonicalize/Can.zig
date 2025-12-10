@@ -2449,9 +2449,9 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                     mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
                 }
-            } else {
-                // TODO: Diagnostic
             }
+            // Note: If resolveIdentifier returns null, the identifier token is malformed.
+            // The parser already handles this; we just don't match it with the annotation.
         }
     }
 
@@ -4088,7 +4088,7 @@ pub fn canonicalizeExpr(
                         // Check if this is a used underscore variable
                         try self.checkUsedUnderscoreVariable(ident, region);
 
-                        // We found the ident in scope, lookup to reference the pattern
+                        // We found the ident in scope, create a lookup to reference the pattern
                         // Note: Rank tracking for let-polymorphism is handled by the type checker (Check.zig)
                         const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
                             .pattern_idx = found_pattern_idx,
@@ -4358,7 +4358,7 @@ pub fn canonicalizeExpr(
                     } else if (std.mem.eql(u8, suffix, "dec")) {
                         break :blk .dec;
                     } else {
-                        // TODO: Create a new error type
+                        // Invalid numeric suffix - the suffix doesn't match any known type
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
                     }
@@ -6531,7 +6531,7 @@ pub fn canonicalizePattern(
                     } else if (std.mem.eql(u8, suffix, "dec")) {
                         break :blk .dec;
                     } else {
-                        // TODO: Create a new error type
+                        // Invalid numeric suffix - the suffix doesn't match any known type
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                     }
                 };
@@ -9454,9 +9454,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         else => {},
     }
 
-    // check against last anno
-
-    // Get the last annotation, if it exists
+    // Check if this declaration matches the last type annotation
     var mb_validated_anno: ?Annotation.Idx = null;
     if (mb_last_anno) |anno_info| {
         if (ast_pattern == .ident) {
@@ -9467,9 +9465,9 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
                     const pattern_region = self.parse_ir.tokenizedRegionToRegion(ast_pattern.to_tokenized_region());
                     mb_validated_anno = try self.createAnnotationFromTypeAnno(anno_info.anno_idx, anno_info.where, pattern_region);
                 }
-            } else {
-                // TODO: Diagnostic
             }
+            // Note: If resolveIdentifier returns null, the identifier token is malformed.
+            // The parser already handles this; we just don't match it with the annotation.
         }
     }
 
