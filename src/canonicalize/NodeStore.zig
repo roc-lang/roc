@@ -1197,9 +1197,12 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
             .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
-        .ty_record => return CIR.TypeAnno{ .record = .{
-            .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-        } },
+        .ty_record => return CIR.TypeAnno{
+            .record = .{
+                .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
+            },
+        },
         .ty_fn => {
             const extra_data_idx = node.data_3;
             const effectful = store.extra_data.items.items[extra_data_idx] != 0;
@@ -2203,6 +2206,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .record => |r| {
             node.data_1 = r.fields.span.start;
             node.data_2 = r.fields.span.len;
+            node.data_3 = if (r.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0;
             node.tag = .ty_record;
         },
         .@"fn" => |f| {

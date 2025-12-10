@@ -304,9 +304,12 @@ pub const Scratch = struct {
     visited: MkSafeList(DescStoreIdx),
 
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
-        // Rust compiler inits with 1024 capacity. But that feels like a lot.
-        // Typical recursion cases should only be a few layers deep?
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // Rust compiler uses 1024, but that's likely overkill for typical Roc code.
+        // These values handle common cases:
+        // - seen/err_chain: 32 - typical type depth is much shallower
+        // - visited: 64 - covers most type traversals without reallocation
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .seen = try Var.SafeList.initCapacity(gpa, 32),

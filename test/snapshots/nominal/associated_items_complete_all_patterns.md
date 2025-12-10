@@ -926,19 +926,20 @@ d1_forward := [A].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:2:16:2:17:**
-```roc
-d1_forward := [A].{
-```
-               ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:2:17:2:18:**
 ```roc
@@ -1014,19 +1015,20 @@ d1_scope := [B].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:8:14:8:15:**
-```roc
-d1_scope := [B].{
-```
-             ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:8:15:8:16:**
 ```roc
@@ -1102,19 +1104,20 @@ d2_inner_first := [C].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:13:20:13:21:**
-```roc
-d2_inner_first := [C].{
-```
-                   ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:13:21:13:22:**
 ```roc
@@ -1212,19 +1215,20 @@ d2_outer_val_middle := [G].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:23:25:23:26:**
-```roc
-d2_outer_val_middle := [G].{
-```
-                        ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:23:26:23:27:**
 ```roc
@@ -1322,19 +1326,20 @@ d2_outer_refs_inner := [I].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:32:25:32:26:**
-```roc
-d2_outer_refs_inner := [I].{
-```
-                        ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:32:26:32:27:**
 ```roc
@@ -1432,19 +1437,20 @@ d2_scope_violation := [K].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:41:24:41:25:**
-```roc
-d2_scope_violation := [K].{
-```
-                       ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:41:25:41:26:**
 ```roc
@@ -1520,19 +1526,20 @@ d2_siblings := [M].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:49:17:49:18:**
-```roc
-d2_siblings := [M].{
-```
-                ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:49:18:49:19:**
 ```roc
@@ -1675,19 +1682,20 @@ d3_types_then_vals := [P].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:60:24:60:25:**
-```roc
-d3_types_then_vals := [P].{
-```
-                       ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:60:25:60:26:**
 ```roc
@@ -1818,19 +1826,20 @@ d3_vals_then_types := [S].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:75:24:75:25:**
-```roc
-d3_vals_then_types := [S].{
-```
-                       ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:75:25:75:26:**
 ```roc
@@ -1961,19 +1970,20 @@ d3_l1_scope_violation := [V].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:90:27:90:28:**
-```roc
-d3_l1_scope_violation := [V].{
-```
-                          ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:90:28:90:29:**
 ```roc
@@ -2049,19 +2059,20 @@ d3_l2_scope_violation := [Y].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:100:27:100:28:**
-```roc
-d3_l2_scope_violation := [Y].{
-```
-                          ^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:100:28:100:29:**
 ```roc
@@ -2137,19 +2148,20 @@ d3_val_after_nested := [AB].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:110:25:110:27:**
-```roc
-d3_val_after_nested := [AB].{
-```
-                        ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:110:27:110:28:**
 ```roc
@@ -2280,19 +2292,20 @@ d4_all_types_then_vals := [AE].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:125:28:125:30:**
-```roc
-d4_all_types_then_vals := [AE].{
-```
-                           ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:125:30:125:31:**
 ```roc
@@ -2412,19 +2425,20 @@ d4_all_vals_then_types := [AI].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:142:28:142:30:**
-```roc
-d4_all_vals_then_types := [AI].{
-```
-                           ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:142:30:142:31:**
 ```roc
@@ -2544,19 +2558,20 @@ d4_reverse_types := [AM].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:159:22:159:24:**
-```roc
-d4_reverse_types := [AM].{
-```
-                     ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:159:24:159:25:**
 ```roc
@@ -2676,19 +2691,20 @@ d4_interleaved := [AQ].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:176:20:176:22:**
-```roc
-d4_interleaved := [AQ].{
-```
-                   ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:176:22:176:23:**
 ```roc
@@ -2808,19 +2824,20 @@ d4_l3_val_after_l4 := [BA].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:193:24:193:26:**
-```roc
-d4_l3_val_after_l4 := [BA].{
-```
-                       ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:193:26:193:27:**
 ```roc
@@ -2940,19 +2957,20 @@ d4_l2_val_after_l3 := [BE].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:205:24:205:26:**
-```roc
-d4_l2_val_after_l3 := [BE].{
-```
-                       ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:205:26:205:27:**
 ```roc
@@ -3072,19 +3090,20 @@ d4_l1_val_after_l2 := [BI].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:220:24:220:26:**
-```roc
-d4_l1_val_after_l2 := [BI].{
-```
-                       ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:220:26:220:27:**
 ```roc
@@ -3204,19 +3223,20 @@ d4_l1_scope_violation := [BM].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:237:27:237:29:**
-```roc
-d4_l1_scope_violation := [BM].{
-```
-                          ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:237:29:237:30:**
 ```roc
@@ -3292,19 +3312,20 @@ d4_l2_scope_violation := [BQ].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:249:27:249:29:**
-```roc
-d4_l2_scope_violation := [BQ].{
-```
-                          ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:249:29:249:30:**
 ```roc
@@ -3380,19 +3401,20 @@ d4_l3_scope_violation := [BU].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:261:27:261:29:**
-```roc
-d4_l3_scope_violation := [BU].{
-```
-                          ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:261:29:261:30:**
 ```roc
@@ -3468,19 +3490,20 @@ d5_all_types_then_vals := [BY].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:273:28:273:30:**
-```roc
-d5_all_types_then_vals := [BY].{
-```
-                           ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:273:30:273:31:**
 ```roc
@@ -3611,19 +3634,20 @@ d5_all_vals_then_types := [CD].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:294:28:294:30:**
-```roc
-d5_all_vals_then_types := [CD].{
-```
-                           ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:294:30:294:31:**
 ```roc
@@ -3754,19 +3778,20 @@ d5_deep_interleave := [CI].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:315:24:315:26:**
-```roc
-d5_deep_interleave := [CI].{
-```
-                       ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:315:26:315:27:**
 ```roc
@@ -3897,19 +3922,20 @@ d5_l4_val_after_l5 := [CN].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:336:24:336:26:**
-```roc
-d5_l4_val_after_l5 := [CN].{
-```
-                       ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:336:26:336:27:**
 ```roc
@@ -4040,19 +4066,20 @@ d5_l3_val_after_l4 := [CS].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:351:24:351:26:**
-```roc
-d5_l3_val_after_l4 := [CS].{
-```
-                       ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:351:26:351:27:**
 ```roc
@@ -4183,19 +4210,20 @@ d5_l1_val_last := [DC].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:368:20:368:22:**
-```roc
-d5_l1_val_last := [DC].{
-```
-                   ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:368:22:368:23:**
 ```roc
@@ -4425,19 +4453,20 @@ d5_l1_to_l5_violation := [DH].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:393:27:393:29:**
-```roc
-d5_l1_to_l5_violation := [DH].{
-```
-                          ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:393:29:393:30:**
 ```roc
@@ -4513,19 +4542,20 @@ d5_l3_to_l5_violation := [DM].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:407:27:407:29:**
-```roc
-d5_l3_to_l5_violation := [DM].{
-```
-                          ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:407:29:407:30:**
 ```roc
@@ -4601,19 +4631,20 @@ d5_l4_to_l5_violation := [DR].{
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Type applications require parentheses around their type arguments.
 
-**associated_items_complete_all_patterns.md:421:27:421:29:**
-```roc
-d5_l4_to_l5_violation := [DR].{
-```
-                          ^^
+I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
 
+Instead of:
+    **List U8**
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
+Use:
+    **List(U8)**
+
+Other valid examples:
+    `Dict(Str, Num)`
+    `Try(a, Str)`
+    `Maybe(List(U64))`
 
 **associated_items_complete_all_patterns.md:421:29:421:30:**
 ```roc
@@ -8160,8 +8191,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -8179,8 +8209,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -8195,8 +8224,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8226,8 +8254,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8252,8 +8279,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -8280,8 +8306,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8301,8 +8326,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8338,8 +8362,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8387,8 +8410,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -8438,8 +8460,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8466,8 +8487,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8494,8 +8514,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8545,8 +8564,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8597,8 +8615,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -8653,8 +8670,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8707,8 +8723,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -8763,8 +8778,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8807,8 +8821,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8854,8 +8867,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8908,8 +8920,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8943,8 +8954,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -8978,8 +8988,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9013,8 +9022,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9078,8 +9086,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -9151,8 +9158,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-decl
@@ -9224,8 +9230,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9276,8 +9281,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9331,8 +9335,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9427,8 +9430,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9469,8 +9471,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl
@@ -9511,8 +9512,7 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
+		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-decl

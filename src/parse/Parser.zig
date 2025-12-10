@@ -479,6 +479,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
     const signatures_span = try self.store.annoRecordFieldSpanFrom(signatures_top);
     const signatures = try self.store.addTypeAnno(.{ .record = .{
         .fields = signatures_span,
+        .ext = null,
         .region = .{
             .start = signatures_start,
             .end = self.pos,
@@ -3037,20 +3038,38 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
             const scratch_top = self.store.scratchAnnoRecordFieldTop();
-            self.parseCollectionSpan(AST.AnnoRecordField.Idx, .CloseCurly, NodeStore.addScratchAnnoRecordField, parseAnnoRecordField) catch |err| {
-                switch (err) {
-                    error.ExpectedNotFound => {
-                        self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
-                        return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                    },
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.TooNested => return error.TooNested,
+            var ext_anno: ?AST.TypeAnno.Idx = null;
+
+            // Parse record fields, with support for record extension
+            while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+                if (self.peek() == .DoubleDot) {
+                    // Handle record extension: { field: Type, ..ext }
+                    self.advance(); // consume DoubleDot
+
+                    if (self.peek() == .LowerIdent) {
+                        // Parse the extension type variable
+                        ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    }
+                    // If no identifier follows .., it's an anonymous extension (just ..)
+                    // Break out since .. must be the last element
+                    break;
+                } else {
+                    // Regular record field
+                    try NodeStore.addScratchAnnoRecordField(&self.store, try parseAnnoRecordField(self));
+                    self.expect(.Comma) catch {
+                        break;
+                    };
                 }
+            }
+            self.expect(.CloseCurly) catch {
+                self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
+                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
             };
             const fields = try self.store.annoRecordFieldSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .record = .{
                 .region = .{ .start = start, .end = self.pos },
                 .fields = fields,
+                .ext = ext_anno,
             } });
         },
         .OpenSquare => {
@@ -3109,9 +3128,12 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         const next_is_not_lower_ident = next_tok != .LowerIdent;
         const not_followed_by_colon = two_away_tok != .OpColon;
         const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
+        // Don't treat comma as function argument separator if followed by:
+        // - CloseCurly (end of record)
+        // - DoubleDot (record extension like { field: Type, ..ext })
         if ((looking_for_args == .not_looking_for_args) and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);

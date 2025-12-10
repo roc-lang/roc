@@ -8299,8 +8299,14 @@ fn canonicalizeTypeAnnoRecord(
     const record_fields_scratch = self.scratch_record_fields.sliceFromStart(scratch_record_fields_top);
     std.mem.sort(types.RecordField, record_fields_scratch, self.env.common.getIdentStore(), comptime types.RecordField.sortByNameAsc);
 
+    // Canonicalize the extension, if it exists
+    const mb_ext_anno = if (record.ext) |ext_idx| blk: {
+        break :blk try self.canonicalizeTypeAnnoHelp(ext_idx, type_anno_ctx);
+    } else null;
+
     return try self.env.addTypeAnno(.{ .record = .{
         .fields = field_anno_idxs,
+        .ext = mb_ext_anno,
     } }, region);
 }
 
@@ -10236,6 +10242,7 @@ fn scopeUpdateTypeDecl(
     try current_scope.updateTypeDecl(gpa, name_ident, new_type_decl_stmt);
 }
 
+/// Look up a type declaration by identifier, searching from innermost to outermost scope.
 pub fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
