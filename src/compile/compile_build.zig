@@ -376,6 +376,15 @@ pub const BuildEnv = struct {
     pkg_sink_ctxs: std.array_list.Managed(*PkgSinkCtx),
     // Owned schedule ctxs for pre-registration (one per package)
     schedule_ctxs: std.array_list.Managed(*ScheduleCtx),
+    // Pending known module registrations (processed after schedulers are created)
+    pending_known_modules: std.array_list.Managed(PendingKnownModule),
+
+    /// Info about a known module registration that needs to be applied after schedulers exist
+    const PendingKnownModule = struct {
+        target_package: []const u8, // Package to register with (e.g., "app")
+        qualified_name: []const u8, // e.g., "pf.Stdout"
+        import_name: []const u8, // e.g., "pf.Stdout"
+    };
 
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
@@ -396,6 +405,7 @@ pub const BuildEnv = struct {
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
             .schedule_ctxs = std.array_list.Managed(*ScheduleCtx).init(gpa),
+            .pending_known_modules = std.array_list.Managed(PendingKnownModule).init(gpa),
         };
     }
 
@@ -424,6 +434,14 @@ pub const BuildEnv = struct {
         // Free schedule ctxs
         for (self.schedule_ctxs.items) |p| self.gpa.destroy(p);
         self.schedule_ctxs.deinit();
+
+        // Free pending known modules
+        for (self.pending_known_modules.items) |pkm| {
+            self.gpa.free(pkm.target_package);
+            self.gpa.free(pkm.qualified_name);
+            self.gpa.free(pkm.import_name);
+        }
+        self.pending_known_modules.deinit();
 
         // Deinit schedulers
         var sit = self.schedulers.iterator();
@@ -525,6 +543,9 @@ pub const BuildEnv = struct {
         // Create per-package schedulers wired with a shared resolver and global queue hook
         try self.createSchedulers();
 
+        // Register pending known modules now that schedulers exist
+        try self.processPendingKnownModules();
+
         // Set back-pointer for dispatch
         self.global_queue.build_env = self;
 
@@ -533,11 +554,8 @@ pub const BuildEnv = struct {
             try self.global_queue.start(self.gpa, self.max_threads, &self.sink);
         }
 
-        // Seed root module into global queue via schedule hook (ModuleBuild will call back)
-        const root_sched = self.schedulers.getPtr(pkg_name).?;
-        try root_sched.*.buildRoot(pkg_root_file);
-
-        // Kick remaining packages by seeding their root files too
+        // Build platform and other dependency packages BEFORE the app
+        // This ensures platform module envs are available when app is canonicalized
         var it = self.schedulers.iterator();
         while (it.next()) |e| {
             const name = e.key_ptr.*;
@@ -545,6 +563,10 @@ pub const BuildEnv = struct {
             const pkg = self.packages.get(name).?;
             try e.value_ptr.*.buildRoot(pkg.root_file);
         }
+
+        // Seed root module into global queue via schedule hook (ModuleBuild will call back)
+        const root_sched = self.schedulers.getPtr(pkg_name).?;
+        try root_sched.*.buildRoot(pkg_root_file);
 
         // Wait for all work to complete
         if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
@@ -753,16 +775,22 @@ pub const BuildEnv = struct {
         const qual = parts.qual;
         const rest = parts.rest;
 
-        const ref = cur_pkg.shorthands.get(qual) orelse return;
+        const ref = cur_pkg.shorthands.get(qual) orelse {
+            return;
+        };
         const target_pkg_name = ref.name;
-        const target_pkg = self.ws.packages.get(target_pkg_name) orelse return;
+        const target_pkg = self.ws.packages.get(target_pkg_name) orelse {
+            return;
+        };
 
         const mod_path = self.ws.dottedToPath(target_pkg.root_dir, rest) catch {
             return;
         };
         defer self.ws.gpa.free(mod_path);
 
-        const sched = self.ws.schedulers.get(target_pkg_name) orelse return;
+        const sched = self.ws.schedulers.get(target_pkg_name) orelse {
+            return;
+        };
         sched.*.scheduleModule(rest, mod_path, 1) catch {
             // Continue anyway - dependency resolution will handle missing modules
         };
@@ -790,10 +818,15 @@ pub const BuildEnv = struct {
         const qual = parts.qual;
         const rest = parts.rest;
 
-        const ref = cur_pkg.shorthands.get(qual) orelse return null;
-        const sched = self.ws.schedulers.get(ref.name) orelse return null;
+        const ref = cur_pkg.shorthands.get(qual) orelse {
+            return null;
+        };
+        const sched = self.ws.schedulers.get(ref.name) orelse {
+            return null;
+        };
 
-        return sched.*.getEnvIfDone(rest);
+        const result = sched.*.getEnvIfDone(rest);
+        return result;
     }
 
     fn resolverResolveLocalPath(ctx: ?*anyopaque, _: []const u8, root_dir: []const u8, import_name: []const u8) []const u8 {
@@ -852,6 +885,8 @@ pub const BuildEnv = struct {
         platform_alias: ?[]u8 = null,
         platform_path: ?[]u8 = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
+        /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
+        exposes: std.ArrayListUnmanaged([]const u8) = .{},
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
             if (self.platform_alias) |a| freeSlice(gpa, a);
@@ -862,6 +897,10 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, e.value_ptr.*);
             }
             self.shorthands.deinit(gpa);
+            for (self.exposes.items) |e| {
+                freeConstSlice(gpa, e);
+            }
+            self.exposes.deinit(gpa);
         }
     };
 
@@ -1124,6 +1163,22 @@ pub const BuildEnv = struct {
                         self.gpa.free(e.value);
                     }
                     try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
+                }
+
+                // Extract platform-exposed modules (e.g., Stdout, Stderr)
+                // These are modules that apps can import from the platform
+                const exposes_coll = ast.store.getCollection(p.exposes);
+                const exposes_items = ast.store.exposedItemSlice(.{ .span = exposes_coll.span });
+                for (exposes_items) |item_idx| {
+                    const item = ast.store.getExposedItem(item_idx);
+                    const token_idx = switch (item) {
+                        .upper_ident => |ui| ui.ident,
+                        .upper_ident_star => |uis| uis.ident,
+                        .lower_ident => |li| li.ident,
+                        .malformed => continue, // Skip malformed items
+                    };
+                    const item_name = ast.resolve(token_idx);
+                    try info.exposes.append(self.gpa, try self.gpa.dupe(u8, item_name));
                 }
             },
             .module => {
@@ -1431,6 +1486,22 @@ pub const BuildEnv = struct {
         }
     }
 
+    /// Register pending known modules with their target schedulers.
+    /// Also schedules the external modules so they'll be built before the app.
+    /// Called after createSchedulers() to ensure all schedulers exist.
+    fn processPendingKnownModules(self: *BuildEnv) !void {
+        for (self.pending_known_modules.items) |pkm| {
+            if (self.schedulers.get(pkm.target_package)) |sched| {
+                try sched.addKnownModule(pkm.qualified_name, pkm.import_name);
+                // Also schedule the external module so it gets built
+                // This is needed so the module is ready when we populate module_envs_map
+                if (sched.resolver) |res| {
+                    res.scheduleExternal(res.ctx, pkm.target_package, pkm.import_name);
+                }
+            }
+        }
+    }
+
     fn populatePackageShorthands(self: *BuildEnv, pkg_name: []const u8, info: *HeaderInfo) !void {
         var pack = self.packages.getPtr(pkg_name).?;
 
@@ -1470,6 +1541,46 @@ pub const BuildEnv = struct {
             });
 
             try self.populatePackageShorthands(dep_name, &child_info);
+
+            // Register platform-exposed modules as packages so apps can import them
+            // This is necessary for URL platforms where the platform directory is in a cache
+            const platform_dir = std.fs.path.dirname(abs) orelse ".";
+
+            for (child_info.exposes.items) |module_name| {
+                // Create path to the module file (e.g., Stdout.roc)
+                const module_filename = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{module_name});
+                defer self.gpa.free(module_filename);
+
+                const module_path = try std.fs.path.join(self.gpa, &.{ platform_dir, module_filename });
+                defer self.gpa.free(module_path);
+
+                // Register this module as a package
+                // Only allocate if package doesn't exist (ensurePackage makes its own copy)
+                if (!self.packages.contains(module_name)) {
+                    try self.ensurePackage(module_name, .module, module_path);
+                }
+
+                // Also add to app's shorthands so imports resolve correctly
+                const mod_key = try self.gpa.dupe(u8, module_name);
+                if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
+                    freeConstSlice(self.gpa, old_entry.key);
+                    freeConstSlice(self.gpa, old_entry.value.name);
+                    freeConstSlice(self.gpa, old_entry.value.root_file);
+                }
+                try pack.shorthands.put(self.gpa, mod_key, .{
+                    .name = try self.gpa.dupe(u8, module_name),
+                    .root_file = try self.gpa.dupe(u8, module_path),
+                });
+
+                // Add to pending list - will be registered after schedulers are created
+                // Use the QUALIFIED name (e.g., "pf.Stdout") because that's how imports are tracked
+                const qualified_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ alias, module_name });
+                try self.pending_known_modules.append(.{
+                    .target_package = try self.gpa.dupe(u8, pkg_name),
+                    .qualified_name = qualified_name,
+                    .import_name = try self.gpa.dupe(u8, qualified_name),
+                });
+            }
         }
 
         // Common package dependencies

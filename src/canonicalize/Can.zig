@@ -6355,8 +6355,7 @@ fn canonicalizePatternOrMalformed(
     }
 }
 
-/// Canonicalizes a parsed pattern from AST representation.
-/// Returns the canonical pattern index, or null if the pattern should be skipped.
+/// Converts an AST pattern into a canonical pattern, introducing identifiers into scope.
 pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
