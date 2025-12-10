@@ -449,11 +449,13 @@ pub const Interpreter = struct {
         // (handles both unset NONE and corrupted undefined values from deserialized data)
         const hasValidModuleName = struct {
             fn check(mod_env: *const can.ModuleEnv) bool {
-                // Check for NONE sentinel
+                // Check for NONE sentinel - deserialized modules have NONE
                 if (mod_env.module_name_idx.isNone()) return false;
+
                 // Bounds check - module_name_idx.idx must be within the ident store
                 const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
-                return mod_env.module_name_idx.idx < ident_store_size;
+                const idx_val = mod_env.module_name_idx.idx;
+                return idx_val < ident_store_size;
             }
         }.check;
 
