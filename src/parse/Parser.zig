@@ -123,7 +123,6 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
 /// - `Name :` followed by a valid type start token
 /// - `Name :=` followed by a valid type start token
 /// - `Name ::` followed by a valid type start token
-/// - `Name a b :` etc. (with type params)
 /// - `Name(a, b) :` etc. (with parenthesized type params)
 ///
 /// The key insight is that after the `:` (or `:=` or `::`), we must see a token that
@@ -150,16 +149,9 @@ fn looksLikeTypeDecl(self: *Parser) bool {
             }
             lookahead += 1;
         }
-    } else {
-        // Skip past any lowercase identifiers (type parameters like `a`, `b`)
-        while (true) {
-            const tok = self.peekN(lookahead);
-            switch (tok) {
-                .LowerIdent, .Underscore, .NamedUnderscore => lookahead += 1,
-                else => break,
-            }
-        }
     }
+    // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
+    // Only `Name(a, b) :` with parenthesized type params is supported.
 
     // Now check for : or := or ::
     const op_tok = self.peekN(lookahead);
@@ -176,7 +168,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
         .LowerIdent, // Type variable: a, b, etc.
         .OpenRound, // Tuple or grouping: (a, b)
         .NoSpaceOpenRound, // Tuple or grouping without space
-        .OpenSquare, // Tag union: [Ok a, Err e]
+        .OpenSquare, // Tag union: [Ok(a), Err(e)]
         .OpenCurly, // Record type: { name: Str }
         .Underscore, // Wildcard type: _
         .NamedUnderscore, // Named wildcard: _foo
