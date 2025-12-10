@@ -44,6 +44,7 @@ pub const Problem = union(enum) {
     type_apply_mismatch_arities: TypeApplyArityMismatch,
     static_dispach: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
+    nominal_type_resolution_failed: NominalTypeResolutionFailed,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
@@ -147,6 +148,9 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_branches: IncompatibleMatchBranches,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
+    invalid_nominal_record,
+    invalid_nominal_tuple,
+    invalid_nominal_value,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
@@ -265,6 +269,13 @@ pub const CannotAccessOpaqueNominal = struct {
     nominal_type_name: Ident.Idx,
 };
 
+/// Error when a nominal type variable doesn't resolve to a nominal_type structure
+/// This indicates an internal error in how the nominal type was defined or stored
+pub const NominalTypeResolutionFailed = struct {
+    var_: Var,
+    nominal_type_decl_var: Var,
+};
+
 // bug //
 
 /// Error when you try to apply the wrong number of arguments to a type in
@@ -375,6 +386,15 @@ pub const ReportBuilder = struct {
                         .invalid_nominal_tag => {
                             return self.buildInvalidNominalTag(mismatch.types);
                         },
+                        .invalid_nominal_record => {
+                            return self.buildInvalidNominalRecord(mismatch.types);
+                        },
+                        .invalid_nominal_tuple => {
+                            return self.buildInvalidNominalTuple(mismatch.types);
+                        },
+                        .invalid_nominal_value => {
+                            return self.buildInvalidNominalValue(mismatch.types);
+                        },
                         .cross_module_import => |data| {
                             return self.buildCrossModuleImportError(mismatch.types, data);
                         },
@@ -394,6 +414,9 @@ pub const ReportBuilder = struct {
             },
             .cannot_access_opaque_nominal => |data| {
                 return self.buildCannotAccessOpaqueNominal(data);
+            },
+            .nominal_type_resolution_failed => |data| {
+                return self.buildNominalTypeResolutionFailed(data);
             },
             .static_dispach => |detail| {
                 switch (detail) {
@@ -1350,6 +1373,126 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for invalid nominal record (record fields don't match)
+    fn buildInvalidNominalRecord(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL RECORD", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type that wraps a record:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The record I found is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal tuple (tuple elements don't match)
+    fn buildInvalidNominalTuple(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TUPLE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The tuple I found is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal value (value type doesn't match)
+    fn buildInvalidNominalValue(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The value I found has type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
     /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
@@ -1821,6 +1964,34 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(" instead of ");
         try report.document.addAnnotated("::", .emphasized);
         try report.document.addReflowingText(".");
+
+        return report;
+    }
+
+    /// Build a report for when a nominal type variable doesn't resolve properly
+    fn buildNominalTypeResolutionFailed(
+        self: *Self,
+        data: NominalTypeResolutionFailed,
+    ) !Report {
+        var report = Report.init(self.gpa, "NOMINAL TYPE RESOLUTION FAILED", .runtime_error);
+        errdefer report.deinit();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This expression tried to use a nominal type, but the type couldn't be resolved correctly:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This is likely an internal compiler error. The nominal type declaration variable did not resolve to a nominal type structure.");
 
         return report;
     }

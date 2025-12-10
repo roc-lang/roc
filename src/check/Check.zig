@@ -4779,8 +4779,17 @@ fn checkNominalTypeUsage(
                         // Constructor doesn't exist or has wrong arity/types
                         self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
                     },
-                    .record, .tuple, .value => {
-                        // Other backing types - no specific error message yet
+                    .record => {
+                        // Record fields don't match the nominal type's backing record
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_record);
+                    },
+                    .tuple => {
+                        // Tuple elements don't match the nominal type's backing tuple
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tuple);
+                    },
+                    .value => {
+                        // Value doesn't match the nominal type's backing type
+                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_value);
                     },
                 }
 
@@ -4791,7 +4800,11 @@ fn checkNominalTypeUsage(
         }
     } else {
         // If the nominal type resolves to something other than a nominal_type structure,
-        // set the whole expression to be an error
+        // report the error and set the expression to error type
+        _ = try self.problems.appendProblem(self.cir.gpa, .{ .nominal_type_resolution_failed = .{
+            .var_ = target_var,
+            .nominal_type_decl_var = nominal_type_decl_var,
+        } });
         try self.unifyWith(target_var, .err, env);
         return .err;
     }
@@ -5199,7 +5212,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 /// A type supports is_eq if:
 /// - It's not a function type
 /// - All of its components (record fields, tuple elements, tag payloads) also support is_eq
-/// - For nominal types, we assume they support is_eq (TODO: actually check for is_eq method)
+/// - For nominal types, check if their backing type supports is_eq
 fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
     return switch (flat_type) {
         // Function types do not support is_eq
@@ -5238,12 +5251,21 @@ fn typeSupportsIsEq(self: *Self, flat_type: types_mod.FlatType) bool {
             return true;
         },
 
-        // Nominal types: TODO: actually check if they have an is_eq method
-        // For now, assume they do (numbers, Bool, Str, etc. all have is_eq)
-        .nominal_type => true,
+        // Nominal types support is_eq if their backing type supports is_eq
+        .nominal_type => |nominal| {
+            const backing_var = self.types.getNominalBackingVar(nominal);
+            return self.varSupportsIsEq(backing_var);
+        },
 
-        // Unbound records need to be resolved first
-        .record_unbound => true, // TODO: check resolved type
+        // Unbound records: resolve and check the resolved type
+        .record_unbound => |fields| {
+            // Check each field in the unbound record
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            for (fields_slice.items(.var_)) |field_var| {
+                if (!self.varSupportsIsEq(field_var)) return false;
+            }
+            return true;
+        },
     };
 }
 
@@ -5252,12 +5274,14 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
     const resolved = self.types.resolveVar(var_);
     return switch (resolved.desc.content) {
         .structure => |s| self.typeSupportsIsEq(s),
-        // Flex/rigid vars could be anything, assume they support is_eq for now
-        // (the actual constraint will be checked when the type is known)
+        // Flex/rigid vars: we optimistically assume they support is_eq.
+        // This is sound because if the variable is later unified with a type
+        // that doesn't support is_eq (like a function), unification will fail.
         .flex, .rigid => true,
         // Aliases: check the underlying type
         .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
-        // Recursion vars: assume they support is_eq (recursive types like List are ok)
+        // Recursion vars: we must assume they support is_eq to avoid infinite loops.
+        // Recursive types like List support is_eq if their element type does.
         .recursion_var => true,
         // Error types: allow them to proceed
         .err => true,
