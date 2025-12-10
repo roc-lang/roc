@@ -1413,10 +1413,11 @@ fn generateHeaderVars(
             .underscore, .malformed => {
                 try self.unifyWith(header_var, .err, env);
             },
-            else => |unexpected| {
+            else => {
                 // The canonicalizer should only produce rigid_var, underscore, or malformed
                 // for header args. If we hit this, there's a compiler bug.
-                std.debug.panic("Compiler bug: unexpected type annotation kind in header arg: {s}", .{@tagName(unexpected)});
+                std.debug.assert(false);
+                try self.unifyWith(header_var, .err, env);
             },
         }
     }
@@ -1758,7 +1759,9 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         } else {
                             // Type applications should only reference aliases or nominal types.
                             // If we hit this, there's a compiler bug.
-                            std.debug.panic("Compiler bug: type application references non-alias/non-nominal: {s}", .{@tagName(decl_resolved)});
+                            std.debug.assert(false);
+                            try self.unifyWith(anno_var, .err, env);
+                            return;
                         }
                     };
 
@@ -1945,7 +1948,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .tag => {
             // Tags should only exist as direct children of tag_unions in type annotations.
             // If we encounter a standalone tag here, it's a compiler bug in canonicalization.
-            std.debug.panic("Compiler bug: standalone tag in type annotation (should be within tag_union)", .{});
+            std.debug.assert(false);
+            try self.unifyWith(anno_var, .err, env);
         },
         .record => |rec| {
             const scratch_record_fields_top = self.scratch_record_fields.top();
@@ -3323,11 +3327,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     }
                 },
-                else => |called_via| {
+                else => {
                     // The canonicalizer currently only produces CalledVia.apply for e_call expressions.
                     // Other call types (binop, unary_op, string_interpolation, record_builder) are
                     // represented as different expression types. If we hit this, there's a compiler bug.
-                    std.debug.panic("Compiler bug: unexpected CalledVia in e_call: {s}", .{@tagName(called_via)});
+                    std.debug.assert(false);
+                    try self.unifyWith(expr_var, .err, env);
                 },
             }
         },
@@ -5201,7 +5206,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             } else {
                 // Deferred constraint checks should always have at least one constraint.
                 // If we hit this, there's a compiler bug in how constraints are tracked.
-                std.debug.panic("Compiler bug: deferred constraint check has no constraints", .{});
+                std.debug.assert(false);
             }
         }
     }
