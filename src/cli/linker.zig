@@ -33,7 +33,7 @@ pub const TargetFormat = enum {
         return switch (builtin.target.os.tag) {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
-            .wasi => .wasm,
+            .freestanding => .wasm,
             else => .elf,
         };
     }
@@ -43,7 +43,7 @@ pub const TargetFormat = enum {
         return switch (os) {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
-            .wasi => .wasm,
+            .freestanding => .wasm,
             else => .elf,
         };
     }
@@ -265,8 +265,8 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
         },
-        .wasi => {
-            // WebAssembly linker (wasm-ld)
+        .freestanding => {
+            // WebAssembly linker (wasm-ld) for freestanding wasm32 target
             try args.append("wasm-ld");
 
             // Add output argument

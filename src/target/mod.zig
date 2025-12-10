@@ -122,7 +122,7 @@ pub const RocTarget = enum {
             .x64openbsd => .openbsd,
             .x64netbsd => .netbsd,
             .x64musl, .x64glibc, .x64linux, .x64elf, .arm64musl, .arm64glibc, .arm64linux, .arm32musl, .arm32linux => .linux,
-            .wasm32 => .wasi,
+            .wasm32 => .freestanding,
         };
     }
 
