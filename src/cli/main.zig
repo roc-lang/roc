@@ -3469,13 +3469,13 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     const host_os = builtin.target.os.tag;
     const host_ptr_width = @bitSizeOf(usize);
 
-    // Determine if this is a cross-architecture build that requires portable serialization
+    // Always use portable serialization for roc build (embedded mode)
+    // The IPC format relies on shared memory alignment guarantees that don't apply
+    // when data is embedded in a binary at arbitrary addresses
     const target_ptr_width = target.ptrBitWidth();
-    const needs_portable_serialization = (target_ptr_width != host_ptr_width);
 
-    // Compile and serialize the module data
-    // For cross-architecture builds (e.g., wasm32 from 64-bit host), use portable serialization
-    // For same-architecture builds, use the faster IPC-style memory layout
+    // Compile and serialize the module data using portable format
+    // This handles unaligned embedded data and cross-architecture builds correctly
     std.log.debug("Compiling Roc file: {s}", .{args.path});
     const SerializedData = struct {
         bytes: []const u8,
@@ -3488,45 +3488,17 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         };
     };
 
-    const serialized_data: SerializedData = if (needs_portable_serialization) blk: {
-        // Cross-architecture build: use ModuleEnv.Serialized format
-        std.log.debug("Using portable serialization for cross-architecture build ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
+    std.log.debug("Using portable serialization ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
 
-        const result = compileAndSerializeModulesForEmbedding(allocs, args.path, args.allow_errors) catch |err| {
-            std.log.err("Failed to compile Roc file with portable serialization: {}", .{err});
-            return err;
-        };
-        std.log.debug("Portable serialization complete, {} bytes", .{result.bytes.len});
+    const compile_result = compileAndSerializeModulesForEmbedding(allocs, args.path, args.allow_errors) catch |err| {
+        std.log.err("Failed to compile Roc file: {}", .{err});
+        return err;
+    };
+    std.log.debug("Portable serialization complete, {} bytes", .{compile_result.bytes.len});
 
-        break :blk .{
-            .bytes = result.bytes,
-            .cleanup = null, // Arena-allocated, no cleanup needed
-        };
-    } else blk: {
-        // Same-architecture build: use native memory layout (faster)
-        const shm_handle = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
-            std.log.err("Failed to compile Roc file: {}", .{err});
-            return err;
-        };
-        std.log.debug("Compilation complete, serialized size: {} bytes", .{shm_handle.handle.size});
-
-        const shm_bytes = @as([*]u8, @ptrCast(shm_handle.handle.ptr))[0..shm_handle.handle.size];
-
-        // Set parent_base_addr to 0 to indicate embedded mode (relocation needed)
-        const FIRST_ALLOC_OFFSET = 504;
-        if (shm_handle.handle.size > FIRST_ALLOC_OFFSET + 8) {
-            @memset(shm_bytes[FIRST_ALLOC_OFFSET .. FIRST_ALLOC_OFFSET + 8], 0);
-            std.log.debug("Set parent_base_addr to 0 for embedded mode relocation", .{});
-        }
-
-        break :blk .{
-            .bytes = shm_bytes,
-            .cleanup = .{
-                .fd = if (is_windows) @ptrCast(shm_handle.handle.fd) else shm_handle.handle.fd,
-                .ptr = shm_handle.handle.ptr,
-                .size = shm_handle.handle.size,
-            },
-        };
+    const serialized_data: SerializedData = .{
+        .bytes = compile_result.bytes,
+        .cleanup = null, // Arena-allocated, no cleanup needed
     };
 
     // Clean up shared memory when done (only if we used it)

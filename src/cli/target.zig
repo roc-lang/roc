@@ -71,7 +71,7 @@ pub const TargetsConfig = struct {
     }
 
     /// Get the default target for a given link type based on the current system
-    /// Returns the first target in the list that's compatible with the current OS
+    /// Returns the first target in the list that's compatible with the current host (OS and arch)
     pub fn getDefaultTarget(self: TargetsConfig, link_type: LinkType) ?RocTarget {
         const specs = switch (link_type) {
             .exe => self.exe,
@@ -79,19 +79,9 @@ pub const TargetsConfig = struct {
             .shared_lib => self.shared_lib,
         };
 
-        const native = RocTarget.detectNative();
-        const native_os = native.toOsTag();
-
-        // First pass: look for exact OS match
+        // First pass: look for exact OS and architecture match
         for (specs) |spec| {
-            if (spec.target.toOsTag() == native_os) {
-                return spec.target;
-            }
-        }
-
-        // wasm32 is considered compatible with all OSes as a fallback
-        for (specs) |spec| {
-            if (spec.target == .wasm32) {
+            if (spec.target.isCompatibleWithHost()) {
                 return spec.target;
             }
         }

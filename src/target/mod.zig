@@ -222,15 +222,16 @@ pub const RocTarget = enum {
         };
     }
 
-    /// Check if this target can be built on the current host.
+    /// Check if this target can be built and run on the current host.
     /// wasm32 is always compatible (cross-compilation to wasm works on any host).
-    /// Native targets are compatible if their OS matches the host OS.
+    /// Native targets are compatible if both OS and architecture match the host.
     pub fn isCompatibleWithHost(self: RocTarget) bool {
         // wasm32 can be built from any host
         if (self == .wasm32) return true;
 
-        // Otherwise, check if OS matches
-        return self.toOsTag() == builtin.target.os.tag;
+        // Otherwise, check if both OS and architecture match
+        return self.toOsTag() == builtin.target.os.tag and
+            self.toCpuArch() == builtin.target.cpu.arch;
     }
 
     /// Get the dynamic linker path for this target
