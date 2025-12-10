@@ -1264,9 +1264,7 @@ test "List.fold with record accumulator - nested list and record" {
     );
 }
 
-// ============================================================================
 // Tests for List.map
-// ============================================================================
 
 test "List.map - basic identity" {
     // Map with identity function
@@ -1313,9 +1311,7 @@ test "List.map - adding" {
     );
 }
 
-// ============================================================================
 // Bug regression tests - interpreter crash issues
-// ============================================================================
 
 test "match with tag containing pattern-bound variable - regression" {
     // Regression test for GitHub issue: interpreter crash when creating a tag
@@ -1362,9 +1358,7 @@ test "nested match with Result type - regression" {
     , .no_trace);
 }
 
-// ============================================================================
 // Bug regression tests - segfault issues from bug reports
-// ============================================================================
 
 test "list equality - single element list - regression" {
     try runExpectBool("[1] == [1]", true, .no_trace);

@@ -7653,7 +7653,7 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-// ===== Canonicalize Type Annotations =====
+// Canonicalize Type Annotations
 
 // Some type annotations, like function type annotations, can introduce variables.
 // Others, however, like alias or nominal tag annotations, cannot.

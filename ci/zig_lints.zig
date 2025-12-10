@@ -22,7 +22,40 @@ pub fn main() !void {
 
     var found_errors = false;
 
-    // Lint 1: Check for pub declarations without doc comments
+    // Lint 1: Check for separator comments (// ====)
+    try stdout.print("Checking for separator comments (// ====)...\n", .{});
+
+    {
+        var zig_files = PathList{};
+        defer freePathList(&zig_files, gpa);
+
+        // Scan src/, build.zig, and test/ (not ci/ since zig_lints.zig mentions the pattern)
+        try walkTree(gpa, "src", &zig_files);
+        try walkTree(gpa, "test", &zig_files);
+
+        // Add build.zig directly
+        try zig_files.append(gpa, try gpa.dupe(u8, "build.zig"));
+
+        for (zig_files.items) |file_path| {
+            const errors = try checkSeparatorComments(gpa, file_path);
+            defer gpa.free(errors);
+
+            if (errors.len > 0) {
+                try stdout.print("{s}", .{errors});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("Separator comments like '// ====' are not allowed. Please delete these lines.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 2: Check for pub declarations without doc comments
     try stdout.print("Checking for pub declarations without doc comments...\n", .{});
 
     var zig_files = PathList{};
@@ -121,6 +154,79 @@ fn walkTree(allocator: Allocator, dir_path: []const u8, zig_files: *PathList) !v
             else => allocator.free(next_path),
         }
     }
+}
+
+fn checkSeparatorComments(allocator: Allocator, file_path: []const u8) ![]u8 {
+    const source = readSourceFile(allocator, file_path) catch |err| {
+        // Skip files we can't read
+        if (err == error.FileNotFound) return try allocator.dupe(u8, "");
+        return err;
+    };
+    defer allocator.free(source);
+
+    var errors = std.ArrayList(u8){};
+    errdefer errors.deinit(allocator);
+
+    var line_num: usize = 1;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+
+    while (lines.next()) |line| {
+        defer line_num += 1;
+
+        // Trim leading whitespace
+        const trimmed = std.mem.trimLeft(u8, line, " \t");
+
+        // Check if line starts with // and is a separator comment
+        // Separator comments are lines like "// ====" or "// ==== Section ===="
+        // We detect them by checking if, after the //, the line consists only of
+        // whitespace, equals signs, and letters (for section titles)
+        if (std.mem.startsWith(u8, trimmed, "//")) {
+            const after_slashes = trimmed[2..];
+            if (isSeparatorComment(after_slashes)) {
+                try errors.writer(allocator).print("{s}:{d}: separator comment '// ====' not allowed\n", .{ file_path, line_num });
+            }
+        }
+    }
+
+    return errors.toOwnedSlice(allocator);
+}
+
+/// Checks if a line (after the //) is a separator comment.
+/// Separator comments are lines consisting only of equals signs (with optional
+/// whitespace and a section title between them).
+/// Examples that should match:
+///   " ===="
+///   " ===== Section ====="
+///   " ==== Title ===="
+/// Examples that should NOT match:
+///   " 2. Stdout contains "=====""
+///   " This is a normal comment about ===="
+fn isSeparatorComment(after_slashes: []const u8) bool {
+    // Must contain ====
+    if (std.mem.indexOf(u8, after_slashes, "====") == null) return false;
+
+    // Trim whitespace
+    const content = std.mem.trim(u8, after_slashes, " \t");
+    if (content.len == 0) return false;
+
+    // Must start with ====
+    if (!std.mem.startsWith(u8, content, "====")) return false;
+
+    // Find where the leading equals end
+    var i: usize = 0;
+    while (i < content.len and content[i] == '=') : (i += 1) {}
+
+    // Everything after leading equals should be whitespace, letters, or trailing equals
+    while (i < content.len) : (i += 1) {
+        const c = content[i];
+        if (c == '=' or c == ' ' or c == '\t' or (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')) {
+            continue;
+        }
+        // Found a character that's not allowed in separator comments
+        return false;
+    }
+
+    return true;
 }
 
 fn checkPubDocComments(allocator: Allocator, file_path: []const u8) ![]u8 {

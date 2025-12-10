@@ -35,8 +35,9 @@ comptime {
     std.debug.assert(MAX_ELEMENT_BUFFER_SIZE % BufferAlign == 0);
 }
 
-// ================ Fluxsort ==================================================
+// Fluxsort
 // The high level fluxsort functions.
+
 /// TODO: document fluxsort
 pub fn fluxsort(
     array: [*]u8,
@@ -678,7 +679,7 @@ pub fn flux_reverse_partition(
     flux_partition(array, swap, array, pivot, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 }
 
-// ================ Pivot Selection ===========================================
+// Pivot Selection
 // Used for selecting the quicksort pivot for various sized arrays.
 
 /// Returns the median of an array taking roughly cube root samples.
@@ -859,7 +860,7 @@ pub fn binary_median(
     copy(out, from);
 }
 
-// ================ Quadsort ==================================================
+// Quadsort
 // The high level quadsort functions.
 
 /// A version of quadsort given pre-allocated swap memory.
@@ -1000,7 +1001,7 @@ fn quadsort_stack_swap(
     rotate_merge(array, len, swap, 512, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 }
 
-// ================ Inplace Rotate Merge ======================================
+// Inplace Rotate Merge
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
 
@@ -1307,7 +1308,7 @@ pub fn trinity_rotation(
     }
 }
 
-// ================ Unbalanced Merges =========================================
+// Unbalanced Merges
 
 /// Merges the remaining blocks at the tail of the array.
 pub fn tail_merge(
@@ -1752,7 +1753,7 @@ fn partial_forward_merge_left_head_2(
     return false;
 }
 
-// ================ Quad Merge Support ========================================
+// Quad Merge Support
 
 /// Merges an array of of sized blocks of sorted elements with a tail.
 /// Returns the block length of sorted runs after the call.
@@ -1984,7 +1985,7 @@ pub fn cross_merge(
     }
 }
 
-// ================ 32 Element Blocks =========================================
+// 32 Element Blocks
 
 const QuadSwapResult = enum {
     sorted,
@@ -2324,7 +2325,7 @@ pub fn quad_reversal(
     }
 }
 
-// ================ Small Arrays ==============================================
+// Small Arrays
 // Below are functions for sorting under 32 element arrays.
 
 /// Uses swap space to sort the tail of an array.
@@ -2420,7 +2421,7 @@ pub fn parity_merge(
     tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy, indirect);
 }
 
-// ================ Tiny Arrays ===============================================
+// Tiny Arrays
 // Below are functions for sorting 0 to 7 element arrays.
 
 /// Sort arrays of 0 to 7 elements.
@@ -2736,7 +2737,7 @@ fn parity_swap_seven(
     copy(arr_ptr, from);
 }
 
-// ================ Primitives ================================================
+// Primitives
 // Below are sorting primitives that attempt to be branchless.
 // They all also are always inline for performance.
 // The are the smallest fundamental unit.

@@ -141,9 +141,7 @@ fn checkTestSuccess(result: std.process.Child.RunResult) !void {
     }
 }
 
-// ============================================================================
 // IO Spec Tests (using shared specs from fx_test_specs.zig)
-// ============================================================================
 // These tests use the --test mode with IO specifications to verify that
 // roc applications produce the expected stdout/stderr output for given stdin.
 // The specs are defined in fx_test_specs.zig and shared with the cross-compile

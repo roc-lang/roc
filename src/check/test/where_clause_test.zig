@@ -12,9 +12,7 @@ const TestEnv = @import("./TestEnv.zig");
 
 const testing = std.testing;
 
-// ============================================================================
 // Basic where clause tests
-// ============================================================================
 
 test "where clause - basic method constraint infers correctly" {
     // Module A defines a type with to_str method
@@ -93,9 +91,7 @@ test "where clause - constraint with multiple args" {
     try test_env_b.assertDefType("main", "A");
 }
 
-// ============================================================================
 // Multiple constraints tests
-// ============================================================================
 
 test "where clause - multiple constraints on same variable" {
     const source_a =
@@ -125,9 +121,7 @@ test "where clause - multiple constraints on same variable" {
     try test_env_b.assertDefType("main", "(Str, U64)");
 }
 
-// ============================================================================
 // Cross-module where clause tests
-// ============================================================================
 
 test "where clause - cross-module constraint satisfaction" {
     const source_a =
@@ -178,9 +172,7 @@ test "where clause - cross-module polymorphic constraint" {
     try test_env_b.assertDefType("main", "Str");
 }
 
-// ============================================================================
 // Nested/chained where clause tests
-// ============================================================================
 
 test "where clause - chained method calls" {
     const source_a =
@@ -209,9 +201,7 @@ test "where clause - chained method calls" {
     try test_env_b.assertDefType("main", "Str");
 }
 
-// ============================================================================
 // Error case tests
-// ============================================================================
 
 test "where clause - missing method on type" {
     const source_a =
@@ -256,9 +246,7 @@ test "where clause - method signature mismatch" {
     try test_env_b.assertFirstTypeError("TYPE MISMATCH");
 }
 
-// ============================================================================
 // Let polymorphism with where clauses
-// ============================================================================
 
 test "where clause - same type used multiple times with where constraint" {
     const source_a =
@@ -284,9 +272,7 @@ test "where clause - same type used multiple times with where constraint" {
     try test_env_b.assertDefType("main", "(Str, Str)");
 }
 
-// ============================================================================
 // Where clause without annotation (inferred)
-// ============================================================================
 
 test "where clause - inferred from method call without annotation" {
     const source_a =

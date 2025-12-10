@@ -9044,9 +9044,7 @@ pub const Interpreter = struct {
         return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
 
-    // ============================================================================
     // Stack-Safe Interpreter Infrastructure
-    // ============================================================================
     //
     // The following types and functions implement a stack-safe interpreter that
     // uses explicit work and value stacks instead of recursive calls. This avoids
@@ -9915,9 +9913,7 @@ pub const Interpreter = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         switch (expr) {
-            // ================================================================
             // Immediate values - no sub-expressions to evaluate
-            // ================================================================
 
             .e_num => |num_lit| {
                 const value = try self.evalNum(expr_idx, expected_rt_var, num_lit);
@@ -9989,9 +9985,7 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            // ================================================================
             // Lambda/Closure creation
-            // ================================================================
 
             .e_lambda => |lam| {
                 const value = try self.evalLambda(expr_idx, expected_rt_var, lam, roc_ops);
@@ -10013,9 +10007,7 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            // ================================================================
             // Variable lookups
-            // ================================================================
 
             .e_lookup_local => |lookup| {
                 const value = try self.evalLookupLocal(lookup, expected_rt_var, roc_ops);
@@ -10086,9 +10078,7 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
 
-            // ================================================================
             // Binary operations
-            // ================================================================
 
             .e_binop => |binop| {
                 switch (binop.op) {
@@ -10242,9 +10232,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Conditionals
-            // ================================================================
 
             .e_if => |if_expr| {
                 const branches = self.env.store.sliceIfBranches(if_expr.branches);
@@ -10272,9 +10260,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Blocks
-            // ================================================================
 
             .e_block => |blk| {
                 const stmts = self.env.store.sliceStatements(blk.stmts);
@@ -10309,9 +10295,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Tuples
-            // ================================================================
 
             .e_tuple => |tup| {
                 const elems = self.env.store.sliceExpr(tup.elems);
@@ -10336,9 +10320,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Lists
-            // ================================================================
 
             .e_list => |list_expr| {
                 const elems = self.env.store.sliceExpr(list_expr.elems);
@@ -10378,9 +10360,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Records
-            // ================================================================
 
             .e_record => |rec| {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -10422,9 +10402,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Nominal types - evaluate backing expression
-            // ================================================================
 
             .e_nominal => |nom| {
                 // Compute the backing type variable for the nominal.
@@ -10526,9 +10504,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Simple error/crash expressions
-            // ================================================================
 
             .e_crash => |crash_expr| {
                 // Get the crash message string and trigger crash
@@ -10558,9 +10534,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Tag unions with payloads
-            // ================================================================
 
             .e_tag => |tag| {
                 // Determine runtime type and tag index.
@@ -10705,9 +10679,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Pattern matching
-            // ================================================================
 
             .e_match => |m| {
                 // Get type info for scrutinee and result
@@ -10732,9 +10704,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Debugging and assertions
-            // ================================================================
 
             .e_expect => |expect_expr| {
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
@@ -10798,9 +10768,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Function calls
-            // ================================================================
 
             .e_call => |call| {
                 const func_idx = call.func;
@@ -10957,9 +10925,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Unary operations
-            // ================================================================
 
             .e_unary_minus => |unary_minus| {
                 // Desugar `-a` to `a.negate()`
@@ -11011,9 +10977,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Dot access (field access and method calls)
-            // ================================================================
 
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
@@ -11054,9 +11018,7 @@ pub const Interpreter = struct {
         }
     }
 
-    // ========================================================================
     // Helper functions for evaluating immediate values (no sub-expressions)
-    // ========================================================================
 
     /// Evaluate a numeric literal (e_num)
     fn evalNum(
@@ -11564,9 +11526,7 @@ pub const Interpreter = struct {
         return error.Crash;
     }
 
-    // ========================================================================
     // Helper functions for lambda/closure creation
-    // ========================================================================
 
     /// Evaluate a lambda expression (e_lambda) - creates a closure value with empty captures
     fn evalLambda(
@@ -11839,9 +11799,7 @@ pub const Interpreter = struct {
         return null;
     }
 
-    // ========================================================================
     // Helper functions for variable lookups
-    // ========================================================================
 
     /// Evaluate a local variable lookup (e_lookup_local)
     /// Searches bindings in reverse order, checks closure captures, and handles
@@ -12001,9 +11959,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    // ========================================================================
     // Helper functions for block evaluation
-    // ========================================================================
 
     /// Add closure placeholders for mutual recursion support.
     /// This is the first pass over statements that creates bindings for closures
