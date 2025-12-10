@@ -20,6 +20,12 @@ pub const DocumentStore = struct {
         end_character: usize,
     };
 
+    /// A text change with an optional range (UTF-16 positions, inclusive-exclusive).
+    pub const ContentChange = struct {
+        text: []const u8,
+        range: ?Range = null,
+    };
+
     /// Creates an empty store backed by the provided allocator.
     pub fn init(allocator: std.mem.Allocator) DocumentStore {
         return .{ .allocator = allocator, .entries = std.StringHashMap(Document).init(allocator) };
@@ -69,23 +75,55 @@ pub const DocumentStore = struct {
 
     /// Applies a range replacement to an existing document using UTF-16 positions.
     pub fn applyRangeReplacement(self: *DocumentStore, uri: []const u8, version: i64, range: Range, new_text: []const u8) !void {
+        const change = ContentChange{ .text = new_text, .range = range };
+        try self.applyContentChanges(uri, version, &.{change});
+    }
+
+    /// Applies one or more content changes in order, mirroring LSP incremental edits.
+    pub fn applyContentChanges(self: *DocumentStore, uri: []const u8, version: i64, changes: []const ContentChange) !void {
+        if (changes.len == 0) return error.NoChanges;
+
         const entry = self.entries.getPtr(uri) orelse return error.DocumentNotFound;
-        const start_offset = try positionToOffset(entry.text, range.start_line, range.start_character);
-        const end_offset = try positionToOffset(entry.text, range.end_line, range.end_character);
-        if (start_offset > end_offset or end_offset > entry.text.len) return error.InvalidRange;
 
-        const replaced = end_offset - start_offset;
-        const new_len = entry.text.len - replaced + new_text.len;
-        var buffer = try self.allocator.alloc(u8, new_len);
-        errdefer self.allocator.free(buffer);
+        var current = try self.allocator.dupe(u8, entry.text);
+        var current_owned = true;
+        defer if (current_owned) self.allocator.free(current);
 
-        @memcpy(buffer[0..start_offset], entry.text[0..start_offset]);
-        @memcpy(buffer[start_offset .. start_offset + new_text.len], new_text);
-        @memcpy(buffer[start_offset + new_text.len ..], entry.text[end_offset..]);
+        for (changes) |change| {
+            const updated = try self.applyChangeToText(current, change);
+            self.allocator.free(current);
+            current = updated;
+        }
 
         self.allocator.free(entry.text);
-        entry.text = buffer;
+        entry.text = current;
         entry.version = version;
+        current_owned = false;
+    }
+
+    fn applyChangeToText(self: *DocumentStore, text: []const u8, change: ContentChange) ![]u8 {
+        if (change.range) |range| {
+            return replaceRange(self.allocator, text, range, change.text);
+        } else {
+            return self.allocator.dupe(u8, change.text);
+        }
+    }
+
+    fn replaceRange(allocator: std.mem.Allocator, text: []const u8, range: Range, new_text: []const u8) ![]u8 {
+        const start_offset = try positionToOffset(text, range.start_line, range.start_character);
+        const end_offset = try positionToOffset(text, range.end_line, range.end_character);
+        if (start_offset > end_offset or end_offset > text.len) return error.InvalidRange;
+
+        const replaced = end_offset - start_offset;
+        const new_len = text.len - replaced + new_text.len;
+        var buffer = try allocator.alloc(u8, new_len);
+        errdefer allocator.free(buffer);
+
+        @memcpy(buffer[0..start_offset], text[0..start_offset]);
+        @memcpy(buffer[start_offset .. start_offset + new_text.len], new_text);
+        @memcpy(buffer[start_offset + new_text.len ..], text[end_offset..]);
+
+        return buffer;
     }
 
     fn positionToOffset(text: []const u8, line: usize, character_utf16: usize) !usize {

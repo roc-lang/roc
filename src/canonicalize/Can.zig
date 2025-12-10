@@ -4571,11 +4571,12 @@ pub fn canonicalizeExpr(
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             return self.canonicalizeTagExpr(e, null, region);
         },
-        .string_part => |_| {
+        .string_part => |sp| {
+            const region = self.parse_ir.tokenizedRegionToRegion(sp.region);
             const feature = try self.env.insertString("canonicalize string_part expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -4857,11 +4858,12 @@ pub fn canonicalizeExpr(
             const free_vars_span = self.scratch_free_vars.spanFrom(lambda_free_vars_start);
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
         },
-        .record_updater => |_| {
+        .record_updater => |ru| {
+            const region = self.parse_ir.tokenizedRegionToRegion(ru.region);
             const feature = try self.env.insertString("canonicalize record_updater expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -5644,11 +5646,12 @@ pub fn canonicalizeExpr(
 
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
-        .record_builder => |_| {
+        .record_builder => |rb| {
+            const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
             const feature = try self.env.insertString("canonicalize record_builder expression");
             const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -5861,7 +5864,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                     const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
-                        .region = Region.zero(),
+                        .region = type_tok_region,
                     } });
                     return CanonicalizedExpr{
                         .idx = malformed_idx,
@@ -6062,7 +6065,7 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                     const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                     const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
                         .feature = feature,
-                        .region = Region.zero(),
+                        .region = type_tok_region,
                     } });
                     return CanonicalizedExpr{
                         .idx = malformed_idx,
@@ -6400,7 +6403,7 @@ pub fn canonicalizePattern(
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
-                    .region = Region.zero(),
+                    .region = region,
                 } });
                 return malformed_idx;
             }
@@ -6422,7 +6425,7 @@ pub fn canonicalizePattern(
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,
-                    .region = Region.zero(),
+                    .region = region,
                 } });
                 return malformed_idx;
             }
@@ -6799,7 +6802,7 @@ pub fn canonicalizePattern(
                         const feature = try self.env.insertString("report an error resolved type decl in scope wasn't actually a type decl");
                         return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                             .feature = feature,
-                            .region = Region.zero(),
+                            .region = type_tok_region,
                         } });
                     },
                 }
@@ -7141,13 +7144,14 @@ pub fn canonicalizePattern(
             } });
             return pattern_idx;
         },
-        .alternatives => |_| {
+        .alternatives => |alt| {
             // Alternatives patterns should only appear in match expressions and are handled there
             // If we encounter one here, it's likely a parser error or misplaced pattern
+            const region = self.parse_ir.tokenizedRegionToRegion(alt.region);
             const feature = try self.env.insertString("alternatives pattern outside match expression");
             const pattern_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                 .feature = feature,
-                .region = Region.zero(),
+                .region = region,
             } });
             return pattern_idx;
         },
@@ -10262,7 +10266,7 @@ fn scopeUpdateTypeDecl(
     try current_scope.updateTypeDecl(gpa, name_ident, new_type_decl_stmt);
 }
 
-/// Looks up a type declaration by identifier, searching from innermost to outermost scope.
+/// Look up a type declaration by identifier, searching from innermost to outermost scope.
 pub fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
