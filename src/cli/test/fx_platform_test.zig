@@ -1048,3 +1048,23 @@ test "fx platform index out of bounds in instantiate regression" {
     // Currently it fails with a panic in instantiate.zig.
     try checkSuccess(run_result);
 }
+
+test "fx platform fold_rev static dispatch regression" {
+    // Regression test: Calling fold_rev with static dispatch (method syntax) panics,
+    // but calling it qualified as List.fold_rev(...) works fine.
+    //
+    // The panic occurs with: [1].fold_rev([], |elem, acc| acc.append(elem))
+    // But this works: List.fold_rev([1], [], |elem, acc| acc.append(elem))
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/fold_rev_static_dispatch.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Start reverse") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Reversed: 3 elements") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Done") != null);
+}
