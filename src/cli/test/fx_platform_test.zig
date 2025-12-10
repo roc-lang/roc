@@ -849,19 +849,18 @@ test "run allows warnings without blocking execution" {
 }
 
 test "fx platform method inspect on string" {
-    // Tests that calling .inspect() on a Str correctly reports MISSING METHOD
-    // (Str doesn't have an inspect method, unlike custom opaque types)
+    // Tests that Str.inspect works correctly on a string value
     const allocator = testing.allocator;
 
     const run_result = try runRoc(allocator, "test/fx/test_method_inspect.roc", .{});
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This should fail because Str doesn't have an inspect method
-    try checkFailure(run_result);
+    // Str.inspect now exists - this should succeed and output the inspected string
+    try checkSuccess(run_result);
 
-    // Should show MISSING METHOD error
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
+    // Should output the inspected string value
+    try testing.expectEqualStrings("\"hello\"\n", run_result.stdout);
 }
 
 test "fx platform if-expression closure capture regression" {

@@ -212,9 +212,6 @@ fn collectExprDependencies(
                     .s_dbg => |dbg| {
                         try collectExprDependencies(cir, dbg.expr, dependencies, allocator);
                     },
-                    .s_inspect => |inspect| {
-                        try collectExprDependencies(cir, inspect.expr, dependencies, allocator);
-                    },
                     .s_expr => |expr_stmt| {
                         try collectExprDependencies(cir, expr_stmt.expr, dependencies, allocator);
                     },
@@ -270,10 +267,6 @@ fn collectExprDependencies(
 
         .e_dbg => |dbg| {
             try collectExprDependencies(cir, dbg.expr, dependencies, allocator);
-        },
-
-        .e_inspect => |inspect| {
-            try collectExprDependencies(cir, inspect.expr, dependencies, allocator);
         },
 
         .e_expect => |expect| {

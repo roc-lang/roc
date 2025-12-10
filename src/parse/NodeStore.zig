@@ -365,11 +365,6 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = @intFromEnum(d.expr);
             node.region = d.region;
         },
-        .inspect => |i| {
-            node.tag = .inspect;
-            node.data.lhs = @intFromEnum(i.expr);
-            node.region = i.region;
-        },
         .expect => |e| {
             node.tag = .expect;
             node.data.lhs = @intFromEnum(e.body);
@@ -750,11 +745,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .dbg;
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.expr);
-        },
-        .inspect => |i| {
-            node.tag = .inspect;
-            node.region = i.region;
-            node.data.lhs = @intFromEnum(i.expr);
         },
         .record_builder => |rb| {
             node.tag = .record_builder;
@@ -1267,12 +1257,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        .inspect => {
-            return .{ .inspect = .{
-                .expr = @enumFromInt(node.data.lhs),
-                .region = node.region,
-            } };
-        },
         .@"return" => {
             return .{ .@"return" = .{
                 .expr = @enumFromInt(node.data.lhs),
@@ -1710,12 +1694,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .dbg => {
             return .{ .dbg = .{
-                .region = node.region,
-                .expr = @enumFromInt(node.data.lhs),
-            } };
-        },
-        .inspect => {
-            return .{ .inspect = .{
                 .region = node.region,
                 .expr = @enumFromInt(node.data.lhs),
             } };
