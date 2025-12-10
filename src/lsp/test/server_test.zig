@@ -200,6 +200,135 @@ test "server tracks documents on didOpen/didChange" {
     try std.testing.expectEqual(@as(i64, 2), doc.version);
 }
 
+test "server applies sequential incremental changes in a single didChange" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"first"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    const change_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":2}},"contentChanges":[
+        \\  {{"text":"\nsecond line","range":{{"start":{{"line":0,"character":5}},"end":{{"line":0,"character":5}}}}}},
+        \\  {{"text":"SECOND","range":{{"start":{{"line":1,"character":0}},"end":{{"line":1,"character":6}}}}}}
+        \\]}}}}
+    , .{file_uri});
+    defer allocator.free(change_body);
+    const change_msg = try frame(allocator, change_body);
+    defer allocator.free(change_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg.len);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, change_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [8192]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const maybe_doc = server.getDocumentForTesting(file_uri);
+    try std.testing.expect(maybe_doc != null);
+    const doc = maybe_doc.?;
+    try std.testing.expectEqualStrings("first\nSECOND line", doc.text);
+    try std.testing.expectEqual(@as(i64, 2), doc.version);
+}
+
+test "server handles burst of incremental didChange messages" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":""}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Simulate rapid typing with multiple change events back-to-back.
+    const change_body_1 = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":2}},"contentChanges":[
+        \\  {{"text":"abc","range":{{"start":{{"line":0,"character":0}},"end":{{"line":0,"character":0}}}}}},
+        \\  {{"text":" def","range":{{"start":{{"line":0,"character":3}},"end":{{"line":0,"character":3}}}}}}
+        \\]}}}}
+    , .{file_uri});
+    defer allocator.free(change_body_1);
+    const change_msg_1 = try frame(allocator, change_body_1);
+    defer allocator.free(change_msg_1);
+
+    const change_body_2 = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":3}},"contentChanges":[
+        \\  {{"text":"\nline","range":{{"start":{{"line":0,"character":7}},"end":{{"line":0,"character":7}}}}}},
+        \\  {{"text":"DEF","range":{{"start":{{"line":0,"character":4}},"end":{{"line":0,"character":7}}}}}}
+        \\]}}}}
+    , .{file_uri});
+    defer allocator.free(change_body_2);
+    const change_msg_2 = try frame(allocator, change_body_2);
+    defer allocator.free(change_msg_2);
+
+    const change_body_3 = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":4}},"contentChanges":[
+        \\  {{"text":"!","range":{{"start":{{"line":1,"character":4}},"end":{{"line":1,"character":4}}}}}},
+        \\  {{"text":"\nDONE","range":{{"start":{{"line":1,"character":5}},"end":{{"line":1,"character":5}}}}}}
+        \\]}}}}
+    , .{file_uri});
+    defer allocator.free(change_body_3);
+    const change_msg_3 = try frame(allocator, change_body_3);
+    defer allocator.free(change_msg_3);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.ensureTotalCapacity(allocator, open_msg.len + change_msg_1.len + change_msg_2.len + change_msg_3.len);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, change_msg_1);
+    try builder.appendSlice(allocator, change_msg_2);
+    try builder.appendSlice(allocator, change_msg_3);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [8192]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const maybe_doc = server.getDocumentForTesting(file_uri);
+    try std.testing.expect(maybe_doc != null);
+    const doc = maybe_doc.?;
+    try std.testing.expectEqualStrings("abc DEF\nline!\nDONE", doc.text);
+    try std.testing.expectEqual(@as(i64, 4), doc.version);
+}
+
 fn uriFromPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return @import("../uri.zig").pathToUri(allocator, path);
 }

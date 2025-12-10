@@ -39,27 +39,52 @@ pub fn handler(comptime ServerType: type) type {
             };
             if (changes.items.len == 0) return;
 
-            const last_change = changes.items[changes.items.len - 1];
-            const change_obj = switch (last_change) {
-                .object => |o| o,
-                else => return,
-            };
-            const text_value = change_obj.get("text") orelse return;
-            const text = switch (text_value) {
-                .string => |s| s,
-                else => return,
-            };
-            if (change_obj.get("range")) |range_value| {
-                const range = parseRange(range_value) catch |err| {
-                    std.log.err("invalid range for {s}: {s}", .{ uri, @errorName(err) });
-                    return;
+            var parsed_changes = std.ArrayList(DocumentStore.ContentChange){};
+            defer parsed_changes.deinit(self.allocator);
+
+            for (changes.items) |change_value| {
+                const change_obj = switch (change_value) {
+                    .object => |o| o,
+                    else => return,
                 };
-                self.doc_store.applyRangeReplacement(uri, version, range, text) catch |err| {
-                    std.log.err("failed to apply incremental change for {s}: {s}", .{ uri, @errorName(err) });
+                const text_value = change_obj.get("text") orelse return;
+                const text = switch (text_value) {
+                    .string => |s| s,
+                    else => return,
+                };
+
+                var change = DocumentStore.ContentChange{ .text = text };
+                if (change_obj.get("range")) |range_value| {
+                    change.range = parseRange(range_value) catch |err| {
+                        std.log.err("invalid range for {s}: {s}", .{ uri, @errorName(err) });
+                        return;
+                    };
+                }
+
+                try parsed_changes.append(self.allocator, change);
+            }
+
+            if (parsed_changes.items.len == 0) return;
+
+            var saw_full_change = false;
+            for (parsed_changes.items) |change| {
+                if (change.range == null) {
+                    saw_full_change = true;
+                    break;
+                }
+            }
+
+            if (saw_full_change) {
+                if (parsed_changes.items.len != 1) {
+                    std.log.err("received invalid mix of full and incremental changes for {s}", .{uri});
+                    return;
+                }
+                self.doc_store.upsert(uri, version, parsed_changes.items[0].text) catch |err| {
+                    std.log.err("failed to apply full change for {s}: {s}", .{ uri, @errorName(err) });
                 };
             } else {
-                self.doc_store.upsert(uri, version, text) catch |err| {
-                    std.log.err("failed to apply full change for {s}: {s}", .{ uri, @errorName(err) });
+                self.doc_store.applyContentChanges(uri, version, parsed_changes.items) catch |err| {
+                    std.log.err("failed to apply incremental change for {s}: {s}", .{ uri, @errorName(err) });
                 };
             }
 
