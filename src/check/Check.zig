@@ -2054,10 +2054,9 @@ fn generateBuiltinTypeInstance(
             const box_content = try self.mkBoxContent(anno_args[0]);
             return try self.freshFromContent(box_content, env, anno_region);
         },
-        // Polymorphic number types (Num, Int, Frac) are no longer supported
-        // They have been replaced with concrete nominal types (U8, I32, F64, Dec, etc.)
-        .num, .int, .frac => {
-            // Return error - these should not be used anymore
+        // Polymorphic Num type is a module, not a type itself
+        .num => {
+            // Return error - Num is a module containing numeric types, not a type
             return try self.freshFromContent(.err, env, anno_region);
         },
     }
