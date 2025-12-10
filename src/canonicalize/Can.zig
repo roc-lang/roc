@@ -10262,6 +10262,7 @@ fn scopeUpdateTypeDecl(
     try current_scope.updateTypeDecl(gpa, name_ident, new_type_decl_stmt);
 }
 
+/// Looks up a type declaration by identifier, searching from innermost to outermost scope.
 pub fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
