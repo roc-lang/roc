@@ -475,6 +475,7 @@ pub const Expr = union(enum) {
         str_from_utf8,
         str_split_on,
         str_join_with,
+        str_inspekt,
 
         // Numeric to_str operations
         u8_to_str,
@@ -849,6 +850,9 @@ pub const Expr = union(enum) {
 
                 // String parsing - list consumed
                 .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
+
+                // Str.inspekt - borrows the value to render it
+                .str_inspekt => &.{.borrow},
 
                 // Numeric to_str - value types (no ownership)
                 .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},

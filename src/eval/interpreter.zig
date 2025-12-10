@@ -2058,6 +2058,161 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
+            .str_inspekt => {
+                // Str.inspekt : _val -> Str
+                // Renders any value to its string representation
+                std.debug.assert(args.len == 1);
+                const value = args[0];
+
+                // Use the value's rt_var to determine rendering
+                const effective_rt_var = value.rt_var;
+                const resolved = self.runtime_types.resolveVar(effective_rt_var);
+
+                // Check if the type has a to_inspect method
+                const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
+                    switch (resolved.desc.content.structure) {
+                        .nominal_type => |nom| try self.tryResolveMethodByIdent(
+                            nom.origin_module,
+                            nom.ident.ident_idx,
+                            self.root_env.idents.to_inspect,
+                            roc_ops,
+                            effective_rt_var,
+                        ),
+                        else => null,
+                    }
+                else
+                    null;
+
+                if (maybe_to_inspect) |method_func| {
+                    // Found to_inspect method - call it directly if it's a low-level op
+                    defer method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                    if (method_func.layout.tag != .closure) {
+                        // Not a closure - fall back to default rendering
+                        const rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        defer self.allocator.free(rendered);
+
+                        const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                        const out = try self.pushStr(str_rt_var);
+                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                        roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                        return out;
+                    }
+
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                    const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
+
+                    if (lambda_expr == .e_low_level_lambda) {
+                        // The to_inspect method is a low-level op - call it directly
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var inner_args = [1]StackValue{value};
+                        const result = try self.callLowLevelBuiltin(low_level.op, &inner_args, roc_ops, null);
+
+                        // Decref based on ownership semantics
+                        const arg_ownership = low_level.op.getArgOwnership();
+                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
+                            // Don't decref the value - it's borrowed
+                        }
+
+                        return result;
+                    }
+
+                    // The to_inspect method is a user-defined closure.
+                    // We can call it synchronously by manually setting up the environment,
+                    // bindings, and using evalWithExpectedType to evaluate the body.
+
+                    const params = closure_header.source_env.store.slicePatterns(closure_header.params);
+                    if (params.len != 1) {
+                        // to_inspect must take exactly one argument - fall back to default rendering
+                        const rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        defer self.allocator.free(rendered);
+
+                        const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                        const out = try self.pushStr(str_rt_var);
+                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                        roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                        return out;
+                    }
+
+                    // Save current environment state
+                    const saved_env = self.env;
+
+                    // Set up the closure's environment
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Add binding for the parameter
+                    try self.bindings.append(.{
+                        .pattern_idx = params[0],
+                        .value = value,
+                        .expr_idx = null,
+                        .source_env = self.env,
+                    });
+
+                    // Track the closure as active
+                    try self.active_closures.append(method_func);
+
+                    // Evaluate the closure body synchronously
+                    const to_inspect_result = try self.evalWithExpectedType(closure_header.body_idx, roc_ops, null);
+
+                    // Clean up: remove the binding and active closure
+                    _ = self.active_closures.pop();
+                    _ = self.bindings.pop();
+
+                    // Restore environment
+                    self.env = saved_env;
+
+                    // Check if the result is already a string - if so, return it directly
+                    if (to_inspect_result.layout.tag == .scalar and
+                        to_inspect_result.layout.data.scalar.tag == .str)
+                    {
+                        return to_inspect_result;
+                    }
+
+                    // Otherwise, render the result of to_inspect to a string
+                    const rendered = try self.renderValueRocWithType(to_inspect_result, to_inspect_result.rt_var, roc_ops);
+                    defer self.allocator.free(rendered);
+                    defer to_inspect_result.decref(&self.runtime_layout_store, roc_ops);
+
+                    const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                    const out = try self.pushStr(str_rt_var);
+                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                    roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                    return out;
+                }
+
+                // No to_inspect method - use default rendering
+                const rendered: []const u8 = if (resolved.desc.content == .structure and
+                    resolved.desc.content.structure == .nominal_type)
+                blk: {
+                    const nom = resolved.desc.content.structure.nominal_type;
+                    if (nom.is_opaque) {
+                        // Check if this is a builtin type with a primitive layout
+                        const is_builtin_primitive = value.layout.tag == .scalar and
+                            (value.layout.data.scalar.tag == .int or
+                            value.layout.data.scalar.tag == .frac or
+                            value.layout.data.scalar.tag == .str);
+                        if (is_builtin_primitive) {
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        }
+                        break :blk try self.allocator.dupe(u8, "<opaque>");
+                    } else {
+                        // Nominal types render as "TypeName.InnerValue"
+                        const type_name = self.root_env.getIdent(nom.ident.ident_idx);
+                        const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        defer self.allocator.free(inner_rendered);
+                        break :blk try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, inner_rendered });
+                    }
+                } else blk: {
+                    break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                };
+                defer self.allocator.free(rendered);
+
+                const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                const out = try self.pushStr(str_rt_var);
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                return out;
+            },
             .list_len => {
                 // List.len : List(a) -> U64
                 // Note: listLen returns usize, but List.len always returns U64.

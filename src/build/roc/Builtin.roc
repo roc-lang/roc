@@ -39,7 +39,6 @@ Builtin :: [].{
 		is_eq : Str, Str -> Bool
 
 		inspekt : _val -> Str
-		inspekt = |val| inspect val
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
