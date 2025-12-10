@@ -312,15 +312,21 @@ pub const Serialized = extern struct {
         const builtin = @import("builtin");
         if (builtin.cpu.arch == .wasm32 and builtin.mode == .Debug) {
             const bytes_ptr = @intFromPtr(interner.bytes.items.items.ptr);
-            const expected_ptr = @as(usize, @intCast(bytes_serialized_offset + offset));
-            if (bytes_ptr != expected_ptr) {
+            const expected_bytes_ptr = @as(usize, @intCast(bytes_serialized_offset + offset));
+            if (bytes_ptr != expected_bytes_ptr) {
                 @panic("SmallStringInterner deserialize: bytes ptr mismatch!");
             }
             if (interner.bytes.items.items.len != @as(usize, @intCast(bytes_serialized_len))) {
                 @panic("SmallStringInterner deserialize: bytes len mismatch!");
             }
-            _ = hash_table_serialized_offset;
-            _ = hash_table_serialized_len;
+            const hash_table_ptr = @intFromPtr(interner.hash_table.items.items.ptr);
+            const expected_hash_ptr = @as(usize, @intCast(hash_table_serialized_offset + offset));
+            if (hash_table_ptr != expected_hash_ptr) {
+                @panic("SmallStringInterner deserialize: hash_table ptr mismatch!");
+            }
+            if (interner.hash_table.items.items.len != @as(usize, @intCast(hash_table_serialized_len))) {
+                @panic("SmallStringInterner deserialize: hash_table len mismatch!");
+            }
         }
 
         return interner;
