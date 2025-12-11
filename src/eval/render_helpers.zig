@@ -287,13 +287,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         try out.append('(');
                         if (arg_vars.len == 1) {
                             // Single payload: first element
-                            // Get the correct layout from the type variable, not the payload union layout
+                            // Use the stored layout from the tuple element, not from type variables.
+                            // This ensures we use the layout that was actually used when creating the value.
                             const arg_var = arg_vars[0];
                             const payload_elem = try tup_acc.getElement(0, arg_var);
-                            const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
-                            const arg_layout = ctx.layout_store.getLayout(layout_idx);
                             const payload_value = StackValue{
-                                .layout = arg_layout,
+                                .layout = payload_elem.layout,
                                 .ptr = payload_elem.ptr,
                                 .is_initialized = payload_elem.is_initialized,
                                 .rt_var = arg_var,
@@ -354,10 +353,10 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             try out.append('(');
                             if (arg_vars.len == 1) {
                                 const arg_var = arg_vars[0];
-                                const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
-                                const arg_layout = ctx.layout_store.getLayout(layout_idx);
+                                // Use the stored payload layout from the record field, not from type variables.
+                                // This ensures we use the layout that was actually used when creating the value.
                                 const payload_value = StackValue{
-                                    .layout = arg_layout,
+                                    .layout = payload.layout,
                                     .ptr = payload.ptr,
                                     .is_initialized = payload.is_initialized,
                                     .rt_var = arg_var,
@@ -366,29 +365,15 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 defer gpa.free(rendered);
                                 try out.appendSlice(rendered);
                             } else {
-                                var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
-                                defer ctx.allocator.free(elem_layouts);
-                                var i: usize = 0;
-                                while (i < arg_vars.len) : (i += 1) {
-                                    const idx = try ctx.layout_store.addTypeVar(arg_vars[i], ctx.type_scope);
-                                    elem_layouts[i] = ctx.layout_store.getLayout(idx);
-                                }
-                                const tuple_idx = try ctx.layout_store.putTuple(elem_layouts);
-                                const tuple_layout = ctx.layout_store.getLayout(tuple_idx);
-                                const tuple_size = ctx.layout_store.layoutSize(tuple_layout);
-                                var tuple_value = StackValue{
-                                    .layout = tuple_layout,
-                                    .ptr = payload.ptr,
-                                    .is_initialized = payload.is_initialized,
-                                    .rt_var = undefined, // not needed - type known from layout
-                                };
+                                // Multiple payloads: use the stored payload layout (should be a tuple)
+                                const tuple_size = ctx.layout_store.layoutSize(payload.layout);
                                 if (tuple_size == 0 or payload.ptr == null) {
                                     var j: usize = 0;
                                     while (j < arg_vars.len) : (j += 1) {
                                         const rendered = try renderValueRocWithType(
                                             ctx,
                                             StackValue{
-                                                .layout = elem_layouts[j],
+                                                .layout = layout.Layout.zst(),
                                                 .ptr = null,
                                                 .is_initialized = true,
                                                 .rt_var = arg_vars[j],
@@ -400,6 +385,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                         if (j + 1 < arg_vars.len) try out.appendSlice(", ");
                                     }
                                 } else {
+                                    var tuple_value = StackValue{
+                                        .layout = payload.layout,
+                                        .ptr = payload.ptr,
+                                        .is_initialized = payload.is_initialized,
+                                        .rt_var = undefined, // not needed - type known from layout
+                                    };
                                     var tup_acc = try tuple_value.asTuple(ctx.layout_store);
                                     var j: usize = 0;
                                     while (j < arg_vars.len) : (j += 1) {
@@ -445,12 +436,15 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         try out.append('(');
                         // Payload is at offset 0
                         const payload_ptr: *anyopaque = @ptrCast(value.ptr.?);
+                        // Get the stored variant layout from the tag union data
+                        // This ensures we use the layout that was actually used when creating the value,
+                        // not a potentially different layout computed from type variables.
+                        const variants = ctx.layout_store.getTagUnionVariants(tu_data);
+                        const stored_payload_layout = ctx.layout_store.getLayout(variants.get(tag_index).payload_layout);
                         if (arg_vars.len == 1) {
                             const arg_var = arg_vars[0];
-                            const layout_idx = try ctx.layout_store.addTypeVar(arg_var, ctx.type_scope);
-                            const arg_layout = ctx.layout_store.getLayout(layout_idx);
                             const payload_value = StackValue{
-                                .layout = arg_layout,
+                                .layout = stored_payload_layout,
                                 .ptr = payload_ptr,
                                 .is_initialized = true,
                                 .rt_var = arg_var,
@@ -459,24 +453,15 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             defer gpa.free(rendered);
                             try out.appendSlice(rendered);
                         } else {
-                            // Multiple payloads: create a tuple layout from arg types
-                            var elem_layouts = try ctx.allocator.alloc(layout.Layout, arg_vars.len);
-                            defer ctx.allocator.free(elem_layouts);
-                            var i: usize = 0;
-                            while (i < arg_vars.len) : (i += 1) {
-                                const idx = try ctx.layout_store.addTypeVar(arg_vars[i], ctx.type_scope);
-                                elem_layouts[i] = ctx.layout_store.getLayout(idx);
-                            }
-                            const tuple_idx = try ctx.layout_store.putTuple(elem_layouts);
-                            const tuple_layout = ctx.layout_store.getLayout(tuple_idx);
-                            const tuple_size = ctx.layout_store.layoutSize(tuple_layout);
+                            // Multiple payloads: use the stored variant layout (should be a tuple)
+                            const tuple_size = ctx.layout_store.layoutSize(stored_payload_layout);
                             if (tuple_size == 0) {
                                 var j: usize = 0;
                                 while (j < arg_vars.len) : (j += 1) {
                                     const rendered = try renderValueRocWithType(
                                         ctx,
                                         StackValue{
-                                            .layout = elem_layouts[j],
+                                            .layout = layout.Layout.zst(),
                                             .ptr = null,
                                             .is_initialized = true,
                                             .rt_var = arg_vars[j],
@@ -489,7 +474,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                 }
                             } else {
                                 const tuple_value = StackValue{
-                                    .layout = tuple_layout,
+                                    .layout = stored_payload_layout,
                                     .ptr = payload_ptr,
                                     .is_initialized = true,
                                     .rt_var = undefined, // not needed - type known from layout
