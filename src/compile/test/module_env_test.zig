@@ -111,9 +111,6 @@ test "ModuleEnv.Serialized roundtrip" {
         .method_idents = deserialized_ptr.method_idents.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
     };
 
-    // Verify the data was preserved
-    // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
-
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
     // ModuleEnv.init() also interns 18 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq

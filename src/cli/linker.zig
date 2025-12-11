@@ -60,7 +60,13 @@ pub const TargetAbi = enum {
     }
 };
 
-/// Configuration for linking operation
+/// Default WASM initial memory: 64MB
+pub const DEFAULT_WASM_INITIAL_MEMORY: usize = 64 * 1024 * 1024;
+
+/// Default WASM stack size: 8MB
+pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// Configuration for the linker, specifying target format, ABI, paths, and linking options.
 pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
@@ -94,6 +100,14 @@ pub const LinkConfig = struct {
 
     /// Whether to disable linker output
     disable_output: bool = false,
+
+    /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
+    /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
+    wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
+
+    /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
+    /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
+    wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
 };
 
 /// Errors that can occur during linking
@@ -282,15 +296,16 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
 
-            // Set initial memory size (64KB pages)
-            // With the interpreter shim embedded, we need ~2.5MB for code + data
-            // Use 4MB to provide room for interpreter, bytecode, and runtime stack
-            try args.append("--initial-memory=4194304");
+            // Set initial memory size (configurable, default 64MB)
+            // Must be a multiple of 64KB (WASM page size)
+            const initial_memory_str = std.fmt.allocPrint(allocs.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
+            try args.append(initial_memory_str);
 
-            // Set stack size to 1MB (default is only 64KB which causes stack overflow
-            // in Debug builds due to larger stack frames from no inlining)
+            // Set stack size (configurable, default 8MB)
+            // Must be a multiple of 16 (stack alignment)
+            const stack_size_str = std.fmt.allocPrint(allocs.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
             try args.append("-z");
-            try args.append("stack-size=1048576");
+            try args.append(stack_size_str);
         },
         else => {
             // Generic ELF linker

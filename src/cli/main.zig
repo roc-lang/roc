@@ -1,6 +1,24 @@
 //! Roc command line interface for the new compiler. Entrypoint of the Roc binary.
 //! Build with `zig build -Dfuzz -Dsystem-afl=false`.
 //! Result is at `./zig-out/bin/roc`
+//!
+//! ## Module Data Modes
+//!
+//! The CLI supports two modes for passing compiled Roc modules to the interpreter:
+//!
+//! ### IPC Mode (`roc path/to/app.roc`)
+//! - Compiles Roc source to ModuleEnv in shared memory
+//! - Spawns interpreter host as child process that maps the shared memory
+//! - Fast startup, same-architecture only
+//! - See: `setupSharedMemoryWithModuleEnv`, `rocRun`
+//!
+//! ### Embedded Mode (`roc build path/to/app.roc`)
+//! - Serializes ModuleEnv to portable binary format
+//! - Embeds serialized data directly into output binary
+//! - Cross-architecture support, standalone executables
+//! - See: `compileAndSerializeModulesForEmbedding`, `rocBuild`
+//!
+//! For detailed documentation, see `src/interpreter_shim/README.md`.
 
 const std = @import("std");
 
@@ -74,45 +92,10 @@ const TestOpsEnv = eval.TestOpsEnv;
 const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 
-/// Magic number for serialized embedded format: "RSER" (Roc Serialized)
-const SERIALIZED_FORMAT_MAGIC: u32 = 0x52534552;
-
-/// Header for the serialized embedded format.
-/// This format uses ModuleEnv.Serialized with fixed-size fields for cross-architecture support.
-/// The magic number distinguishes it from the legacy raw format.
-const SerializedHeader = extern struct {
-    /// Magic number: 0x52534552 ("RSER") identifies this as serialized format
-    magic: u32,
-    /// Format version (currently 1)
-    format_version: u32,
-    /// Number of modules
-    module_count: u32,
-    /// Number of entry points
-    entry_count: u32,
-    /// Index of primary environment (platform main or app)
-    primary_env_index: u32,
-    /// Index of app environment
-    app_env_index: u32,
-    /// Offset to entry point def indices array (relative to buffer start)
-    def_indices_offset: u64,
-    /// Offset to module info array (relative to buffer start)
-    module_infos_offset: u64,
-};
-
-/// Info for each serialized module.
-/// Stored in an array after the header.
-const SerializedModuleInfo = extern struct {
-    /// Offset to source bytes (relative to buffer start)
-    source_offset: u64,
-    /// Length of source bytes
-    source_len: u64,
-    /// Offset to module name string (relative to buffer start)
-    module_name_offset: u64,
-    /// Length of module name string
-    module_name_len: u64,
-    /// Offset to ModuleEnv.Serialized struct (relative to buffer start)
-    env_serialized_offset: u64,
-};
+// Import serialization types from the shared module
+const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
+const SerializedHeader = collections.SerializedHeader;
+const SerializedModuleInfo = collections.SerializedModuleInfo;
 
 /// Embedded interpreter shim libraries for different targets.
 /// The native shim is used for roc run and native builds.
@@ -669,7 +652,7 @@ pub fn main() !void {
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
-        if (builtin.os.tag == .wasi) break :gpa .{ std.heap.wasm_allocator, false };
+        if (builtin.os.tag == .freestanding) break :gpa .{ std.heap.wasm_allocator, false };
         break :gpa switch (builtin.mode) {
             .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
             .ReleaseFast, .ReleaseSmall => .{ std.heap.c_allocator, false },
@@ -1638,8 +1621,9 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // - Relative paths (./...) -> join with app directory
     // - URL paths (http/https) -> resolve to cached package main.roc
     // - Other paths -> null (not supported)
+    // Note: All paths use arena allocator so no manual freeing is needed.
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, platform_spec })
+        try std.fs.path.join(allocs.arena, &[_][]const u8{ app_dir, platform_spec })
     else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
         // URL platform - resolve to cached package path
         const platform_paths = resolveUrlPlatform(allocs, platform_spec) catch {
@@ -1647,12 +1631,6 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         };
         break :blk platform_paths.platform_source_path;
     } else null;
-    defer if (platform_main_path) |p| {
-        // Only free if it was allocated by join (not arena-allocated from resolveUrlPlatform)
-        if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../")) {
-            allocs.gpa.free(p);
-        }
-    };
 
     // Get the platform directory from the resolved path
     const platform_dir: ?[]const u8 = if (platform_main_path) |p|
@@ -2246,6 +2224,8 @@ const CompiledModule = struct {
     module_name: []const u8,
     is_platform_main: bool,
     is_app: bool,
+    /// Number of errors found during compilation (from parsing, canonicalization, type checking)
+    error_count: usize,
 };
 
 /// Result of compiling and serializing modules for embedding.
@@ -2254,6 +2234,8 @@ const SerializedModulesResult = struct {
     bytes: []align(16) u8,
     /// Entry point definition indices
     entry_def_indices: []const u32,
+    /// Number of compilation errors encountered
+    error_count: usize,
 };
 
 /// Compile a single module to a ModuleEnv using a regular allocator.
@@ -2345,12 +2327,22 @@ fn compileModuleForSerialization(
 
     try checker.checkFile();
 
+    // Count errors from parsing, canonicalization, and type checking
+    var error_count: usize = 0;
+
+    // Count parse errors
+    error_count += parse_ast.parse_diagnostics.items.len;
+
+    // Count type checker problems
+    error_count += checker.problems.len();
+
     return CompiledModule{
         .env = env,
         .source = source,
         .module_name = module_name_copy,
         .is_platform_main = false,
         .is_app = false,
+        .error_count = error_count,
     };
 }
 
@@ -2361,7 +2353,8 @@ fn compileAndSerializeModulesForEmbedding(
     roc_file_path: []const u8,
     allow_errors: bool,
 ) !SerializedModulesResult {
-    _ = allow_errors; // TODO: handle errors
+    // Track total errors across all modules
+    var total_error_count: usize = 0;
 
     // Load builtin modules
     var builtin_modules = try eval.BuiltinModules.init(allocs.gpa);
@@ -2432,6 +2425,7 @@ fn compileAndSerializeModulesForEmbedding(
             &builtin_modules,
             &.{},
         );
+        total_error_count += compiled.error_count;
         try compiled_modules.append(compiled);
     }
 
@@ -2452,6 +2446,7 @@ fn compileAndSerializeModulesForEmbedding(
             platform_env_ptrs,
         );
         compiled.is_platform_main = true;
+        total_error_count += compiled.error_count;
         primary_env_index = @intCast(compiled_modules.items.len);
         try compiled_modules.append(compiled);
     }
@@ -2472,11 +2467,17 @@ fn compileAndSerializeModulesForEmbedding(
             all_env_ptrs,
         );
         compiled.is_app = true;
+        total_error_count += compiled.error_count;
         app_env_index = @intCast(compiled_modules.items.len);
         if (!has_platform) {
             primary_env_index = app_env_index;
         }
         try compiled_modules.append(compiled);
+    }
+
+    // Check for errors - abort unless --allow-errors flag is set
+    if (total_error_count > 0 and !allow_errors) {
+        return error.CompilationErrors;
     }
 
     // Get entry points from primary environment
@@ -2580,6 +2581,7 @@ fn compileAndSerializeModulesForEmbedding(
     return SerializedModulesResult{
         .bytes = buffer,
         .entry_def_indices = entry_def_indices,
+        .error_count = total_error_count,
     };
 }
 
@@ -3644,6 +3646,8 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         .target_abi = target_abi,
         .target_os = target.toOsTag(),
         .target_arch = target.toCpuArch(),
+        .wasm_initial_memory = args.wasm_memory orelse linker_mod.DEFAULT_WASM_INITIAL_MEMORY,
+        .wasm_stack_size = args.wasm_stack_size orelse linker_mod.DEFAULT_WASM_STACK_SIZE,
     };
 
     try linker_mod.link(allocs, link_config);

@@ -19,9 +19,18 @@ const eval = @import("eval");
 const is_wasm32 = builtin.cpu.arch == .wasm32;
 
 // IPC module only available on native platforms (not wasm32)
+// On wasm32, we provide stub types that produce clear compile errors if used.
 const ipc = if (is_wasm32) struct {
-    // Stub for wasm32 - IPC not supported
-    pub const SharedMemoryAllocator = struct {};
+    /// IPC is not available on wasm32 - modules must be embedded at compile time.
+    /// Use `roc build` to create standalone WASM binaries with embedded modules.
+    pub const SharedMemoryAllocator = struct {
+        pub fn create(_: usize, _: usize) @This() {
+            @compileError("IPC/SharedMemory is not supported on wasm32. Use embedded mode via `roc build`.");
+        }
+        pub fn fromCoordination(_: anytype, _: usize) @This() {
+            @compileError("IPC/SharedMemory is not supported on wasm32. Use embedded mode via `roc build`.");
+        }
+    };
 } else @import("ipc");
 
 // Allocator: wasm32 uses a simple arena, native uses page_allocator
@@ -68,6 +77,52 @@ var shim_import_mapping = import_mapping_mod.ImportMapping.init(default_allocato
 
 const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllocator;
 
+/// Thread-safe initialization flag with unified interface.
+/// On wasm32: simple bool (single-threaded environment)
+/// On native: atomic with proper memory ordering for multi-threaded safety
+const InitializationFlag = struct {
+    inner: if (is_wasm32) bool else std.atomic.Value(bool),
+
+    const Self = @This();
+
+    pub fn init() Self {
+        return .{ .inner = if (is_wasm32) false else std.atomic.Value(bool).init(false) };
+    }
+
+    pub fn isSet(self: *const Self) bool {
+        return if (is_wasm32) self.inner else self.inner.load(.acquire);
+    }
+
+    pub fn set(self: *Self) void {
+        if (is_wasm32) {
+            self.inner = true;
+        } else {
+            self.inner.store(true, .release);
+        }
+    }
+};
+
+/// Platform-appropriate mutex with unified interface.
+/// On wasm32: no-op (single-threaded environment)
+/// On native: actual mutex for thread safety
+const PlatformMutex = struct {
+    inner: if (is_wasm32) void else std.Thread.Mutex,
+
+    const Self = @This();
+
+    pub fn init() Self {
+        return .{ .inner = if (is_wasm32) {} else .{} };
+    }
+
+    pub fn lock(self: *Self) void {
+        if (!is_wasm32) self.inner.lock();
+    }
+
+    pub fn unlock(self: *Self) void {
+        if (!is_wasm32) self.inner.unlock();
+    }
+};
+
 // Global base pointer for the serialized header + env.
 // Is a weak extern that can be overwritten by `roc build` when embedding module data.
 // If null at runtime, we're in IPC mode (roc run) and read from shared memory.
@@ -76,18 +131,14 @@ extern var roc__serialized_base_ptr: ?[*]align(1) u8;
 extern var roc__serialized_size: usize;
 
 // Global state for shared memory - initialized once per process
-// For wasm32: No threading, so simple bool instead of atomic
-var shared_memory_initialized: if (is_wasm32) bool else std.atomic.Value(bool) =
-    if (is_wasm32) false else std.atomic.Value(bool).init(false);
+var shared_memory_initialized = InitializationFlag.init();
 var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32)
 {} else null;
 var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (platform or app)
 var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
-// For wasm32: No threading, so no mutex needed
-var shm_mutex: if (is_wasm32) void else std.Thread.Mutex = if (is_wasm32)
-{} else .{};
+var shm_mutex = PlatformMutex.init();
 
 // Cached header info (set during initialization, used for evaluation)
 var global_entry_count: u32 = 0;
@@ -116,31 +167,10 @@ const Header = struct {
     app_env_offset: u64, // Always present, used for e_lookup_required resolution
 };
 
-/// Magic number for portable serialized format: "RSER" (Roc Serialized)
-/// Used to detect cross-architecture builds that use ModuleEnv.Serialized
-const SERIALIZED_FORMAT_MAGIC: u32 = 0x52534552;
-
-/// Header for portable serialized format (cross-architecture builds)
-/// Uses fixed-size types for platform independence
-const SerializedHeader = extern struct {
-    magic: u32,
-    format_version: u32,
-    module_count: u32,
-    entry_count: u32,
-    primary_env_index: u32,
-    app_env_index: u32,
-    def_indices_offset: u64,
-    module_infos_offset: u64,
-};
-
-/// Info for each module in portable serialized format
-const SerializedModuleInfo = extern struct {
-    source_offset: u64,
-    source_len: u64,
-    module_name_offset: u64,
-    module_name_len: u64,
-    env_serialized_offset: u64,
-};
+// Import serialization types from the shared module
+const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
+const SerializedHeader = collections.SerializedHeader;
+const SerializedModuleInfo = collections.SerializedModuleInfo;
 
 /// Comprehensive error handling for the shim
 const ShimError = error{
@@ -179,23 +209,14 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
 /// Initialize shared memory and ModuleEnv once per process
 fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     // Fast path: if already initialized, return immediately
-    if (is_wasm32) {
-        if (shared_memory_initialized) return;
-    } else {
-        if (shared_memory_initialized.load(.acquire)) return;
-    }
+    if (shared_memory_initialized.isSet()) return;
 
     // Slow path: acquire mutex and check again (double-checked locking)
-    // For wasm32: no threading, so no mutex needed
-    if (!is_wasm32) {
-        shm_mutex.lock();
-    }
-    defer if (!is_wasm32) shm_mutex.unlock();
+    shm_mutex.lock();
+    defer shm_mutex.unlock();
 
     // Check again in case another thread initialized while we were waiting
-    if (!is_wasm32) {
-        if (shared_memory_initialized.load(.acquire)) return;
-    }
+    if (shared_memory_initialized.isSet()) return;
 
     const allocator = default_allocator;
     var buf: [256]u8 = undefined;
@@ -249,13 +270,8 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     global_app_env_ptr = setup_result.app_env;
     global_builtin_modules = builtin_modules;
 
-    // Mark as initialized
-    if (is_wasm32) {
-        shared_memory_initialized = true;
-    } else {
-        // release semantics ensure all writes above are visible
-        shared_memory_initialized.store(true, .release);
-    }
+    // Mark as initialized (release semantics ensure all writes above are visible)
+    shared_memory_initialized.set();
 }
 
 /// Cross-platform evaluation (works for both IPC and embedded modes)

@@ -13,8 +13,8 @@
 //!
 //! ## Memory Management
 //!
-//! Uses a simple bump allocator for WASM linear memory. Memory is allocated
-//! from the end of the data section and grows upward.
+//! Uses Zig's standard WASM allocator for proper memory management with
+//! deallocation and reallocation support.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -34,82 +34,66 @@ extern "env" fn roc_panic(ptr: [*]const u8, len: usize) noreturn;
 extern "env" fn roc_dbg(ptr: [*]const u8, len: usize) void;
 extern "env" fn roc_expect_failed(ptr: [*]const u8, len: usize) void;
 
-// Bump allocator state
-var heap_ptr: usize = 0;
-var heap_end: usize = 0;
-
-// Initialize heap from __heap_base symbol (provided by wasm-ld)
-extern var __heap_base: u8;
-
-fn initHeap() void {
-    if (heap_ptr == 0) {
-        heap_ptr = @intFromPtr(&__heap_base);
-        // Start with 64KB of heap, can grow via memory.grow
-        heap_end = heap_ptr + 65536;
-    }
-}
-
-fn bumpAlloc(size: usize, alignment: usize) ?[*]u8 {
-    initHeap();
-
-    // Align the heap pointer
-    const aligned_ptr = (heap_ptr + alignment - 1) & ~(alignment - 1);
-    const new_heap_ptr = aligned_ptr + size;
-
-    // Check if we need to grow memory
-    if (new_heap_ptr > heap_end) {
-        const pages_needed = (new_heap_ptr - heap_end + 65535) / 65536;
-        const result = @wasmMemoryGrow(0, pages_needed);
-        if (result == -1) {
-            return null; // Out of memory
-        }
-        heap_end += pages_needed * 65536;
-    }
-
-    heap_ptr = new_heap_ptr;
-    return @ptrFromInt(aligned_ptr);
-}
+// Use Zig's standard WASM allocator for proper memory management
+const wasm_allocator = std.heap.wasm_allocator;
 
 // Direct exports for the interpreter shim's memory allocation
 // (The interpreter shim's wasmAlloc calls these directly)
 export fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
-    return @ptrCast(bumpAlloc(size, alignment));
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
+    const result = wasm_allocator.rawAlloc(size, align_log2, @returnAddress());
+    return @ptrCast(result);
 }
 
-export fn roc_dealloc(_: *anyopaque, _: u32) callconv(.c) void {
-    // Bump allocator doesn't free individual allocations
+export fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void {
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
+    // WasmAllocator tracks size via size classes, but we need to pass something for rawFree
+    // Use 0 as the size since WasmAllocator doesn't actually need it for deallocation
+    const slice_ptr: [*]u8 = @ptrCast(ptr);
+    wasm_allocator.rawFree(slice_ptr[0..0], align_log2, @returnAddress());
 }
 
-export fn roc_realloc(ptr: *anyopaque, new_size: usize, _: usize, alignment: u32) callconv(.c) ?*anyopaque {
-    // Simple realloc: allocate new, don't copy (bump allocator limitation)
-    _ = ptr;
-    return @ptrCast(bumpAlloc(new_size, alignment));
+export fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
+    // For WASM, we need to alloc new, copy, and free old since rawRealloc may not be available
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
+    const slice_ptr: [*]u8 = @ptrCast(ptr);
+
+    // Allocate new memory
+    const new_ptr = wasm_allocator.rawAlloc(new_size, align_log2, @returnAddress()) orelse return null;
+
+    // Copy old data
+    const copy_size = @min(old_size, new_size);
+    @memcpy(new_ptr[0..copy_size], slice_ptr[0..copy_size]);
+
+    // Free old memory
+    wasm_allocator.rawFree(slice_ptr[0..old_size], align_log2, @returnAddress());
+
+    return @ptrCast(new_ptr);
 }
 
 // RocOps callback implementations
 
 fn rocAllocFn(alloc_req: *RocAlloc, env: *anyopaque) callconv(.c) void {
     _ = env;
-    const ptr = bumpAlloc(alloc_req.length, alloc_req.alignment);
-    alloc_req.answer = @ptrCast(ptr);
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alloc_req.alignment));
+    const ptr = wasm_allocator.rawAlloc(alloc_req.length, align_log2, @returnAddress());
+    alloc_req.answer = @ptrCast(ptr orelse @panic("WASM allocation failed"));
 }
 
 fn rocDeallocFn(dealloc_req: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    // Bump allocator doesn't free individual allocations
-    _ = dealloc_req;
     _ = env;
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, dealloc_req.alignment));
+    const slice_ptr: [*]u8 = @ptrCast(dealloc_req.ptr);
+    wasm_allocator.rawFree(slice_ptr[0..0], align_log2, @returnAddress());
 }
 
 fn rocReallocFn(realloc_req: *RocRealloc, env: *anyopaque) callconv(.c) void {
     _ = env;
-    // Simple realloc: just allocate new memory
-    // For a bump allocator, we can't efficiently realloc - just allocate new
-    // Note: old data is NOT copied since we don't know the old length
-    // The caller is expected to handle this or use a more sophisticated allocator
-    const new_ptr = bumpAlloc(realloc_req.new_length, realloc_req.alignment);
-    if (new_ptr) |ptr| {
-        realloc_req.answer = @ptrCast(ptr);
-    }
+    // RocRealloc doesn't provide the old pointer or size - this is an allocation-only operation
+    // Just allocate new memory
+    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, realloc_req.alignment));
+    const ptr = wasm_allocator.rawAlloc(realloc_req.new_length, align_log2, @returnAddress());
+    realloc_req.answer = @ptrCast(ptr orelse @panic("WASM reallocation failed"));
 }
 
 fn rocDbgFn(roc_dbg_arg: *const RocDbg, env: *anyopaque) callconv(.c) void {
@@ -168,10 +152,4 @@ export fn wasm_main() [*]const u8 {
 /// Get the length of the result string from the last wasm_main() call
 export fn wasm_result_len() usize {
     return last_result.len();
-}
-
-/// Get heap usage for debugging
-export fn wasm_heap_used() usize {
-    initHeap();
-    return heap_ptr - @intFromPtr(&__heap_base);
 }

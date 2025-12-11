@@ -21,7 +21,6 @@ const CompactWriter = collections.CompactWriter;
 const CommonEnv = @This();
 
 idents: Ident.Store,
-// ident_ids_for_slicing: SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,

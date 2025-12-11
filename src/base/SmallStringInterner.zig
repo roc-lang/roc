@@ -200,20 +200,6 @@ pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
     const bytes_slice = self.bytes.items.items;
     const start = @intFromEnum(idx);
-
-    // Debug: check bounds before access on wasm32
-    const std_builtin = @import("builtin");
-    if (std_builtin.cpu.arch == .wasm32 and std_builtin.mode == .Debug) {
-        const ptr_addr = @intFromPtr(bytes_slice.ptr);
-        const ptr_len = bytes_slice.len;
-        if (start >= ptr_len) {
-            @panic("getText: idx >= len");
-        }
-        if (ptr_addr == 0 or ptr_addr > 0x10000000) {
-            @panic("getText: bytes.ptr invalid");
-        }
-    }
-
     return std.mem.sliceTo(bytes_slice[start..], 0);
 }
 
@@ -289,11 +275,7 @@ pub const Serialized = extern struct {
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
         const interner = @as(*SmallStringInterner, @ptrCast(self));
 
-        // Read values from Serialized BEFORE any writes
-        const bytes_serialized_offset = self.bytes.offset;
-        const bytes_serialized_len = self.bytes.len;
-        const hash_table_serialized_offset = self.hash_table.offset;
-        const hash_table_serialized_len = self.hash_table.len;
+        // Read values from Serialized BEFORE any writes (required for in-place deserialization)
         const saved_entry_count = self.entry_count;
 
         // Now deserialize (which does in-place writes)
@@ -307,27 +289,6 @@ pub const Serialized = extern struct {
             // Debug-only: mark as not supporting inserts - deserialized interners should never need new idents
             .supports_inserts = if (std.debug.runtime_safety) false else {},
         };
-
-        // Debug: verify the deserialized values look reasonable
-        const builtin = @import("builtin");
-        if (builtin.cpu.arch == .wasm32 and builtin.mode == .Debug) {
-            const bytes_ptr = @intFromPtr(interner.bytes.items.items.ptr);
-            const expected_bytes_ptr = @as(usize, @intCast(bytes_serialized_offset + offset));
-            if (bytes_ptr != expected_bytes_ptr) {
-                @panic("SmallStringInterner deserialize: bytes ptr mismatch!");
-            }
-            if (interner.bytes.items.items.len != @as(usize, @intCast(bytes_serialized_len))) {
-                @panic("SmallStringInterner deserialize: bytes len mismatch!");
-            }
-            const hash_table_ptr = @intFromPtr(interner.hash_table.items.items.ptr);
-            const expected_hash_ptr = @as(usize, @intCast(hash_table_serialized_offset + offset));
-            if (hash_table_ptr != expected_hash_ptr) {
-                @panic("SmallStringInterner deserialize: hash_table ptr mismatch!");
-            }
-            if (interner.hash_table.items.items.len != @as(usize, @intCast(hash_table_serialized_len))) {
-                @panic("SmallStringInterner deserialize: hash_table len mismatch!");
-            }
-        }
 
         return interner;
     }

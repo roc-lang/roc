@@ -1230,6 +1230,7 @@ pub fn build(b: *std.Build) void {
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
 
@@ -1592,6 +1593,31 @@ pub fn build(b: *std.Build) void {
         serialization_size_step.dependOn(&size_check_native.step);
         serialization_size_step.dependOn(&size_check_wasm32.step);
         serialization_size_step.dependOn(&run_native.step);
+    }
+
+    // Build WASM static library test runner with bytebox
+    // This test requires the WASM file to be built separately via `roc build test/wasm/app.roc --target=wasm32`
+    {
+        const wasm_test_exe = b.addExecutable(.{
+            .name = "wasm_static_lib_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/wasm/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_test_exe, target);
+        wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+
+        const install = b.addInstallArtifact(wasm_test_exe, .{});
+        wasm_static_lib_test_step.dependOn(&install.step);
+
+        const run_wasm_test = b.addRunArtifact(wasm_test_exe);
+        if (run_args.len != 0) {
+            run_wasm_test.addArgs(run_args);
+        }
+        run_wasm_test.step.dependOn(&install.step);
+        wasm_static_lib_test_step.dependOn(&run_wasm_test.step);
     }
 
     // Check fx platform test coverage convenience step
