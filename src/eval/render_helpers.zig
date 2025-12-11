@@ -84,6 +84,143 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                             }
                         }
                     }
+                    // Special handling for Box before unwrapping
+                    if (nt.ident.ident_idx == ctx.env.idents.box) {
+                        // Use sliceNominalArgs which skips the backing var (first element)
+                        const arg_vars = ctx.runtime_types.sliceNominalArgs(nt);
+                        if (arg_vars.len != 1) {
+                            return error.TypeMismatch;
+                        }
+                        const payload_var = arg_vars[0];
+
+                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                        errdefer out.deinit();
+                        try out.appendSlice("Box(");
+
+                        const payload_layout_idx = try ctx.layout_store.addTypeVar(payload_var, ctx.type_scope);
+                        const payload_layout = ctx.layout_store.getLayout(payload_layout_idx);
+                        const payload_size = ctx.layout_store.layoutSize(payload_layout);
+
+                        var payload_value = StackValue{
+                            .layout = payload_layout,
+                            .ptr = null,
+                            .is_initialized = true,
+                            .rt_var = payload_var,
+                        };
+
+                        switch (value.layout.tag) {
+                            .box => {
+                                const elem_layout = ctx.layout_store.getLayout(value.layout.data.box);
+                                const data_ptr_opt = value.boxDataPointer() orelse return error.TypeMismatch;
+                                if (!std.meta.eql(elem_layout, payload_layout)) {
+                                    return error.TypeMismatch;
+                                }
+                                if (payload_size > 0) {
+                                    payload_value.ptr = @as(*anyopaque, @ptrFromInt(@intFromPtr(data_ptr_opt)));
+                                }
+                                const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
+                                defer gpa.free(rendered_payload);
+                                try out.appendSlice(rendered_payload);
+                            },
+                            .box_of_zst => {
+                                if (payload_size != 0) return error.TypeMismatch;
+                                const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
+                                defer gpa.free(rendered_payload);
+                                try out.appendSlice(rendered_payload);
+                            },
+                            .scalar => {
+                                // Box might be stored as a scalar opaque_ptr when inside other structures
+                                // Try to interpret it as a pointer to boxed data
+                                if (value.layout.data.scalar.tag == .opaque_ptr and payload_size > 0) {
+                                    if (value.ptr) |ptr| {
+                                        const data_ptr: *usize = @ptrCast(@alignCast(ptr));
+                                        payload_value.ptr = @as(*anyopaque, @ptrFromInt(data_ptr.*));
+                                        const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
+                                        defer gpa.free(rendered_payload);
+                                        try out.appendSlice(rendered_payload);
+                                    } else {
+                                        try out.appendSlice("<null>");
+                                    }
+                                } else {
+                                    try out.appendSlice("<unsupported>");
+                                }
+                            },
+                            else => {
+                                // Fallback - render as unsupported
+                                try out.appendSlice("<unsupported>");
+                            },
+                        }
+
+                        try out.append(')');
+                        return out.toOwnedSlice();
+                    }
+                    // Special handling for List before unwrapping - render with element type info
+                    if (nt.ident.ident_idx == ctx.env.idents.list) {
+                        // Use sliceNominalArgs which skips the backing var (first element)
+                        const arg_vars = ctx.runtime_types.sliceNominalArgs(nt);
+                        if (arg_vars.len != 1) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Get element type from List's type argument
+                        const elem_type_var = arg_vars[0];
+
+                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                        errdefer out.deinit();
+                        try out.append('[');
+
+                        // Handle list layout
+                        if (value.layout.tag == .list) {
+                            const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
+                            const len = roc_list.len();
+                            if (len > 0) {
+                                const elem_layout_idx = value.layout.data.list;
+                                const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
+                                const elem_size = ctx.layout_store.layoutSize(elem_layout);
+                                var i: usize = 0;
+                                while (i < len) : (i += 1) {
+                                    if (roc_list.bytes) |bytes| {
+                                        const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
+                                        const elem_val = StackValue{
+                                            .layout = elem_layout,
+                                            .ptr = elem_ptr,
+                                            .is_initialized = true,
+                                            .rt_var = elem_type_var,
+                                        };
+                                        // Use layout-based rendering since type info may be unreliable
+                                        const rendered = try renderValueRoc(ctx, elem_val);
+                                        defer gpa.free(rendered);
+                                        try out.appendSlice(rendered);
+                                        if (i + 1 < len) try out.appendSlice(", ");
+                                    }
+                                }
+                            }
+                        } else if (value.layout.tag == .list_of_zst) {
+                            // list_of_zst - elements have no data, just render count if non-empty
+                            const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
+                            const len = roc_list.len();
+                            if (len > 0) {
+                                // For ZST lists, render each element using type info
+                                const elem_layout = layout.Layout.zst();
+                                var i: usize = 0;
+                                while (i < len) : (i += 1) {
+                                    const elem_val = StackValue{
+                                        .layout = elem_layout,
+                                        .ptr = null,
+                                        .is_initialized = true,
+                                        .rt_var = elem_type_var,
+                                    };
+                                    const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
+                                    defer gpa.free(rendered);
+                                    try out.appendSlice(rendered);
+                                    if (i + 1 < len) try out.appendSlice(", ");
+                                }
+                            }
+                        }
+
+                        try out.append(']');
+                        return out.toOwnedSlice();
+                    }
                     // No custom to_inspect, unwrap to backing type
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);
@@ -375,55 +512,6 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             }
         },
-        .nominal_type => |nominal| {
-            if (nominal.ident.ident_idx == ctx.env.idents.box) {
-                const args_range = nominal.vars;
-                const arg_vars = ctx.runtime_types.sliceVars(toVarRange(args_range));
-                if (arg_vars.len != 1) return error.TypeMismatch;
-                const payload_var = arg_vars[0];
-
-                var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-                errdefer out.deinit();
-                try out.appendSlice("Box(");
-
-                const payload_layout_idx = try ctx.layout_store.addTypeVar(payload_var, ctx.type_scope);
-                const payload_layout = ctx.layout_store.getLayout(payload_layout_idx);
-                const payload_size = ctx.layout_store.layoutSize(payload_layout);
-
-                var payload_value = StackValue{
-                    .layout = payload_layout,
-                    .ptr = null,
-                    .is_initialized = true,
-                    .rt_var = payload_var,
-                };
-
-                switch (value.layout.tag) {
-                    .box => {
-                        const elem_layout = ctx.layout_store.getLayout(value.layout.data.box);
-                        const data_ptr_opt = value.boxDataPointer() orelse return error.TypeMismatch;
-                        if (!std.meta.eql(elem_layout, payload_layout)) {
-                            return error.TypeMismatch;
-                        }
-                        if (payload_size > 0) {
-                            payload_value.ptr = @as(*anyopaque, @ptrFromInt(@intFromPtr(data_ptr_opt)));
-                        }
-                        const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
-                        defer gpa.free(rendered_payload);
-                        try out.appendSlice(rendered_payload);
-                    },
-                    .box_of_zst => {
-                        if (payload_size != 0) return error.TypeMismatch;
-                        const rendered_payload = try renderValueRocWithType(ctx, payload_value, payload_var);
-                        defer gpa.free(rendered_payload);
-                        try out.appendSlice(rendered_payload);
-                    },
-                    else => return error.TypeMismatch,
-                }
-
-                try out.append(')');
-                return out.toOwnedSlice();
-            }
-        },
         .record => |rec| {
             // Gather all record fields by following the extension chain
             var all_fields = std.array_list.AlignedManaged(types.RecordField, null).init(gpa);
@@ -486,7 +574,14 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 try out.appendSlice(" }");
                 return out.toOwnedSlice();
             }
+            // Handle empty records (zero fields)
+            if (is_valid and all_fields.items.len == 0) {
+                return try gpa.dupe(u8, "{}");
+            }
             // Fall through to renderValueRoc which can use layout info
+        },
+        .empty_record => {
+            return try gpa.dupe(u8, "{}");
         },
         .fn_pure, .fn_effectful, .fn_unbound => {
             return try gpa.dupe(u8, "<function>");
@@ -624,6 +719,51 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         try out.appendSlice(" }");
         return out.toOwnedSlice();
     }
+    if (value.layout.tag == .box) {
+        // Layout-only Box rendering: we know it's a Box from layout but don't have type info
+        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+        errdefer out.deinit();
+        try out.appendSlice("Box(");
+
+        // Get the element layout and render the boxed value
+        const elem_layout_idx = value.layout.data.box;
+        const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
+        const elem_size = ctx.layout_store.layoutSize(elem_layout);
+
+        if (elem_size > 0) {
+            if (value.boxDataPointer()) |data_ptr| {
+                const elem_val = StackValue{
+                    .layout = elem_layout,
+                    .ptr = @ptrCast(data_ptr),
+                    .is_initialized = true,
+                    .rt_var = undefined,
+                };
+                const rendered = try renderValueRoc(ctx, elem_val);
+                defer gpa.free(rendered);
+                try out.appendSlice(rendered);
+            } else {
+                try out.appendSlice("<null>");
+            }
+        } else {
+            // Zero-sized element
+            const elem_val = StackValue{
+                .layout = elem_layout,
+                .ptr = null,
+                .is_initialized = true,
+                .rt_var = undefined,
+            };
+            const rendered = try renderValueRoc(ctx, elem_val);
+            defer gpa.free(rendered);
+            try out.appendSlice(rendered);
+        }
+
+        try out.append(')');
+        return out.toOwnedSlice();
+    }
+    if (value.layout.tag == .box_of_zst) {
+        // Box of zero-sized type - render as Box({}) or similar
+        return try gpa.dupe(u8, "Box({})");
+    }
     if (value.layout.tag == .tag_union) {
         // Layout-only fallback for tag_union: show discriminant and raw payload
         const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
@@ -645,7 +785,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         }
         return out.toOwnedSlice();
     }
-    return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
+    return try gpa.dupe(u8, "<unsupported>");
 }
 
 fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
