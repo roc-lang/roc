@@ -1085,24 +1085,15 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "external platform memory alignment regression" {
-    // NOTE: This test is SKIPPED because it exposes a bug in an EXTERNAL platform
-    // (roc-platform-template-zig), not in the Roc compiler.
-    //
-    // The bug: External platform's rocDeallocFn uses `roc_dealloc.alignment` directly
-    // instead of `@max(roc_dealloc.alignment, @alignOf(usize))`. This causes memory
-    // allocated with alignment 8 to be freed with alignment 1 when Roc passes small
-    // alignment values for certain data types.
-    //
-    // The fix: The external platform needs to update its host.zig to match the local
-    // platform's allocation pattern:
-    //   const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
-    //   const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    //
-    // This test is kept to document the issue. When the external platform is fixed,
-    // this test should pass without modification.
-    //
-    // Error message: "error(gpa): Allocation alignment 8 does not match free alignment 1"
-    //
-    // To run this test manually once the external platform is fixed, remove this return:
-    return error.SkipZigTest;
+    // This test verifies that external platforms with the memory alignment fix work correctly.
+    // The bug was in roc-platform-template-zig < 0.6 where rocDeallocFn used
+    // `roc_dealloc.alignment` directly instead of `@max(roc_dealloc.alignment, @alignOf(usize))`.
+    // Fixed in https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/tag/0.6
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "aoc_day2.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
 }
