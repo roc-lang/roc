@@ -1091,7 +1091,7 @@ test "external platform memory alignment regression" {
     // Fixed in https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/tag/0.6
     const allocator = testing.allocator;
 
-    const run_result = try runRoc(allocator, "aoc_day2.roc", .{});
+    const run_result = try runRoc(allocator, "test/fx/aoc_day2.roc", .{});
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
