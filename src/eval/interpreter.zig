@@ -6865,18 +6865,23 @@ pub const Interpreter = struct {
             .box => {
                 // Get the expected element layout from the box type
                 const expected_elem_layout = self.runtime_layout_store.getLayout(result_layout.data.box);
+                const target_usize = self.runtime_layout_store.targetUsize();
 
                 // Use the payload's layout if it matches semantically.
                 // The type system guarantees type compatibility, but layouts might be stored
                 // at different indices even for identical structures (e.g., records created
                 // at different times). We trust the type system and use the payload's layout
-                // for the allocation, but verify basic compatibility (tag must match).
-                const elem_layout = if (expected_elem_layout.tag == payload.layout.tag)
-                    payload.layout
-                else
-                    expected_elem_layout;
-
-                const target_usize = self.runtime_layout_store.targetUsize();
+                // for the allocation, but verify both tag and size match for defense-in-depth.
+                const elem_layout = blk: {
+                    if (expected_elem_layout.tag == payload.layout.tag) {
+                        const expected_size = self.runtime_layout_store.layoutSize(expected_elem_layout);
+                        const payload_size = self.runtime_layout_store.layoutSize(payload.layout);
+                        if (expected_size == payload_size) {
+                            break :blk payload.layout;
+                        }
+                    }
+                    break :blk expected_elem_layout;
+                };
                 const elem_alignment = elem_layout.alignment(target_usize).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
                 const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
