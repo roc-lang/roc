@@ -3570,6 +3570,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
             }
         },
+        .e_type_var_dispatch => |tvd| {
+            // Type variable dispatch expression: Thing.method(args) where Thing is a type var alias.
+            // For now, check the arguments and leave expr_var as a flex var.
+            // Full resolution of the method will be implemented in a future phase.
+            for (self.cir.store.exprSlice(tvd.args)) |arg_idx| {
+                does_fx = try self.checkExpr(arg_idx, env, .no_expectation) or does_fx;
+            }
+            // The type of this expression depends on what the type variable resolves to.
+            // For now, leave it as a flex var - it will be unified with expected below.
+        },
         .e_runtime_error => {
             try self.unifyWith(expr_var, .err, env);
         },
@@ -3874,6 +3884,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // These are only valid at the top level, czer reports error
                 try self.unifyWith(stmt_var, .err, env);
             },
+            .s_type_var_alias => {
+                // Type var alias introduces no new constraints during type checking
+                // The alias is already registered in scope by canonicalization
+                // The type var it references is a rigid var from the enclosing function
+                try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+            },
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, env);
             },
@@ -3965,7 +3981,7 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
-        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_runtime_error => {},
+        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
     }
 }
 

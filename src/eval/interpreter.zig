@@ -10141,6 +10141,13 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
 
+            .e_type_var_dispatch => {
+                // Type variable dispatch requires type resolution to determine the actual method.
+                // Full implementation will be done in a future phase.
+                self.triggerCrash("type variable dispatch not yet implemented in interpreter", false, roc_ops);
+                return error.Crash;
+            },
+
             // Binary operations
 
             .e_binop => |binop| {

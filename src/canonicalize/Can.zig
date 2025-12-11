@@ -4843,7 +4843,13 @@ pub fn canonicalizeExpr(
             // Track free vars from receiver and arguments
             const free_vars_start = self.scratch_free_vars.top();
 
-            // Try module-qualified lookup first (e.g., Json.utf8)
+            // Try type var alias dispatch first (e.g., Thing.method() where Thing : thing)
+            if (try self.tryTypeVarAliasDispatch(field_access)) |expr_idx| {
+                // Type var alias dispatch doesn't have free vars directly
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            }
+
+            // Try module-qualified lookup next (e.g., Json.utf8)
             if (try self.tryModuleQualifiedLookup(field_access)) |expr_idx| {
                 // Module-qualified lookups don't have free vars (they reference external definitions)
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
@@ -8960,71 +8966,137 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // These introduce local type aliases/nominals scoped to the current block
             const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
-            // Canonicalize the type declaration header
-            const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+            // Check if this is a type variable alias (e.g., `Thing : thing` where `thing` is a type var in scope)
+            // This enables static dispatch on type variables: `Thing.method(arg)`
+            const is_type_var_alias = type_var_alias_check: {
+                // Must be an alias (not nominal or opaque)
+                if (type_decl.kind != .alias) break :type_var_alias_check false;
 
-            // Check if the header is malformed
-            const header_node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
-            if (header_node.tag == .malformed) {
-                // Header is malformed - return a malformed statement
-                const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .malformed_type_annotation = .{
-                    .region = region,
-                } });
-                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            } else {
-                // Get the type name from the header
-                const type_header = self.env.store.getTypeHeader(header_idx);
+                // Get the type header to check for type parameters
+                const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch break :type_var_alias_check false;
 
-                // Process type parameters and annotation in a type variable scope
-                const anno_idx = blk: {
-                    const type_var_scope = self.scopeEnterTypeVar();
-                    defer self.scopeExitTypeVar(type_var_scope);
+                // Must have no type parameters (simple alias like `Thing : thing`, not `Thing(a) : thing`)
+                const header_args = self.parse_ir.store.typeAnnoSlice(ast_header.args);
+                if (header_args.len > 0) break :type_var_alias_check false;
 
-                    // Introduce type parameters from the header into the scope
-                    try self.introduceTypeParametersFromHeader(header_idx);
+                // Check if the annotation is a simple type variable
+                const ast_anno = self.parse_ir.store.getTypeAnno(type_decl.anno);
+                if (ast_anno != .ty_var) break :type_var_alias_check false;
 
-                    // Canonicalize the type annotation with type parameters in scope
-                    break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+                // Get the type variable name and check if it's in scope
+                const type_var_tok = ast_anno.ty_var.tok;
+                const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse break :type_var_alias_check false;
+
+                // Check if this type variable is already in scope (from enclosing function signature)
+                const lookup_result = self.scopeLookupTypeVar(type_var_ident);
+                if (lookup_result != .found) break :type_var_alias_check false;
+
+                break :type_var_alias_check true;
+            };
+
+            if (is_type_var_alias) {
+                // This is a type variable alias - create s_type_var_alias statement
+                const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch unreachable;
+                const alias_name = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse unreachable;
+
+                const ast_anno = self.parse_ir.store.getTypeAnno(type_decl.anno);
+                const type_var_tok = ast_anno.ty_var.tok;
+                const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse unreachable;
+
+                // Get the type annotation index for the type variable from scope
+                const type_var_anno = switch (self.scopeLookupTypeVar(type_var_ident)) {
+                    .found => |anno_idx| anno_idx,
+                    .not_found => unreachable, // Already checked above
                 };
 
-                // Create the CIR type declaration statement
-                const type_decl_stmt: Statement = switch (type_decl.kind) {
-                    .alias => .{
-                        .s_alias_decl = .{
-                            .header = header_idx,
-                            .anno = anno_idx,
-                        },
-                    },
-                    .nominal, .@"opaque" => .{
-                        .s_nominal_decl = .{
-                            .header = header_idx,
-                            .anno = anno_idx,
-                            .is_opaque = type_decl.kind == .@"opaque",
-                        },
-                    },
-                };
+                // Create the type var alias statement
+                const stmt_idx = try self.env.addStatement(Statement{ .s_type_var_alias = .{
+                    .alias_name = alias_name,
+                    .type_var_name = type_var_ident,
+                    .type_var_anno = type_var_anno,
+                } }, region);
 
-                const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+                // Introduce the type var alias into scope for use in `Thing.method()` calls
+                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                _ = try current_scope.introduceTypeVarAlias(self.env.gpa, alias_name, type_var_ident, type_var_anno, stmt_idx, null);
 
-                // Introduce the type into the current scope for local use
-                try self.introduceType(type_header.name, stmt_idx, region);
-
-                // Where clauses are not allowed in type declarations
+                // Where clauses are not allowed
                 if (type_decl.where) |_| {
                     try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
                         .region = region,
                     } });
                 }
 
-                // Associated blocks are not supported for local type declarations
-                if (type_decl.associated) |_| {
-                    try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
-                        .feature = try self.env.insertString("associated blocks in local type declarations"),
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+            } else {
+                // Regular type alias or nominal type declaration
+
+                // Canonicalize the type declaration header
+                const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
+
+                // Check if the header is malformed
+                const header_node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
+                if (header_node.tag == .malformed) {
+                    // Header is malformed - return a malformed statement
+                    const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .malformed_type_annotation = .{
                         .region = region,
                     } });
-                }
+                    mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                } else {
+                    // Get the type name from the header
+                    const type_header = self.env.store.getTypeHeader(header_idx);
 
-                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+                    // Process type parameters and annotation in a type variable scope
+                    const anno_idx = blk: {
+                        const type_var_scope = self.scopeEnterTypeVar();
+                        defer self.scopeExitTypeVar(type_var_scope);
+
+                        // Introduce type parameters from the header into the scope
+                        try self.introduceTypeParametersFromHeader(header_idx);
+
+                        // Canonicalize the type annotation with type parameters in scope
+                        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+                    };
+
+                    // Create the CIR type declaration statement
+                    const type_decl_stmt: Statement = switch (type_decl.kind) {
+                        .alias => .{
+                            .s_alias_decl = .{
+                                .header = header_idx,
+                                .anno = anno_idx,
+                            },
+                        },
+                        .nominal, .@"opaque" => .{
+                            .s_nominal_decl = .{
+                                .header = header_idx,
+                                .anno = anno_idx,
+                                .is_opaque = type_decl.kind == .@"opaque",
+                            },
+                        },
+                    };
+
+                    const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+
+                    // Introduce the type into the current scope for local use
+                    try self.introduceType(type_header.name, stmt_idx, region);
+
+                    // Where clauses are not allowed in type declarations
+                    if (type_decl.where) |_| {
+                        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+                            .region = region,
+                        } });
+                    }
+
+                    // Associated blocks are not supported for local type declarations
+                    if (type_decl.associated) |_| {
+                        try self.env.pushDiagnostic(Diagnostic{ .not_implemented = .{
+                            .feature = try self.env.insertString("associated blocks in local type declarations"),
+                            .region = region,
+                        } });
+                    }
+
+                    mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+                }
             }
         },
         .type_anno => |ta| blk: {
@@ -10838,6 +10910,97 @@ fn processTypeImports(self: *Self, module_name: Ident.Idx, alias_name: Ident.Idx
         false, // Type imports are not package-qualified
         null, // No parent lookup function for now
     );
+}
+
+/// Try to handle field access as a type variable alias dispatch.
+///
+/// This handles cases like `Thing.method(args)` where `Thing` is a type variable alias
+/// introduced by a statement like `Thing : thing` inside a function body.
+///
+/// Returns `null` if this is not a type var alias dispatch.
+fn tryTypeVarAliasDispatch(self: *Self, field_access: AST.BinOp) std.mem.Allocator.Error!?Expr.Idx {
+    const left_expr = self.parse_ir.store.getExpr(field_access.left);
+    if (left_expr != .ident) return null;
+
+    const left_ident = left_expr.ident;
+    const alias_name = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
+
+    // Check if this is a type var alias in scope
+    const scope = self.currentScope();
+    const lookup_result = scope.lookupTypeVarAlias(alias_name);
+    switch (lookup_result) {
+        .not_found => return null,
+        .found => |binding| {
+            // This is a type var alias! Handle the dispatch.
+            const region = self.parse_ir.tokenizedRegionToRegion(field_access.region);
+            const right_expr = self.parse_ir.store.getExpr(field_access.right);
+
+            // Get the method name and arguments
+            switch (right_expr) {
+                .apply => |apply| {
+                    // Case: `Thing.method(arg1, arg2)`
+                    const method_expr = self.parse_ir.store.getExpr(apply.@"fn");
+                    if (method_expr != .ident) {
+                        // Non-ident function in apply - malformed
+                        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                            .region = region,
+                        } });
+                    }
+
+                    const method_ident = method_expr.ident;
+                    const method_name = self.parse_ir.tokens.resolveIdentifier(method_ident.token) orelse {
+                        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                            .region = region,
+                        } });
+                    };
+
+                    // Canonicalize the arguments
+                    const scratch_top = self.env.store.scratchExprTop();
+                    for (self.parse_ir.store.exprSlice(apply.args)) |arg_idx| {
+                        if (try self.canonicalizeExpr(arg_idx)) |canonicalized| {
+                            try self.env.store.addScratchExpr(canonicalized.get_idx());
+                        }
+                    }
+                    const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                    // Create the type var dispatch expression
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_type_var_dispatch = .{
+                            .type_var_alias_stmt = binding.statement_idx,
+                            .method_name = method_name,
+                            .args = args_span,
+                        },
+                    }, region);
+                    return expr_idx;
+                },
+                .ident => {
+                    // Case: `Thing.method` (no arguments)
+                    const right_ident = right_expr.ident;
+                    const method_name = self.parse_ir.tokens.resolveIdentifier(right_ident.token) orelse {
+                        return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                            .region = region,
+                        } });
+                    };
+
+                    // Create the type var dispatch expression with empty args
+                    const expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_type_var_dispatch = .{
+                            .type_var_alias_stmt = binding.statement_idx,
+                            .method_name = method_name,
+                            .args = .{ .span = DataSpan.empty() },
+                        },
+                    }, region);
+                    return expr_idx;
+                },
+                else => {
+                    // Unexpected expression type on right side
+                    return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                        .region = region,
+                    } });
+                },
+            }
+        },
+    }
 }
 
 /// Try to handle field access as a module-qualified lookup.
