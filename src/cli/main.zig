@@ -3271,11 +3271,23 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
         }
     }
 
-    // Validate platform header if the first file looks like a platform
-    // This ensures bundles have proper targets sections
-    const main_file = file_paths.items[0];
-    if (std.mem.endsWith(u8, main_file, ".roc")) {
-        if (platform_validation.validatePlatformHeader(allocs.arena, main_file)) |validation| {
+    // Find the platform file among the .roc files (if any)
+    // We need to check each file without side effects first, then validate the actual platform
+    var platform_file: ?[]const u8 = null;
+    for (file_paths.items) |path| {
+        if (std.mem.endsWith(u8, path, ".roc")) {
+            if (platform_validation.isPlatformFile(allocs.arena, path)) |is_platform| {
+                if (is_platform) {
+                    platform_file = path;
+                    break;
+                }
+            }
+        }
+    }
+
+    // If we found a platform file, validate it has proper targets section
+    if (platform_file) |pf| {
+        if (platform_validation.validatePlatformHeader(allocs.arena, pf)) |validation| {
             // Platform validation succeeded - validate all target files exist
             if (platform_validation.validateAllTargetFilesExist(
                 allocs.arena,
@@ -3290,21 +3302,10 @@ pub fn rocBundle(allocs: *Allocators, args: cli_args.BundleArgs) !void {
                     else => error.MissingTargetFile,
                 };
             }
-            std.log.debug("Platform validation passed for: {s}", .{main_file});
-        } else |err| {
-            switch (err) {
-                error.MissingTargetsSection => {
-                    // Only warn - file might be an app, not a platform
-                    std.log.debug("File {s} has no targets section (may be an app)", .{main_file});
-                },
-                error.ParseError, error.FileReadError => {
-                    // Parsing failed - could be invalid syntax or not a Roc file
-                    std.log.debug("Could not parse {s} as platform: {}", .{ main_file, err });
-                },
-                else => {
-                    std.log.warn("Platform validation warning: {}", .{err});
-                },
-            }
+        } else |_| {
+            // validatePlatformHeader already rendered the error message via the reporting system.
+            // We continue bundling for now (non-blocking warning), but the user has seen the error.
+            // This allows bundling apps or platforms that don't yet have targets sections.
         }
     }
 
