@@ -41,19 +41,19 @@ const StackValue = @This();
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         const raw_ptr = ptr orelse return;
-        const roc_str: *const RocStr = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, @as([*]u8, @ptrCast(raw_ptr)), @src()));
+        const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
         roc_str.incref(1);
         return;
     }
     if (layout.tag == .list) {
         const raw_ptr = ptr orelse return;
-        const list_value: *const RocList = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(RocList)) u8, @as([*]u8, @ptrCast(raw_ptr)), @src()));
+        const list_value: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
         list_value.incref(1, false);
         return;
     }
     if (layout.tag == .box) {
         const raw_ptr = ptr orelse return;
-        const slot: *usize = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(usize)) u8, @as([*]u8, @ptrCast(raw_ptr)), @src()));
+        const slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(raw_ptr)), @src());
         if (slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
@@ -110,13 +110,13 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
 fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         const raw_ptr = ptr orelse return;
-        const roc_str: *const RocStr = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, @as([*]u8, @ptrCast(raw_ptr)), @src()));
+        const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
         roc_str.decref(ops);
         return;
     }
     if (layout.tag == .list) {
         const raw_ptr = ptr orelse return;
-        const list_header: *const RocList = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(RocList)) u8, @as([*]u8, @ptrCast(raw_ptr)), @src()));
+        const list_header: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
         const list_value = list_header.*;
         const elem_layout = layout_cache.getLayout(layout.data.list);
         const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
@@ -139,7 +139,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .box) {
         const box_raw_ptr = ptr orelse return;
-        const slot: *usize = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(usize)) u8, @as([*]u8, @ptrCast(box_raw_ptr)), @src()));
+        const slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(box_raw_ptr)), @src());
         const raw_ptr = slot.*;
         if (raw_ptr == 0) return;
         const data_ptr = @as([*]u8, @ptrFromInt(raw_ptr));
@@ -152,7 +152,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const unmasked_ptr = ptr_int & ~tag_mask;
         const refcount_addr = unmasked_ptr - @sizeOf(isize);
 
-        // Refcount address must be aligned - use debugAlignCast via intFromPtr check
+        // Refcount address must be aligned - use alignedPtrCast via intFromPtr check
         if (comptime builtin.mode == .Debug) {
             if (refcount_addr % @alignOf(isize) != 0) {
                 std.debug.panic("decrefLayoutPtr: refcount_addr=0x{x} misaligned! unmasked=0x{x}, raw=0x{x}", .{
@@ -214,7 +214,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     if (layout.tag == .closure) {
         const closure_raw_ptr = ptr orelse return;
         // Get the closure header to find the captures layout
-        const closure_header: *const layout_mod.Closure = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(layout_mod.Closure)) u8, @as([*]u8, @ptrCast(closure_raw_ptr)), @src()));
+        const closure_header: *const layout_mod.Closure = builtins.utils.alignedPtrCast(*const layout_mod.Closure, @as([*]u8, @ptrCast(closure_raw_ptr)), @src());
         const closure_ptr_val = @intFromPtr(closure_raw_ptr);
 
         // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
@@ -289,14 +289,14 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 // Copy the RocStr struct and incref the underlying data.
                 // This is more efficient than clone() which allocates new memory.
                 std.debug.assert(self.ptr != null);
-                const src_str: *const RocStr = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, @as([*]u8, @ptrCast(self.ptr.?)), @src()));
-                const dest_str: *RocStr = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, @as([*]u8, @ptrCast(dest_ptr)), @src()));
+                const src_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+                const dest_str: *RocStr = builtins.utils.alignedPtrCast(*RocStr, @as([*]u8, @ptrCast(dest_ptr)), @src());
                 dest_str.* = src_str.*;
                 if (comptime trace_refcount) {
                     if (!src_str.isSmallStr()) {
                         const alloc_ptr = src_str.getAllocationPtr();
                         const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                            const isizes: [*]isize = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(isize)) u8, ptr, @src()));
+                            const isizes: [*]isize = builtins.utils.alignedPtrCast([*]isize, ptr, @src());
                             break :blk (isizes - 1)[0];
                         } else 0;
                         traceRefcount("INCREF str (copyToPtr) ptr=0x{x} len={} rc={} slice={}", .{
@@ -318,43 +318,43 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const dest_bytes: [*]u8 = @ptrCast(dest_ptr);
                 switch (precision) {
                     .u8 => {
-                        const typed_ptr: *u8 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u8)) u8, dest_bytes, @src()));
+                        const typed_ptr: *u8 = builtins.utils.alignedPtrCast(*u8, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
                     },
                     .u16 => {
-                        const typed_ptr: *u16 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u16)) u8, dest_bytes, @src()));
+                        const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
                     },
                     .u32 => {
-                        const typed_ptr: *u32 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u32)) u8, dest_bytes, @src()));
+                        const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
                     },
                     .u64 => {
-                        const typed_ptr: *u64 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u64)) u8, dest_bytes, @src()));
+                        const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
                     },
                     .u128 => {
-                        const typed_ptr: *u128 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u128)) u8, dest_bytes, @src()));
+                        const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
                     },
                     .i8 => {
-                        const typed_ptr: *i8 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i8)) u8, dest_bytes, @src()));
+                        const typed_ptr: *i8 = builtins.utils.alignedPtrCast(*i8, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
                     },
                     .i16 => {
-                        const typed_ptr: *i16 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i16)) u8, dest_bytes, @src()));
+                        const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
                     },
                     .i32 => {
-                        const typed_ptr: *i32 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i32)) u8, dest_bytes, @src()));
+                        const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
                     },
                     .i64 => {
-                        const typed_ptr: *i64 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i64)) u8, dest_bytes, @src()));
+                        const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
                     },
                     .i128 => {
-                        const typed_ptr: *i128 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i128)) u8, dest_bytes, @src()));
+                        const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, dest_bytes, @src());
                         typed_ptr.* = value;
                     },
                 }
@@ -365,8 +365,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box) {
-        const src_slot: *usize = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(usize)) u8, @as([*]u8, @ptrCast(self.ptr.?)), @src()));
-        const dest_slot: *usize = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(usize)) u8, @as([*]u8, @ptrCast(dest_ptr)), @src()));
+        const src_slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+        const dest_slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_slot.* = src_slot.*;
         if (dest_slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
@@ -376,7 +376,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box_of_zst) {
-        const dest_slot: *usize = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(usize)) u8, @as([*]u8, @ptrCast(dest_ptr)), @src()));
+        const dest_slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_slot.* = 0;
         return;
     }
@@ -384,8 +384,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list) {
         // Copy the list header and incref the underlying data
         std.debug.assert(self.ptr != null);
-        const src_list: *const builtins.list.RocList = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(builtins.list.RocList)) u8, @as([*]u8, @ptrCast(self.ptr.?)), @src()));
-        const dest_list: *builtins.list.RocList = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(builtins.list.RocList)) u8, @as([*]u8, @ptrCast(dest_ptr)), @src()));
+        const src_list: *const builtins.list.RocList = builtins.utils.alignedPtrCast(*const builtins.list.RocList, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+        const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_list.* = src_list.*;
 
         const elem_layout = layout_cache.getLayout(self.layout.data.list);
@@ -419,8 +419,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list_of_zst) {
         // Copy the list header for ZST lists - no refcounting needed for ZSTs
         std.debug.assert(self.ptr != null);
-        const src_list: *const builtins.list.RocList = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(builtins.list.RocList)) u8, @as([*]u8, @ptrCast(self.ptr.?)), @src()));
-        const dest_list: *builtins.list.RocList = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(builtins.list.RocList)) u8, @as([*]u8, @ptrCast(dest_ptr)), @src()));
+        const src_list: *const builtins.list.RocList = builtins.utils.alignedPtrCast(*const builtins.list.RocList, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+        const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_list.* = src_list.*;
         return;
     }
@@ -538,8 +538,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const disc_ptr = base_ptr + tu_data.discriminant_offset;
         const discriminant: u32 = switch (tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u16)) u8, disc_ptr, @src()))).*,
-            4 => @as(*const u32, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u32)) u8, disc_ptr, @src()))).*,
+            2 => builtins.utils.alignedPtrCast(*const u16, disc_ptr, @src()).*,
+            4 => builtins.utils.alignedPtrCast(*const u32, disc_ptr, @src()).*,
             else => unreachable,
         };
 
@@ -609,15 +609,15 @@ pub fn asI128(self: StackValue) i128 {
 
     return switch (precision) {
         .u8 => @as(i128, @as(*const u8, @ptrCast(raw_ptr)).*),
-        .u16 => @as(i128, @as(*const u16, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u16)) u8, raw_ptr, @src()))).*),
-        .u32 => @as(i128, @as(*const u32, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u32)) u8, raw_ptr, @src()))).*),
-        .u64 => @as(i128, @as(*const u64, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u64)) u8, raw_ptr, @src()))).*),
-        .u128 => @as(i128, @intCast(@as(*const u128, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u128)) u8, raw_ptr, @src()))).*)),
+        .u16 => @as(i128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
+        .u32 => @as(i128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
+        .u64 => @as(i128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
+        .u128 => @as(i128, @intCast(@as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*)),
         .i8 => @as(i128, @as(*const i8, @ptrCast(raw_ptr)).*),
-        .i16 => @as(i128, @as(*const i16, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i16)) u8, raw_ptr, @src()))).*),
-        .i32 => @as(i128, @as(*const i32, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i32)) u8, raw_ptr, @src()))).*),
-        .i64 => @as(i128, @as(*const i64, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i64)) u8, raw_ptr, @src()))).*),
-        .i128 => @as(*const i128, @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i128)) u8, raw_ptr, @src()))).*,
+        .i16 => @as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*),
+        .i32 => @as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*),
+        .i64 => @as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*),
+        .i128 => @as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*,
     };
 }
 
@@ -647,19 +647,19 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
             typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
         },
         .u16 => {
-            const typed_ptr: *u16 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u16)) u8, raw_ptr, @src()));
+            const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
         },
         .u32 => {
-            const typed_ptr: *u32 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u32)) u8, raw_ptr, @src()));
+            const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
         },
         .u64 => {
-            const typed_ptr: *u64 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u64)) u8, raw_ptr, @src()));
+            const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
         },
         .u128 => {
-            const typed_ptr: *u128 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u128)) u8, raw_ptr, @src()));
+            const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
         },
         .i8 => {
@@ -667,19 +667,19 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
             typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
         },
         .i16 => {
-            const typed_ptr: *i16 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i16)) u8, raw_ptr, @src()));
+            const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, raw_ptr, @src());
             typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
         },
         .i32 => {
-            const typed_ptr: *i32 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i32)) u8, raw_ptr, @src()));
+            const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, raw_ptr, @src());
             typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
         },
         .i64 => {
-            const typed_ptr: *i64 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i64)) u8, raw_ptr, @src()));
+            const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, raw_ptr, @src());
             typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
         },
         .i128 => {
-            const typed_ptr: *i128 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(i128)) u8, raw_ptr, @src()));
+            const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, raw_ptr, @src());
             typed_ptr.* = value;
         },
     }
@@ -709,19 +709,19 @@ pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{In
                 typed_ptr.* = std.math.cast(u8, u128_value) orelse return error.IntegerOverflow;
             },
             .u16 => {
-                const typed_ptr: *u16 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u16)) u8, raw_ptr, @src()));
+                const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, raw_ptr, @src());
                 typed_ptr.* = std.math.cast(u16, u128_value) orelse return error.IntegerOverflow;
             },
             .u32 => {
-                const typed_ptr: *u32 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u32)) u8, raw_ptr, @src()));
+                const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, raw_ptr, @src());
                 typed_ptr.* = std.math.cast(u32, u128_value) orelse return error.IntegerOverflow;
             },
             .u64 => {
-                const typed_ptr: *u64 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u64)) u8, raw_ptr, @src()));
+                const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, raw_ptr, @src());
                 typed_ptr.* = std.math.cast(u64, u128_value) orelse return error.IntegerOverflow;
             },
             .u128 => {
-                const typed_ptr: *u128 = @ptrCast(builtins.utils.debugAlignCast([*]align(@alignOf(u128)) u8, raw_ptr, @src()));
+                const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, raw_ptr, @src());
                 typed_ptr.* = u128_value;
             },
             .i8, .i16, .i32, .i64, .i128 => {

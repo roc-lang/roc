@@ -168,7 +168,7 @@ pub const RocList = extern struct {
             const alloc_ptr = self.getAllocationDataPtr() orelse unreachable;
             // - 1 is refcount.
             // - 2 is size on heap.
-            const ptr: [*]usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, alloc_ptr, @src()));
+            const ptr: [*]usize = utils.alignedPtrCast([*]usize, alloc_ptr, @src());
             return (ptr - 2)[0];
         } else {
             return self.length;
@@ -182,7 +182,7 @@ pub const RocList = extern struct {
             if (self.getAllocationDataPtr()) |alloc_ptr| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
-                const ptr: [*]usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, alloc_ptr, @src()));
+                const ptr: [*]usize = utils.alignedPtrCast([*]usize, alloc_ptr, @src());
                 (ptr - 2)[0] = self.length;
             }
         }
@@ -194,7 +194,7 @@ pub const RocList = extern struct {
             if (self.getAllocationDataPtr()) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
-                const ptr: [*]usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, source, @src()));
+                const ptr: [*]usize = utils.alignedPtrCast([*]usize, source, @src());
                 (ptr - 2)[0] = self.length;
             }
         }
@@ -235,7 +235,7 @@ pub const RocList = extern struct {
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
         if (self.bytes) |bytes| {
-            return @ptrCast(utils.debugAlignCast([*]align(@alignOf(T)) u8, bytes, @src()));
+            return utils.alignedPtrCast([*]T, bytes, @src());
         }
         return null;
     }
@@ -252,7 +252,7 @@ pub const RocList = extern struct {
         }
 
         if (self.getAllocationDataPtr()) |non_null_ptr| {
-            const ptr: [*]usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, non_null_ptr, @src()));
+            const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
             @panic("RocList.refcount: getAllocationDataPtr returned null");
@@ -1474,105 +1474,105 @@ pub fn listConcatUtf8(
 
 /// Specialized copy fn which takes pointers as pointers to U8 and copies from src to dest.
 pub fn copy_u8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u8 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u8)) u8, dest.?, @src()));
-    const src_ptr: *const u8 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u8)) u8, src.?, @src()));
+    const dest_ptr: *u8 = utils.alignedPtrCast(*u8, dest.?, @src());
+    const src_ptr: *const u8 = utils.alignedPtrCast(*const u8, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to I8 and copies from src to dest.
 pub fn copy_i8(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i8 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i8)) u8, dest.?, @src()));
-    const src_ptr: *const i8 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i8)) u8, src.?, @src()));
+    const dest_ptr: *i8 = utils.alignedPtrCast(*i8, dest.?, @src());
+    const src_ptr: *const i8 = utils.alignedPtrCast(*const i8, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to U16 and copies from src to dest.
 pub fn copy_u16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u16 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u16)) u8, dest.?, @src()));
-    const src_ptr: *const u16 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u16)) u8, src.?, @src()));
+    const dest_ptr: *u16 = utils.alignedPtrCast(*u16, dest.?, @src());
+    const src_ptr: *const u16 = utils.alignedPtrCast(*const u16, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to I16 and copies from src to dest.
 pub fn copy_i16(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i16 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i16)) u8, dest.?, @src()));
-    const src_ptr: *const i16 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i16)) u8, src.?, @src()));
+    const dest_ptr: *i16 = utils.alignedPtrCast(*i16, dest.?, @src());
+    const src_ptr: *const i16 = utils.alignedPtrCast(*const i16, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to U32 and copies from src to dest.
 pub fn copy_u32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u32 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u32)) u8, dest.?, @src()));
-    const src_ptr: *const u32 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u32)) u8, src.?, @src()));
+    const dest_ptr: *u32 = utils.alignedPtrCast(*u32, dest.?, @src());
+    const src_ptr: *const u32 = utils.alignedPtrCast(*const u32, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to I32 and copies from src to dest.
 pub fn copy_i32(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i32 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i32)) u8, dest.?, @src()));
-    const src_ptr: *const i32 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i32)) u8, src.?, @src()));
+    const dest_ptr: *i32 = utils.alignedPtrCast(*i32, dest.?, @src());
+    const src_ptr: *const i32 = utils.alignedPtrCast(*const i32, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to U64 and copies from src to dest.
 pub fn copy_u64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u64)) u8, dest.?, @src()));
-    const src_ptr: *const u64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u64)) u8, src.?, @src()));
+    const dest_ptr: *u64 = utils.alignedPtrCast(*u64, dest.?, @src());
+    const src_ptr: *const u64 = utils.alignedPtrCast(*const u64, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to I64 and copies from src to dest.
 pub fn copy_i64(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, dest.?, @src()));
-    const src_ptr: *const i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, src.?, @src()));
+    const dest_ptr: *i64 = utils.alignedPtrCast(*i64, dest.?, @src());
+    const src_ptr: *const i64 = utils.alignedPtrCast(*const i64, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to U128 and copies from src to dest.
 pub fn copy_u128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *u128 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u128)) u8, dest.?, @src()));
-    const src_ptr: *const u128 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(u128)) u8, src.?, @src()));
+    const dest_ptr: *u128 = utils.alignedPtrCast(*u128, dest.?, @src());
+    const src_ptr: *const u128 = utils.alignedPtrCast(*const u128, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to I128 and copies from src to dest.
 pub fn copy_i128(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *i128 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i128)) u8, dest.?, @src()));
-    const src_ptr: *const i128 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i128)) u8, src.?, @src()));
+    const dest_ptr: *i128 = utils.alignedPtrCast(*i128, dest.?, @src());
+    const src_ptr: *const i128 = utils.alignedPtrCast(*const i128, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to Boxes and copies from src to dest.
 pub fn copy_box(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, dest.?, @src()));
-    const src_ptr: *const usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, src.?, @src()));
+    const dest_ptr: *usize = utils.alignedPtrCast(*usize, dest.?, @src());
+    const src_ptr: *const usize = utils.alignedPtrCast(*const usize, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to ZST Boxes and copies from src to dest.
 pub fn copy_box_zst(dest: Opaque, _: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, dest.?, @src()));
+    const dest_ptr: *usize = utils.alignedPtrCast(*usize, dest.?, @src());
     dest_ptr.* = 0;
 }
 
 /// Specialized copy fn which takes pointers as pointers to Lists and copies from src to dest.
 pub fn copy_list(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *RocList = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocList)) u8, dest.?, @src()));
-    const src_ptr: *const RocList = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocList)) u8, src.?, @src()));
+    const dest_ptr: *RocList = utils.alignedPtrCast(*RocList, dest.?, @src());
+    const src_ptr: *const RocList = utils.alignedPtrCast(*const RocList, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to ZST Lists and copies from src to dest.
 pub fn copy_list_zst(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *RocList = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocList)) u8, dest.?, @src()));
-    const src_ptr: *const RocList = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocList)) u8, src.?, @src()));
+    const dest_ptr: *RocList = utils.alignedPtrCast(*RocList, dest.?, @src());
+    const src_ptr: *const RocList = utils.alignedPtrCast(*const RocList, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
 /// Specialized copy fn which takes pointers as pointers to a RocStr and copies from src to dest.
 pub fn copy_str(dest: Opaque, src: Opaque, _: usize) callconv(.c) void {
-    const dest_ptr: *RocStr = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, dest.?, @src()));
-    const src_ptr: *const RocStr = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, src.?, @src()));
+    const dest_ptr: *RocStr = utils.alignedPtrCast(*RocStr, dest.?, @src());
+    const src_ptr: *const RocStr = utils.alignedPtrCast(*const RocStr, src.?, @src());
     dest_ptr.* = src_ptr.*;
 }
 
@@ -1589,9 +1589,7 @@ test "listConcat: non-unique with unique overlapping" {
 
     const nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..], false, test_env.getOps());
     const bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
-    const ptr_width = @sizeOf(usize);
-    const aligned_bytes = utils.debugAlignCast([*]align(@sizeOf(usize)) u8, bytes, @src());
-    const refcount_ptr: [*]isize = @ptrCast(aligned_bytes - ptr_width);
+    const refcount_ptr: [*]isize = utils.alignedPtrCast([*]isize, bytes - @sizeOf(usize), @src());
     utils.increfRcPtrC(&refcount_ptr[0], 1);
     // NOTE: nonUnique will be consumed by listConcat, so no defer decref needed
 

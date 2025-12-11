@@ -36,9 +36,9 @@ const rcNone = @import("utils.zig").rcNone;
 /// The context parameter is expected to be a *RocOps.
 fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element) |elem_ptr| {
-        const str_ptr: *RocStr = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, elem_ptr, @src()));
+        const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, elem_ptr, @src());
         if (context) |ctx| {
-            const roc_ops: *RocOps = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocOps)) u8, @as([*]u8, @ptrCast(ctx)), @src()));
+            const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
             str_ptr.decref(roc_ops);
         } else {
             @panic("strDecref: context is null");
@@ -253,7 +253,7 @@ pub const RocStr = extern struct {
     pub fn incref(self: RocStr, n: usize) void {
         if (!self.isSmallStr()) {
             if (self.getAllocationPtr()) |alloc_ptr| {
-                const isizes: [*]isize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(isize)) u8, alloc_ptr, @src()));
+                const isizes: [*]isize = utils.alignedPtrCast([*]isize, alloc_ptr, @src());
                 utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
             }
         }
@@ -501,7 +501,7 @@ pub const RocStr = extern struct {
             self.bytes;
 
         if (data_ptr) |non_null_ptr| {
-            const ptr: [*]usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, non_null_ptr, @src()));
+            const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
             @panic("RocStr.refcount: data_ptr is null");
@@ -647,7 +647,7 @@ pub fn strSplitOn(
     const list = RocList.list_allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true, roc_ops);
 
     if (list.bytes) |bytes| {
-        const strings: [*]RocStr = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, bytes, @src()));
+        const strings: [*]RocStr = utils.alignedPtrCast([*]RocStr, bytes, @src());
         strSplitOnHelp(strings, string, delimiter, roc_ops);
     }
 
@@ -975,7 +975,7 @@ pub fn strJoinWithC(
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     const list_elements: ?[*]RocStr = if (list.bytes) |bytes|
-        @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, bytes, @src()))
+        utils.alignedPtrCast([*]RocStr, bytes, @src())
     else
         null;
     const roc_list_str = RocListStr{
@@ -1695,7 +1695,7 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
 }
 
 fn decStr(ptr: ?[*]u8) callconv(.c) void {
-    const str_ptr: *RocStr = @ptrCast(utils.debugAlignCast([*]align(@alignOf(RocStr)) u8, ptr orelse unreachable, @src()));
+    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, ptr orelse unreachable, @src());
     str_ptr.decref();
 }
 

@@ -19,25 +19,25 @@ const RocCrashed = @import("host_abi.zig").RocCrashed;
 
 const DEBUG_TESTING_ALLOC = false;
 
-/// Performs an alignment cast with debug-mode verification.
+/// Performs a pointer cast with debug-mode alignment verification.
 ///
 /// In debug builds, verifies that the pointer is properly aligned for the target type
 /// and panics with detailed diagnostic information if alignment is incorrect.
-/// In release builds, this is equivalent to a plain `@alignCast`.
+/// In release builds, this is equivalent to `@ptrCast(@alignCast(ptr))`.
 ///
 /// Usage:
 /// ```
-/// const typed_ptr = debugAlignCast([*]usize, raw_ptr, @src());
+/// const typed_ptr: *usize = alignedPtrCast(*usize, raw_ptr, @src());
 /// ```
 ///
 /// The `src` parameter should always be `@src()` at the call site - this captures
 /// the file, function, and line number to aid in reproducing alignment bugs.
-pub inline fn debugAlignCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
+pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
     if (comptime builtin.mode == .Debug) {
         const ptr_info = @typeInfo(T);
         const alignment = switch (ptr_info) {
             .pointer => |p| p.alignment,
-            else => @compileError("debugAlignCast target must be a pointer type"),
+            else => @compileError("alignedPtrCast target must be a pointer type"),
         };
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
@@ -47,7 +47,7 @@ pub inline fn debugAlignCast(comptime T: type, ptr: anytype, src: std.builtin.So
             );
         }
     }
-    return @alignCast(ptr);
+    return @ptrCast(@alignCast(ptr));
 }
 
 /// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
@@ -333,7 +333,7 @@ pub fn decrefCheckNullC(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     if (bytes_or_null) |bytes| {
-        const isizes: [*]isize = @ptrCast(debugAlignCast([*]align(@alignOf(isize)) u8, bytes, @src()));
+        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
         return @call(
             .always_inline,
             decref_ptr_to_refcount,
@@ -467,7 +467,7 @@ pub fn decref(
 
     const bytes = bytes_or_null orelse return;
 
-    const isizes: [*]isize = @ptrCast(debugAlignCast([*]align(@alignOf(isize)) u8, bytes, @src()));
+    const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
 
     decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops);
 }
@@ -615,12 +615,7 @@ pub inline fn rcConstant(refcount: isize) bool {
 pub inline fn assertValidRefcount(data_ptr: ?[*]u8) void {
     if (builtin.mode != .Debug) return;
     if (data_ptr) |ptr| {
-        // Debug alignment check
-        const ptr_addr = @intFromPtr(ptr) - @sizeOf(usize);
-        if (ptr_addr % @sizeOf(usize) != 0) {
-            std.debug.panic("[assertValidRefcount] ptr=0x{x} is not aligned", .{ptr_addr});
-        }
-        const rc_ptr: [*]isize = @ptrCast(debugAlignCast([*]align(@alignOf(isize)) u8, ptr - @sizeOf(usize), @src()));
+        const rc_ptr: [*]isize = alignedPtrCast([*]isize, ptr - @sizeOf(usize), @src());
         const rc = rc_ptr[0];
         if (rc == POISON_VALUE) {
             @panic("assertValidRefcount: Use-after-free detected");
@@ -723,7 +718,7 @@ pub fn allocateWithRefcount(
 
     const data_ptr = new_bytes + extra_bytes;
 
-    const refcount_ptr = @as([*]usize, @ptrCast(debugAlignCast([*]align(@sizeOf(usize)) u8, data_ptr, @src()) - @sizeOf(usize)));
+    const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
     return data_ptr;

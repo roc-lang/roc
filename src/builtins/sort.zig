@@ -72,7 +72,7 @@ pub fn fluxsort(
         const alloc_ptr = roc_ops.alloc(len * @sizeOf(usize), @alignOf(usize));
 
         // Build list of pointers to sort.
-        const arr_ptr: [*]Opaque = @ptrCast(utils.debugAlignCast([*]align(@alignOf(Opaque)) u8, @as([*]u8, @ptrCast(alloc_ptr)), @src()));
+        const arr_ptr: [*]Opaque = utils.alignedPtrCast([*]Opaque, @as([*]u8, @ptrCast(alloc_ptr)), @src());
         defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
         for (0..len) |i| {
             arr_ptr[i] = array + i * element_width;
@@ -920,7 +920,7 @@ pub fn quadsort(
         const alloc_ptr = roc_ops.alloc(len * @sizeOf(usize), @alignOf(usize));
 
         // Build list of pointers to sort.
-        const arr_ptr: [*]Opaque = @ptrCast(utils.debugAlignCast([*]align(@alignOf(Opaque)) u8, @as([*]u8, @ptrCast(alloc_ptr)), @src()));
+        const arr_ptr: [*]Opaque = utils.alignedPtrCast([*]Opaque, @as([*]u8, @ptrCast(alloc_ptr)), @src());
         defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
         for (0..len) |i| {
             arr_ptr[i] = array + i * element_width;
@@ -2897,8 +2897,8 @@ inline fn compare(
     comptime indirect: bool,
 ) Ordering {
     if (indirect) {
-        const lhs_ptr: *[*]u8 = @ptrCast(utils.debugAlignCast([*]align(@alignOf([*]u8)) u8, @as([*]u8, @ptrCast(lhs_opaque)), @src()));
-        const rhs_ptr: *[*]u8 = @ptrCast(utils.debugAlignCast([*]align(@alignOf([*]u8)) u8, @as([*]u8, @ptrCast(rhs_opaque)), @src()));
+        const lhs_ptr: *[*]u8 = utils.alignedPtrCast(*[*]u8, @as([*]u8, @ptrCast(lhs_opaque)), @src());
+        const rhs_ptr: *[*]u8 = utils.alignedPtrCast(*[*]u8, @as([*]u8, @ptrCast(rhs_opaque)), @src());
         return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs_ptr.*, rhs_ptr.*)));
     } else {
         const lhs: [*]u8 = @ptrCast(lhs_opaque);
@@ -2930,14 +2930,14 @@ inline fn compare_inc(
 /// Copies the value pointed to by `src_ptr` into the location pointed to by `dst_ptr`.
 /// Both pointers must be valid and properly aligned.
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    const dst: *usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, dst_ptr.?, @src()));
-    const src: *const usize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(usize)) u8, src_ptr.?, @src()));
+    const dst: *usize = utils.alignedPtrCast(*usize, dst_ptr.?, @src());
+    const src: *const usize = utils.alignedPtrCast(*const usize, src_ptr.?, @src());
     dst.* = src.*;
 }
 
 fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a: *const i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, a_ptr.?, @src()));
-    const b: *const i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, b_ptr.?, @src()));
+    const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
+    const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
     const gt = @as(u8, @intFromBool(a.* > b.*));
     const lt = @as(u8, @intFromBool(a.* < b.*));
@@ -2949,13 +2949,13 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
 }
 
 fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a: *const i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, a_ptr.?, @src()));
-    const b: *const i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, b_ptr.?, @src()));
+    const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
+    const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
     const gt = @as(u8, @intFromBool(a.* > b.*));
     const lt = @as(u8, @intFromBool(a.* < b.*));
 
-    const count: *isize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(isize)) u8, count_ptr.?, @src()));
+    const count: *isize = utils.alignedPtrCast(*isize, count_ptr.?, @src());
     count.* -= 1;
     // Eq = 0
     // GT = 1
@@ -2964,13 +2964,13 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    const dst: *i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, dst_ptr.?, @src()));
-    const src: *const i64 = @ptrCast(utils.debugAlignCast([*]align(@alignOf(i64)) u8, src_ptr.?, @src()));
+    const dst: *i64 = utils.alignedPtrCast(*i64, dst_ptr.?, @src());
+    const src: *const i64 = utils.alignedPtrCast(*const i64, src_ptr.?, @src());
     dst.* = src.*;
 }
 
 fn test_inc_n_data(_: ?*anyopaque, count_ptr: Opaque, n: usize) callconv(.c) void {
-    const count: *isize = @ptrCast(utils.debugAlignCast([*]align(@alignOf(isize)) u8, count_ptr.?, @src()));
+    const count: *isize = utils.alignedPtrCast(*isize, count_ptr.?, @src());
     count.* += @intCast(n);
 }
 
