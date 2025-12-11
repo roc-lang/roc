@@ -124,6 +124,9 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The expected return type of the enclosing function, if any.
 /// Used to correctly type-check `return` expressions inside loops etc.
 enclosing_func_return_type: ?Var,
+/// The name of the enclosing function, if known.
+/// Used to provide better error messages when type checking lambda arguments.
+enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
 
@@ -213,6 +216,7 @@ pub fn init(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
+        .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
     };
@@ -1219,6 +1223,17 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
         // Check the pattern
         try self.checkPattern(def.pattern, env, .no_expectation);
+
+        // Extract function name from the pattern (for better error messages)
+        const saved_func_name = self.enclosing_func_name;
+        self.enclosing_func_name = blk: {
+            const pattern = self.cir.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |assign| break :blk assign.ident,
+                else => break :blk null,
+            }
+        };
+        defer self.enclosing_func_name = saved_func_name;
 
         // Handle if there's an annotation associated with this def
         if (def.annotation) |annotation_idx| {
@@ -3043,7 +3058,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                         // Use the new error detail for bound type variable incompatibility
                                         self.setProblemTypeMismatchDetail(unify_result.problem, .{
                                             .incompatible_fn_args_bound_var = .{
-                                                .fn_name = null, // TODO: Use function name?
+                                                .fn_name = self.enclosing_func_name,
                                                 .first_arg_var = arg_1,
                                                 .second_arg_var = arg_2,
                                                 .first_arg_index = @intCast(i),
@@ -3287,19 +3302,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // Redirect the expr to the function's return type
                                 _ = try self.unify(expr_var, func.ret, env);
                             } else {
-                                // TODO(jared): Better arity difference error message
+                                // Arity mismatch - the function expects a different
+                                // number of arguments than were provided
+                                const fn_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, func_var);
+                                _ = try self.problems.appendProblem(self.cir.gpa, .{
+                                    .fn_call_arity_mismatch = .{
+                                        .fn_name = func_name,
+                                        .fn_var = func_var,
+                                        .fn_snapshot = fn_snapshot,
+                                        .call_region = expr_region,
+                                        .expected_args = @intCast(func_args.len),
+                                        .actual_args = @intCast(call_arg_expr_idxs.len),
+                                    },
+                                });
 
-                                // If the expected function's arity doesn't match
-                                // the actual arguments provoided, unify the
-                                // inferred function type with the expected function
-                                // type to get  the regulare error message
-                                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
-                                const call_func_ret = try self.fresh(env, expr_region);
-                                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
-                                const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
-
-                                _ = try self.unify(func_var, call_func_var, env);
-                                _ = try self.unify(expr_var, call_func_ret, env);
+                                // Set the expression to error type
+                                try self.unifyWith(expr_var, .err, env);
                             }
                         } else {
                             // We get here if the type of expr being called
@@ -3599,6 +3617,17 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
+                // Extract function name from the pattern (for better error messages)
+                const saved_func_name = self.enclosing_func_name;
+                self.enclosing_func_name = inner_blk: {
+                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
+                    switch (pattern) {
+                        .assign => |assign| break :inner_blk assign.ident,
+                        else => break :inner_blk null,
+                    }
+                };
+                defer self.enclosing_func_name = saved_func_name;
+
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
@@ -3650,6 +3679,17 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the pattern
                 try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
+
+                // Extract function name from the pattern (for better error messages)
+                const saved_func_name = self.enclosing_func_name;
+                self.enclosing_func_name = inner_blk: {
+                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
+                    switch (pattern) {
+                        .assign => |assign| break :inner_blk assign.ident,
+                        else => break :inner_blk null,
+                    }
+                };
+                defer self.enclosing_func_name = saved_func_name;
 
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
@@ -5170,23 +5210,24 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
-                const constraint = constraints[0];
-
-                // For is_eq constraints, use the specific equality error message
-                // Use ident index comparison instead of string comparison
-                if (constraint.fn_name == self.cir.idents.is_eq) {
-                    try self.reportEqualityError(
-                        deferred_constraint.var_,
-                        constraint,
-                        env,
-                    );
-                } else {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .not_nominal,
-                        env,
-                    );
+                // Report errors for ALL failing constraints, not just the first one
+                for (constraints) |constraint| {
+                    // For is_eq constraints, use the specific equality error message
+                    // Use ident index comparison instead of string comparison
+                    if (constraint.fn_name == self.cir.idents.is_eq) {
+                        try self.reportEqualityError(
+                            deferred_constraint.var_,
+                            constraint,
+                            env,
+                        );
+                    } else {
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .not_nominal,
+                            env,
+                        );
+                    }
                 }
             } else {
                 // Deferred constraint checks should always have at least one constraint.

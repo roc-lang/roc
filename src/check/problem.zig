@@ -41,6 +41,7 @@ fn pluralize(count: anytype, singular: []const u8, plural: []const u8) []const u
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
+    fn_call_arity_mismatch: FnCallArityMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
     static_dispach: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
@@ -168,6 +169,16 @@ pub const IncompatibleListElements = struct {
 pub const CrossModuleImport = struct {
     import_region: CIR.Expr.Idx,
     module_idx: CIR.Import.Idx,
+};
+
+/// Problem data when function is called with wrong number of arguments
+pub const FnCallArityMismatch = struct {
+    fn_name: ?Ident.Idx,
+    fn_var: Var,
+    fn_snapshot: SnapshotContentIdx,
+    call_region: base.Region,
+    expected_args: u32,
+    actual_args: u32,
 };
 
 /// Problem data when function argument types don't match
@@ -361,6 +372,26 @@ pub const ReportBuilder = struct {
         return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
     }
 
+    /// Returns the operator symbol for a given method ident, or null if not an operator method.
+    /// Maps method idents like plus, minus, times, div_by to their corresponding operator symbols.
+    fn getOperatorForMethod(self: *const Self, method_ident: Ident.Idx) ?[]const u8 {
+        const idents = self.can_ir.idents;
+        if (method_ident == idents.plus) return "+";
+        if (method_ident == idents.minus) return "-";
+        if (method_ident == idents.times) return "*";
+        if (method_ident == idents.div_by) return "/";
+        if (method_ident == idents.div_trunc_by) return "//";
+        if (method_ident == idents.rem_by) return "%";
+        if (method_ident == idents.negate) return "-";
+        if (method_ident == idents.is_eq) return "==";
+        if (method_ident == idents.is_lt) return "<";
+        if (method_ident == idents.is_lte) return "<=";
+        if (method_ident == idents.is_gt) return ">";
+        if (method_ident == idents.is_gte) return ">=";
+        if (method_ident == idents.not) return "not";
+        return null;
+    }
+
     /// Build a report for a problem
     pub fn build(
         self: *Self,
@@ -419,6 +450,9 @@ pub const ReportBuilder = struct {
                 } else {
                     return self.buildGenericTypeMismatchReport(mismatch.types);
                 }
+            },
+            .fn_call_arity_mismatch => |data| {
+                return self.buildFnCallArityMismatchReport(data);
             },
             .type_apply_mismatch_arities => |data| {
                 return self.buildTypeApplyArityMismatchReport(data);
@@ -1743,6 +1777,69 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for function call arity mismatch
+    fn buildFnCallArityMismatchReport(
+        self: *Self,
+        data: FnCallArityMismatch,
+    ) !Report {
+        const title = blk: {
+            if (data.expected_args > data.actual_args) {
+                break :blk "TOO FEW ARGUMENTS";
+            } else if (data.expected_args < data.actual_args) {
+                break :blk "TOO MANY ARGUMENTS";
+            } else {
+                break :blk "WRONG NUMBER OF ARGUMENTS";
+            }
+        };
+        var report = Report.init(self.gpa, title, .runtime_error);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print("{d}", .{data.expected_args});
+        const num_expected = try report.addOwnedString(self.bytes_buf.items);
+
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print("{d}", .{data.actual_args});
+        const num_actual = try report.addOwnedString(self.bytes_buf.items);
+
+        // Build the function type string from the snapshot
+        const fn_type = try report.addOwnedString(self.getFormattedString(data.fn_snapshot));
+
+        // Start the error message
+        if (data.fn_name) |fn_name_ident| {
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addReflowingText("The function ");
+            try report.document.addAnnotated(fn_name, .inline_code);
+        } else {
+            try report.document.addReflowingText("This function");
+        }
+        try report.document.addReflowingText(" expects ");
+        try report.document.addReflowingText(num_expected);
+        try report.document.addReflowingText(pluralize(data.expected_args, " argument, but ", " arguments, but "));
+        try report.document.addReflowingText(num_actual);
+        try report.document.addReflowingText(pluralize(data.actual_args, " was provided:", " were provided:"));
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.call_region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // Show the function signature
+        try report.document.addReflowingText("The function has the signature:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(fn_type, .type_variable);
+
+        return report;
+    }
+
     /// Build a report for when a type alias references itself recursively
     fn buildRecursiveAliasReport(
         self: *Self,
@@ -1845,15 +1942,22 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is the "plus" method (from the + operator)
-        const is_plus_operator = data.origin == .desugared_binop;
+        // Check if this method corresponds to an operator (using ident index comparison, not strings)
+        const is_from_binop = data.origin == .desugared_binop;
+        const mb_operator = self.getOperatorForMethod(data.method_name);
 
-        if (is_plus_operator) {
-            try report.document.addReflowingText("The value before this ");
-            try report.document.addAnnotated("+", .emphasized);
-            try report.document.addReflowingText(" operator has a type that doesn't have a ");
-            try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(" method:");
+        if (is_from_binop) {
+            if (mb_operator) |operator| {
+                try report.document.addReflowingText("The value before this ");
+                try report.document.addAnnotated(operator, .emphasized);
+                try report.document.addReflowingText(" operator has a type that doesn't have a ");
+                try report.document.addAnnotated(method_name_str, .emphasized);
+                try report.document.addReflowingText(" method:");
+            } else {
+                try report.document.addReflowingText("This ");
+                try report.document.addAnnotated(method_name_str, .emphasized);
+                try report.document.addReflowingText(" method is being called on a value whose type doesn't have that method:");
+            }
             try report.document.addLineBreak();
         } else {
             try report.document.addReflowingText("This ");
@@ -1871,34 +1975,31 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        if (is_plus_operator) {
-            try report.document.addReflowingText("The value's type, which does not have a method named ");
-            try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(", is:");
-        } else {
-            try report.document.addReflowingText("The value's type, which does not have a method named ");
-            try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(", is:");
-        }
+        try report.document.addReflowingText("The value's type, which does not have a method named ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(", is:");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(snapshot_str, .type_variable);
-
-        // TODO: Find similar method names and show a more helpful error message
-        // here
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addAnnotated("Hint:", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
-                if (is_plus_operator) {
-                    try report.document.addReflowingText("The ");
-                    try report.document.addAnnotated("+", .emphasized);
-                    try report.document.addReflowingText(" operator calls a method named ");
-                    try report.document.addAnnotated("plus", .emphasized);
-                    try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
+                if (is_from_binop) {
+                    if (mb_operator) |operator| {
+                        try report.document.addReflowingText("The ");
+                        try report.document.addAnnotated(operator, .emphasized);
+                        try report.document.addReflowingText(" operator calls a method named ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
+                    } else {
+                        try report.document.addReflowingText(" For this to work, the type would need to have a method named ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" associated with it in the type's declaration.");
+                    }
                 } else {
                     try report.document.addReflowingText(" For this to work, the type would need to have a method named ");
                     try report.document.addAnnotated(method_name_str, .emphasized);
@@ -1906,12 +2007,18 @@ pub const ReportBuilder = struct {
                 }
             },
             .rigid => {
-                if (is_plus_operator) {
-                    try report.document.addReflowingText(" The ");
-                    try report.document.addAnnotated("+", .emphasized);
-                    try report.document.addReflowingText(" operator requires the type to have a ");
-                    try report.document.addAnnotated("plus", .emphasized);
-                    try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
+                if (is_from_binop) {
+                    if (mb_operator) |operator| {
+                        try report.document.addReflowingText(" The ");
+                        try report.document.addAnnotated(operator, .emphasized);
+                        try report.document.addReflowingText(" operator requires the type to have a ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
+                    } else {
+                        try report.document.addReflowingText(" Did you forget to specify ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" in the type annotation?");
+                    }
                 } else {
                     try report.document.addReflowingText(" Did you forget to specify ");
                     try report.document.addAnnotated(method_name_str, .emphasized);
