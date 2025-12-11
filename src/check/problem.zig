@@ -51,6 +51,7 @@ pub const Problem = union(enum) {
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
     recursive_alias: RecursiveAlias,
+    unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     invalid_number_type: VarWithSnapshot,
@@ -309,6 +310,13 @@ pub const RecursiveAlias = struct {
     region: base.Region,
 };
 
+/// Error when using alias syntax in where clause (e.g., `where [a.SomeAlias]`)
+/// This syntax was used for abilities which have been removed from the language
+pub const UnsupportedAliasWhereClause = struct {
+    alias_name: base.Ident.Idx,
+    region: base.Region,
+};
+
 // bug //
 
 /// A bug that occurred during unification
@@ -484,6 +492,9 @@ pub const ReportBuilder = struct {
             },
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
+            },
+            .unsupported_alias_where_clause => |data| {
+                return self.buildUnsupportedAliasWhereClauseReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
@@ -1873,6 +1884,40 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addReflowingText("Type aliases cannot be recursive. If you need a recursive type, use a nominal type (:=) instead of an alias (:).");
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when alias syntax is used in a where clause
+    /// This syntax was used for abilities which have been removed
+    fn buildUnsupportedAliasWhereClauseReport(
+        self: *Self,
+        data: UnsupportedAliasWhereClause,
+    ) !Report {
+        var report = Report.init(self.gpa, "UNSUPPORTED WHERE CLAUSE", .runtime_error);
+        errdefer report.deinit();
+
+        const alias_name = try report.addOwnedString(self.can_ir.getIdent(data.alias_name));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+
+        try report.document.addReflowingText("The where clause syntax ");
+        try report.document.addAnnotated(alias_name, .type_variable);
+        try report.document.addReflowingText(" is not supported:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.");
         try report.document.addLineBreak();
 
         return report;

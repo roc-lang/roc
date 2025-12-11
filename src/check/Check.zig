@@ -67,9 +67,9 @@ cir: *ModuleEnv,
 regions: *Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
-/// Map of module name identifiers to their env. This includes all modules
-/// "below" this one in the dependency graph
-module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+/// Map of auto-imported type names (like "Str", "List", "Bool") to their defining modules.
+/// This is used to resolve type names that are automatically available without explicit imports.
+auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 /// Builtin type context for the module being type-checked
 builtin_ctx: BuiltinContext,
 
@@ -169,7 +169,7 @@ pub fn init(
     types: *types_mod.Store,
     cir: *const ModuleEnv,
     imported_modules: []const *const ModuleEnv,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
     regions: *Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
@@ -180,7 +180,7 @@ pub fn init(
         cir,
         builtin_ctx.builtin_module,
         builtin_ctx.builtin_indices,
-        module_envs,
+        auto_imported_types,
     );
     errdefer import_mapping.deinit();
 
@@ -189,7 +189,7 @@ pub fn init(
         .types = types,
         .cir = mutable_cir,
         .imported_modules = imported_modules,
-        .module_envs = module_envs,
+        .auto_imported_types = auto_imported_types,
         .regions = regions,
         .builtin_ctx = builtin_ctx,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
@@ -974,10 +974,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire(.generalized);
     defer self.env_pool.release(env);
 
-    // TODO: Generating type from type stmts writes types into the env, but i
-    // don't think it _needs_ to. We reset before solving each def. We may be able
-    // to save some perf by not passing `env` into the type stmt functions
-
     // Copy builtin types (Bool, Try) into this module's type store
     try self.copyBuiltinTypes();
 
@@ -1544,8 +1540,13 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 },
             });
         },
-        .w_alias => {
-            // TODO: Recursively unwrap alias
+        .w_alias => |alias| {
+            // Alias syntax in where clauses (e.g., `where [a.Decode]`) was used for abilities,
+            // which have been removed from Roc. Emit an error.
+            _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_alias_where_clause = .{
+                .alias_name = alias.alias_name,
+                .region = where_region,
+            } });
         },
         .w_malformed => {
             // If it's malformed, just ignore
@@ -1610,9 +1611,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .lookup => |lookup| {
             switch (lookup.base) {
                 .builtin => |builtin_type| {
-                    // TODO: Don't generate a new type var here, reuse anno var
-                    const builtin_var = try self.generateBuiltinTypeInstance(lookup.name, builtin_type, &.{}, anno_region, env);
-                    _ = try self.unify(anno_var, builtin_var, env);
+                    try self.setBuiltinTypeContent(anno_var, lookup.name, builtin_type, &.{}, anno_region, env);
                 },
                 .local => |local| {
 
@@ -1701,9 +1700,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             switch (a.base) {
                 .builtin => |builtin_type| {
-                    // TODO: Don't generate a new type var here, reuse anno var
-                    const builtin_var = try self.generateBuiltinTypeInstance(a.name, builtin_type, anno_arg_vars, anno_region, env);
-                    _ = try self.unify(anno_var, builtin_var, env);
+                    try self.setBuiltinTypeContent(anno_var, a.name, builtin_type, anno_arg_vars, anno_region, env);
                 },
                 .local => |local| {
                     // Check if we're in a declaration or an annotation
@@ -2028,32 +2025,34 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
     }
 }
 
-/// Generate a type variable from the builtin
+/// Set the content of anno_var to the builtin type.
 ///
-/// Writes the resulting type into the slot at `ret_var`
-fn generateBuiltinTypeInstance(
+/// Uses unifyWith to efficiently set content directly when possible,
+/// avoiding the creation of an intermediate type variable.
+fn setBuiltinTypeContent(
     self: *Self,
+    anno_var: Var,
     anno_builtin_name: Ident.Idx,
     anno_builtin_type: CIR.TypeAnno.Builtin,
     anno_args: []Var,
     anno_region: Region,
     env: *Env,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!void {
     switch (anno_builtin_type) {
         // Phase 5: Use nominal types from Builtin instead of special .num content
-        .u8 => return try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, anno_region),
-        .u16 => return try self.freshFromContent(try self.mkNumberTypeContent("U16", env), env, anno_region),
-        .u32 => return try self.freshFromContent(try self.mkNumberTypeContent("U32", env), env, anno_region),
-        .u64 => return try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, anno_region),
-        .u128 => return try self.freshFromContent(try self.mkNumberTypeContent("U128", env), env, anno_region),
-        .i8 => return try self.freshFromContent(try self.mkNumberTypeContent("I8", env), env, anno_region),
-        .i16 => return try self.freshFromContent(try self.mkNumberTypeContent("I16", env), env, anno_region),
-        .i32 => return try self.freshFromContent(try self.mkNumberTypeContent("I32", env), env, anno_region),
-        .i64 => return try self.freshFromContent(try self.mkNumberTypeContent("I64", env), env, anno_region),
-        .i128 => return try self.freshFromContent(try self.mkNumberTypeContent("I128", env), env, anno_region),
-        .f32 => return try self.freshFromContent(try self.mkNumberTypeContent("F32", env), env, anno_region),
-        .f64 => return try self.freshFromContent(try self.mkNumberTypeContent("F64", env), env, anno_region),
-        .dec => return try self.freshFromContent(try self.mkNumberTypeContent("Dec", env), env, anno_region),
+        .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U8", env), env),
+        .u16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U16", env), env),
+        .u32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U32", env), env),
+        .u64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U64", env), env),
+        .u128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U128", env), env),
+        .i8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I8", env), env),
+        .i16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I16", env), env),
+        .i32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I32", env), env),
+        .i64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I64", env), env),
+        .i128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I128", env), env),
+        .f32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F32", env), env),
+        .f64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F64", env), env),
+        .dec => try self.unifyWith(anno_var, try self.mkNumberTypeContent("Dec", env), env),
         .list => {
             // Then check arity
             if (anno_args.len != 1) {
@@ -2064,13 +2063,14 @@ fn generateBuiltinTypeInstance(
                     .num_actual_args = @intCast(anno_args.len),
                 } });
 
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
+                // Set error
+                try self.unifyWith(anno_var, .err, env);
+                return;
             }
 
             // Create the nominal List type
             const list_content = try self.mkListContent(anno_args[0], env);
-            return try self.freshFromContent(list_content, env, anno_region);
+            try self.unifyWith(anno_var, list_content, env);
         },
         .box => {
             // Then check arity
@@ -2082,18 +2082,19 @@ fn generateBuiltinTypeInstance(
                     .num_actual_args = @intCast(anno_args.len),
                 } });
 
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
+                // Set error
+                try self.unifyWith(anno_var, .err, env);
+                return;
             }
 
             // Create the nominal Box type
             const box_content = try self.mkBoxContent(anno_args[0]);
-            return try self.freshFromContent(box_content, env, anno_region);
+            try self.unifyWith(anno_var, box_content, env);
         },
         // Polymorphic Num type is a module, not a type itself
         .num => {
-            // Return error - Num is a module containing numeric types, not a type
-            return try self.freshFromContent(.err, env, anno_region);
+            // Set error - Num is a module containing numeric types, not a type
+            try self.unifyWith(anno_var, .err, env);
         },
     }
 }
@@ -3411,9 +3412,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .start = first_arg_range.start,
                         .count = rest_args_range.count + 1,
                     };
-
-                    // TODO Why do we have to create the static dispatch fn at the
-                    // receiver rank instead of the  cur rank?
 
                     // Since the return type of this dispatch is unknown, create a
                     // flex to represent it
@@ -5008,24 +5006,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         break :blk self.cir;
                     }
                 } else {
-                    // TODO: The name `module_envs` is misleading - it's actually a map of
-                    // auto-imported TYPE NAMES to their defining modules, not a map of module names.
-                    // This is because when you write `List` in user code (not `Builtin.List`), the
-                    // compiler needs to quickly resolve which module defines that type name.
-                    //
-                    // This creates confusion here in static dispatch: we have an `origin_module`
-                    // which stores the MODULE name ("Builtin"), but `module_envs` is keyed by
-                    // TYPE names ("List", "Bool", etc.).
-                    //
-                    // The correct solution would be to have two separate maps:
-                    // - auto_imported_types: HashMap(TypeName, ModuleEnv) for canonicalization
-                    // - imported_modules: HashMap(ModuleName, ModuleEnv) for module lookups
-                    //
-                    // For now, we work around this by looking up regular imports in module_envs.
-                    std.debug.assert(self.module_envs != null);
-                    const module_envs = self.module_envs.?;
+                    // Look up the module in auto_imported_types.
+                    // Note: auto_imported_types maps TYPE names to their modules, but
+                    // here we're using the origin_module (a MODULE name). This works
+                    // because imported types have entries keyed by their type name.
+                    std.debug.assert(self.auto_imported_types != null);
+                    const auto_imported_types = self.auto_imported_types.?;
 
-                    const mb_original_module_env = module_envs.get(original_module_ident);
+                    const mb_original_module_env = auto_imported_types.get(original_module_ident);
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }
@@ -5463,7 +5451,7 @@ pub fn createImportMapping(
     cir: *const ModuleEnv,
     builtin_module: ?*const ModuleEnv,
     builtin_indices: ?CIR.BuiltinIndices,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 ) std.mem.Allocator.Error!types_mod.import_mapping.ImportMapping {
     var mapping = types_mod.import_mapping.ImportMapping.init(gpa);
     errdefer mapping.deinit();
@@ -5552,7 +5540,7 @@ pub fn createImportMapping(
         }
     }
 
-    _ = module_envs; // Not needed anymore - mapping is built during canonicalization
+    _ = auto_imported_types; // Not needed anymore - mapping is built during canonicalization
 
     return mapping;
 }

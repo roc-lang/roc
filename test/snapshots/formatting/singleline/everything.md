@@ -50,6 +50,8 @@ UNUSED VARIABLE - everything.md:19:2:19:4
 UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:21:2:21:4
 UNUSED VARIABLE - everything.md:22:2:22:4
+UNSUPPORTED WHERE CLAUSE - everything.md:15:19:15:22
+UNSUPPORTED WHERE CLAUSE - everything.md:15:24:15:27
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -201,6 +203,28 @@ The unused variable is declared here:
 	h5 = (x, y)
 ```
 	^^
+
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _A_ is not supported:
+**everything.md:15:19:15:22:**
+```roc
+g : e -> e where [e.A, e.B]
+```
+                  ^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _B_ is not supported:
+**everything.md:15:24:15:27:**
+```roc
+g : e -> e where [e.A, e.B]
+```
+                       ^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
 
 # TOKENS
