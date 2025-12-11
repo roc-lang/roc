@@ -160,6 +160,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("Builtin.List.append")) |list_append_ident| {
         try low_level_map.put(list_append_ident, .list_append);
     }
+    if (env.common.findIdent("Builtin.List.prepend")) |list_prepend_ident| {
+        try low_level_map.put(list_prepend_ident, .list_prepend);
+    }
     if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
         try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
     }

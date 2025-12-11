@@ -67,6 +67,8 @@ Builtin :: [].{
 		}
 
 		append : List(a), a -> List(a)
+		
+		prepend : List(a), a -> List(a)
 
 		first : List(item) -> Try(item, [ListWasEmpty, ..others])
 		first = |list| if List.is_empty(list) {

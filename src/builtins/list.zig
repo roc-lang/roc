@@ -728,11 +728,11 @@ pub fn listPrepend(
     elements_refcounted: bool,
     inc_context: ?*anyopaque,
     inc: Inc,
-    copy: CopyFn,
+    update_mode: UpdateMode,
+    copy: CopyFallbackFn,
     roc_ops: *RocOps,
 ) callconv(.c) RocList {
     const old_length = list.len();
-    // TODO: properly wire in update mode.
     var with_capacity = listReserve(
         list,
         alignment,
@@ -741,7 +741,7 @@ pub fn listPrepend(
         elements_refcounted,
         inc_context,
         inc,
-        .Immutable,
+        update_mode,
         roc_ops,
     );
     with_capacity.length += 1;
@@ -755,7 +755,7 @@ pub fn listPrepend(
 
         // finally copy in the new first element
         if (element) |source| {
-            copy(target, source);
+            copy(target, source, element_width);
         }
     }
 
@@ -1953,7 +1953,7 @@ test "listPrepend basic functionality" {
 
     // Prepend an element
     const element: u8 = 1;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 4), result.len());
@@ -1987,7 +1987,7 @@ test "listPrepend to empty list" {
 
     // Prepend an element
     const element: i32 = 42;
-    const result = listPrepend(empty_list, @alignOf(i32), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(i32), false, null, rcNone, copy_fn, test_env.getOps());
+    const result = listPrepend(empty_list, @alignOf(i32), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(i32), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer result.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), result.len());
@@ -2020,12 +2020,11 @@ test "listPrepend multiple elements" {
 
     // Prepend first element
     const element1: u16 = 200;
-    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u16), false, null, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u16), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     // Prepend second element
     const element2: u16 = 300;
-    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u16), false, null, rcNone, copy_fn, test_env.getOps());
-
+    list = listPrepend(list, @alignOf(u16), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u16), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 3), list.len());
@@ -2149,7 +2148,7 @@ test "listReplace basic functionality" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2186,7 +2185,7 @@ test "listReplace first element" {
 
     // Copy function for i32 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*i32, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*i32, @ptrCast(@alignCast(src)));
@@ -2222,7 +2221,7 @@ test "listReplace last element" {
 
     // Copy function for u16 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u16, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u16, @ptrCast(@alignCast(src)));
@@ -2384,7 +2383,7 @@ test "edge case: listPrepend to large list" {
 
     // Prepend an element
     const element: u8 = 255;
-    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
+    const result = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
     defer result.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 101), result.len());
@@ -2644,7 +2643,7 @@ test "listReplaceInPlace basic functionality" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2853,7 +2852,7 @@ test "integration: prepend then drop operations" {
 
     // Copy function for u8 elements
     const copy_fn = struct {
-        fn copy(dest: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+        fn copy(dest: ?[*]u8, src: ?[*]u8, _: usize) callconv(.c) void {
             if (dest != null and src != null) {
                 const dest_ptr = @as(*u8, @ptrCast(@alignCast(dest)));
                 const src_ptr = @as(*u8, @ptrCast(@alignCast(src)));
@@ -2868,10 +2867,10 @@ test "integration: prepend then drop operations" {
 
     // Prepend multiple elements
     const element1: u8 = 1;
-    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element1))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     const element2: u8 = 2;
-    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, null, rcNone, copy_fn, test_env.getOps());
+    list = listPrepend(list, @alignOf(u8), @as(?[*]u8, @ptrCast(@constCast(&element2))), @sizeOf(u8), false, null, rcNone, .Immutable, copy_fn, test_env.getOps());
 
     // Now we should have [2, 1, 5, 10, 15]
     try std.testing.expectEqual(@as(usize, 5), list.len());
