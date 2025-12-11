@@ -2626,7 +2626,19 @@ pub const Interpreter = struct {
                 const elt_arg = args[1];
 
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
-                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
+
+                if (elt_arg.ptr == null) {
+                    // only ZST elements can have null pointer
+                    std.debug.assert(roc_list_arg.layout.tag == .list_of_zst);
+                    std.debug.assert(elt_arg.layout.tag == .zst);
+                    const roc_list: *RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    if (roc_list.isUnique()) {
+                        // Mutate in place
+                        roc_list.length += 1;
+                        return roc_list_arg;
+                    }
+                    unreachable; // TODO In my testing this was never reached, so I could not test it
+                }
 
                 // Extract element layout from List(a)
                 std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
@@ -12888,7 +12900,7 @@ pub const Interpreter = struct {
 
                         // Create the list layout with the correct element layout
                         const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                        const actual_list_layout: Layout = if (actual_elem_layout.tag == .zst) .listOfZst() else .list(correct_elem_idx);
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
