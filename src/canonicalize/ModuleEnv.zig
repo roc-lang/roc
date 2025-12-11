@@ -169,6 +169,9 @@ pub const CommonIdents = extern struct {
     digits_after_pt: Ident.Idx,
     box_method: Ident.Idx,
     unbox_method: Ident.Idx,
+    // Fully qualified Box intrinsic method names
+    builtin_box_box: Ident.Idx,
+    builtin_box_unbox: Ident.Idx,
     to_inspect: Ident.Idx,
     ok: Ident.Idx,
     err: Ident.Idx,
@@ -255,6 +258,9 @@ pub const CommonIdents = extern struct {
             .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
             .box_method = try common.insertIdent(gpa, Ident.for_text("box")),
             .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
+            // Fully qualified Box intrinsic method names
+            .builtin_box_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box.box")),
+            .builtin_box_unbox = try common.insertIdent(gpa, Ident.for_text("Builtin.Box.unbox")),
             .to_inspect = try common.insertIdent(gpa, Ident.for_text("to_inspect")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
@@ -344,6 +350,9 @@ pub const CommonIdents = extern struct {
             .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
             .box_method = common.findIdent("box") orelse unreachable,
             .unbox_method = common.findIdent("unbox") orelse unreachable,
+            // Fully qualified Box intrinsic method names
+            .builtin_box_box = common.findIdent("Builtin.Box.box") orelse unreachable,
+            .builtin_box_unbox = common.findIdent("Builtin.Box.unbox") orelse unreachable,
             .to_inspect = common.findIdent("to_inspect") orelse unreachable,
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,

@@ -289,6 +289,7 @@ pub fn populateModuleEnvs(
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
+        .{ "Box", builtin_indices.box_type, builtin_indices.box_ident },
         .{ "Utf8Problem", builtin_indices.utf8_problem_type, builtin_indices.utf8_problem_ident },
         .{ "U8", builtin_indices.u8_type, builtin_indices.u8_ident },
         .{ "I8", builtin_indices.i8_type, builtin_indices.i8_ident },

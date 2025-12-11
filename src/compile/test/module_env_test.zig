@@ -125,7 +125,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 numeric method identifiers: abs, abs_diff
     // Plus 1 inspect method identifier: to_inspect
     // Plus 14 unqualified builtin type names: Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
-    try testing.expectEqual(@as(u32, 79), original.common.idents.interner.entry_count);
+    // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
+    try testing.expectEqual(@as(u32, 81), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -134,9 +135,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 79 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 14 unqualified builtin type names from ModuleEnv.init()
+    // Should have same 81 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 14 unqualified builtin type names from ModuleEnv.init() + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 79), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 81), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

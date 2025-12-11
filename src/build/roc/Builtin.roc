@@ -240,7 +240,10 @@ Builtin :: [].{
 		# Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 	}
 
-	Box(item) :: [ProvidedByCompiler].{}
+	Box(item) :: [ProvidedByCompiler].{
+		box : item -> Box(item)
+		unbox : Box(item) -> item
+	}
 
 	Try(ok, err) := [Ok(ok), Err(err)].{
 		is_ok : Try(_ok, _err) -> Bool
