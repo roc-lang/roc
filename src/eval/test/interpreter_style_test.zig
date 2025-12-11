@@ -1784,9 +1784,7 @@ test "interpreter: crash at end of block in if branch" {
 
 // Boolean/if support intentionally omitted for now
 
-// ============================================================================
 // Comprehensive dbg tests
-// ============================================================================
 
 test "dbg: integer literal" {
     const roc_src =

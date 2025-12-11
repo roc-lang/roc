@@ -427,9 +427,7 @@ test "roc test/str/app.roc runs successfully" {
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
 }
 
-// =============================================================================
 // roc build tests
-// =============================================================================
 
 test "roc build creates executable from test/int/app.roc" {
     // Skip on Windows - test/int platform doesn't have Windows host libraries

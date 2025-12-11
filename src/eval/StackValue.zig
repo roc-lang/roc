@@ -34,9 +34,7 @@ const Expr = CIR.Expr;
 
 const StackValue = @This();
 
-// ============================================================================
 // Internal helper functions for memory operations that don't need rt_var
-// ============================================================================
 
 /// Increment reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.

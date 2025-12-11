@@ -8,9 +8,7 @@ const TestEnv = @import("./TestEnv.zig");
 
 const testing = std.testing;
 
-// ============================================================================
 // Direct self-reference tests
-// ============================================================================
 
 test "recursive alias - direct self-reference without args" {
     // Simple recursive alias: A : List(A)
@@ -32,9 +30,7 @@ test "recursive alias - direct self-reference with args (apply case)" {
     try test_env.assertFirstTypeError("RECURSIVE ALIAS");
 }
 
-// ============================================================================
 // Nominal type recursion is allowed
-// ============================================================================
 
 test "nominal type - direct self-reference is allowed" {
     // Nominal types can be recursive
@@ -58,9 +54,7 @@ test "nominal type with args - self-reference is allowed" {
     try test_env.assertNoErrors();
 }
 
-// ============================================================================
 // Non-recursive aliases should work
-// ============================================================================
 
 test "non-recursive alias - simple alias works" {
     const source =
