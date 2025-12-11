@@ -2636,9 +2636,8 @@ pub const Interpreter = struct {
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
-                // Get element layout
-                const elem_layout_idx = roc_list_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                // Get element layout: use elt_arg, because list could be empty
+                const elem_layout = elt_arg.layout;
                 const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
@@ -2698,7 +2697,13 @@ pub const Interpreter = struct {
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
-                const result_layout = roc_list_arg.layout; // Same layout as input
+                var result_layout = roc_list_arg.layout;
+                if (roc_list_arg.layout.tag == .list_of_zst) {
+                    // Change layout to .list, because the list is no longer empty
+                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(elt_arg.layout);
+                    result_layout = Layout.list(elem_layout_idx);
+                }
+
                 var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
                 out.is_initialized = false;
 
