@@ -6901,6 +6901,86 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Evaluates the Box.box intrinsic, creating a boxed value from the input.
+    /// Returns the boxed result value. Caller is responsible for decref on arg_value.
+    fn evalBoxIntrinsic(
+        self: *Interpreter,
+        arg_value: StackValue,
+        return_expr_idx: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+    ) !StackValue {
+        const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
+        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+        const box_layout = try self.getRuntimeLayout(return_rt_var);
+        return try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
+    }
+
+    /// Evaluates the Box.unbox intrinsic, extracting the value from a box.
+    /// Returns the unboxed result value. Caller is responsible for decref on boxed_value.
+    fn evalUnboxIntrinsic(
+        self: *Interpreter,
+        boxed_value: StackValue,
+        value_stack: *ValueStack,
+    ) !void {
+        // Get the element rt_var from the Box type's type argument
+        const elem_rt_var = blk: {
+            const box_resolved = self.runtime_types.resolveVar(boxed_value.rt_var);
+            if (box_resolved.desc.content == .structure) {
+                const flat = box_resolved.desc.content.structure;
+                if (flat == .nominal_type) {
+                    const nom = flat.nominal_type;
+                    const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    if (type_args.len > 0) {
+                        break :blk type_args[0];
+                    }
+                }
+            }
+            // Fallback: create a fresh var
+            break :blk try self.runtime_types.fresh();
+        };
+
+        if (boxed_value.layout.tag == .box_of_zst) {
+            // Zero-sized type - return empty value
+            const elem_layout = layout.Layout.zst();
+            var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
+            result.is_initialized = true;
+            try value_stack.push(result);
+            return;
+        }
+
+        if (boxed_value.layout.tag == .box) {
+            // Get element layout
+            const elem_idx = boxed_value.layout.data.box;
+            const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
+            const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+
+            // Get pointer to heap data from the box
+            const box_ptr: *usize = @ptrCast(@alignCast(boxed_value.ptr.?));
+            const data_ptr: [*]u8 = @ptrFromInt(box_ptr.*);
+
+            // Allocate stack space and copy the value
+            var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
+            if (elem_size > 0 and result.ptr != null) {
+                @memcpy(
+                    @as([*]u8, @ptrCast(result.ptr.?))[0..elem_size],
+                    data_ptr[0..elem_size],
+                );
+            }
+            result.is_initialized = true;
+
+            // If the element is refcounted, increment its refcount since we're
+            // creating a new reference (the box still holds its own reference)
+            if (elem_layout.isRefcounted()) {
+                result.incref(&self.runtime_layout_store);
+            }
+
+            try value_stack.push(result);
+            return;
+        }
+
+        return error.TypeMismatch;
+    }
+
     fn makeRenderCtx(self: *Interpreter) render_helpers.RenderCtx {
         return .{
             .allocator = self.allocator,
@@ -10883,87 +10963,22 @@ pub const Interpreter = struct {
                             const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
                             // Check if this is Box.box
                             if (is_box_method and arg_indices.len == 1) {
-                                // Evaluate the argument to box
                                 const arg_expr = arg_indices[0];
                                 const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
-                                // Decref the original value after boxing (data is copied to heap)
                                 defer arg_value.decref(&self.runtime_layout_store, roc_ops);
 
-                                // Get Box layout from return type
-                                const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
-                                const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
-                                const box_layout = try self.getRuntimeLayout(return_rt_var);
-
-                                // Use existing helper to create boxed value
-                                const result = try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
-
+                                const result = try self.evalBoxIntrinsic(arg_value, expr_idx, roc_ops);
                                 try value_stack.push(result);
                                 return;
                             }
                             // Check if this is Box.unbox
                             if (is_unbox_method and arg_indices.len == 1) {
-                                // Evaluate the boxed argument
                                 const arg_expr = arg_indices[0];
                                 const boxed_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
                                 defer boxed_value.decref(&self.runtime_layout_store, roc_ops);
 
-                                // Get the element rt_var from the Box type's type argument
-                                const elem_rt_var = blk: {
-                                    const box_resolved = self.runtime_types.resolveVar(boxed_value.rt_var);
-                                    if (box_resolved.desc.content == .structure) {
-                                        const flat = box_resolved.desc.content.structure;
-                                        if (flat == .nominal_type) {
-                                            const nom = flat.nominal_type;
-                                            const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                            if (type_args.len > 0) {
-                                                break :blk type_args[0];
-                                            }
-                                        }
-                                    }
-                                    // Fallback: create a fresh var
-                                    break :blk try self.runtime_types.fresh();
-                                };
-
-                                if (boxed_value.layout.tag == .box_of_zst) {
-                                    // Zero-sized type - return empty value
-                                    const elem_layout = layout.Layout.zst();
-                                    var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
-                                    result.is_initialized = true;
-                                    try value_stack.push(result);
-                                    return;
-                                }
-
-                                if (boxed_value.layout.tag == .box) {
-                                    // Get element layout
-                                    const elem_idx = boxed_value.layout.data.box;
-                                    const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
-                                    const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-
-                                    // Get pointer to heap data from the box
-                                    const box_ptr: *usize = @ptrCast(@alignCast(boxed_value.ptr.?));
-                                    const data_ptr: [*]u8 = @ptrFromInt(box_ptr.*);
-
-                                    // Allocate stack space and copy the value
-                                    var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
-                                    if (elem_size > 0 and result.ptr != null) {
-                                        @memcpy(
-                                            @as([*]u8, @ptrCast(result.ptr.?))[0..elem_size],
-                                            data_ptr[0..elem_size],
-                                        );
-                                    }
-                                    result.is_initialized = true;
-
-                                    // If the element is refcounted, increment its refcount since we're
-                                    // creating a new reference (the box still holds its own reference)
-                                    if (elem_layout.isRefcounted()) {
-                                        result.incref(&self.runtime_layout_store);
-                                    }
-
-                                    try value_stack.push(result);
-                                    return;
-                                }
-
-                                return error.TypeMismatch;
+                                try self.evalUnboxIntrinsic(boxed_value, value_stack);
+                                return;
                             }
                         }
                     }
@@ -14781,19 +14796,11 @@ pub const Interpreter = struct {
                     da.field_name == self.root_env.idents.box_method and
                     arg_exprs.len == 1)
                 {
-                    // Evaluate the argument to box
                     const arg_expr = arg_exprs[0];
                     const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
-                    // Decref the original value after boxing (data is copied to heap)
                     defer arg_value.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Get Box layout from return type
-                    const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
-                    const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
-                    const box_layout = try self.getRuntimeLayout(return_rt_var);
-
-                    // Use existing helper to create boxed value
-                    const result = try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
+                    const result = try self.evalBoxIntrinsic(arg_value, da.expr_idx, roc_ops);
 
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     try value_stack.push(result);
@@ -14805,66 +14812,10 @@ pub const Interpreter = struct {
                 if (nominal_info.?.ident == self.root_env.idents.box and
                     da.field_name == self.root_env.idents.unbox_method)
                 {
-                    // receiver_value IS the boxed value
                     defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Get the element rt_var from the Box type's type argument
-                    const elem_rt_var = blk: {
-                        const box_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
-                        if (box_resolved.desc.content == .structure) {
-                            const flat = box_resolved.desc.content.structure;
-                            if (flat == .nominal_type) {
-                                const nom = flat.nominal_type;
-                                const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                if (type_args.len > 0) {
-                                    break :blk type_args[0];
-                                }
-                            }
-                        }
-                        // Fallback: create a fresh var
-                        break :blk try self.runtime_types.fresh();
-                    };
-
-                    if (receiver_value.layout.tag == .box_of_zst) {
-                        // Zero-sized type - return empty value
-                        const elem_layout = layout.Layout.zst();
-                        var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
-                        result.is_initialized = true;
-                        try value_stack.push(result);
-                        return true;
-                    }
-
-                    if (receiver_value.layout.tag == .box) {
-                        // Get element layout
-                        const elem_idx = receiver_value.layout.data.box;
-                        const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
-                        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-
-                        // Get pointer to heap data from the box
-                        const box_ptr: *usize = @ptrCast(@alignCast(receiver_value.ptr.?));
-                        const data_ptr: [*]u8 = @ptrFromInt(box_ptr.*);
-
-                        // Allocate stack space and copy the value
-                        var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
-                        if (elem_size > 0 and result.ptr != null) {
-                            @memcpy(
-                                @as([*]u8, @ptrCast(result.ptr.?))[0..elem_size],
-                                data_ptr[0..elem_size],
-                            );
-                        }
-                        result.is_initialized = true;
-
-                        // If the element is refcounted, increment its refcount since we're
-                        // creating a new reference (the box still holds its own reference)
-                        if (elem_layout.isRefcounted()) {
-                            result.incref(&self.runtime_layout_store);
-                        }
-
-                        try value_stack.push(result);
-                        return true;
-                    }
-
-                    return error.TypeMismatch;
+                    try self.evalUnboxIntrinsic(receiver_value, value_stack);
+                    return true;
                 }
 
                 // Resolve the method function
