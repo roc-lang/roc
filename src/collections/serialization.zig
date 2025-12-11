@@ -66,7 +66,7 @@ pub const SERIALIZED_FORMAT_VERSION: u32 = 1;
 /// The structure is marked `extern` to ensure consistent memory layout
 /// across compiler optimizations and platforms.
 pub const SerializedHeader = extern struct {
-    /// Magic number: 0x52534552 ("RSER") identifies this as serialized format.
+    /// Magic number identifies this serialized format.
     /// Used to distinguish from legacy raw format.
     magic: u32,
     /// Format version (currently 1) - see SERIALIZED_FORMAT_VERSION

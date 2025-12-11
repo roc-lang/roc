@@ -2303,7 +2303,8 @@ fn compileModuleForSerialization(
 
     // Run HostedCompiler to convert e_anno_only to e_hosted_lambda
     const HostedCompiler = can.HostedCompiler;
-    _ = try HostedCompiler.replaceAnnoOnlyWithHosted(&env);
+    var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(&env);
+    defer modified_def_indices.deinit(allocs.gpa);
 
     // Type check
     var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
