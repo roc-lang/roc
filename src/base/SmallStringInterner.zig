@@ -66,6 +66,35 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     return self;
 }
 
+/// Enable inserts on a deserialized interner for runtime use.
+/// Normally deserialized interners are read-only, but the interpreter needs to
+/// insert new identifiers at runtime for type name translation and method lookup.
+/// This copies the deserialized data into newly allocated memory that can be grown.
+/// Call this after deserialization but before using the interner for runtime operations.
+pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+    // Copy the bytes array into newly allocated memory
+    const bytes_slice = self.bytes.items.items;
+    var new_bytes = try collections.SafeList(u8).initCapacity(gpa, bytes_slice.len);
+    if (bytes_slice.len > 0) {
+        @memcpy(new_bytes.items.items.ptr, bytes_slice);
+        new_bytes.items.items.len = bytes_slice.len;
+    }
+    self.bytes = new_bytes;
+
+    // Copy the hash_table array into newly allocated memory
+    const hash_table_slice = self.hash_table.items.items;
+    var new_hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_slice.len);
+    if (hash_table_slice.len > 0) {
+        @memcpy(new_hash_table.items.items.ptr, hash_table_slice);
+        new_hash_table.items.items.len = hash_table_slice.len;
+    }
+    self.hash_table = new_hash_table;
+
+    if (std.debug.runtime_safety) {
+        self.supports_inserts = true;
+    }
+}
+
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
 /// NOTE: Do NOT call deinit on deserialized interners - their memory is owned by the deserialization buffer.

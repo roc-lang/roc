@@ -2240,12 +2240,18 @@ const SerializedModulesResult = struct {
 
 /// Compile a single module to a ModuleEnv using a regular allocator.
 /// Unlike compileModuleToSharedMemory, this uses the gpa and keeps source separate.
+///
+/// exposed_type_module_names: Optional list of module names that are "type modules" (e.g., "Stdout", "Stderr").
+///     When provided, modules in additional_modules whose names match these will have their
+///     statement_idx set correctly, enabling proper function lookup (e.g., Stdout.line!).
+///     The order must match: exposed_type_module_names[i] corresponds to additional_modules[i].
 fn compileModuleForSerialization(
     allocs: *Allocators,
     file_path: []const u8,
     module_name_arg: []const u8,
     builtin_modules: *eval.BuiltinModules,
     additional_modules: []*ModuleEnv,
+    exposed_type_module_names: ?[]const []const u8,
 ) !CompiledModule {
     // Read file into arena (so it lives until serialization)
     const file = try std.fs.cwd().openFile(file_path, .{});
@@ -2282,16 +2288,76 @@ fn compileModuleForSerialization(
         builtin_modules.builtin_indices,
     );
 
-    for (additional_modules) |mod_env| {
-        const name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
-        const qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(mod_env.module_name));
-        try module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
+    // Extract platform qualifier from app header (e.g., "pf" from { pf: platform "..." })
+    // This is needed to register modules with both base name and qualified name
+    const platform_qualifier: ?[]const u8 = blk: {
+        const parsed_file = parse_ast.store.getFile();
+        const header = parse_ast.store.getHeader(parsed_file.header);
+        if (header == .app) {
+            const platform_field = parse_ast.store.getRecordField(header.app.platform_idx);
+            const key_region = parse_ast.tokens.resolve(platform_field.name);
+            break :blk source[key_region.start.offset..key_region.end.offset];
+        }
+        break :blk null;
+    };
 
-        if (std.mem.endsWith(u8, mod_env.module_name, ".roc")) {
-            const name_without_roc = mod_env.module_name[0 .. mod_env.module_name.len - 4];
-            const short_name = try env.insertIdent(base.Ident.for_text(name_without_roc));
-            const short_qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(name_without_roc));
-            try module_envs_map.put(short_name, .{ .env = mod_env, .qualified_type_ident = short_qualified_ident });
+    for (additional_modules, 0..) |mod_env, mod_idx| {
+        // Get the base module name (without .roc extension if present)
+        var base_module_name = mod_env.module_name;
+        if (std.mem.endsWith(u8, base_module_name, ".roc")) {
+            base_module_name = base_module_name[0 .. base_module_name.len - 4];
+        }
+
+        // Check if this module is a "type module" (platform module like Stdout that exposes a type).
+        // For type modules, we need to set statement_idx to enable proper function lookup.
+        const is_type_module = if (exposed_type_module_names) |type_names|
+            mod_idx < type_names.len and std.mem.eql(u8, type_names[mod_idx], base_module_name)
+        else
+            false;
+
+        // Build the AutoImportedType entry
+        const auto_type: Can.AutoImportedType = if (is_type_module) blk: {
+            // For type modules, look up the type's node index
+            const type_qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
+            const type_ident_in_module = mod_env.common.findIdent(base_module_name) orelse {
+                std.log.err("Type module '{s}' does not expose a type named '{s}'", .{ mod_env.module_name, base_module_name });
+                return error.MissingTypeInPlatformModule;
+            };
+            const type_node_idx = mod_env.getExposedNodeIndexById(type_ident_in_module) orelse {
+                std.log.err("Type module '{s}' has no node index for type '{s}'", .{ mod_env.module_name, base_module_name });
+                return error.MissingNodeIndexForPlatformType;
+            };
+            break :blk .{
+                .env = mod_env,
+                .statement_idx = @enumFromInt(type_node_idx),
+                .qualified_type_ident = type_qualified_ident,
+            };
+        } else blk: {
+            // For regular modules (like platform main.roc), no statement_idx needed
+            const qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(mod_env.module_name));
+            break :blk .{
+                .env = mod_env,
+                .statement_idx = null,
+                .qualified_type_ident = qualified_ident,
+            };
+        };
+
+        // Register with base module name (e.g., "Stdout")
+        const name = try env.insertIdent(base.Ident.for_text(base_module_name));
+        try module_envs_map.put(name, auto_type);
+
+        // Register with full module name if different (e.g., "Stdout.roc")
+        if (!std.mem.eql(u8, mod_env.module_name, base_module_name)) {
+            const full_name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
+            try module_envs_map.put(full_name, auto_type);
+        }
+
+        // Register with platform-qualified name (e.g., "pf.Stdout" for apps)
+        if (platform_qualifier) |pf| {
+            const qualified_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}", .{ pf, base_module_name });
+            defer allocs.gpa.free(qualified_name);
+            const pf_name = try env.insertIdent(base.Ident.for_text(qualified_name));
+            try module_envs_map.put(pf_name, auto_type);
         }
     }
 
@@ -2319,11 +2385,19 @@ fn compileModuleForSerialization(
         .builtin_indices = builtin_modules.builtin_indices,
     };
 
-    const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+    // Build imported_envs array: builtins + additional modules
+    // This is needed for resolveImports to properly map external lookups
+    var imported_envs_list = try std.ArrayList(*const ModuleEnv).initCapacity(allocs.gpa, 1 + additional_modules.len);
+    defer imported_envs_list.deinit(allocs.gpa);
+    imported_envs_list.appendAssumeCapacity(builtin_modules.builtin_module.env);
+    for (additional_modules) |mod| {
+        imported_envs_list.appendAssumeCapacity(mod);
+    }
+    const imported_envs = imported_envs_list.items;
 
-    env.imports.resolveImports(&env, &imported_envs);
+    env.imports.resolveImports(&env, imported_envs);
 
-    var checker = try Check.init(allocs.gpa, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
+    var checker = try Check.init(allocs.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -2425,6 +2499,7 @@ fn compileAndSerializeModulesForEmbedding(
             module_name,
             &builtin_modules,
             &.{},
+            null, // No type modules when compiling sibling modules
         );
         total_error_count += compiled.error_count;
         try compiled_modules.append(compiled);
@@ -2445,6 +2520,7 @@ fn compileAndSerializeModulesForEmbedding(
             "main",
             &builtin_modules,
             platform_env_ptrs,
+            null, // No type modules when compiling platform main.roc
         );
         compiled.is_platform_main = true;
         total_error_count += compiled.error_count;
@@ -2466,6 +2542,7 @@ fn compileAndSerializeModulesForEmbedding(
             "app",
             &builtin_modules,
             all_env_ptrs,
+            exposed_modules.items, // Pass type module names so statement_idx gets set
         );
         compiled.is_app = true;
         total_error_count += compiled.error_count;
@@ -2474,6 +2551,94 @@ fn compileAndSerializeModulesForEmbedding(
             primary_env_index = app_env_index;
         }
         try compiled_modules.append(compiled);
+    }
+
+    // Collect and sort all hosted functions globally, then assign indices
+    // This must happen before serialization so hosted_idx values are correct
+    {
+        const HostedCompiler = can.HostedCompiler;
+        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+        defer all_hosted_fns.deinit(allocs.gpa);
+
+        // Collect from platform sibling modules only (not app, not platform main.roc)
+        for (compiled_modules.items, 0..) |*m, i| {
+            // Skip app module and platform main.roc
+            if (i == app_env_index or i == primary_env_index) continue;
+            var module_fns = try HostedCompiler.collectAndSortHostedFunctions(&m.env);
+            defer module_fns.deinit(m.env.gpa);
+
+            for (module_fns.items) |fn_info| {
+                try all_hosted_fns.append(allocs.gpa, fn_info);
+            }
+        }
+
+        // Sort globally
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+            }
+        };
+        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+        // Deduplicate
+        var write_idx: usize = 0;
+        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+                if (write_idx != read_idx) {
+                    all_hosted_fns.items[write_idx] = fn_info;
+                }
+                write_idx += 1;
+            } else {
+                allocs.gpa.free(fn_info.name_text);
+            }
+        }
+        all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+        // Reassign global indices for platform sibling modules only
+        // (not app, not platform main.roc - only exposed modules like Stdout, Stderr, Stdin)
+        for (compiled_modules.items, 0..) |*m, module_idx| {
+            // Skip app module and platform main.roc
+            if (module_idx == app_env_index or module_idx == primary_env_index) continue;
+            const platform_env = &m.env;
+
+            const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+            for (all_defs) |def_idx| {
+                const def = platform_env.store.getDef(def_idx);
+                const expr = platform_env.store.getExpr(def.expr);
+
+                if (expr == .e_hosted_lambda) {
+                    const hosted = expr.e_hosted_lambda;
+                    const local_name = platform_env.getIdent(hosted.symbol_name);
+
+                    var plat_module_name = platform_env.module_name;
+                    if (std.mem.endsWith(u8, plat_module_name, ".roc")) {
+                        plat_module_name = plat_module_name[0 .. plat_module_name.len - 4];
+                    }
+                    const qualified_name = try std.fmt.allocPrint(allocs.gpa, "{s}.{s}", .{ plat_module_name, local_name });
+                    defer allocs.gpa.free(qualified_name);
+
+                    const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                        qualified_name[0 .. qualified_name.len - 1]
+                    else
+                        qualified_name;
+
+                    for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                        if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
+                            const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
+                            var expr_node = platform_env.store.nodes.get(expr_node_idx);
+                            expr_node.data_2 = @intCast(idx);
+                            platform_env.store.nodes.set(expr_node_idx, expr_node);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Free name_text strings
+        for (all_hosted_fns.items) |fn_info| {
+            allocs.gpa.free(fn_info.name_text);
+        }
     }
 
     // Check for errors - abort unless --allow-errors flag is set

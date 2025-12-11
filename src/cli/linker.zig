@@ -293,6 +293,10 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             // Export all symbols (the Roc app exports its entrypoints)
             try args.append("--export-all");
 
+            // Disable garbage collection to preserve host-defined exports (init, handleEvent, update)
+            // Without this, wasm-ld removes symbols that aren't referenced by the Roc app
+            try args.append("--no-gc-sections");
+
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
 

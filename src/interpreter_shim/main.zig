@@ -659,6 +659,30 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         }
     }
 
+    // Enable runtime inserts on all deserialized module environments.
+    // The interpreter needs to insert new identifiers at runtime for:
+    // - Translating module names between different ident spaces
+    // - Building qualified type names for method lookup
+    // - Runtime type introspection
+    // Deserialized interners are read-only by default, so we explicitly enable inserts here.
+    // This copies the data from the read-only embedded buffer into growable allocated memory.
+    env_ptr.common.idents.interner.enableRuntimeInserts(allocator) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on platform env");
+        return error.InterpreterSetupFailed;
+    };
+    if (app_env) |a_env| {
+        @constCast(a_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on app env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+    for (imported_envs) |imp_env| {
+        @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on imported env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
