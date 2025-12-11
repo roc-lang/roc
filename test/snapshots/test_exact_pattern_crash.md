@@ -34,7 +34,7 @@ main = {
 ~~~
 # EXPECTED
 UNUSED VARIABLE - test_exact_pattern_crash.md:19:5:19:7
-TYPE MISMATCH - test_exact_pattern_crash.md:23:10:23:50
+TOO MANY ARGUMENTS - test_exact_pattern_crash.md:23:10:23:50
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `p1` is not used anywhere in your code.
@@ -48,18 +48,15 @@ The unused variable is declared here:
     ^^
 
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO MANY ARGUMENTS**
+The function `map_pair` expects 3 arguments, but 4 were provided:
 **test_exact_pattern_crash.md:23:10:23:50:**
 ```roc
     p2 = map_pair(3, 4, (|x| x + 1), (|y| y * 2))
 ```
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-It has the type:
-    _e, h, (i -> i), (j -> j) -> _ret where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]_
-
-But I expected it to be:
+The function has the signature:
     _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_
 
 # TOKENS
@@ -327,7 +324,7 @@ main = {
 	(defs
 		(patt (type "Pair(a, b) -> Pair(b, a)"))
 		(patt (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
-		(patt (type "_e")))
+		(patt (type "Error")))
 	(type_decls
 		(alias (type "Pair(a, b)")
 			(ty-header (name "Pair")
@@ -337,5 +334,5 @@ main = {
 	(expressions
 		(expr (type "Pair(a, b) -> Pair(b, a)"))
 		(expr (type "Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)"))
-		(expr (type "_e"))))
+		(expr (type "Error"))))
 ~~~

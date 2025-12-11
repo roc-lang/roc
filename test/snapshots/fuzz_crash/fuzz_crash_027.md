@@ -227,8 +227,7 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
-TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
+TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
 MISSING METHOD - fuzz_crash_027.md:125:6:125:9
 MISSING METHOD - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
@@ -933,8 +932,8 @@ This expression produces a value, but it's not being used:
 It has the type:
     __d_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `match_time` expects 2 arguments, but 1 was provided:
 **fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
@@ -942,23 +941,8 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
+The function has the signature:
     _[Red, Blue, .._others2], _arg -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_027.md:111:2:113:3:**
-```roc
-	match_time(
-		..., #
-	)
-```
-
-It has the type:
-    __d_
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
