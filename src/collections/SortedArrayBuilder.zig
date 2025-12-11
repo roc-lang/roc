@@ -22,6 +22,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
     return struct {
         entries: std.ArrayList(Entry) = .{},
         sorted: bool = true,
+        deduplicated: bool = true,
 
         const Self = @This();
 
@@ -70,12 +71,16 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             // Check if we need to maintain sorted order
             if (self.sorted and self.entries.items.len > 0) {
                 const last = self.entries.items[self.entries.items.len - 1];
-                if (K == []const u8) {
-                    self.sorted = std.mem.lessThan(u8, last.key, new_key);
-                } else if (KeyBackingInt != void) {
-                    self.sorted = @as(KeyBackingInt, @bitCast(last.key)) < @as(KeyBackingInt, @bitCast(new_key));
-                } else {
-                    self.sorted = last.key < new_key;
+                const is_less_than = if (K == []const u8)
+                    std.mem.lessThan(u8, last.key, new_key)
+                else if (KeyBackingInt != void)
+                    @as(KeyBackingInt, @bitCast(last.key)) < @as(KeyBackingInt, @bitCast(new_key))
+                else
+                    last.key < new_key;
+
+                if (!is_less_than) {
+                    self.sorted = false;
+                    self.deduplicated = false; // If unsorted, may have duplicates
                 }
             }
 
@@ -127,64 +132,57 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 self.sorted = true;
             }
 
-            // Always deduplicate when ensureSorted is called
-            // This ensures we handle cases where detectDuplicates was called first
-            self.deduplicateAndReport(allocator);
+            // Only deduplicate if not already deduplicated
+            if (!self.deduplicated) {
+                self.deduplicateAndReport(allocator);
+            }
         }
 
-        /// Check for duplicates, report them, and remove duplicates keeping the last occurrence
+        /// Check for duplicates, report them, and remove duplicates keeping the last occurrence.
+        /// Since the array is sorted, duplicates are adjacent - this is O(n).
         fn deduplicateAndReport(self: *Self, allocator: Allocator) void {
-            if (self.entries.items.len <= 1) return;
-
-            // First pass: detect and report duplicates
-            var i: usize = 1;
-            while (i < self.entries.items.len) {
-                const prev_entry = self.entries.items[i - 1];
-                const curr_entry = self.entries.items[i];
-                const is_duplicate = if (K == []const u8)
-                    std.mem.eql(u8, prev_entry.key, curr_entry.key)
-                else
-                    prev_entry.key == curr_entry.key;
-
-                if (is_duplicate) {
-                    // Note: Duplicate detection is handled by caller via detectDuplicates() method
-                }
-                i += 1;
+            if (self.entries.items.len <= 1) {
+                self.deduplicated = true;
+                return;
             }
 
-            // Second pass: deduplicate by keeping last occurrence
+            // Since array is sorted, duplicates are adjacent.
+            // We keep the last occurrence of each key by scanning backwards from each position.
+            // Single pass: for each entry, check if the NEXT entry has the same key.
+            // If so, skip current entry (keep the later one).
             var write_index: usize = 0;
-            for (self.entries.items, 0..) |entry, read_index| {
-                var should_keep = true;
+            const len = self.entries.items.len;
 
-                // Look ahead to see if there's a duplicate later
-                for (self.entries.items[read_index + 1 ..]) |future_entry| {
-                    const is_duplicate = if (K == []const u8)
-                        std.mem.eql(u8, entry.key, future_entry.key)
+            for (0..len) |read_index| {
+                const entry = self.entries.items[read_index];
+                const is_last = read_index == len - 1;
+
+                // Check if next entry has the same key (if not last)
+                const has_duplicate_after = if (is_last) false else blk: {
+                    const next_entry = self.entries.items[read_index + 1];
+                    break :blk if (K == []const u8)
+                        std.mem.eql(u8, entry.key, next_entry.key)
                     else
-                        entry.key == future_entry.key;
+                        entry.key == next_entry.key;
+                };
 
-                    if (is_duplicate) {
-                        should_keep = false;
-                        break;
+                if (has_duplicate_after) {
+                    // Skip this entry, keep the later one
+                    if (K == []const u8) {
+                        allocator.free(entry.key);
                     }
-                }
-
-                if (should_keep) {
+                } else {
+                    // Keep this entry
                     if (write_index != read_index) {
                         self.entries.items[write_index] = entry;
                     }
                     write_index += 1;
-                } else {
-                    // Free the string key that we're not keeping
-                    if (K == []const u8) {
-                        allocator.free(entry.key);
-                    }
                 }
             }
 
             // Update the length to reflect deduplicated entries
             self.entries.shrinkRetainingCapacity(write_index);
+            self.deduplicated = true;
         }
 
         /// Detect duplicates without modifying the array - returns list of duplicate keys
@@ -298,6 +296,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             entries_len: u64,
             entries_capacity: u64,
             sorted: bool,
+            deduplicated: bool,
 
             /// Serialize a SortedArrayBuilder into this Serialized struct, appending data to the writer
             pub fn serialize(
@@ -316,6 +315,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                 self.entries_len = entries_slice.len;
                 self.entries_capacity = entries_slice.len;
                 self.sorted = builder.sorted;
+                self.deduplicated = builder.deduplicated;
             }
 
             /// Deserialize this Serialized struct into a SortedArrayBuilder
@@ -334,6 +334,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     builder.* = SortedArrayBuilder(K, V){
                         .entries = .{},
                         .sorted = self.sorted,
+                        .deduplicated = self.deduplicated,
                     };
                 } else {
                     // Apply the offset to convert from serialized offset to actual pointer
@@ -346,6 +347,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                             .capacity = @intCast(self.entries_capacity),
                         },
                         .sorted = self.sorted,
+                        .deduplicated = self.deduplicated,
                     };
                 }
 
