@@ -504,21 +504,17 @@ pub const Store = struct {
     /// Get or create an empty record layout (for closures with no captures)
     fn getEmptyRecordLayout(self: *Self) !Idx {
         // Check if we already have an empty record layout
-        for (self.record_data.items.items, 0..) |record_data, i| {
+        for (self.record_data.items.items) |record_data| {
             if (record_data.size == 0 and record_data.fields.count == 0) {
-                const record_idx = RecordIdx{ .int_idx = @intCast(i) };
-                const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
+                // empty records are a zero-sized
+                const empty_record_layout = Layout.zst();
                 return try self.insertLayout(empty_record_layout);
             }
         }
 
         // Create new empty record layout
-        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
-        _ = try self.record_data.append(self.env.gpa, .{
-            .size = 0,
-            .fields = collections.NonEmptyRange{ .start = 0, .count = 0 },
-        });
-        const empty_record_layout = Layout.record(std.mem.Alignment.@"1", record_idx);
+        // empty records are a zero-sized
+        const empty_record_layout = Layout.zst();
         return try self.insertLayout(empty_record_layout);
     }
 
