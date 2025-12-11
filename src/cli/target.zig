@@ -71,7 +71,7 @@ pub const TargetsConfig = struct {
     }
 
     /// Get the default target for a given link type based on the current system
-    /// Returns the first target in the list that's compatible with the current OS
+    /// Returns the first target in the list that's compatible with the current host (OS and arch)
     pub fn getDefaultTarget(self: TargetsConfig, link_type: LinkType) ?RocTarget {
         const specs = switch (link_type) {
             .exe => self.exe,
@@ -79,20 +79,34 @@ pub const TargetsConfig = struct {
             .shared_lib => self.shared_lib,
         };
 
-        const native = RocTarget.detectNative();
-        const native_os = native.toOsTag();
-
-        // First pass: look for exact OS match
+        // First pass: look for exact OS and architecture match
         for (specs) |spec| {
-            if (spec.target.toOsTag() == native_os) {
+            if (spec.target.isCompatibleWithHost()) {
                 return spec.target;
             }
         }
 
-        // wasm32 is considered compatible with all OSes as a fallback
-        for (specs) |spec| {
-            if (spec.target == .wasm32) {
-                return spec.target;
+        return null;
+    }
+
+    /// Result of finding a compatible target
+    pub const CompatibleTarget = struct {
+        target: RocTarget,
+        link_type: LinkType,
+    };
+
+    /// Get the first compatible target across all link types.
+    /// Iterates through exe, static_lib, shared_lib in order,
+    /// returning the first target compatible with the current host.
+    pub fn getFirstCompatibleTarget(self: TargetsConfig) ?CompatibleTarget {
+        const link_types = [_]LinkType{ .exe, .static_lib, .shared_lib };
+
+        for (link_types) |lt| {
+            const specs = self.getSupportedTargets(lt);
+            for (specs) |spec| {
+                if (spec.target.isCompatibleWithHost()) {
+                    return CompatibleTarget{ .target = spec.target, .link_type = lt };
+                }
             }
         }
 
@@ -189,13 +203,62 @@ pub const TargetsConfig = struct {
             }
         }
 
-        // static_lib and shared_lib to be added later
+        // Convert static_lib link type
+        var static_lib_specs = std.array_list.Managed(TargetLinkSpec).init(allocator);
+        errdefer static_lib_specs.deinit();
+
+        if (targets_section.static_lib) |static_lib_idx| {
+            const link_type = store.getTargetLinkType(static_lib_idx);
+            const entry_indices = store.targetEntrySlice(link_type.entries);
+
+            for (entry_indices) |entry_idx| {
+                const entry = store.getTargetEntry(entry_idx);
+
+                // Parse target name from token
+                const target_name = ast.resolve(entry.target);
+                const target = RocTarget.fromString(target_name) orelse continue; // Skip unknown targets
+
+                // Convert files
+                var link_items = std.array_list.Managed(LinkItem).init(allocator);
+                errdefer link_items.deinit();
+
+                const file_indices = store.targetFileSlice(entry.files);
+                for (file_indices) |file_idx| {
+                    const target_file = store.getTargetFile(file_idx);
+
+                    switch (target_file) {
+                        .string_literal => |tok| {
+                            // The tok points to StringPart token containing the path
+                            const path = ast.resolve(tok);
+                            try link_items.append(.{ .file_path = path });
+                        },
+                        .special_ident => |tok| {
+                            const ident = ast.resolve(tok);
+                            if (std.mem.eql(u8, ident, "app")) {
+                                try link_items.append(.app);
+                            } else if (std.mem.eql(u8, ident, "win_gui")) {
+                                try link_items.append(.win_gui);
+                            }
+                            // Skip unknown special identifiers
+                        },
+                        .malformed => continue, // Skip malformed entries
+                    }
+                }
+
+                try static_lib_specs.append(.{
+                    .target = target,
+                    .items = try link_items.toOwnedSlice(),
+                });
+            }
+        }
+
+        // shared_lib to be added later
         const empty_specs: []const TargetLinkSpec = &.{};
 
         return TargetsConfig{
             .files_dir = files_dir,
             .exe = try exe_specs.toOwnedSlice(),
-            .static_lib = empty_specs,
+            .static_lib = try static_lib_specs.toOwnedSlice(),
             .shared_lib = empty_specs,
         };
     }

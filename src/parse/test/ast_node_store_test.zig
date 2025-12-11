@@ -725,6 +725,7 @@ test "NodeStore round trip - Targets" {
     const section = AST.TargetsSection{
         .files_path = rand_token_idx(),
         .exe = link_type_idx,
+        .static_lib = null,
         .region = rand_region(),
     };
     const section_idx = try store.addTargetsSection(section);
@@ -740,6 +741,7 @@ test "NodeStore round trip - Targets" {
     const section_nulls = AST.TargetsSection{
         .files_path = null,
         .exe = null,
+        .static_lib = null,
         .region = rand_region(),
     };
     const section_nulls_idx = try store.addTargetsSection(section_nulls);

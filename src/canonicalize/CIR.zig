@@ -819,6 +819,9 @@ pub const Import = struct {
         ///
         /// For each import, this finds the module in available_modules whose module_name
         /// matches the import name and sets the resolved index accordingly.
+        ///
+        /// For package-qualified imports like "pf.Stdout", this also tries to match the
+        /// base module name ("Stdout") if the full qualified name doesn't match.
         pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
             const import_count: usize = @intCast(self.imports.len());
             for (0..import_count) |i| {
@@ -826,9 +829,18 @@ pub const Import = struct {
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
+                // For package-qualified imports like "pf.Stdout", extract the base module name
+                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+                    import_name[dot_pos + 1 ..]
+                else
+                    import_name;
+
                 // Find matching module in available_modules by comparing module names
                 for (available_modules, 0..) |module_env, module_idx| {
-                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
+                    // Try exact match first, then base name match for package-qualified imports
+                    if (std.mem.eql(u8, module_env.module_name, import_name) or
+                        std.mem.eql(u8, module_env.module_name, base_name))
+                    {
                         self.setResolvedModule(import_idx, @intCast(module_idx));
                         break;
                     }

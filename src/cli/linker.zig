@@ -33,7 +33,7 @@ pub const TargetFormat = enum {
         return switch (builtin.target.os.tag) {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
-            .wasi => .wasm,
+            .freestanding => .wasm,
             else => .elf,
         };
     }
@@ -43,7 +43,7 @@ pub const TargetFormat = enum {
         return switch (os) {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
-            .wasi => .wasm,
+            .freestanding => .wasm,
             else => .elf,
         };
     }
@@ -60,7 +60,13 @@ pub const TargetAbi = enum {
     }
 };
 
-/// Configuration for linking operation
+/// Default WASM initial memory: 64MB
+pub const DEFAULT_WASM_INITIAL_MEMORY: usize = 64 * 1024 * 1024;
+
+/// Default WASM stack size: 8MB
+pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// Configuration for the linker, specifying target format, ABI, paths, and linking options.
 pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
@@ -94,6 +100,14 @@ pub const LinkConfig = struct {
 
     /// Whether to disable linker output
     disable_output: bool = false,
+
+    /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
+    /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
+    wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
+
+    /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
+    /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
+    wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
 };
 
 /// Errors that can occur during linking
@@ -264,6 +278,38 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
+        },
+        .freestanding => {
+            // WebAssembly linker (wasm-ld) for freestanding wasm32 target
+            try args.append("wasm-ld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Don't look for _start or _main entry point - we export specific functions
+            try args.append("--no-entry");
+
+            // Export all symbols (the Roc app exports its entrypoints)
+            try args.append("--export-all");
+
+            // Disable garbage collection to preserve host-defined exports (init, handleEvent, update)
+            // Without this, wasm-ld removes symbols that aren't referenced by the Roc app
+            try args.append("--no-gc-sections");
+
+            // Allow undefined symbols (imports from host environment)
+            try args.append("--allow-undefined");
+
+            // Set initial memory size (configurable, default 64MB)
+            // Must be a multiple of 64KB (WASM page size)
+            const initial_memory_str = std.fmt.allocPrint(allocs.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
+            try args.append(initial_memory_str);
+
+            // Set stack size (configurable, default 8MB)
+            // Must be a multiple of 16 (stack alignment)
+            const stack_size_str = std.fmt.allocPrint(allocs.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
+            try args.append("-z");
+            try args.append(stack_size_str);
         },
         else => {
             // Generic ELF linker

@@ -128,8 +128,8 @@ pub const Dir = struct {
 
     /// Canonicalize the given filepath relative to this dir's path.
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-        if (comptime @import("builtin").target.os.tag == .wasi) {
-            // WASI doesn't support realpath, so we'll just resolve the path
+        if (comptime @import("builtin").target.os.tag == .freestanding) {
+            // Freestanding doesn't support realpath, so we'll just resolve the path
             // without following symlinks
             return std.fs.path.resolve(allocator, &.{filename}) catch |err| {
                 switch (err) {
@@ -236,8 +236,8 @@ fn baseNameDefault(absolute_path: []const u8) ?[]const u8 {
 }
 
 fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    if (comptime @import("builtin").target.os.tag == .wasi) {
-        // WASI doesn't support realpath, so we'll just resolve the path
+    if (comptime @import("builtin").target.os.tag == .freestanding) {
+        // Freestanding doesn't support realpath, so we'll just resolve the path
         // without following symlinks
         return std.fs.path.resolve(allocator, &.{root_relative_path}) catch |err| {
             return switch (err) {

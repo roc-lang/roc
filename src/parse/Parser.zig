@@ -1141,15 +1141,16 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
 
     var files_path: ?TokenIdx = null;
     var exe: ?AST.TargetLinkType.Idx = null;
+    var static_lib: ?AST.TargetLinkType.Idx = null;
 
     // Parse fields until closing curly brace
-    // Field identification is done by value type, not field name (deferred to CLI)
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Expect field name (lower identifier)
         if (self.peek() != .LowerIdent) {
             return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
         }
 
+        const field_name_tok = self.pos; // Capture field name token before advancing
         self.advance(); // Advance past field name
 
         // Expect colon
@@ -1177,8 +1178,16 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
             },
             .OpenCurly => {
                 // Parse link type section (exe, static_lib, shared_lib)
-                // For now, we only support exe
-                exe = try self.parseTargetLinkType();
+                const parsed_link_type = try self.parseTargetLinkType();
+                // Get field name from source using token region
+                const region = self.tok_buf.resolve(field_name_tok);
+                const field_name = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
+                if (std.mem.eql(u8, field_name, "exe")) {
+                    exe = parsed_link_type;
+                } else if (std.mem.eql(u8, field_name, "static_lib")) {
+                    static_lib = parsed_link_type;
+                }
+                // Unknown fields are ignored (shared_lib to be added later)
             },
             else => {
                 return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
@@ -1199,6 +1208,7 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
     return try self.store.addTargetsSection(.{
         .files_path = files_path,
         .exe = exe,
+        .static_lib = static_lib,
         .region = .{ .start = start, .end = self.pos },
     });
 }

@@ -2419,7 +2419,7 @@ pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem
         .main_token = section.files_path orelse 0,
         .data = .{
             .lhs = if (section.exe) |e| @intFromEnum(e) + OPTIONAL_VALUE_OFFSET else 0,
-            .rhs = 0, // Reserved for static_lib, shared_lib
+            .rhs = if (section.static_lib) |s| @intFromEnum(s) + OPTIONAL_VALUE_OFFSET else 0,
         },
         .region = section.region,
     };
@@ -2559,10 +2559,12 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
 
     const files_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
     const exe: ?AST.TargetLinkType.Idx = if (node.data.lhs == 0) null else @enumFromInt(node.data.lhs - OPTIONAL_VALUE_OFFSET);
+    const static_lib: ?AST.TargetLinkType.Idx = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs - OPTIONAL_VALUE_OFFSET);
 
     return .{
         .files_path = files_path,
         .exe = exe,
+        .static_lib = static_lib,
         .region = node.region,
     };
 }

@@ -122,7 +122,7 @@ pub const RocTarget = enum {
             .x64openbsd => .openbsd,
             .x64netbsd => .netbsd,
             .x64musl, .x64glibc, .x64linux, .x64elf, .arm64musl, .arm64glibc, .arm64linux, .arm32musl, .arm32linux => .linux,
-            .wasm32 => .wasi,
+            .wasm32 => .freestanding,
         };
     }
 
@@ -220,6 +220,18 @@ pub const RocTarget = enum {
             .arm, .wasm32 => 32,
             else => 64, // Default to 64-bit
         };
+    }
+
+    /// Check if this target can be built and run on the current host.
+    /// wasm32 is always compatible (cross-compilation to wasm works on any host).
+    /// Native targets are compatible if both OS and architecture match the host.
+    pub fn isCompatibleWithHost(self: RocTarget) bool {
+        // wasm32 can be built from any host
+        if (self == .wasm32) return true;
+
+        // Otherwise, check if both OS and architecture match
+        return self.toOsTag() == builtin.target.os.tag and
+            self.toCpuArch() == builtin.target.cpu.arch;
     }
 
     /// Get the dynamic linker path for this target

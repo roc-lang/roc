@@ -5,6 +5,11 @@
 //! proper deserialization of the written data.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+// POSIX I/O only available on non-freestanding targets
+const is_freestanding = builtin.os.tag == .freestanding;
+const posix = if (is_freestanding) undefined else std.posix;
 
 const CompactWriter = @This();
 
@@ -71,7 +76,7 @@ pub fn writeGather(
         if (valid_iovec_count == 0) break;
 
         // Create adjusted iovec array for partial writes
-        var adjusted_iovecs = try allocator.alloc(std.posix.iovec_const, valid_iovec_count);
+        var adjusted_iovecs = try allocator.alloc(posix.iovec_const, valid_iovec_count);
         defer allocator.free(adjusted_iovecs);
 
         // Copy remaining iovecs, adjusting first one for partial write and filtering out empty ones
@@ -101,7 +106,7 @@ pub fn writeGather(
         // Sanity check - we should have filled all slots
         std.debug.assert(adjusted_index == valid_iovec_count);
 
-        const n = try std.posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
+        const n = try posix.pwritev(file.handle, adjusted_iovecs, bytes_written);
 
         if (n == 0) return error.UnexpectedEof;
 
