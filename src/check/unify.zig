@@ -2490,6 +2490,7 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.err = null;
     }
