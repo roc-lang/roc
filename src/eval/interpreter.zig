@@ -133,6 +133,20 @@ pub const Interpreter = struct {
         var_: types.Var,
     };
 
+    /// Key for caching method resolution results.
+    /// Caches the expensive lookupMethodIdentFromTwoEnvsConst + getExposedNodeIndexById chain.
+    const MethodResolutionKey = struct {
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name_ident: base_pkg.Ident.Idx,
+    };
+
+    /// Cached result of method resolution.
+    const MethodResolutionResult = struct {
+        origin_env: *const can.ModuleEnv,
+        def_idx: can.CIR.Def.Idx,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -235,8 +249,11 @@ pub const Interpreter = struct {
     poly_context_generation: u64,
 
     // Polymorphic instantiation cache
-
     poly_cache: HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80),
+
+    // Method resolution cache: (origin_module, nominal_ident, method_name_ident) -> (origin_env, def_idx)
+    // This caches the expensive lookupMethodIdentFromTwoEnvsConst + getExposedNodeIndexById lookups
+    method_resolution_cache: std.AutoHashMap(MethodResolutionKey, MethodResolutionResult),
 
     // Runtime unification context
     env: *can.ModuleEnv,
@@ -413,6 +430,7 @@ pub const Interpreter = struct {
             .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_context_generation = 0,
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
+            .method_resolution_cache = std.AutoHashMap(MethodResolutionKey, MethodResolutionResult).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
@@ -7476,6 +7494,7 @@ pub const Interpreter = struct {
             }
         }
         self.poly_cache.deinit();
+        self.method_resolution_cache.deinit();
         self.module_envs.deinit(self.allocator);
         self.translated_module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
@@ -7588,38 +7607,59 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         receiver_rt_var: ?types.Var,
     ) Error!StackValue {
-        // Get the module environment for this type's origin
-        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
-            return error.MethodLookupFailed;
+        // Check method resolution cache first
+        const cache_key = MethodResolutionKey{
+            .origin_module = origin_module,
+            .nominal_ident = nominal_ident,
+            .method_name_ident = method_name_ident,
         };
 
-        // Use index-based lookup to find the qualified method ident.
-        // nominal_ident comes from runtime types - always in runtime_layout_store.env
-        // method_name_ident comes from the CIR - in self.env
-        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-            self.runtime_layout_store.env,
-            nominal_ident,
-            self.env,
-            method_name_ident,
-        ) orelse {
-            return error.MethodLookupFailed;
-        };
+        const resolution = self.method_resolution_cache.get(cache_key) orelse blk: {
+            // Cache miss - do the expensive lookups
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-            // Fallback: search all definitions for the method
-            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = origin_env.store.getDef(def_idx);
-                const pat = origin_env.store.getPattern(def.pattern);
-                if (pat == .assign and pat.assign.ident == method_ident) {
-                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+            // Get the module environment for this type's origin
+            const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+                return error.MethodLookupFailed;
+            };
+
+            // Use index-based lookup to find the qualified method ident.
+            // nominal_ident comes from runtime types - always in runtime_layout_store.env
+            // method_name_ident comes from the CIR - in self.env
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                self.env,
+                method_name_ident,
+            ) orelse {
+                return error.MethodLookupFailed;
+            };
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+                // Fallback: search all definitions for the method
+                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = origin_env.store.getDef(def_idx);
+                    const pat = origin_env.store.getPattern(def.pattern);
+                    if (pat == .assign and pat.assign.ident == method_ident) {
+                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                    }
                 }
-            }
-            return error.MethodLookupFailed;
+                return error.MethodLookupFailed;
+            };
+
+            const result = MethodResolutionResult{
+                .origin_env = origin_env,
+                .def_idx = @enumFromInt(node_idx),
+            };
+
+            // Cache the result for future lookups
+            self.method_resolution_cache.put(cache_key, result) catch {};
+
+            break :blk result;
         };
 
-        // The node should be a Def
-        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const origin_env = resolution.origin_env;
+        const target_def_idx = resolution.def_idx;
         const target_def = origin_env.store.getDef(target_def_idx);
 
         // Save current environment and bindings
@@ -7677,37 +7717,58 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         receiver_rt_var: ?types.Var,
     ) Error!?StackValue {
-        // Get the module environment for this type's origin
-        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
-            return null;
+        // Check method resolution cache first
+        const cache_key = MethodResolutionKey{
+            .origin_module = origin_module,
+            .nominal_ident = nominal_ident,
+            .method_name_ident = method_name_ident,
         };
 
-        // Use index-based method lookup - the method_name_ident is in self.env's ident space,
-        // nominal_ident is in runtime_layout_store.env's ident space
-        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-            self.runtime_layout_store.env,
-            nominal_ident,
-            self.env,
-            method_name_ident,
-        ) orelse {
-            return null;
-        };
+        const resolution = self.method_resolution_cache.get(cache_key) orelse blk: {
+            // Cache miss - do the expensive lookups
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-            // Fallback: search all definitions for the method
-            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = origin_env.store.getDef(def_idx);
-                const pat = origin_env.store.getPattern(def.pattern);
-                if (pat == .assign and pat.assign.ident == method_ident) {
-                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+            // Get the module environment for this type's origin
+            const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+                return null;
+            };
+
+            // Use index-based method lookup - the method_name_ident is in self.env's ident space,
+            // nominal_ident is in runtime_layout_store.env's ident space
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                self.env,
+                method_name_ident,
+            ) orelse {
+                return null;
+            };
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+                // Fallback: search all definitions for the method
+                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = origin_env.store.getDef(def_idx);
+                    const pat = origin_env.store.getPattern(def.pattern);
+                    if (pat == .assign and pat.assign.ident == method_ident) {
+                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                    }
                 }
-            }
-            return null;
+                return null;
+            };
+
+            const result = MethodResolutionResult{
+                .origin_env = origin_env,
+                .def_idx = @enumFromInt(node_idx),
+            };
+
+            // Cache the result for future lookups
+            self.method_resolution_cache.put(cache_key, result) catch {};
+
+            break :blk result;
         };
 
-        // The node should be a Def
-        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const origin_env = resolution.origin_env;
+        const target_def_idx = resolution.def_idx;
         const target_def = origin_env.store.getDef(target_def_idx);
 
         // Save current environment and bindings
@@ -9046,9 +9107,7 @@ pub const Interpreter = struct {
         return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
 
-    // ============================================================================
     // Stack-Safe Interpreter Infrastructure
-    // ============================================================================
     //
     // The following types and functions implement a stack-safe interpreter that
     // uses explicit work and value stacks instead of recursive calls. This avoids
@@ -9917,9 +9976,7 @@ pub const Interpreter = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         switch (expr) {
-            // ================================================================
             // Immediate values - no sub-expressions to evaluate
-            // ================================================================
 
             .e_num => |num_lit| {
                 const value = try self.evalNum(expr_idx, expected_rt_var, num_lit);
@@ -9991,9 +10048,7 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            // ================================================================
             // Lambda/Closure creation
-            // ================================================================
 
             .e_lambda => |lam| {
                 const value = try self.evalLambda(expr_idx, expected_rt_var, lam, roc_ops);
@@ -10015,9 +10070,7 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            // ================================================================
             // Variable lookups
-            // ================================================================
 
             .e_lookup_local => |lookup| {
                 const value = try self.evalLookupLocal(lookup, expected_rt_var, roc_ops);
@@ -10088,9 +10141,7 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
 
-            // ================================================================
             // Binary operations
-            // ================================================================
 
             .e_binop => |binop| {
                 switch (binop.op) {
@@ -10244,9 +10295,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Conditionals
-            // ================================================================
 
             .e_if => |if_expr| {
                 const branches = self.env.store.sliceIfBranches(if_expr.branches);
@@ -10274,9 +10323,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Blocks
-            // ================================================================
 
             .e_block => |blk| {
                 const stmts = self.env.store.sliceStatements(blk.stmts);
@@ -10311,9 +10358,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Tuples
-            // ================================================================
 
             .e_tuple => |tup| {
                 const elems = self.env.store.sliceExpr(tup.elems);
@@ -10338,9 +10383,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Lists
-            // ================================================================
 
             .e_list => |list_expr| {
                 const elems = self.env.store.sliceExpr(list_expr.elems);
@@ -10380,9 +10423,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Records
-            // ================================================================
 
             .e_record => |rec| {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -10424,9 +10465,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Nominal types - evaluate backing expression
-            // ================================================================
 
             .e_nominal => |nom| {
                 // Compute the backing type variable for the nominal.
@@ -10528,9 +10567,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Simple error/crash expressions
-            // ================================================================
 
             .e_crash => |crash_expr| {
                 // Get the crash message string and trigger crash
@@ -10560,9 +10597,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Tag unions with payloads
-            // ================================================================
 
             .e_tag => |tag| {
                 // Determine runtime type and tag index.
@@ -10707,9 +10742,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Pattern matching
-            // ================================================================
 
             .e_match => |m| {
                 // Get type info for scrutinee and result
@@ -10734,9 +10767,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Debugging and assertions
-            // ================================================================
 
             .e_expect => |expect_expr| {
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
@@ -10800,9 +10831,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Function calls
-            // ================================================================
 
             .e_call => |call| {
                 const func_idx = call.func;
@@ -10959,9 +10988,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Unary operations
-            // ================================================================
 
             .e_unary_minus => |unary_minus| {
                 // Desugar `-a` to `a.negate()`
@@ -11013,9 +11040,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Dot access (field access and method calls)
-            // ================================================================
 
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
@@ -11056,9 +11081,7 @@ pub const Interpreter = struct {
         }
     }
 
-    // ========================================================================
     // Helper functions for evaluating immediate values (no sub-expressions)
-    // ========================================================================
 
     /// Evaluate a numeric literal (e_num)
     fn evalNum(
@@ -11566,9 +11589,7 @@ pub const Interpreter = struct {
         return error.Crash;
     }
 
-    // ========================================================================
     // Helper functions for lambda/closure creation
-    // ========================================================================
 
     /// Evaluate a lambda expression (e_lambda) - creates a closure value with empty captures
     fn evalLambda(
@@ -11841,9 +11862,7 @@ pub const Interpreter = struct {
         return null;
     }
 
-    // ========================================================================
     // Helper functions for variable lookups
-    // ========================================================================
 
     /// Evaluate a local variable lookup (e_lookup_local)
     /// Searches bindings in reverse order, checks closure captures, and handles
@@ -12003,9 +12022,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    // ========================================================================
     // Helper functions for block evaluation
-    // ========================================================================
 
     /// Add closure placeholders for mutual recursion support.
     /// This is the first pass over statements that creates bindings for closures

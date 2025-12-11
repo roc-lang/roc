@@ -11,9 +11,7 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
-// =============================================================================
 // Cross-compile target definitions
-// =============================================================================
 
 /// Cross-compile target specification
 const CrossTarget = struct {

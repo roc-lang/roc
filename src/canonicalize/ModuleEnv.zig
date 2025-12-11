@@ -383,7 +383,7 @@ gpa: std.mem.Allocator,
 common: CommonEnv,
 types: TypeStore,
 
-// ===== Module compilation fields =====
+// Module compilation fields
 // NOTE: These fields are populated during canonicalization and preserved for later use
 
 /// The kind of module (type_module, app, etc.) - set during canonicalization
@@ -559,7 +559,7 @@ pub fn deinit(self: *Self) void {
     }
 }
 
-// ===== Module compilation functionality =====
+// Module compilation functionality
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
 pub fn pushDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Error!void {
@@ -591,7 +591,7 @@ const isCastable = CIR.isCastable;
 /// Cast function for safely converting between compatible index types
 pub const castIdx = CIR.castIdx;
 
-// ===== Module compilation functions =====
+// Module compilation functions
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
