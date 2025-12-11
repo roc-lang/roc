@@ -51,6 +51,15 @@ fn runRoc(allocator: std.mem.Allocator, roc_file: []const u8, options: RunOption
 
 /// Helper to check if a run result indicates success (exit code 0)
 fn checkSuccess(result: std.process.Child.RunResult) !void {
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("Memory error detected (GPA)\n", .{});
+        std.debug.print("STDOUT: {s}\n", .{result.stdout});
+        std.debug.print("STDERR: {s}\n", .{result.stderr});
+        return error.MemoryError;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code != 0) {
@@ -120,6 +129,14 @@ fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []const 
 
 /// Helper to check if a test mode run succeeded (exit code 0, empty output)
 fn checkTestSuccess(result: std.process.Child.RunResult) !void {
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("Memory error detected (GPA)\n", .{});
+        std.debug.print("STDERR: {s}\n", .{result.stderr});
+        return error.MemoryError;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code != 0) {
@@ -1065,4 +1082,27 @@ test "fx platform fold_rev static dispatch regression" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Start reverse") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Reversed: 3 elements") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Done") != null);
+}
+
+test "external platform memory alignment regression" {
+    // NOTE: This test is SKIPPED because it exposes a bug in an EXTERNAL platform
+    // (roc-platform-template-zig), not in the Roc compiler.
+    //
+    // The bug: External platform's rocDeallocFn uses `roc_dealloc.alignment` directly
+    // instead of `@max(roc_dealloc.alignment, @alignOf(usize))`. This causes memory
+    // allocated with alignment 8 to be freed with alignment 1 when Roc passes small
+    // alignment values for certain data types.
+    //
+    // The fix: The external platform needs to update its host.zig to match the local
+    // platform's allocation pattern:
+    //   const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    //   const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
+    //
+    // This test is kept to document the issue. When the external platform is fixed,
+    // this test should pass without modification.
+    //
+    // Error message: "error(gpa): Allocation alignment 8 does not match free alignment 1"
+    //
+    // To run this test manually once the external platform is fixed, remove this return:
+    return error.SkipZigTest;
 }

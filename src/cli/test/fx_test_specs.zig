@@ -204,6 +204,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>ok",
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
     },
+    .{
+        .roc_file = "test/fx/recursive_tuple_list.roc",
+        .io_spec = "1>Result count: 4",
+        .description = "Regression test: recursive function with List of tuples and append",
+    },
+    .{
+        .roc_file = "test/fx/list_map_fallible.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: List.map with fallible function (U64.from_str)",
+    },
 };
 
 /// Get the total number of IO spec tests

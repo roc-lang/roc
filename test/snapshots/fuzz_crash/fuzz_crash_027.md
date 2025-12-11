@@ -946,7 +946,7 @@ It has the type:
     __arg -> _ret_
 
 But I expected it to be:
-    _[Red, Blue, .._others2], _arg -> Error_
+    _[Blue, Red, .._others2], _arg -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
