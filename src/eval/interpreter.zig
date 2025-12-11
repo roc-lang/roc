@@ -14779,6 +14779,8 @@ pub const Interpreter = struct {
                     // Evaluate the argument to box
                     const arg_expr = arg_exprs[0];
                     const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+                    // Decref the original value after boxing (data is copied to heap)
+                    defer arg_value.decref(&self.runtime_layout_store, roc_ops);
 
                     // Get Box layout from return type
                     const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
