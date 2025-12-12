@@ -248,13 +248,26 @@ test "instantiate - tag union preserves structure" {
 
     try std.testing.expectEqual(2, tags.len);
 
+    // Tags are sorted alphabetically by name after instantiation.
+    // Find tags by name rather than assuming order.
+    const tag_names = tags.items(.name);
+    const tag_args = tags.items(.args);
+
+    var some_idx: ?usize = null;
+    var none_idx: ?usize = null;
+    for (tag_names, 0..) |name, i| {
+        const name_str = env.idents.getText(name);
+        if (std.mem.eql(u8, name_str, "Some")) some_idx = i;
+        if (std.mem.eql(u8, name_str, "None")) none_idx = i;
+    }
+
     // Check Some tag has one arg that's different from original
-    const some_args = env.types.sliceVars(tags.items(.args)[0]);
+    const some_args = env.types.sliceVars(tag_args[some_idx.?]);
     try std.testing.expectEqual(1, some_args.len);
     try std.testing.expect(some_args[0] != rigid_a);
 
     // Check None tag has no args
-    const none_args = env.types.sliceVars(tags.items(.args)[1]);
+    const none_args = env.types.sliceVars(tag_args[none_idx.?]);
     try std.testing.expectEqual(0, none_args.len);
 }
 

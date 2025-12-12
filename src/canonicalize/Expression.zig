@@ -393,6 +393,29 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
     },
 
+    /// Type variable dispatch expression for calling methods on type variable aliases.
+    /// This is created when the user writes `Thing.method(args)` inside a function body
+    /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
+    ///
+    /// The actual function to call is resolved during type-checking once the type variable
+    /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
+    /// then `Thing.len(x)` becomes `List.len(x)`.
+    ///
+    /// ```roc
+    /// default_value : |thing| thing where thing implements Default
+    /// default_value = |thing|
+    ///     Thing : thing
+    ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
+    /// ```
+    e_type_var_dispatch: struct {
+        /// Reference to the s_type_var_alias statement that introduced this type alias
+        type_var_alias_stmt: CIR.Statement.Idx,
+        /// The method name being called (e.g., "default" in Thing.default())
+        method_name: Ident.Idx,
+        /// Arguments to the method call (may be empty for no-arg methods)
+        args: Expr.Span,
+    },
+
     /// For expression that iterates over a list and executes a body for each element.
     /// The for expression evaluates to the empty record `{}`.
     /// This is the expression form of a for loop, allowing it to be used in expression contexts.
@@ -1863,6 +1886,25 @@ pub const Expr = union(enum) {
 
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_var_dispatch => |tvd| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-var-dispatch");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Add method name
+                const method_text = ir.getIdent(tvd.method_name);
+                try tree.pushStringPair("method", method_text);
+
+                const attrs = tree.beginNode();
+
+                // Add arguments if any
+                for (ir.store.exprSlice(tvd.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
 
                 try tree.endNode(begin, attrs);
             },

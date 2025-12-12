@@ -2563,3 +2563,36 @@ test "check type - record extension - mismatch should fail" {
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
+
+// List method syntax tests
+
+test "check type - List.get method syntax" {
+    // Check what type is inferred for [1].get(0) (this works at runtime)
+    const source =
+        \\result = [1].get(0)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(item, [OutOfBounds, ..others]) where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+}
+
+// List.first method syntax tests - REGRESSION TEST for cycle detection bug
+
+test "check type - List.first method syntax should not create cyclic types" {
+    // REGRESSION TEST: This test reproduces a bug where calling [1].first() (method syntax)
+    // would cause an infinite loop in layout computation because the interpreter was creating
+    // cyclic rigid var mappings in the TypeScope when building layouts.
+    //
+    // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
+    // When the return type is Try(item, [ListWasEmpty, ..others]) with an open tag union,
+    // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
+    //
+    // Method syntax: [1].first()
+    // Should have same type as function syntax: List.first([1])
+    //
+    // NOTE: The type checking itself is correct - this test verifies type checking produces
+    // the right type. The bug manifests in the interpreter's layout computation phase.
+    const source =
+        \\result = [1].first()
+    ;
+    // Expected: Try(item, [ListWasEmpty, ..others]) with item having from_numeral constraint
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(item, [ListWasEmpty, ..others]) where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+}

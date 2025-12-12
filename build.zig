@@ -1774,18 +1774,19 @@ pub fn build(b: *std.Build) void {
         // Determine the appropriate target for the fx platform host library.
         // On Linux, we need to use musl explicitly because the CLI's findHostLibrary
         // looks for targets/x64musl/libhost.a first, and musl produces proper static binaries.
+        const native_fx_target_dir = roc_target.RocTarget.fromStdTarget(target.result).toName();
         const fx_host_target, const fx_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
             .linux => switch (target.result.cpu.arch) {
                 .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
                 .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
-                else => .{ target, null },
+                else => .{ target, native_fx_target_dir },
             },
             .windows => switch (target.result.cpu.arch) {
                 .x86_64 => .{ target, "x64win" },
                 .aarch64 => .{ target, "arm64win" },
-                else => .{ target, null },
+                else => .{ target, native_fx_target_dir },
             },
-            else => .{ target, null },
+            else => .{ target, native_fx_target_dir },
         };
 
         // Create fx test platform host static library
