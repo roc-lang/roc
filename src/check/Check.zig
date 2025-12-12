@@ -3570,6 +3570,62 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
             }
         },
+        .e_type_var_dispatch => |tvd| {
+            // Type variable dispatch expression: Thing.method(args) where Thing is a type var alias.
+            // This is similar to static dispatch (e_dot_access with args) but dispatches on a
+            // type variable rather than on the type of a receiver expression.
+
+            // Check the args and track errors
+            const dispatch_arg_expr_idxs = self.cir.store.exprSlice(tvd.args);
+            var did_err = false;
+            for (dispatch_arg_expr_idxs) |dispatch_arg_expr_idx| {
+                does_fx = try self.checkExpr(dispatch_arg_expr_idx, env, .no_expectation) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(dispatch_arg_expr_idx)).desc.content == .err);
+            }
+
+            if (did_err) {
+                // If any arguments are errors, propagate the error
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                // Get the type var alias statement to access the type variable
+                const type_var_alias_stmt = self.cir.store.getStatement(tvd.type_var_alias_stmt);
+                const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
+                const type_var = ModuleEnv.varFrom(type_var_anno);
+
+                // For type var dispatch, the arguments are just the explicit args (no receiver)
+                const dispatch_arg_vars_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
+
+                // Since the return type of this dispatch is unknown, create a flex to represent it
+                const dispatch_ret_var = try self.fresh(env, expr_region);
+
+                // Create the function being dispatched
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = dispatch_arg_vars_range,
+                    .ret = dispatch_ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                // Create the static dispatch constraint
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = tvd.method_name,
+                    .fn_var = constraint_fn_var,
+                    .origin = .method_call,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                // Create a constrained flex and unify it with the type variable
+                const constrained_var = try self.freshFromContent(
+                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                    env,
+                    expr_region,
+                );
+
+                _ = try self.unify(constrained_var, type_var, env);
+
+                // Set the expression type to the return type of the dispatch
+                _ = try self.unify(expr_var, dispatch_ret_var, env);
+            }
+        },
         .e_runtime_error => {
             try self.unifyWith(expr_var, .err, env);
         },
@@ -3874,6 +3930,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // These are only valid at the top level, czer reports error
                 try self.unifyWith(stmt_var, .err, env);
             },
+            .s_type_var_alias => {
+                // Type var alias introduces no new constraints during type checking
+                // The alias is already registered in scope by canonicalization
+                // The type var it references is a rigid var from the enclosing function
+                try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+            },
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, env);
             },
@@ -3965,7 +4027,7 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
-        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_runtime_error => {},
+        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
     }
 }
 
