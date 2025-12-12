@@ -197,7 +197,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123",
         .description = "Str.inspect on tag unions",
     },
-
     // Bug regression tests
     .{
         .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",

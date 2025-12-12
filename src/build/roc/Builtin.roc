@@ -222,6 +222,13 @@ Builtin :: [].{
 			take_len = if (len <= n) 0 else len - n
 			List.sublist(list, { start: 0, len: take_len })
 		}
+
+		join_with : List(item), item -> item
+			where [item.join_with : List(item), item -> item]
+		join_with = |list, joiner| {
+			Item : item
+			Item.join_with(list, joiner)
+		}
 	}
 
 	Bool := [False, True].{
