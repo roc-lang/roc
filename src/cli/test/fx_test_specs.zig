@@ -229,6 +229,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>ok",
         .description = "Regression test: List.first with function syntax",
     },
+    .{
+        .roc_file = "test/fx/stdin_while_uaf.roc",
+        .io_spec = "0<123456789012345678901234|1>123456789012345678901234|0<|1>",
+        .description = "Regression test: Stdin.line! in while loop with 24 char input (heap-allocated string)",
+    },
+    .{
+        .roc_file = "test/fx/stdin_while_uaf.roc",
+        .io_spec = "0<short|1>short|0<|1>",
+        .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
+    },
 };
 
 /// Get the total number of IO spec tests
