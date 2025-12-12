@@ -14217,11 +14217,9 @@ pub const Interpreter = struct {
                     var args = [1]StackValue{operand};
                     const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
 
-                    // Decref operand based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
-                    if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
-                        operand.decref(&self.runtime_layout_store, roc_ops);
-                    }
+                    // Note: We do NOT decref the operand here.
+                    // The defer statement at the top of unary_op_apply already handles decrefing.
+                    // Decrefing here too would cause a double-free bug.
 
                     self.env = saved_env;
                     try value_stack.push(result);
@@ -14578,14 +14576,11 @@ pub const Interpreter = struct {
                     var args = [2]StackValue{ lhs, rhs };
                     var result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
 
-                    // Decref arguments based on ownership semantics
-                    const arg_ownership = low_level.op.getArgOwnership();
-                    for (args, 0..) |arg, arg_idx| {
-                        const ownership = if (arg_idx < arg_ownership.len) arg_ownership[arg_idx] else .borrow;
-                        if (ownership == .borrow) {
-                            arg.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                    }
+                    // Note: We do NOT decref arguments here for borrow semantics.
+                    // The defer statements at the top of binop_apply already handle decrefing
+                    // lhs and rhs. Decrefing here too would cause a double-free bug.
+                    // For consume semantics, the low-level builtin takes ownership, so we
+                    // also don't decref - the builtin is responsible for the memory.
 
                     // Decref the method closure (for low-level, we handle it here)
                     method_func.decref(&self.runtime_layout_store, roc_ops);
