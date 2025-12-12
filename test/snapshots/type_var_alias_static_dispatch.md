@@ -10,8 +10,8 @@ type=snippet
 # alias and call methods on that type.
 
 # Simple example: calling a method on a type variable
-callDefault : {} -> thing where [thing.default : () -> thing]
-callDefault = |_| {
+call_default : {} -> thing where [thing.default : () -> thing]
+call_default = |_| {
     Thing : thing
     Thing.default()
 }
@@ -24,8 +24,8 @@ combine = |_first, second| {
 }
 
 # Multiple methods on same type variable
-processValue : val -> val where [val.transform : val -> val, val.validate : val -> Bool]
-processValue = |input| {
+process_value : val -> val where [val.transform : val -> val, val.validate : val -> Bool]
+process_value = |input| {
     V : val
     if V.validate(input) {
         V.transform(input)
@@ -35,26 +35,33 @@ processValue = |input| {
 }
 
 # Chaining method results - pass result of one dispatch to another
-chainMethods : x -> x where [x.second : x -> x, x.first : () -> x]
-chainMethods = |_| {
+chain_methods : x -> x where [x.second : x -> x, x.first : () -> x]
+chain_methods = |_| {
     X : x
     initial = X.first()
     X.second(initial)
 }
 
 # Multiple type var aliases in same scope with different type vars
-multiAlias : a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]
-multiAlias = |x, y| {
+multi_alias : a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]
+multi_alias = |x, y| {
     A : a
     B : b
     (A.convert(x), B.convert(y))
 }
 
 # Method taking multiple arguments
-methodWithArgs : t, Str -> t where [t.create : Str, U64 -> t]
-methodWithArgs = |_, name| {
+method_with_args : t, Str -> t where [t.create : Str, U64 -> t]
+method_with_args = |_, name| {
     T : t
     T.create(name, 42)
+}
+
+# Method that takes a function argument and returns the type variable
+from_str : Str -> thing where [thing.from_str : Str -> thing]
+from_str = |str| {
+    Thing : thing
+    Thing.from_str(str)
 }
 ~~~
 # EXPECTED
@@ -99,6 +106,11 @@ LowerIdent,OpAssign,OpBar,Underscore,Comma,LowerIdent,OpBar,OpenCurly,
 UpperIdent,OpColon,LowerIdent,
 UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,Int,CloseRound,
 CloseCurly,
+LowerIdent,OpColon,UpperIdent,OpArrow,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,UpperIdent,OpArrow,LowerIdent,CloseSquare,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+UpperIdent,OpColon,LowerIdent,
+UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+CloseCurly,
 EndOfFile,
 ~~~
 # PARSE
@@ -106,7 +118,7 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-type-anno (name "callDefault")
+		(s-type-anno (name "call_default")
 			(ty-fn
 				(ty-record)
 				(ty-var (raw "thing")))
@@ -115,7 +127,7 @@ EndOfFile,
 					(args)
 					(ty-var (raw "thing")))))
 		(s-decl
-			(p-ident (raw "callDefault"))
+			(p-ident (raw "call_default"))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -152,7 +164,7 @@ EndOfFile,
 						(e-apply
 							(e-ident (raw "A.from_b"))
 							(e-ident (raw "second")))))))
-		(s-type-anno (name "processValue")
+		(s-type-anno (name "process_value")
 			(ty-fn
 				(ty-var (raw "val"))
 				(ty-var (raw "val")))
@@ -166,7 +178,7 @@ EndOfFile,
 						(ty-var (raw "val")))
 					(ty (name "Bool")))))
 		(s-decl
-			(p-ident (raw "processValue"))
+			(p-ident (raw "process_value"))
 			(e-lambda
 				(args
 					(p-ident (raw "input")))
@@ -188,7 +200,7 @@ EndOfFile,
 							(e-block
 								(statements
 									(e-ident (raw "input")))))))))
-		(s-type-anno (name "chainMethods")
+		(s-type-anno (name "chain_methods")
 			(ty-fn
 				(ty-var (raw "x"))
 				(ty-var (raw "x")))
@@ -201,7 +213,7 @@ EndOfFile,
 					(args)
 					(ty-var (raw "x")))))
 		(s-decl
-			(p-ident (raw "chainMethods"))
+			(p-ident (raw "chain_methods"))
 			(e-lambda
 				(args
 					(p-underscore))
@@ -218,7 +230,7 @@ EndOfFile,
 						(e-apply
 							(e-ident (raw "X.second"))
 							(e-ident (raw "initial")))))))
-		(s-type-anno (name "multiAlias")
+		(s-type-anno (name "multi_alias")
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty-var (raw "b"))
@@ -235,7 +247,7 @@ EndOfFile,
 						(ty-var (raw "b")))
 					(ty-var (raw "b")))))
 		(s-decl
-			(p-ident (raw "multiAlias"))
+			(p-ident (raw "multi_alias"))
 			(e-lambda
 				(args
 					(p-ident (raw "x"))
@@ -257,7 +269,7 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "B.convert"))
 								(e-ident (raw "y"))))))))
-		(s-type-anno (name "methodWithArgs")
+		(s-type-anno (name "method_with_args")
 			(ty-fn
 				(ty-var (raw "t"))
 				(ty (name "Str"))
@@ -269,7 +281,7 @@ EndOfFile,
 						(ty (name "U64")))
 					(ty-var (raw "t")))))
 		(s-decl
-			(p-ident (raw "methodWithArgs"))
+			(p-ident (raw "method_with_args"))
 			(e-lambda
 				(args
 					(p-underscore)
@@ -283,7 +295,30 @@ EndOfFile,
 						(e-apply
 							(e-ident (raw "T.create"))
 							(e-ident (raw "name"))
-							(e-int (raw "42")))))))))
+							(e-int (raw "42")))))))
+		(s-type-anno (name "from_str")
+			(ty-fn
+				(ty (name "Str"))
+				(ty-var (raw "thing")))
+			(where
+				(method (module-of "thing") (name "from_str")
+					(args
+						(ty (name "Str")))
+					(ty-var (raw "thing")))))
+		(s-decl
+			(p-ident (raw "from_str"))
+			(e-lambda
+				(args
+					(p-ident (raw "str")))
+				(e-block
+					(statements
+						(s-type-decl
+							(header (name "Thing")
+								(args))
+							(ty-var (raw "thing")))
+						(e-apply
+							(e-ident (raw "Thing.from_str"))
+							(e-ident (raw "str")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -292,8 +327,8 @@ EndOfFile,
 # alias and call methods on that type.
 
 # Simple example: calling a method on a type variable
-callDefault : {} -> thing where [thing.default : thing]
-callDefault = |_| {
+call_default : {} -> thing where [thing.default : thing]
+call_default = |_| {
 	Thing : thing
 	Thing.default()
 }
@@ -306,8 +341,8 @@ combine = |_first, second| {
 }
 
 # Multiple methods on same type variable
-processValue : val -> val where [val.transform : val -> val, val.validate : val -> Bool]
-processValue = |input| {
+process_value : val -> val where [val.transform : val -> val, val.validate : val -> Bool]
+process_value = |input| {
 	V : val
 	if V.validate(input) {
 		V.transform(input)
@@ -317,33 +352,40 @@ processValue = |input| {
 }
 
 # Chaining method results - pass result of one dispatch to another
-chainMethods : x -> x where [x.second : x -> x, x.first : x]
-chainMethods = |_| {
+chain_methods : x -> x where [x.second : x -> x, x.first : x]
+chain_methods = |_| {
 	X : x
 	initial = X.first()
 	X.second(initial)
 }
 
 # Multiple type var aliases in same scope with different type vars
-multiAlias : a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]
-multiAlias = |x, y| {
+multi_alias : a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]
+multi_alias = |x, y| {
 	A : a
 	B : b
 	(A.convert(x), B.convert(y))
 }
 
 # Method taking multiple arguments
-methodWithArgs : t, Str -> t where [t.create : Str, U64 -> t]
-methodWithArgs = |_, name| {
+method_with_args : t, Str -> t where [t.create : Str, U64 -> t]
+method_with_args = |_, name| {
 	T : t
 	T.create(name, 42)
+}
+
+# Method that takes a function argument and returns the type variable
+from_str : Str -> thing where [thing.from_str : Str -> thing]
+from_str = |str| {
+	Thing : thing
+	Thing.from_str(str)
 }
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "callDefault"))
+		(p-assign (ident "call_default"))
 		(e-lambda
 			(args
 				(p-underscore))
@@ -382,7 +424,7 @@ methodWithArgs = |_, name| {
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
-		(p-assign (ident "processValue"))
+		(p-assign (ident "process_value"))
 		(e-lambda
 			(args
 				(p-assign (ident "input")))
@@ -417,7 +459,7 @@ methodWithArgs = |_, name| {
 						(ty-rigid-var-lookup (ty-rigid-var (name "val"))))
 					(ty-lookup (name "Bool") (builtin))))))
 	(d-let
-		(p-assign (ident "chainMethods"))
+		(p-assign (ident "chain_methods"))
 		(e-lambda
 			(args
 				(p-underscore))
@@ -443,7 +485,7 @@ methodWithArgs = |_, name| {
 					(args)
 					(ty-rigid-var-lookup (ty-rigid-var (name "x")))))))
 	(d-let
-		(p-assign (ident "multiAlias"))
+		(p-assign (ident "multi_alias"))
 		(e-lambda
 			(args
 				(p-assign (ident "x"))
@@ -478,7 +520,7 @@ methodWithArgs = |_, name| {
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
-		(p-assign (ident "methodWithArgs"))
+		(p-assign (ident "method_with_args"))
 		(e-lambda
 			(args
 				(p-underscore)
@@ -500,7 +542,27 @@ methodWithArgs = |_, name| {
 					(args
 						(ty-lookup (name "Str") (builtin))
 						(ty-lookup (name "U64") (builtin)))
-					(ty-rigid-var-lookup (ty-rigid-var (name "t"))))))))
+					(ty-rigid-var-lookup (ty-rigid-var (name "t")))))))
+	(d-let
+		(p-assign (ident "from_str"))
+		(e-lambda
+			(args
+				(p-assign (ident "str")))
+			(e-block
+				(s-type-var-alias (alias "Thing") (type-var "thing")
+					(ty-rigid-var (name "thing")))
+				(e-type-var-dispatch (method "from_str")
+					(e-lookup-local
+						(p-assign (ident "str"))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Str") (builtin))
+				(ty-rigid-var (name "thing")))
+			(where
+				(method (ty-rigid-var-lookup (ty-rigid-var (name "thing"))) (name "from_str")
+					(args
+						(ty-lookup (name "Str") (builtin)))
+					(ty-rigid-var-lookup (ty-rigid-var (name "thing"))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -511,12 +573,14 @@ methodWithArgs = |_, name| {
 		(patt (type "val -> val where [val.transform : val -> val, val.validate : val -> Bool]"))
 		(patt (type "x -> x where [x.second : x -> x, x.first : ({}) -> x]"))
 		(patt (type "a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]"))
-		(patt (type "t, Str -> t where [t.create : Str, U64 -> t]")))
+		(patt (type "t, Str -> t where [t.create : Str, U64 -> t]"))
+		(patt (type "Str -> thing where [thing.from_str : Str -> thing]")))
 	(expressions
 		(expr (type "{  } -> thing where [thing.default : ({}) -> thing]"))
 		(expr (type "a, b -> a where [a.from_b : b -> a]"))
 		(expr (type "val -> val where [val.transform : val -> val, val.validate : val -> Bool]"))
 		(expr (type "x -> x where [x.second : x -> x, x.first : ({}) -> x]"))
 		(expr (type "a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]"))
-		(expr (type "t, Str -> t where [t.create : Str, U64 -> t]"))))
+		(expr (type "t, Str -> t where [t.create : Str, U64 -> t]"))
+		(expr (type "Str -> thing where [thing.from_str : Str -> thing]"))))
 ~~~
