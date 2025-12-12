@@ -51,6 +51,15 @@ fn runRoc(allocator: std.mem.Allocator, roc_file: []const u8, options: RunOption
 
 /// Helper to check if a run result indicates success (exit code 0)
 fn checkSuccess(result: std.process.Child.RunResult) !void {
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("Memory error detected (GPA)\n", .{});
+        std.debug.print("STDOUT: {s}\n", .{result.stdout});
+        std.debug.print("STDERR: {s}\n", .{result.stderr});
+        return error.MemoryError;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code != 0) {
@@ -120,6 +129,14 @@ fn runRocTest(allocator: std.mem.Allocator, roc_file: []const u8, spec: []const 
 
 /// Helper to check if a test mode run succeeded (exit code 0, empty output)
 fn checkTestSuccess(result: std.process.Child.RunResult) !void {
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("Memory error detected (GPA)\n", .{});
+        std.debug.print("STDERR: {s}\n", .{result.stderr});
+        return error.MemoryError;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code != 0) {
@@ -1093,4 +1110,18 @@ test "fx platform fold_rev static dispatch regression" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Start reverse") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Reversed: 3 elements") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Done") != null);
+}
+
+test "external platform memory alignment regression" {
+    // This test verifies that external platforms with the memory alignment fix work correctly.
+    // The bug was in roc-platform-template-zig < 0.6 where rocDeallocFn used
+    // `roc_dealloc.alignment` directly instead of `@max(roc_dealloc.alignment, @alignOf(usize))`.
+    // Fixed in https://github.com/lukewilliamboswell/roc-platform-template-zig/releases/tag/0.6
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/aoc_day2.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
 }

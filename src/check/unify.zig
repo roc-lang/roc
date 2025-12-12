@@ -2122,7 +2122,7 @@ const Unifier = struct {
             _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
         }
 
-        // Merge vars
+        // Merge vars (sorting happens in merge() for all tag unions)
         self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
             .tags = self.types_store.tags.rangeToEnd(range_start),
             .ext = ext,

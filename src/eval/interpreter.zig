@@ -6604,7 +6604,8 @@ pub const Interpreter = struct {
         // Sort the tags alphabetically to match gatherTags and layout store ordering
         // This ensures tag discriminants are consistent between evaluation and rendering
         // Use runtime_layout_store.env since runtime type tag names are translated to that env
-        std.mem.sort(types.Tag, list.items, self.runtime_layout_store.env.common.getIdentStore(), comptime types.Tag.sortByNameAsc);
+        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
@@ -8508,6 +8509,13 @@ pub const Interpreter = struct {
                                 };
                             }
 
+                            // Re-sort tags by their runtime ident indices.
+                            // The initial sort (in gatherTags) was by source module ident indices,
+                            // but after translation to runtime idents the order may no longer be alphabetical.
+                            // This ensures discriminant indices match between tag creation and rendering.
+                            const ident_store = self.runtime_layout_store.env.common.getIdentStore();
+                            std.mem.sort(types.Tag, rt_tags.items, ident_store, comptime types.Tag.sortByNameAsc);
+
                             // Determine the terminal extension type (after following tag_union chain).
                             // If the extension is flex/rigid (open union), preserve that in the runtime type.
                             const rt_ext = blk2: {
@@ -9066,7 +9074,7 @@ pub const Interpreter = struct {
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
             _ = try unify.unifyWithConf(
-                self.env,
+                self.runtime_layout_store.env,
                 self.runtime_types,
                 &self.problems,
                 &self.snapshots,
@@ -10458,7 +10466,7 @@ pub const Interpreter = struct {
                             };
                             const dec_var = target_var;
                             _ = try unify.unify(
-                                self.env,
+                                self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -10469,7 +10477,7 @@ pub const Interpreter = struct {
                                 dec_var,
                             );
                             _ = try unify.unify(
-                                self.env,
+                                self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -10482,7 +10490,7 @@ pub const Interpreter = struct {
                         } else if (lhs_is_flex and !rhs_is_flex) {
                             // LHS is flex, RHS is concrete - unify LHS with RHS
                             _ = try unify.unify(
-                                self.env,
+                                self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -10495,7 +10503,7 @@ pub const Interpreter = struct {
                         } else if (!lhs_is_flex and rhs_is_flex) {
                             // RHS is flex, LHS is concrete - unify RHS with LHS
                             _ = try unify.unify(
-                                self.env,
+                                self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.problems,
                                 &self.snapshots,
@@ -11178,7 +11186,7 @@ pub const Interpreter = struct {
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
                     _ = try unify.unifyWithConf(
-                        self.env,
+                        self.runtime_layout_store.env,
                         self.runtime_types,
                         &self.problems,
                         &self.snapshots,
@@ -13880,6 +13888,15 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
 
+                        // Get the actual return type from the lambda's function type.
+                        // This is needed because ci.call_ret_rt_var may be a polymorphic type
+                        // that hasn't been unified with the actual return type (e.g., when
+                        // passing a builtin like U64.from_str directly to a higher-order function).
+                        const low_level_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                        const low_level_rt_var = try self.translateTypeVar(self.env, low_level_ct_var);
+                        const resolved_func = self.runtime_types.resolveVar(low_level_rt_var);
+                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
+
                         // Special handling for list_sort_with which requires continuation-based evaluation
                         if (low_level.op == .list_sort_with) {
                             std.debug.assert(arg_values.len == 2);
@@ -13891,7 +13908,7 @@ pub const Interpreter = struct {
                             func_val.decref(&self.runtime_layout_store, roc_ops);
                             if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
-                            switch (try self.setupSortWith(list_arg, compare_fn, ci.call_ret_rt_var, saved_rigid_subst, roc_ops, work_stack)) {
+                            switch (try self.setupSortWith(list_arg, compare_fn, ret_rt_var, saved_rigid_subst, roc_ops, work_stack)) {
                                 .already_sorted => |result_list| {
                                     compare_fn.decref(&self.runtime_layout_store, roc_ops);
                                     try value_stack.push(result_list);
@@ -13903,7 +13920,7 @@ pub const Interpreter = struct {
                         }
 
                         // Call the builtin
-                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ci.call_ret_rt_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, ret_rt_var);
 
                         // Decref arguments based on ownership semantics.
                         // See src/builtins/OWNERSHIP.md for detailed documentation.
@@ -15174,7 +15191,7 @@ pub const Interpreter = struct {
                                     .mark = types.Mark.none,
                                 });
                                 _ = unify.unifyWithConf(
-                                    self.env,
+                                    self.runtime_layout_store.env,
                                     self.runtime_types,
                                     &self.problems,
                                     &self.snapshots,
