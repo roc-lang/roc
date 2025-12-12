@@ -325,18 +325,30 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
     }
 
     // Add platform-provided files that come before object files
-    for (config.platform_files_pre) |platform_file| {
-        try args.append(platform_file);
+    // Use --whole-archive to include all members from static libraries (e.g., libhost.a)
+    // This ensures host-exported functions like init, handleEvent, update are included
+    // even though they're not referenced by the Roc app's compiled code
+    if (config.platform_files_pre.len > 0) {
+        try args.append("--whole-archive");
+        for (config.platform_files_pre) |platform_file| {
+            try args.append(platform_file);
+        }
+        try args.append("--no-whole-archive");
     }
 
-    // Add object files
+    // Add object files (Roc shim libraries - don't need --whole-archive)
     for (config.object_files) |obj_file| {
         try args.append(obj_file);
     }
 
     // Add platform-provided files that come after object files
-    for (config.platform_files_post) |platform_file| {
-        try args.append(platform_file);
+    // Also use --whole-archive in case there are static libs here too
+    if (config.platform_files_post.len > 0) {
+        try args.append("--whole-archive");
+        for (config.platform_files_post) |platform_file| {
+            try args.append(platform_file);
+        }
+        try args.append("--no-whole-archive");
     }
 
     // Add any extra arguments
