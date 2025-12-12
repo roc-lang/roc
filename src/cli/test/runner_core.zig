@@ -168,6 +168,14 @@ pub fn runWithIoSpec(
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("FAIL (memory error detected)\n", .{});
+        printTruncatedOutput(result.stderr, 10, "       ");
+        return .failed;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code == 0) {
@@ -309,6 +317,15 @@ pub fn printResultLine(status: []const u8, target: []const u8, message: []const 
 // --- Internal helpers ---
 
 fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const u8) TestResult {
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("FAIL (memory error detected)\n", .{});
+        printTruncatedOutput(result.stderr, 10, "       ");
+        cleanup(output_name);
+        return .failed;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code == 0) {
@@ -342,6 +359,14 @@ fn handleProcessResult(result: std.process.Child.RunResult, output_name: []const
 }
 
 fn handleProcessResultNoCleanup(result: std.process.Child.RunResult, output_name: []const u8) TestResult {
+    // Check for GPA (General Purpose Allocator) errors in stderr
+    // These indicate memory bugs like alignment mismatches, double frees, etc.
+    if (std.mem.indexOf(u8, result.stderr, "error(gpa):") != null) {
+        std.debug.print("FAIL (memory error detected)\n", .{});
+        printTruncatedOutput(result.stderr, 10, "       ");
+        return .failed;
+    }
+
     switch (result.term) {
         .Exited => |code| {
             if (code == 0) {

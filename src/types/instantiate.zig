@@ -391,6 +391,10 @@ pub const Instantiator = struct {
             });
         }
 
+        // Sort the fresh tags alphabetically by name before appending.
+        // This ensures tag discriminants are consistent after instantiation.
+        std.mem.sort(Tag, fresh_tags.items, self.idents, comptime Tag.sortByNameAsc);
+
         const tags_range = try self.store.appendTags(fresh_tags.items);
         return TagUnion{
             .tags = tags_range,

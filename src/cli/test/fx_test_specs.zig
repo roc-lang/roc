@@ -204,6 +204,16 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
     },
     .{
+        .roc_file = "test/fx/recursive_tuple_list.roc",
+        .io_spec = "1>Result count: 4",
+        .description = "Regression test: recursive function with List of tuples and append",
+    },
+    .{
+        .roc_file = "test/fx/list_map_fallible.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: List.map with fallible function (U64.from_str)",
+    },
+    .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
         .io_spec = "0<000000010000000100000001|1>000000010000000100000001",
         .description = "Regression test: List.append with effectful call on big string (24+ chars)",
@@ -217,6 +227,16 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_first_function.roc",
         .io_spec = "1>ok",
         .description = "Regression test: List.first with function syntax",
+    },
+    .{
+        .roc_file = "test/fx/stdin_while_uaf.roc",
+        .io_spec = "0<123456789012345678901234|1>123456789012345678901234|0<|1>",
+        .description = "Regression test: Stdin.line! in while loop with 24 char input (heap-allocated string)",
+    },
+    .{
+        .roc_file = "test/fx/stdin_while_uaf.roc",
+        .io_spec = "0<short|1>short|0<|1>",
+        .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
 };
 

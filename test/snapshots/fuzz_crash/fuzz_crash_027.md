@@ -942,7 +942,7 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 ```
 
 The function has the signature:
-    _[Red, Blue, .._others2], _arg -> Error_
+    _[Blue, Red, .._others2], _arg -> Error_
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
