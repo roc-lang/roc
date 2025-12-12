@@ -73,19 +73,7 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
 /// For lists, this compares the element layout index, so two lists with
 /// different element types (e.g., List(Dec) vs List(generic_num)) will be different.
 fn layoutsEqual(a: Layout, b: Layout) bool {
-    if (a.tag != b.tag) return false;
-    return switch (a.tag) {
-        .scalar => std.meta.eql(a.data.scalar, b.data.scalar),
-        .list => a.data.list == b.data.list,
-        .list_of_zst => true,
-        .box => a.data.box == b.data.box,
-        .box_of_zst => true,
-        .record => std.meta.eql(a.data.record, b.data.record),
-        .tuple => std.meta.eql(a.data.tuple, b.data.tuple),
-        .closure => std.meta.eql(a.data.closure, b.data.closure),
-        .tag_union => std.meta.eql(a.data.tag_union, b.data.tag_union),
-        .zst => true,
-    };
+    return a.eql(b);
 }
 
 fn interpreterLookupModuleEnv(
@@ -7119,7 +7107,7 @@ pub const Interpreter = struct {
             const stored_elem_layout_idx = list_layout.data.list;
             const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
 
-            const layouts_match = std.meta.eql(stored_elem_layout, elem_layout);
+            const layouts_match = stored_elem_layout.eql(elem_layout);
             if (!layouts_match) {
                 const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
                 break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
