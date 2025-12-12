@@ -41,6 +41,18 @@ pub const ForwardReference = struct {
     reference_regions: std.ArrayList(Region),
 };
 
+/// Information about a type variable alias binding (for static dispatch on type vars)
+/// Example: `Thing : thing` creates an alias allowing `Thing.method(arg)` to dispatch
+/// based on what `thing` resolves to at runtime.
+pub const TypeVarAliasBinding = struct {
+    /// The name of the type variable being aliased (e.g., "thing")
+    type_var_name: Ident.Idx,
+    /// The type annotation index for the type variable
+    type_var_anno: CIR.TypeAnno.Idx,
+    /// The statement index for the s_type_var_alias statement
+    statement_idx: CIR.Statement.Idx,
+};
+
 /// Maps an Ident to a Pattern in the Can IR
 idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
 aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
@@ -50,6 +62,9 @@ forward_references: std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference),
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
 /// Maps type variables to their type annotation indices
 type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
+/// Maps uppercase alias names to type variable aliases (for static dispatch on type vars)
+/// The key is the alias name (e.g., "Thing"), the value contains the type var info
+type_var_aliases: std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding),
 /// Maps module alias names to their full module info (name + whether package-qualified)
 module_aliases: std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
 /// Maps exposed item names to their source modules and original names (for import resolution)
@@ -69,6 +84,7 @@ pub fn init(is_function_boundary: bool) Scope {
         .forward_references = std.AutoHashMapUnmanaged(Ident.Idx, ForwardReference){},
         .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
         .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
+        .type_var_aliases = std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
         .imported_modules = std.StringHashMapUnmanaged(CIR.Import.Idx){},
@@ -91,6 +107,7 @@ pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
 
     self.type_bindings.deinit(gpa);
     self.type_vars.deinit(gpa);
+    self.type_var_aliases.deinit(gpa);
     self.module_aliases.deinit(gpa);
     self.exposed_items.deinit(gpa);
     self.imported_modules.deinit(gpa);
@@ -122,6 +139,19 @@ pub const TypeLookupResult = union(enum) {
 pub const TypeVarLookupResult = union(enum) {
     found: CIR.TypeAnno.Idx,
     not_found: void,
+};
+
+/// Result of looking up a type variable alias
+pub const TypeVarAliasLookupResult = union(enum) {
+    found: TypeVarAliasBinding,
+    not_found: void,
+};
+
+/// Result of introducing a type variable alias
+pub const TypeVarAliasIntroduceResult = union(enum) {
+    success: void,
+    shadowing_warning: TypeVarAliasBinding, // The type var alias that was shadowed
+    already_in_scope: TypeVarAliasBinding, // The type var alias already exists in this scope
 };
 
 /// Information about a module alias
@@ -359,6 +389,58 @@ pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
         }
     }
     return TypeVarLookupResult{ .not_found = {} };
+}
+
+/// Look up a type variable alias in this scope (for static dispatch on type vars)
+pub fn lookupTypeVarAlias(scope: *const Scope, name: Ident.Idx) TypeVarAliasLookupResult {
+    // Search by comparing .idx values (integer index into string interner)
+    var iter = scope.type_var_aliases.iterator();
+    while (iter.next()) |entry| {
+        if (name.idx == entry.key_ptr.idx) {
+            return TypeVarAliasLookupResult{ .found = entry.value_ptr.* };
+        }
+    }
+    return TypeVarAliasLookupResult{ .not_found = {} };
+}
+
+/// Introduce a type variable alias into this scope (for static dispatch on type vars)
+pub fn introduceTypeVarAlias(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    alias_name: Ident.Idx,
+    type_var_name: Ident.Idx,
+    type_var_anno: CIR.TypeAnno.Idx,
+    statement_idx: CIR.Statement.Idx,
+    parent_lookup_fn: ?*const fn (Ident.Idx) ?TypeVarAliasBinding,
+) std.mem.Allocator.Error!TypeVarAliasIntroduceResult {
+    // Check if already exists in current scope by comparing text content
+    var iter = scope.type_var_aliases.iterator();
+    while (iter.next()) |entry| {
+        if (alias_name.idx == entry.key_ptr.idx) {
+            // Type var alias already exists in this scope
+            return TypeVarAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
+        }
+    }
+
+    // Check for shadowing in parent scopes
+    var shadowed_alias: ?TypeVarAliasBinding = null;
+    if (parent_lookup_fn) |lookup_fn| {
+        shadowed_alias = lookup_fn(alias_name);
+    }
+
+    const binding = TypeVarAliasBinding{
+        .type_var_name = type_var_name,
+        .type_var_anno = type_var_anno,
+        .statement_idx = statement_idx,
+    };
+
+    try scope.type_var_aliases.put(gpa, alias_name, binding);
+
+    if (shadowed_alias) |shadowed| {
+        return TypeVarAliasIntroduceResult{ .shadowing_warning = shadowed };
+    }
+
+    return TypeVarAliasIntroduceResult{ .success = {} };
 }
 
 /// Look up a module alias in this scope

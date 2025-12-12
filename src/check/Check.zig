@@ -67,9 +67,9 @@ cir: *ModuleEnv,
 regions: *Region.List,
 /// List of directly imported  module. Import indexes in CIR refer to this list
 imported_modules: []const *const ModuleEnv,
-/// Map of module name identifiers to their env. This includes all modules
-/// "below" this one in the dependency graph
-module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+/// Map of auto-imported type names (like "Str", "List", "Bool") to their defining modules.
+/// This is used to resolve type names that are automatically available without explicit imports.
+auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 /// Builtin type context for the module being type-checked
 builtin_ctx: BuiltinContext,
 
@@ -124,6 +124,9 @@ top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The expected return type of the enclosing function, if any.
 /// Used to correctly type-check `return` expressions inside loops etc.
 enclosing_func_return_type: ?Var,
+/// The name of the enclosing function, if known.
+/// Used to provide better error messages when type checking lambda arguments.
+enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
 
@@ -166,7 +169,7 @@ pub fn init(
     types: *types_mod.Store,
     cir: *const ModuleEnv,
     imported_modules: []const *const ModuleEnv,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
     regions: *Region.List,
     builtin_ctx: BuiltinContext,
 ) std.mem.Allocator.Error!Self {
@@ -177,7 +180,7 @@ pub fn init(
         cir,
         builtin_ctx.builtin_module,
         builtin_ctx.builtin_indices,
-        module_envs,
+        auto_imported_types,
     );
     errdefer import_mapping.deinit();
 
@@ -186,7 +189,7 @@ pub fn init(
         .types = types,
         .cir = mutable_cir,
         .imported_modules = imported_modules,
-        .module_envs = module_envs,
+        .auto_imported_types = auto_imported_types,
         .regions = regions,
         .builtin_ctx = builtin_ctx,
         .snapshots = try SnapshotStore.initCapacity(gpa, 512),
@@ -213,6 +216,7 @@ pub fn init(
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
+        .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
     };
@@ -970,10 +974,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     var env = try self.env_pool.acquire(.generalized);
     defer self.env_pool.release(env);
 
-    // TODO: Generating type from type stmts writes types into the env, but i
-    // don't think it _needs_ to. We reset before solving each def. We may be able
-    // to save some perf by not passing `env` into the type stmt functions
-
     // Copy builtin types (Bool, Try) into this module's type store
     try self.copyBuiltinTypes();
 
@@ -1219,6 +1219,17 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
         // Check the pattern
         try self.checkPattern(def.pattern, env, .no_expectation);
+
+        // Extract function name from the pattern (for better error messages)
+        const saved_func_name = self.enclosing_func_name;
+        self.enclosing_func_name = blk: {
+            const pattern = self.cir.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |assign| break :blk assign.ident,
+                else => break :blk null,
+            }
+        };
+        defer self.enclosing_func_name = saved_func_name;
 
         // Handle if there's an annotation associated with this def
         if (def.annotation) |annotation_idx| {
@@ -1529,8 +1540,13 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
                 },
             });
         },
-        .w_alias => {
-            // TODO: Recursively unwrap alias
+        .w_alias => |alias| {
+            // Alias syntax in where clauses (e.g., `where [a.Decode]`) was used for abilities,
+            // which have been removed from Roc. Emit an error.
+            _ = try self.problems.appendProblem(self.gpa, .{ .unsupported_alias_where_clause = .{
+                .alias_name = alias.alias_name,
+                .region = where_region,
+            } });
         },
         .w_malformed => {
             // If it's malformed, just ignore
@@ -1595,9 +1611,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
         .lookup => |lookup| {
             switch (lookup.base) {
                 .builtin => |builtin_type| {
-                    // TODO: Don't generate a new type var here, reuse anno var
-                    const builtin_var = try self.generateBuiltinTypeInstance(lookup.name, builtin_type, &.{}, anno_region, env);
-                    _ = try self.unify(anno_var, builtin_var, env);
+                    try self.setBuiltinTypeContent(anno_var, lookup.name, builtin_type, &.{}, anno_region, env);
                 },
                 .local => |local| {
 
@@ -1686,9 +1700,7 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
 
             switch (a.base) {
                 .builtin => |builtin_type| {
-                    // TODO: Don't generate a new type var here, reuse anno var
-                    const builtin_var = try self.generateBuiltinTypeInstance(a.name, builtin_type, anno_arg_vars, anno_region, env);
-                    _ = try self.unify(anno_var, builtin_var, env);
+                    try self.setBuiltinTypeContent(anno_var, a.name, builtin_type, anno_arg_vars, anno_region, env);
                 },
                 .local => |local| {
                     // Check if we're in a declaration or an annotation
@@ -2013,32 +2025,34 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
     }
 }
 
-/// Generate a type variable from the builtin
+/// Set the content of anno_var to the builtin type.
 ///
-/// Writes the resulting type into the slot at `ret_var`
-fn generateBuiltinTypeInstance(
+/// Uses unifyWith to efficiently set content directly when possible,
+/// avoiding the creation of an intermediate type variable.
+fn setBuiltinTypeContent(
     self: *Self,
+    anno_var: Var,
     anno_builtin_name: Ident.Idx,
     anno_builtin_type: CIR.TypeAnno.Builtin,
     anno_args: []Var,
     anno_region: Region,
     env: *Env,
-) std.mem.Allocator.Error!Var {
+) std.mem.Allocator.Error!void {
     switch (anno_builtin_type) {
         // Phase 5: Use nominal types from Builtin instead of special .num content
-        .u8 => return try self.freshFromContent(try self.mkNumberTypeContent("U8", env), env, anno_region),
-        .u16 => return try self.freshFromContent(try self.mkNumberTypeContent("U16", env), env, anno_region),
-        .u32 => return try self.freshFromContent(try self.mkNumberTypeContent("U32", env), env, anno_region),
-        .u64 => return try self.freshFromContent(try self.mkNumberTypeContent("U64", env), env, anno_region),
-        .u128 => return try self.freshFromContent(try self.mkNumberTypeContent("U128", env), env, anno_region),
-        .i8 => return try self.freshFromContent(try self.mkNumberTypeContent("I8", env), env, anno_region),
-        .i16 => return try self.freshFromContent(try self.mkNumberTypeContent("I16", env), env, anno_region),
-        .i32 => return try self.freshFromContent(try self.mkNumberTypeContent("I32", env), env, anno_region),
-        .i64 => return try self.freshFromContent(try self.mkNumberTypeContent("I64", env), env, anno_region),
-        .i128 => return try self.freshFromContent(try self.mkNumberTypeContent("I128", env), env, anno_region),
-        .f32 => return try self.freshFromContent(try self.mkNumberTypeContent("F32", env), env, anno_region),
-        .f64 => return try self.freshFromContent(try self.mkNumberTypeContent("F64", env), env, anno_region),
-        .dec => return try self.freshFromContent(try self.mkNumberTypeContent("Dec", env), env, anno_region),
+        .u8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U8", env), env),
+        .u16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U16", env), env),
+        .u32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U32", env), env),
+        .u64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U64", env), env),
+        .u128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("U128", env), env),
+        .i8 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I8", env), env),
+        .i16 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I16", env), env),
+        .i32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I32", env), env),
+        .i64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I64", env), env),
+        .i128 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("I128", env), env),
+        .f32 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F32", env), env),
+        .f64 => try self.unifyWith(anno_var, try self.mkNumberTypeContent("F64", env), env),
+        .dec => try self.unifyWith(anno_var, try self.mkNumberTypeContent("Dec", env), env),
         .list => {
             // Then check arity
             if (anno_args.len != 1) {
@@ -2049,13 +2063,14 @@ fn generateBuiltinTypeInstance(
                     .num_actual_args = @intCast(anno_args.len),
                 } });
 
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
+                // Set error
+                try self.unifyWith(anno_var, .err, env);
+                return;
             }
 
             // Create the nominal List type
             const list_content = try self.mkListContent(anno_args[0], env);
-            return try self.freshFromContent(list_content, env, anno_region);
+            try self.unifyWith(anno_var, list_content, env);
         },
         .box => {
             // Then check arity
@@ -2067,18 +2082,19 @@ fn generateBuiltinTypeInstance(
                     .num_actual_args = @intCast(anno_args.len),
                 } });
 
-                // Set error and return
-                return try self.freshFromContent(.err, env, anno_region);
+                // Set error
+                try self.unifyWith(anno_var, .err, env);
+                return;
             }
 
             // Create the nominal Box type
             const box_content = try self.mkBoxContent(anno_args[0]);
-            return try self.freshFromContent(box_content, env, anno_region);
+            try self.unifyWith(anno_var, box_content, env);
         },
         // Polymorphic Num type is a module, not a type itself
         .num => {
-            // Return error - Num is a module containing numeric types, not a type
-            return try self.freshFromContent(.err, env, anno_region);
+            // Set error - Num is a module containing numeric types, not a type
+            try self.unifyWith(anno_var, .err, env);
         },
     }
 }
@@ -3043,7 +3059,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                         // Use the new error detail for bound type variable incompatibility
                                         self.setProblemTypeMismatchDetail(unify_result.problem, .{
                                             .incompatible_fn_args_bound_var = .{
-                                                .fn_name = null, // TODO: Use function name?
+                                                .fn_name = self.enclosing_func_name,
                                                 .first_arg_var = arg_1,
                                                 .second_arg_var = arg_2,
                                                 .first_arg_index = @intCast(i),
@@ -3287,19 +3303,22 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // Redirect the expr to the function's return type
                                 _ = try self.unify(expr_var, func.ret, env);
                             } else {
-                                // TODO(jared): Better arity difference error message
+                                // Arity mismatch - the function expects a different
+                                // number of arguments than were provided
+                                const fn_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, func_var);
+                                _ = try self.problems.appendProblem(self.cir.gpa, .{
+                                    .fn_call_arity_mismatch = .{
+                                        .fn_name = func_name,
+                                        .fn_var = func_var,
+                                        .fn_snapshot = fn_snapshot,
+                                        .call_region = expr_region,
+                                        .expected_args = @intCast(func_args.len),
+                                        .actual_args = @intCast(call_arg_expr_idxs.len),
+                                    },
+                                });
 
-                                // If the expected function's arity doesn't match
-                                // the actual arguments provoided, unify the
-                                // inferred function type with the expected function
-                                // type to get  the regulare error message
-                                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
-                                const call_func_ret = try self.fresh(env, expr_region);
-                                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
-                                const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
-
-                                _ = try self.unify(func_var, call_func_var, env);
-                                _ = try self.unify(expr_var, call_func_ret, env);
+                                // Set the expression to error type
+                                try self.unifyWith(expr_var, .err, env);
                             }
                         } else {
                             // We get here if the type of expr being called
@@ -3393,9 +3412,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .start = first_arg_range.start,
                         .count = rest_args_range.count + 1,
                     };
-
-                    // TODO Why do we have to create the static dispatch fn at the
-                    // receiver rank instead of the  cur rank?
 
                     // Since the return type of this dispatch is unknown, create a
                     // flex to represent it
@@ -3554,6 +3570,62 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
             }
         },
+        .e_type_var_dispatch => |tvd| {
+            // Type variable dispatch expression: Thing.method(args) where Thing is a type var alias.
+            // This is similar to static dispatch (e_dot_access with args) but dispatches on a
+            // type variable rather than on the type of a receiver expression.
+
+            // Check the args and track errors
+            const dispatch_arg_expr_idxs = self.cir.store.exprSlice(tvd.args);
+            var did_err = false;
+            for (dispatch_arg_expr_idxs) |dispatch_arg_expr_idx| {
+                does_fx = try self.checkExpr(dispatch_arg_expr_idx, env, .no_expectation) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(dispatch_arg_expr_idx)).desc.content == .err);
+            }
+
+            if (did_err) {
+                // If any arguments are errors, propagate the error
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                // Get the type var alias statement to access the type variable
+                const type_var_alias_stmt = self.cir.store.getStatement(tvd.type_var_alias_stmt);
+                const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
+                const type_var = ModuleEnv.varFrom(type_var_anno);
+
+                // For type var dispatch, the arguments are just the explicit args (no receiver)
+                const dispatch_arg_vars_range = try self.types.appendVars(@ptrCast(dispatch_arg_expr_idxs));
+
+                // Since the return type of this dispatch is unknown, create a flex to represent it
+                const dispatch_ret_var = try self.fresh(env, expr_region);
+
+                // Create the function being dispatched
+                const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+                    .args = dispatch_arg_vars_range,
+                    .ret = dispatch_ret_var,
+                    .needs_instantiation = false,
+                } } }, env, expr_region);
+
+                // Create the static dispatch constraint
+                const constraint = StaticDispatchConstraint{
+                    .fn_name = tvd.method_name,
+                    .fn_var = constraint_fn_var,
+                    .origin = .method_call,
+                };
+                const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+                // Create a constrained flex and unify it with the type variable
+                const constrained_var = try self.freshFromContent(
+                    .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+                    env,
+                    expr_region,
+                );
+
+                _ = try self.unify(constrained_var, type_var, env);
+
+                // Set the expression type to the return type of the dispatch
+                _ = try self.unify(expr_var, dispatch_ret_var, env);
+            }
+        },
         .e_runtime_error => {
             try self.unifyWith(expr_var, .err, env);
         },
@@ -3598,6 +3670,17 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the pattern
                 try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
+
+                // Extract function name from the pattern (for better error messages)
+                const saved_func_name = self.enclosing_func_name;
+                self.enclosing_func_name = inner_blk: {
+                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
+                    switch (pattern) {
+                        .assign => |assign| break :inner_blk assign.ident,
+                        else => break :inner_blk null,
+                    }
+                };
+                defer self.enclosing_func_name = saved_func_name;
 
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
@@ -3650,6 +3733,17 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the pattern
                 try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
+
+                // Extract function name from the pattern (for better error messages)
+                const saved_func_name = self.enclosing_func_name;
+                self.enclosing_func_name = inner_blk: {
+                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
+                    switch (pattern) {
+                        .assign => |assign| break :inner_blk assign.ident,
+                        else => break :inner_blk null,
+                    }
+                };
+                defer self.enclosing_func_name = saved_func_name;
 
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
@@ -3836,6 +3930,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // These are only valid at the top level, czer reports error
                 try self.unifyWith(stmt_var, .err, env);
             },
+            .s_type_var_alias => {
+                // Type var alias introduces no new constraints during type checking
+                // The alias is already registered in scope by canonicalization
+                // The type var it references is a rigid var from the enclosing function
+                try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+            },
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, env);
             },
@@ -3927,7 +4027,7 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
-        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_runtime_error => {},
+        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
     }
 }
 
@@ -4968,24 +5068,14 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         break :blk self.cir;
                     }
                 } else {
-                    // TODO: The name `module_envs` is misleading - it's actually a map of
-                    // auto-imported TYPE NAMES to their defining modules, not a map of module names.
-                    // This is because when you write `List` in user code (not `Builtin.List`), the
-                    // compiler needs to quickly resolve which module defines that type name.
-                    //
-                    // This creates confusion here in static dispatch: we have an `origin_module`
-                    // which stores the MODULE name ("Builtin"), but `module_envs` is keyed by
-                    // TYPE names ("List", "Bool", etc.).
-                    //
-                    // The correct solution would be to have two separate maps:
-                    // - auto_imported_types: HashMap(TypeName, ModuleEnv) for canonicalization
-                    // - imported_modules: HashMap(ModuleName, ModuleEnv) for module lookups
-                    //
-                    // For now, we work around this by looking up regular imports in module_envs.
-                    std.debug.assert(self.module_envs != null);
-                    const module_envs = self.module_envs.?;
+                    // Look up the module in auto_imported_types.
+                    // Note: auto_imported_types maps TYPE names to their modules, but
+                    // here we're using the origin_module (a MODULE name). This works
+                    // because imported types have entries keyed by their type name.
+                    std.debug.assert(self.auto_imported_types != null);
+                    const auto_imported_types = self.auto_imported_types.?;
 
-                    const mb_original_module_env = module_envs.get(original_module_ident);
+                    const mb_original_module_env = auto_imported_types.get(original_module_ident);
                     std.debug.assert(mb_original_module_env != null);
                     break :blk mb_original_module_env.?.env;
                 }
@@ -5170,23 +5260,24 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             if (constraints.len > 0) {
-                const constraint = constraints[0];
-
-                // For is_eq constraints, use the specific equality error message
-                // Use ident index comparison instead of string comparison
-                if (constraint.fn_name == self.cir.idents.is_eq) {
-                    try self.reportEqualityError(
-                        deferred_constraint.var_,
-                        constraint,
-                        env,
-                    );
-                } else {
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .not_nominal,
-                        env,
-                    );
+                // Report errors for ALL failing constraints, not just the first one
+                for (constraints) |constraint| {
+                    // For is_eq constraints, use the specific equality error message
+                    // Use ident index comparison instead of string comparison
+                    if (constraint.fn_name == self.cir.idents.is_eq) {
+                        try self.reportEqualityError(
+                            deferred_constraint.var_,
+                            constraint,
+                            env,
+                        );
+                    } else {
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .not_nominal,
+                            env,
+                        );
+                    }
                 }
             } else {
                 // Deferred constraint checks should always have at least one constraint.
@@ -5422,7 +5513,7 @@ pub fn createImportMapping(
     cir: *const ModuleEnv,
     builtin_module: ?*const ModuleEnv,
     builtin_indices: ?CIR.BuiltinIndices,
-    module_envs: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
+    auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 ) std.mem.Allocator.Error!types_mod.import_mapping.ImportMapping {
     var mapping = types_mod.import_mapping.ImportMapping.init(gpa);
     errdefer mapping.deinit();
@@ -5511,7 +5602,7 @@ pub fn createImportMapping(
         }
     }
 
-    _ = module_envs; // Not needed anymore - mapping is built during canonicalization
+    _ = auto_imported_types; // Not needed anymore - mapping is built during canonicalization
 
     return mapping;
 }

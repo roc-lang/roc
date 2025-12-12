@@ -2686,6 +2686,15 @@ pub const Interpreter = struct {
                     else => break :copy &builtins.list.copy_fallback,
                 };
 
+                // Increment refcount of the element being appended.
+                // The element is copied into the list, creating a second reference,
+                // so we need to increment its refcount before the copy.
+                // Without this, when the original element is freed, the list would
+                // hold a dangling reference (use-after-free bug).
+                if (elements_refcounted) {
+                    elt_arg.incref(&self.runtime_layout_store);
+                }
+
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
@@ -9231,6 +9240,12 @@ pub const Interpreter = struct {
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
 
+        /// Type var dispatch - collect arguments for static method call.
+        type_var_dispatch_collect_args: TypeVarDispatchCollectArgs,
+
+        /// Type var dispatch - invoke the method after arguments are collected.
+        type_var_dispatch_invoke: TypeVarDispatchInvoke,
+
         /// For loop/expression - iterate over list elements after list is evaluated.
         for_iterate: ForIterate,
 
@@ -9581,6 +9596,35 @@ pub const Interpreter = struct {
             remaining_args: []const can.CIR.Expr.Idx,
             /// Receiver runtime type variable (for method resolution)
             receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Type var dispatch - collect arguments for a static method call on a type variable.
+        /// Similar to DotAccessCollectArgs but without a receiver value.
+        /// Used for Thing.method(args) where Thing is a type var alias.
+        pub const TypeVarDispatchCollectArgs = struct {
+            /// Method name
+            method_name: base_pkg.Ident.Idx,
+            /// Number of arguments already collected on the value stack
+            collected_count: usize,
+            /// Remaining argument expression indices
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Runtime type variable for the type being dispatched on
+            dispatch_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Type var dispatch - invoke the method after arguments are collected.
+        /// Stack contains: [method_func, arg0, arg1, ...]
+        pub const TypeVarDispatchInvoke = struct {
+            /// Method name (for error messages)
+            method_name: base_pkg.Ident.Idx,
+            /// Number of arguments collected on the value stack
+            arg_count: usize,
+            /// Runtime type variable for the type being dispatched on
+            dispatch_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
         };
@@ -10147,6 +10191,194 @@ pub const Interpreter = struct {
             .e_runtime_error => {
                 self.triggerCrash("runtime error", false, roc_ops);
                 return error.Crash;
+            },
+
+            .e_type_var_dispatch => |tvd| {
+                // Type variable dispatch: Thing.method(args) where Thing is a type var alias.
+                // Get the type variable from the type var alias statement
+                const type_var_alias_stmt = self.env.store.getStatement(tvd.type_var_alias_stmt);
+                const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
+
+                // Translate the type annotation to a runtime type variable
+                const ct_var = can.ModuleEnv.varFrom(type_var_anno);
+                const dispatch_rt_var = try self.translateTypeVar(self.env, ct_var);
+
+                // Resolve the type to find the nominal type info
+                var resolved = self.runtime_types.resolveVar(dispatch_rt_var);
+
+                // Follow aliases to get to the underlying type
+                while (resolved.desc.content == .alias) {
+                    const alias = resolved.desc.content.alias;
+                    const backing = self.runtime_types.getAliasBackingVar(alias);
+                    resolved = self.runtime_types.resolveVar(backing);
+                }
+
+                // Get nominal type info for method resolution
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => null,
+                    },
+                    else => null,
+                };
+
+                if (nominal_info == null) {
+                    self.triggerCrash("type variable dispatch requires a nominal type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Resolve the method function
+                const method_func = self.resolveMethodFunction(
+                    nominal_info.?.origin,
+                    nominal_info.?.ident,
+                    tvd.method_name,
+                    roc_ops,
+                    dispatch_rt_var,
+                ) catch |err| {
+                    if (err == error.MethodLookupFailed) {
+                        const layout_env = self.runtime_layout_store.env;
+                        const type_name = import_mapping_mod.getDisplayName(
+                            self.import_mapping,
+                            layout_env.common.getIdentStore(),
+                            nominal_info.?.ident,
+                        );
+                        const method_name = self.env.getIdent(tvd.method_name);
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
+                            self.triggerCrash("Method not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        self.triggerCrash(crash_msg, true, roc_ops);
+                        return error.Crash;
+                    }
+                    return err;
+                };
+
+                if (method_func.layout.tag != .closure) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                const arg_exprs = self.env.store.exprSlice(tvd.args);
+
+                if (arg_exprs.len == 0) {
+                    // No arguments - invoke method directly
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Check if low-level lambda
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var args = [0]StackValue{};
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                        try value_stack.push(result);
+                    } else if (lambda_expr == .e_lambda) {
+                        // Regular lambda - invoke
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                        // Push cleanup continuation
+                        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                            .saved_bindings_len = saved_bindings_len,
+                            .saved_env = saved_env,
+                            .param_count = 0,
+                            .has_active_closure = false,
+                            .did_instantiate = false,
+                            .call_ret_rt_var = return_rt_var,
+                            .saved_rigid_subst = null,
+                            .saved_flex_type_context = null,
+                            .arg_rt_vars_to_free = null,
+                        } } });
+
+                        // Push body evaluation
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = lambda_expr.e_lambda.body,
+                            .expected_rt_var = return_rt_var,
+                        } });
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                    } else if (lambda_expr == .e_closure) {
+                        // Closure - follow to underlying lambda
+                        const underlying_lambda = self.env.store.getExpr(lambda_expr.e_closure.lambda_idx);
+                        if (underlying_lambda != .e_lambda) {
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            self.env = saved_env;
+                            return error.TypeMismatch;
+                        }
+
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                        // Push cleanup continuation
+                        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                            .saved_bindings_len = saved_bindings_len,
+                            .saved_env = saved_env,
+                            .param_count = 0,
+                            .has_active_closure = false,
+                            .did_instantiate = false,
+                            .call_ret_rt_var = return_rt_var,
+                            .saved_rigid_subst = null,
+                            .saved_flex_type_context = null,
+                            .arg_rt_vars_to_free = null,
+                        } } });
+
+                        // Push body evaluation
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = underlying_lambda.e_lambda.body,
+                            .expected_rt_var = return_rt_var,
+                        } });
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                    } else {
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    // Has arguments - need to evaluate them first
+                    // Push method func to value stack
+                    try value_stack.push(method_func);
+
+                    // Push invoke continuation (will be executed after all args collected)
+                    try work_stack.push(.{ .apply_continuation = .{ .type_var_dispatch_invoke = .{
+                        .method_name = tvd.method_name,
+                        .arg_count = arg_exprs.len,
+                        .dispatch_rt_var = dispatch_rt_var,
+                        .expr_idx = expr_idx,
+                    } } });
+
+                    // If more than one arg, push collect continuation
+                    if (arg_exprs.len > 1) {
+                        try work_stack.push(.{ .apply_continuation = .{ .type_var_dispatch_collect_args = .{
+                            .method_name = tvd.method_name,
+                            .collected_count = 0,
+                            .remaining_args = arg_exprs[1..],
+                            .dispatch_rt_var = dispatch_rt_var,
+                            .expr_idx = expr_idx,
+                        } } });
+                    }
+
+                    // Push first arg evaluation
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = arg_exprs[0],
+                        .expected_rt_var = first_arg_rt_var,
+                    } });
+                }
             },
 
             // Binary operations
@@ -14750,6 +14982,41 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
 
+                    // Get the method function's type and unify parameter with receiver.
+                    // This properly constrains rigid type variables (like `item` in List.first).
+                    const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const method_lambda_rt_var = try self.translateTypeVar(self.env, method_lambda_ct_var);
+                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+
+                    // Get the function's return type and first parameter for unification
+                    const effective_ret_var: types.Var = blk: {
+                        const func_info = method_resolved.desc.content.unwrapFunc() orelse {
+                            // Fall back to translating from call site if not a function type
+                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                            break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                        };
+
+                        // Unify the method's first parameter with the receiver type
+                        const method_params = self.runtime_types.sliceVars(func_info.args);
+                        if (method_params.len >= 1) {
+                            _ = try unify.unifyWithConf(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.type_writer,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                method_params[0],
+                                da.receiver_rt_var,
+                                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                            );
+                        }
+
+                        // Now the return type has rigid vars properly substituted
+                        break :blk func_info.ret;
+                    };
+
                     try self.active_closures.append(method_func);
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
@@ -14764,14 +15031,14 @@ pub const Interpreter = struct {
                         .param_count = 1,
                         .has_active_closure = true,
                         .did_instantiate = false,
-                        .call_ret_rt_var = null,
+                        .call_ret_rt_var = effective_ret_var,
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = null,
+                        .expected_rt_var = effective_ret_var,
                     } });
                     return true;
                 }
@@ -15122,6 +15389,180 @@ pub const Interpreter = struct {
                     .expected_rt_var = null,
                 } });
                 return true;
+            },
+            .type_var_dispatch_collect_args => |tvdc| {
+                // Type var dispatch: collecting arguments
+                // Stack: [method_func, arg0, arg1, ...]
+                if (tvdc.remaining_args.len > 0) {
+                    // More arguments to evaluate
+                    try work_stack.push(.{ .apply_continuation = .{ .type_var_dispatch_collect_args = .{
+                        .method_name = tvdc.method_name,
+                        .collected_count = tvdc.collected_count + 1,
+                        .remaining_args = tvdc.remaining_args[1..],
+                        .dispatch_rt_var = tvdc.dispatch_rt_var,
+                        .expr_idx = tvdc.expr_idx,
+                    } } });
+
+                    // Translate argument type
+                    const next_arg_ct_var = can.ModuleEnv.varFrom(tvdc.remaining_args[0]);
+                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = tvdc.remaining_args[0],
+                        .expected_rt_var = next_arg_rt_var,
+                    } });
+                }
+                return true;
+            },
+            .type_var_dispatch_invoke => |tvdi| {
+                // Type var dispatch: all arguments collected, invoke the method
+                // Stack: [method_func, arg0, arg1, ...]
+
+                // Pop all arguments
+                var arg_values = try self.allocator.alloc(StackValue, tvdi.arg_count);
+                defer self.allocator.free(arg_values);
+                var i: usize = tvdi.arg_count;
+                while (i > 0) {
+                    i -= 1;
+                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                }
+
+                // Pop method function
+                const method_func = value_stack.pop() orelse return error.Crash;
+
+                if (method_func.layout.tag != .closure) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, return_rt_var);
+
+                    // Decref based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    for (arg_values, 0..) |arg, idx| {
+                        if (idx < arg_ownership.len and arg_ownership[idx] == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                    try value_stack.push(result);
+                    return true;
+                } else if (lambda_expr == .e_lambda) {
+                    // Regular lambda - bind parameters and evaluate body
+                    const params_slice = self.env.store.slicePatterns(lambda_expr.e_lambda.args);
+
+                    // Bind all arguments to parameters
+                    for (params_slice, 0..) |param, idx| {
+                        if (idx >= arg_values.len) break;
+                        const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
+                            self.env = saved_env;
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            return error.TypeMismatch;
+                        }
+                        // patternMatchesBind makes a copy, so decref the original
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                    // Push cleanup continuation
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_bindings_len = saved_bindings_len,
+                        .saved_env = saved_env,
+                        .param_count = @intCast(params_slice.len),
+                        .has_active_closure = false,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = return_rt_var,
+                        .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+
+                    // Push body evaluation
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = lambda_expr.e_lambda.body,
+                        .expected_rt_var = return_rt_var,
+                    } });
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return true;
+                } else if (lambda_expr == .e_closure) {
+                    // Closure - follow to underlying lambda
+                    const underlying_lambda = self.env.store.getExpr(lambda_expr.e_closure.lambda_idx);
+                    if (underlying_lambda != .e_lambda) {
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+
+                    const params_slice = self.env.store.slicePatterns(underlying_lambda.e_lambda.args);
+
+                    // Bind all arguments to parameters
+                    for (params_slice, 0..) |param, idx| {
+                        if (idx >= arg_values.len) break;
+                        const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
+                            self.env = saved_env;
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            return error.TypeMismatch;
+                        }
+                        // patternMatchesBind makes a copy, so decref the original
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                    // Push cleanup continuation
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_bindings_len = saved_bindings_len,
+                        .saved_env = saved_env,
+                        .param_count = @intCast(params_slice.len),
+                        .has_active_closure = false,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = return_rt_var,
+                        .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+
+                    // Push body evaluation
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = underlying_lambda.e_lambda.body,
+                        .expected_rt_var = return_rt_var,
+                    } });
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return true;
+                } else {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
             },
             .for_iterate => |fl_in| {
                 // For loop/expression iteration: list has been evaluated, start iterating

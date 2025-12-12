@@ -214,6 +214,21 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
     },
+    .{
+        .roc_file = "test/fx/list_append_stdin_uaf.roc",
+        .io_spec = "0<000000010000000100000001|1>000000010000000100000001",
+        .description = "Regression test: List.append with effectful call on big string (24+ chars)",
+    },
+    .{
+        .roc_file = "test/fx/list_first_method.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with method syntax",
+    },
+    .{
+        .roc_file = "test/fx/list_first_function.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with function syntax",
+    },
 };
 
 /// Get the total number of IO spec tests

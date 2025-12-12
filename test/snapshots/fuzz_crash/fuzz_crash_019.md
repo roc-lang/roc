@@ -191,8 +191,7 @@ TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 UNUSED VALUE - fuzz_crash_019.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
 UNUSED VALUE - fuzz_crash_019.md:1:1:1:1
-TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
-UNUSED VALUE - fuzz_crash_019.md:84:2:86:3
+TOO FEW ARGUMENTS - fuzz_crash_019.md:84:2:86:3
 UNUSED VALUE - fuzz_crash_019.md:86:11:86:17
 MISSING METHOD - fuzz_crash_019.md:77:11:77:14
 UNUSED VALUE - fuzz_crash_019.md:98:4:104:3
@@ -930,8 +929,8 @@ This expression produces a value, but it's not being used:
 It has the type:
     __f_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `me` expects 2 arguments, but 1 was provided:
 **fuzz_crash_019.md:84:2:86:3:**
 ```roc
 	me(
@@ -939,23 +938,8 @@ This expression is used in an unexpected way:
 	)crash ke"Unr!" #)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
+The function has the signature:
     _[Blue, .._others], [Tb, .._others2] -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:84:2:86:3:**
-```roc
-	me(
-		..., # r
-	)crash ke"Unr!" #)
-```
-
-It has the type:
-    __f_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

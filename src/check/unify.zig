@@ -1536,42 +1536,28 @@ const Unifier = struct {
                             switch (flat_type) {
                                 .record => |ext_record| {
                                     const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
-                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
 
-                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
-                                        // Check if field name already exists (O(n) but fields are small)
-                                        const already_exists = for (already_gathered) |existing| {
-                                            if (existing.name == name) break true;
-                                        } else false;
+                                    // Merge extension fields while maintaining sorted order
+                                    self.scratch.mergeSortedExtensionFields(
+                                        &range,
+                                        next_fields.items(.name),
+                                        next_fields.items(.var_),
+                                        self.module_env.getIdentStore(),
+                                    ) catch return Error.AllocatorError;
 
-                                        // Only append if NOT already present (Map.union left-bias)
-                                        if (!already_exists) {
-                                            _ = self.scratch.gathered_fields.append(
-                                                self.scratch.gpa,
-                                                RecordField{ .name = name, .var_ = var_ },
-                                            ) catch return Error.AllocatorError;
-                                            range.count += 1;
-                                        }
-                                    }
                                     ext = .{ .ext = ext_record.ext };
                                 },
                                 .record_unbound => |fields| {
                                     const next_fields = self.types_store.record_fields.sliceRange(fields);
-                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
 
-                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
-                                        const already_exists = for (already_gathered) |existing| {
-                                            if (existing.name == name) break true;
-                                        } else false;
+                                    // Merge extension fields while maintaining sorted order
+                                    self.scratch.mergeSortedExtensionFields(
+                                        &range,
+                                        next_fields.items(.name),
+                                        next_fields.items(.var_),
+                                        self.module_env.getIdentStore(),
+                                    ) catch return Error.AllocatorError;
 
-                                        if (!already_exists) {
-                                            _ = self.scratch.gathered_fields.append(
-                                                self.scratch.gpa,
-                                                RecordField{ .name = name, .var_ = var_ },
-                                            ) catch return Error.AllocatorError;
-                                            range.count += 1;
-                                        }
-                                    }
                                     return .{ .ext = ext, .range = range };
                                 },
                                 .empty_record => {
@@ -1614,7 +1600,7 @@ const Unifier = struct {
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedRecordFields {
-        // First sort the fields
+        // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
         std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
@@ -1982,11 +1968,16 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .tag_union => |ext_tag_union| {
-                            const next_range = self.scratch.copyGatherTagsFromMultiList(
-                                &self.types_store.tags,
-                                ext_tag_union.tags,
+                            const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
+
+                            // Merge extension tags while maintaining sorted order
+                            self.scratch.mergeSortedExtensionTags(
+                                &range,
+                                next_tags.items(.name),
+                                next_tags.items(.args),
+                                self.module_env.getIdentStore(),
                             ) catch return Error.AllocatorError;
-                            range.count += next_range.count;
+
                             ext_var = ext_tag_union.ext;
                         },
                         .empty_tag_union => {
@@ -2007,7 +1998,7 @@ const Unifier = struct {
     };
 
     /// Given two ranges of tag_union tags stored in `scratch.gathered_tags`, this function:
-    /// * sorts both slices in-place by field name
+    /// * sorts both slices in-place by tag name
     /// * partitions them into three disjoint groups:
     ///     - tags only in `a`
     ///     - tags only in `b`
@@ -2027,7 +2018,7 @@ const Unifier = struct {
         a_tags_range: TagSafeList.Range,
         b_tags_range: TagSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedTags {
-        // First sort the tags
+        // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
         const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
         std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
         const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
@@ -2390,14 +2381,11 @@ pub fn partitionTags(
 ///    while SafeLists waste some space compared to MultiList, the cost isn't too
 ///    high
 ///
-/// TODO: If canonicalization can ensure that record fields/tags are always sorted
-/// then we could switch these to use multi lists.
-///
-/// TODO: Currently, we capture vars created during unifcation in `fresh_vars`
-/// and constraints to check later in `deferred_constraints`. We then copy
-/// these values into other arrays in Check.  In the future, we should consider
-/// passing in references to arrays by the caller of unify. Then we can write
-/// directly into the output arrays and save the extra copying.
+/// NOTE: Record fields and tags are merged in sorted order during gathering
+/// (via mergeSortedExtensionFields/mergeSortedExtensionTags). However, unification
+/// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
+/// still perform a final sort. To fully eliminate these sorts, we would need to ensure
+/// unifySharedTags also produces sorted output.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -2515,6 +2503,118 @@ pub const Scratch = struct {
         return self.gathered_fields.rangeToEnd(@intCast(start_int));
     }
 
+    /// Merge sorted extension fields into an already-sorted gathered range.
+    /// Maintains sorted order and left-bias semantics (base fields take precedence).
+    /// The range is updated in-place to reflect the new count.
+    /// Returns whether any new fields were added.
+    fn mergeSortedExtensionFields(
+        self: *Self,
+        range: *RecordFieldSafeList.Range,
+        ext_names: []const Ident.Idx,
+        ext_vars: []const Var,
+        ident_store: *const Ident.Store,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(ext_names.len == ext_vars.len);
+        if (ext_names.len == 0) return;
+
+        // Get current gathered fields
+        const current_fields = self.gathered_fields.sliceRange(range.*);
+        const current_len = current_fields.len;
+
+        // Count how many extension fields are NOT duplicates
+        var new_count: usize = 0;
+        for (ext_names) |ext_name| {
+            const is_dup = for (current_fields) |existing| {
+                if (existing.name == ext_name) break true;
+            } else false;
+            if (!is_dup) new_count += 1;
+        }
+
+        if (new_count == 0) return;
+
+        // Allocate space for merged result
+        try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
+
+        // We need to merge in-place. Strategy:
+        // 1. Append all new (non-duplicate) extension fields to the end
+        // 2. Then do an in-place merge of the two sorted regions
+
+        // Append non-duplicate extension fields
+        for (ext_names, ext_vars) |name, var_| {
+            const is_dup = for (current_fields) |existing| {
+                if (existing.name == name) break true;
+            } else false;
+            if (!is_dup) {
+                self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .var_ = var_ });
+            }
+        }
+
+        // Now we have: [sorted_base | sorted_extension]
+        // Do an in-place merge using the standard merge technique
+        // Get the slice starting from range.start with the new total length
+        const start_idx: usize = @intFromEnum(range.start);
+        const total_len = current_len + new_count;
+        const items = self.gathered_fields.items.items[start_idx..][0..total_len];
+
+        // In-place merge: we have [sorted_left | sorted_right]
+        // Use rotation-based merge which is O(n) for this case
+        inPlaceMergeFields(items, current_len, ident_store);
+
+        // Update range count
+        range.count = @intCast(total_len);
+    }
+
+    /// Merge sorted extension tags into an already-sorted gathered range.
+    /// Maintains sorted order and left-bias semantics (base tags take precedence).
+    fn mergeSortedExtensionTags(
+        self: *Self,
+        range: *TagSafeList.Range,
+        ext_names: []const Ident.Idx,
+        ext_args: []const Var.SafeList.Range,
+        ident_store: *const Ident.Store,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(ext_names.len == ext_args.len);
+        if (ext_names.len == 0) return;
+
+        // Get current gathered tags
+        const current_tags = self.gathered_tags.sliceRange(range.*);
+        const current_len = current_tags.len;
+
+        // Count how many extension tags are NOT duplicates
+        var new_count: usize = 0;
+        for (ext_names) |ext_name| {
+            const is_dup = for (current_tags) |existing| {
+                if (existing.name == ext_name) break true;
+            } else false;
+            if (!is_dup) new_count += 1;
+        }
+
+        if (new_count == 0) return;
+
+        // Allocate space for merged result
+        try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
+
+        // Append non-duplicate extension tags
+        for (ext_names, ext_args) |name, args| {
+            const is_dup = for (current_tags) |existing| {
+                if (existing.name == name) break true;
+            } else false;
+            if (!is_dup) {
+                self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });
+            }
+        }
+
+        // In-place merge
+        const start_idx: usize = @intFromEnum(range.start);
+        const total_len = current_len + new_count;
+        const items = self.gathered_tags.items.items[start_idx..][0..total_len];
+
+        inPlaceMergeTags(items, current_len, ident_store);
+
+        // Update range count
+        range.count = @intCast(total_len);
+    }
+
     /// Given a multi list of tag and a range, copy from the multi list
     /// into scratch's gathered fields array
     fn copyGatherTagsFromMultiList(
@@ -2547,3 +2647,40 @@ pub const Scratch = struct {
         self.err = err;
     }
 };
+
+/// In-place merge of two sorted regions of record fields.
+/// Given an array [left_sorted | right_sorted], produces [merged_sorted].
+/// Uses insertion sort approach which is O(n*m) but efficient for small arrays.
+fn inPlaceMergeFields(items: []RecordField, left_len: usize, ident_store: *const Ident.Store) void {
+    if (left_len == 0 or left_len == items.len) return;
+
+    // Simple approach: insertion sort the right portion into the left
+    // This is O(n*m) but records typically have few fields
+    var i = left_len;
+    while (i < items.len) : (i += 1) {
+        const key = items[i];
+        var j = i;
+        // Shift elements right until we find the correct position
+        while (j > 0 and RecordField.orderByName(ident_store, items[j - 1], key) == .gt) {
+            items[j] = items[j - 1];
+            j -= 1;
+        }
+        items[j] = key;
+    }
+}
+
+/// In-place merge of two sorted regions of tags.
+fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Store) void {
+    if (left_len == 0 or left_len == items.len) return;
+
+    var i = left_len;
+    while (i < items.len) : (i += 1) {
+        const key = items[i];
+        var j = i;
+        while (j > 0 and Tag.orderByName(ident_store, items[j - 1], key) == .gt) {
+            items[j] = items[j - 1];
+            j -= 1;
+        }
+        items[j] = key;
+    }
+}
