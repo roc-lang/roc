@@ -951,6 +951,12 @@ pub const Store = struct {
         const max_iterations = 10000; // Safety limit to prevent infinite loops
         var layout_idx: Idx = undefined;
 
+        // Track vars that we've visited via TypeScope lookup to detect cycles.
+        // This prevents infinite loops when rigid -> flex mappings create cycles
+        // through constraints that reference back to the original rigid.
+        var scope_lookup_visited: [32]Var = undefined;
+        var scope_lookup_count: u8 = 0;
+
         outer: while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
@@ -1388,9 +1394,52 @@ pub const Store = struct {
                 .flex => |flex| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
-                        current = self.types_store.resolveVar(mapped_var);
-                        continue :outer;
+                        // Check if we've already visited this var via a scope lookup (cycle detection)
+                        const already_visited = for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                            if (visited == current.var_) break true;
+                        } else false;
+
+                        if (!already_visited) {
+                            // Track this var as visited and follow the mapping
+                            if (scope_lookup_count < 32) {
+                                scope_lookup_visited[scope_lookup_count] = current.var_;
+                                scope_lookup_count += 1;
+                            }
+                            current = self.types_store.resolveVar(mapped_var);
+                            continue :outer;
+                        }
+                        // Cycle detected! Instead of treating as unmapped flex, check what
+                        // the mapped var actually is and handle appropriately.
+                        const resolved_mapped = self.types_store.resolveVar(mapped_var);
+                        switch (resolved_mapped.desc.content) {
+                            .flex => |f| {
+                                // Mapped to another flex var - check constraints
+                                if (self.hasFromNumeralConstraint(f.constraints)) {
+                                    break :blk Layout.default_num();
+                                }
+                                // No from_numeral - treat as ZST
+                            },
+                            .rigid => |r| {
+                                // Mapped to a rigid - check constraints
+                                if (self.hasFromNumeralConstraint(r.constraints)) {
+                                    break :blk Layout.default_num();
+                                }
+                                // No from_numeral - treat as ZST
+                            },
+                            .structure => {
+                                // Mapped to a concrete structure - follow it without cycle check
+                                // This is safe because structures don't loop back through TypeScope
+                                current = resolved_mapped;
+                                continue :outer;
+                            },
+                            .alias => |alias| {
+                                // Mapped to an alias - follow the backing var
+                                current = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+                                continue :outer;
+                            },
+                            else => {},
+                        }
+                        // Fall through to handle as normal flex
                     }
 
                     // Check if this flex var has a from_numeral constraint, indicating
@@ -1413,9 +1462,52 @@ pub const Store = struct {
                 .rigid => |rigid| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
-                        current = self.types_store.resolveVar(mapped_var);
-                        continue :outer;
+                        // Check if we've already visited this var via a scope lookup (cycle detection)
+                        const already_visited = for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                            if (visited == current.var_) break true;
+                        } else false;
+
+                        if (!already_visited) {
+                            // Track this var as visited and follow the mapping
+                            if (scope_lookup_count < 32) {
+                                scope_lookup_visited[scope_lookup_count] = current.var_;
+                                scope_lookup_count += 1;
+                            }
+                            current = self.types_store.resolveVar(mapped_var);
+                            continue :outer;
+                        }
+                        // Cycle detected! Instead of treating as unmapped rigid, check what
+                        // the mapped var actually is and handle appropriately.
+                        const resolved_mapped = self.types_store.resolveVar(mapped_var);
+                        switch (resolved_mapped.desc.content) {
+                            .flex => |f| {
+                                // Mapped to a flex var - check constraints
+                                if (self.hasFromNumeralConstraint(f.constraints)) {
+                                    break :blk Layout.default_num();
+                                }
+                                // No from_numeral - treat as ZST
+                            },
+                            .rigid => |r| {
+                                // Mapped to another rigid - check constraints
+                                if (self.hasFromNumeralConstraint(r.constraints)) {
+                                    break :blk Layout.default_num();
+                                }
+                                // No from_numeral - treat as ZST
+                            },
+                            .structure => {
+                                // Mapped to a concrete structure - follow it without cycle check
+                                // This is safe because structures don't loop back through TypeScope
+                                current = resolved_mapped;
+                                continue :outer;
+                            },
+                            .alias => |alias| {
+                                // Mapped to an alias - follow the backing var
+                                current = self.types_store.resolveVar(self.types_store.getAliasBackingVar(alias));
+                                continue :outer;
+                            },
+                            else => {},
+                        }
+                        // Fall through to handle as normal rigid
                     }
 
                     // Check if this rigid var has a from_numeral constraint, indicating

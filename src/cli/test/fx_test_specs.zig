@@ -204,6 +204,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>ok",
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
     },
+    .{
+        .roc_file = "test/fx/list_first_method.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with method syntax",
+    },
+    .{
+        .roc_file = "test/fx/list_first_function.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with function syntax",
+    },
 };
 
 /// Get the total number of IO spec tests
