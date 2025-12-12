@@ -119,13 +119,10 @@ pub const LinkError = error{
     WindowsSDKNotFound,
 } || std.zig.system.DetectError;
 
-/// Link object files into an executable using LLD
-pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
-    // Check if LLVM is available at compile time
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
-
+/// Build the linker command arguments for the given configuration.
+/// Returns the args array that would be passed to LLD.
+/// This is used both by link() and formatLinkCommand().
+fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
     var args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 64) catch return LinkError.OutOfMemory;
@@ -356,6 +353,18 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
         try args.append(extra_arg);
     }
 
+    return args;
+}
+
+/// Link object files into an executable using LLD
+pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
+    // Check if LLVM is available at compile time
+    if (comptime !llvm_available) {
+        return LinkError.LLVMNotAvailable;
+    }
+
+    const args = try buildLinkArgs(allocs, config);
+
     // Debug: Print the linker command
     std.log.debug("Linker command:", .{});
     for (args.items) |arg| {
@@ -371,7 +380,7 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
     }
 
     // Call appropriate LLD function based on target format
-    const success = if (comptime llvm_available) switch (config.target_format) {
+    const success = switch (config.target_format) {
         .elf => llvm_externs.ZigLLDLinkELF(
             @intCast(c_args.len),
             c_args.ptr,
@@ -396,11 +405,43 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             config.can_exit_early,
             config.disable_output,
         ),
-    } else false;
+    };
 
     if (!success) {
         return LinkError.LinkFailed;
     }
+}
+
+/// Format link configuration as a shell command string for manual reproduction.
+/// Useful for debugging linking issues by allowing users to run the linker manually.
+pub fn formatLinkCommand(allocs: *Allocators, config: LinkConfig) LinkError![]const u8 {
+    const args = try buildLinkArgs(allocs, config);
+
+    // Join args with spaces, quoting paths that contain spaces or special chars
+    var result = std.array_list.Managed(u8).init(allocs.arena);
+
+    for (args.items, 0..) |arg, i| {
+        if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
+
+        // Quote if contains spaces or shell metacharacters
+        const needs_quoting = std.mem.indexOfAny(u8, arg, " \t'\"\\$`") != null;
+        if (needs_quoting) {
+            result.append('\'') catch return LinkError.OutOfMemory;
+            // Escape single quotes within the string
+            for (arg) |c| {
+                if (c == '\'') {
+                    result.appendSlice("'\\''") catch return LinkError.OutOfMemory;
+                } else {
+                    result.append(c) catch return LinkError.OutOfMemory;
+                }
+            }
+            result.append('\'') catch return LinkError.OutOfMemory;
+        } else {
+            result.appendSlice(arg) catch return LinkError.OutOfMemory;
+        }
+    }
+
+    return result.toOwnedSlice() catch return LinkError.OutOfMemory;
 }
 
 /// Convenience function to link two object files into an executable

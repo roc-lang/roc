@@ -3816,6 +3816,11 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
         .wasm_stack_size = args.wasm_stack_size orelse linker_mod.DEFAULT_WASM_STACK_SIZE,
     };
 
+    // Dump linker inputs to temp directory if requested
+    if (args.z_dump_linker) {
+        try dumpLinkerInputs(allocs, link_config);
+    }
+
     try linker_mod.link(allocs, link_config);
 
     const output_type = switch (link_type) {
@@ -3825,6 +3830,135 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     };
     std.log.info("Successfully built {s}: {s}", .{ output_type, final_output_path });
 }
+
+/// Dump linker inputs to a temp directory for debugging linking issues.
+/// Creates a directory with all input files copied and a README with the linker command.
+fn dumpLinkerInputs(allocs: *Allocators, link_config: linker.LinkConfig) !void {
+    const stderr = stderrWriter();
+    defer stderr.flush() catch {};
+
+    // Create temp directory with unique name based on timestamp
+    const timestamp = std.time.timestamp();
+    const dir_name = try std.fmt.allocPrint(allocs.arena, "roc-linker-debug-{d}", .{timestamp});
+    const dump_dir = try std.fs.path.join(allocs.arena, &.{ "/tmp", dir_name });
+
+    std.fs.cwd().makePath(dump_dir) catch |err| {
+        try stderr.print("Failed to create debug dump directory '{s}': {}\n", .{ dump_dir, err });
+        return err;
+    };
+
+    // Track copied files for the README
+    var copied_files = try std.array_list.Managed(CopiedFile).initCapacity(allocs.arena, 16);
+
+    // Copy platform_files_pre
+    for (link_config.platform_files_pre, 0..) |src, i| {
+        const basename = std.fs.path.basename(src);
+        const dest_name = try std.fmt.allocPrint(allocs.arena, "pre_{d}_{s}", .{ i, basename });
+        const dest_path = try std.fs.path.join(allocs.arena, &.{ dump_dir, dest_name });
+        std.fs.cwd().copyFile(src, std.fs.cwd(), dest_path, .{}) catch |err| {
+            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
+            continue;
+        };
+        try copied_files.append(.{ .name = dest_name, .original = src, .category = "platform (pre-link)" });
+    }
+
+    // Copy object_files
+    for (link_config.object_files, 0..) |src, i| {
+        const basename = std.fs.path.basename(src);
+        const dest_name = try std.fmt.allocPrint(allocs.arena, "obj_{d}_{s}", .{ i, basename });
+        const dest_path = try std.fs.path.join(allocs.arena, &.{ dump_dir, dest_name });
+        std.fs.cwd().copyFile(src, std.fs.cwd(), dest_path, .{}) catch |err| {
+            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
+            continue;
+        };
+        try copied_files.append(.{ .name = dest_name, .original = src, .category = "object file" });
+    }
+
+    // Copy platform_files_post
+    for (link_config.platform_files_post, 0..) |src, i| {
+        const basename = std.fs.path.basename(src);
+        const dest_name = try std.fmt.allocPrint(allocs.arena, "post_{d}_{s}", .{ i, basename });
+        const dest_path = try std.fs.path.join(allocs.arena, &.{ dump_dir, dest_name });
+        std.fs.cwd().copyFile(src, std.fs.cwd(), dest_path, .{}) catch |err| {
+            try stderr.print("Warning: Failed to copy '{s}': {}\n", .{ src, err });
+            continue;
+        };
+        try copied_files.append(.{ .name = dest_name, .original = src, .category = "platform (post-link)" });
+    }
+
+    // Generate the linker command string
+    const link_cmd = linker.formatLinkCommand(allocs, link_config) catch |err| {
+        try stderr.print("Warning: Failed to format linker command: {}\n", .{err});
+        return;
+    };
+
+    // Build the file list for README
+    var file_list = std.array_list.Managed(u8).init(allocs.arena);
+    for (copied_files.items) |file| {
+        try file_list.writer().print("  {s}\n    <- {s} ({s})\n", .{ file.name, file.original, file.category });
+    }
+
+    // Write README.txt with instructions
+    const readme_content = try std.fmt.allocPrint(allocs.arena,
+        \\Roc Linker Debug Dump
+        \\=====================
+        \\
+        \\Target format: {s}
+        \\Target OS: {s}
+        \\Target arch: {s}
+        \\Output: {s}
+        \\
+        \\Files ({d} copied):
+        \\{s}
+        \\
+        \\To manually reproduce the link step:
+        \\
+        \\  {s}
+        \\
+        \\Note: The command above uses original file paths. The copied files
+        \\in this directory preserve original filenames for inspection.
+        \\
+    , .{
+        @tagName(link_config.target_format),
+        if (link_config.target_os) |os| @tagName(os) else "native",
+        if (link_config.target_arch) |arch| @tagName(arch) else "native",
+        link_config.output_path,
+        copied_files.items.len,
+        file_list.items,
+        link_cmd,
+    });
+
+    const readme_path = try std.fs.path.join(allocs.arena, &.{ dump_dir, "README.txt" });
+    const readme_file = std.fs.cwd().createFile(readme_path, .{}) catch |err| {
+        try stderr.print("Warning: Failed to create README.txt: {}\n", .{err});
+        return;
+    };
+    defer readme_file.close();
+    readme_file.writeAll(readme_content) catch |err| {
+        try stderr.print("Warning: Failed to write README.txt: {}\n", .{err});
+    };
+
+    // Print summary to stderr
+    try stderr.print(
+        \\
+        \\=== Linker debug dump ===
+        \\Directory: {s}
+        \\Files: {d} copied
+        \\
+        \\To reproduce:
+        \\  {s}
+        \\
+        \\See {s}/README.txt for details
+        \\=========================
+        \\
+    , .{ dump_dir, copied_files.items.len, link_cmd, dump_dir });
+}
+
+const CopiedFile = struct {
+    name: []const u8,
+    original: []const u8,
+    category: []const u8,
+};
 
 /// Information about a test (expect statement) to be evaluated
 const ExpectTest = struct {
