@@ -1,8 +1,8 @@
 platform ""
-    requires {} { add_ints : I64, I64 -> I64, multiply_ints : I64, I64 -> I64 }
+    requires { model } { init : {} -> model, update : model, I64 -> model, render : model -> I64 }
     exposes []
     packages {}
-    provides { add_ints_for_host: "add_ints", multiply_ints_for_host: "multiply_ints" }
+    provides { init_for_host: "init", update_for_host: "update", render_for_host: "render" }
     targets: {
         files: "targets/",
         exe: {
@@ -15,8 +15,21 @@ platform ""
         }
     }
 
-add_ints_for_host : I64, I64 -> I64
-add_ints_for_host = add_ints
+# Returns Box(model) - this works (return value)
+init_for_host : {} -> Box(model)
+init_for_host = |{}| Box.box(init({}))
 
-multiply_ints_for_host : I64, I64 -> I64
-multiply_ints_for_host = multiply_ints
+# Takes Box(model) as parameter - this should trigger the bug
+# Also takes I64 which host can provide
+update_for_host : Box(model), I64 -> Box(model)
+update_for_host = |boxed_model, value| {
+    m = Box.unbox(boxed_model)
+    Box.box(update(m, value))
+}
+
+# Takes Box(model) as parameter, returns I64 for host verification
+render_for_host : Box(model) -> I64
+render_for_host = |boxed_model| {
+    m = Box.unbox(boxed_model)
+    render(m)
+}

@@ -1,7 +1,12 @@
-app [add_ints, multiply_ints] { pf: platform "./platform/main.roc" }
+app [init, update, render] { pf: platform "./platform/main.roc" }
 
-add_ints : I64, I64 -> I64
-add_ints = |a, b| a + b
+Model : { value: I64 }
 
-multiply_ints : I64, I64 -> I64
-multiply_ints = |a, b| a * b
+init : {} -> Model
+init = |{}| { value: 0 }
+
+update : Model, I64 -> Model
+update = |m, delta| { value: m.value + delta }
+
+render : Model -> I64
+render = |m| m.value

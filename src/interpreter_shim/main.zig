@@ -328,7 +328,12 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const expr_idx = def.expr;
 
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
+        if (err == error.TypeMismatch) {
+            roc_ops.crash("TypeMismatch from evaluateExpression");
+        }
+        return err;
+    };
 }
 
 /// Result of setting up module environments
