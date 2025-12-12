@@ -36,22 +36,9 @@ const rcNone = @import("utils.zig").rcNone;
 /// The context parameter is expected to be a *RocOps.
 fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element) |elem_ptr| {
-        if (comptime builtin.mode == .Debug) {
-            const elem_addr = @intFromPtr(elem_ptr);
-            const required_align = @alignOf(RocStr);
-            if (elem_addr % required_align != 0) {
-                @panic("strDecref: elem_ptr is not properly aligned for RocStr");
-            }
-        }
-        const str_ptr: *RocStr = @ptrCast(@alignCast(elem_ptr));
+        const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, elem_ptr, @src());
         if (context) |ctx| {
-            if (comptime builtin.mode == .Debug) {
-                const ctx_addr = @intFromPtr(ctx);
-                if (ctx_addr % @alignOf(RocOps) != 0) {
-                    @panic("strDecref: context is not properly aligned for RocOps");
-                }
-            }
-            const roc_ops: *RocOps = @ptrCast(@alignCast(ctx));
+            const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
             str_ptr.decref(roc_ops);
         } else {
             @panic("strDecref: context is null");
@@ -265,17 +252,9 @@ pub const RocStr = extern struct {
 
     pub fn incref(self: RocStr, n: usize) void {
         if (!self.isSmallStr()) {
-            const alloc_ptr = self.getAllocationPtr();
-            if (alloc_ptr != null) {
-                // Verify alignment before @alignCast
-                if (comptime builtin.mode == .Debug) {
-                    const ptr_int = @intFromPtr(alloc_ptr);
-                    if (ptr_int % @sizeOf(isize) != 0) {
-                        @panic("RocStr.incref: alloc_ptr is not properly aligned");
-                    }
-                }
-                const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(alloc_ptr)));
-                @import("utils.zig").increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
+            if (self.getAllocationPtr()) |alloc_ptr| {
+                const isizes: [*]isize = utils.alignedPtrCast([*]isize, alloc_ptr, @src());
+                utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
             }
         }
     }
@@ -521,16 +500,12 @@ pub const RocStr = extern struct {
         else
             self.bytes;
 
-        // Verify alignment before @alignCast
-        if (comptime builtin.mode == .Debug) {
-            const ptr_int = @intFromPtr(data_ptr);
-            if (ptr_int % @sizeOf(usize) != 0) {
-                @panic("RocStr.refcount: data_ptr is not properly aligned");
-            }
+        if (data_ptr) |non_null_ptr| {
+            const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
+            return (ptr - 1)[0];
+        } else {
+            @panic("RocStr.refcount: data_ptr is null");
         }
-
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(data_ptr)));
-        return (ptr - 1)[0];
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
@@ -672,7 +647,7 @@ pub fn strSplitOn(
     const list = RocList.list_allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true, roc_ops);
 
     if (list.bytes) |bytes| {
-        const strings = @as([*]RocStr, @ptrCast(@alignCast(bytes)));
+        const strings: [*]RocStr = utils.alignedPtrCast([*]RocStr, bytes, @src());
         strSplitOnHelp(strings, string, delimiter, roc_ops);
     }
 
@@ -999,8 +974,12 @@ pub fn strJoinWithC(
     separator: RocStr,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
+    const list_elements: ?[*]RocStr = if (list.bytes) |bytes|
+        utils.alignedPtrCast([*]RocStr, bytes, @src())
+    else
+        null;
     const roc_list_str = RocListStr{
-        .list_elements = @as(?[*]RocStr, @ptrCast(@alignCast(list.bytes))),
+        .list_elements = list_elements,
         .list_length = list.length,
         .list_capacity_or_alloc_ptr = list.capacity_or_alloc_ptr,
     };
@@ -1716,7 +1695,7 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
 }
 
 fn decStr(ptr: ?[*]u8) callconv(.c) void {
-    const str_ptr = @as(*RocStr, @ptrCast(@alignCast(ptr orelse unreachable)));
+    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, ptr orelse unreachable, @src());
     str_ptr.decref();
 }
 

@@ -321,6 +321,14 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
         },
     }
 
+    // For WASM targets, wrap platform files in --whole-archive to include all symbols
+    // This ensures host exports (init, handleEvent, update) aren't stripped even when
+    // not referenced by other code
+    const is_wasm = config.target_format == .wasm;
+    if (is_wasm and config.platform_files_pre.len > 0) {
+        try args.append("--whole-archive");
+    }
+
     // Add platform-provided files that come before object files
     // Use --whole-archive to include all members from static libraries (e.g., libhost.a)
     // This ensures host-exported functions like init, handleEvent, update are included

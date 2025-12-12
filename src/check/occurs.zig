@@ -54,11 +54,6 @@ pub const Result = enum {
 /// This function accepts a mutable reference to `Store`, but guarantees that it
 /// _only_ modifies a variable's `Mark`. Before returning, all visited nodes'
 /// `Mark`s will be reset to `none`.
-///
-/// TODO: See if there's a way to represent this ^ in the type system? If we
-/// switch the types_store descriptors to use a multi list (which we should do
-/// anyway), maybe we can only pass in only a mutable ref to the backing `Mark`s
-/// array?
 pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
     scratch.reset();
 

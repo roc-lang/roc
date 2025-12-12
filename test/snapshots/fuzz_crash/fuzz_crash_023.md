@@ -275,8 +275,7 @@ UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
-TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
-UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
+TOO FEW ARGUMENTS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:175:26:175:27
 UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
 UNUSED VALUE - fuzz_crash_023.md:190:2:190:29
@@ -987,8 +986,8 @@ This expression produces a value, but it's not being used:
 It has the type:
     __d_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `match_time` expects 2 arguments, but 1 was provided:
 **fuzz_crash_023.md:155:2:157:3:**
 ```roc
 	match_time(
@@ -996,23 +995,8 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
+The function has the signature:
     _[Red, ..[Blue, Green, .._others2]], _arg -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_023.md:155:2:157:3:**
-```roc
-	match_time(
-		..., # Single args with comment
-	)
-```
-
-It has the type:
-    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

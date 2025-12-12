@@ -2674,6 +2674,15 @@ pub const Interpreter = struct {
                     else => break :copy &builtins.list.copy_fallback,
                 };
 
+                // Increment refcount of the element being appended.
+                // The element is copied into the list, creating a second reference,
+                // so we need to increment its refcount before the copy.
+                // Without this, when the original element is freed, the list would
+                // hold a dangling reference (use-after-free bug).
+                if (elements_refcounted) {
+                    elt_arg.incref(&self.runtime_layout_store);
+                }
+
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
