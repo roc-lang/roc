@@ -204,6 +204,27 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>99",
         .description = "Tests all Roc syntax possible in a single file",
     },
+    // Bug regression tests
+    .{
+        .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
+    },
+    .{
+        .roc_file = "test/fx/list_append_stdin_uaf.roc",
+        .io_spec = "0<000000010000000100000001|1>000000010000000100000001",
+        .description = "Regression test: List.append with effectful call on big string (24+ chars)",
+    },
+    .{
+        .roc_file = "test/fx/list_first_method.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with method syntax",
+    },
+    .{
+        .roc_file = "test/fx/list_first_function.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with function syntax",
+    },
 };
 
 /// Get the total number of IO spec tests

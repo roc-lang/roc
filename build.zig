@@ -11,9 +11,7 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
-// =============================================================================
 // Cross-compile target definitions
-// =============================================================================
 
 /// Cross-compile target specification
 const CrossTarget = struct {
@@ -1199,6 +1197,20 @@ fn setupTestPlatforms(
         }
     }
 
+    // Build the wasm test platform host for wasm32-freestanding
+    {
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+        const copy_step = buildAndCopyTestPlatformHostLib(
+            b,
+            "wasm",
+            wasm_target,
+            "wasm32",
+            optimize,
+            roc_modules,
+        );
+        clear_cache_step.dependOn(&copy_step.step);
+    }
+
     b.getInstallStep().dependOn(clear_cache_step);
     test_platforms_step.dependOn(clear_cache_step);
 }
@@ -1216,6 +1228,7 @@ pub fn build(b: *std.Build) void {
     const playground_step = b.step("playground", "Build the WASM playground");
     const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
+    const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
 
@@ -1578,6 +1591,31 @@ pub fn build(b: *std.Build) void {
         serialization_size_step.dependOn(&size_check_native.step);
         serialization_size_step.dependOn(&size_check_wasm32.step);
         serialization_size_step.dependOn(&run_native.step);
+    }
+
+    // Build WASM static library test runner with bytebox
+    // This test requires the WASM file to be built separately via `roc build test/wasm/app.roc --target=wasm32`
+    {
+        const wasm_test_exe = b.addExecutable(.{
+            .name = "wasm_static_lib_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/wasm/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_test_exe, target);
+        wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+
+        const install = b.addInstallArtifact(wasm_test_exe, .{});
+        wasm_static_lib_test_step.dependOn(&install.step);
+
+        const run_wasm_test = b.addRunArtifact(wasm_test_exe);
+        if (run_args.len != 0) {
+            run_wasm_test.addArgs(run_args);
+        }
+        run_wasm_test.step.dependOn(&install.step);
+        wasm_static_lib_test_step.dependOn(&run_wasm_test.step);
     }
 
     // Check fx platform test coverage convenience step
@@ -2071,6 +2109,7 @@ fn addMainExe(
         .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
         .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
     };
 
     for (cross_compile_shim_targets) |cross_target| {
@@ -2102,7 +2141,27 @@ fn addMainExe(
             .linkage = .static,
         });
         configureBackend(cross_shim_lib, cross_resolved_target);
-        roc_modules.addAll(cross_shim_lib);
+
+        // For wasm32, only add the modules needed by the interpreter shim
+        // (compile, watch, lsp, repl, ipc use threading/file I/O not available on freestanding)
+        if (cross_target.query.cpu_arch == .wasm32 and cross_target.query.os_tag == .freestanding) {
+            cross_shim_lib.root_module.addImport("base", roc_modules.base);
+            cross_shim_lib.root_module.addImport("collections", roc_modules.collections);
+            cross_shim_lib.root_module.addImport("types", roc_modules.types);
+            cross_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+            cross_shim_lib.root_module.addImport("can", roc_modules.can);
+            cross_shim_lib.root_module.addImport("check", roc_modules.check);
+            cross_shim_lib.root_module.addImport("parse", roc_modules.parse);
+            cross_shim_lib.root_module.addImport("layout", roc_modules.layout);
+            cross_shim_lib.root_module.addImport("eval", roc_modules.eval);
+            cross_shim_lib.root_module.addImport("reporting", roc_modules.reporting);
+            cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
+            cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
+            // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
+            // The interpreter shim main.zig has a stub for wasm32
+        } else {
+            roc_modules.addAll(cross_shim_lib);
+        }
         cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
         cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
         cross_shim_lib.addObject(cross_builtins_obj);

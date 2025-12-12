@@ -168,6 +168,12 @@ test "NodeStore round trip - Statements" {
         .where = null,
     } });
 
+    try statements.append(gpa, CIR.Statement{ .s_type_var_alias = .{
+        .alias_name = rand_ident_idx(),
+        .type_var_name = rand_ident_idx(),
+        .type_var_anno = rand_idx(CIR.TypeAnno.Idx),
+    } });
+
     try statements.append(gpa, CIR.Statement{ .s_runtime_error = .{
         .diagnostic = rand_idx(CIR.Diagnostic.Idx),
     } });
@@ -409,6 +415,13 @@ test "NodeStore round trip - Expressions" {
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_var_dispatch = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
 
@@ -958,6 +971,7 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .record = .{
             .fields = CIR.TypeAnno.RecordField.Span{ .span = rand_span() },
+            .ext = null,
         },
     });
 

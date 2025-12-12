@@ -1001,7 +1001,7 @@ pub const Watcher = struct {
     }
 };
 
-// ===== TESTS =====
+// TESTS
 
 fn waitForEvents(event_count: *std.atomic.Value(u32), expected: u32, max_wait_ms: u32) !void {
     // When using stubs, don't wait for events since they won't be generated

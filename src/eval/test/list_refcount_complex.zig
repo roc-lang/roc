@@ -15,7 +15,7 @@ const testing = std.testing;
 const runExpectInt = helpers.runExpectInt;
 const runExpectStr = helpers.runExpectStr;
 
-// ===== Lists of Records =====
+// Lists of Records
 
 test "list refcount complex - list of records with strings" {
     try runExpectStr(
@@ -60,7 +60,7 @@ test "list refcount complex - list of records with nested data" {
     , 10, .no_trace);
 }
 
-// ===== Lists of Tuples =====
+// Lists of Tuples
 
 test "list refcount complex - list of tuples with integers" {
     try runExpectInt(
@@ -84,7 +84,7 @@ test "list refcount complex - list of tuples with strings" {
     , "a", .no_trace);
 }
 
-// ===== Lists of Tags =====
+// Lists of Tags
 
 test "list refcount complex - list of tags with integers" {
     // Alternative: Tag containing list instead of list of tags
@@ -100,7 +100,7 @@ test "list refcount complex - list of tags with strings" {
     , "hello", .no_trace);
 }
 
-// ===== Deep Nesting =====
+// Deep Nesting
 
 test "list refcount complex - list of records of lists of strings" {
     try runExpectStr(

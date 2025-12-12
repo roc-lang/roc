@@ -1,6 +1,9 @@
 //! A shim to read the ModuleEnv from shared memory for the interpreter
 //! Refactored to use clean abstractions for cross-platform shared memory,
 //! memory safety, and interpreter integration.
+//!
+//! For wasm32-freestanding: Only embedded mode is supported (no IPC).
+//! The serialized module data is linked into the binary via roc__serialized_base_ptr.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,12 +14,114 @@ const types = @import("types");
 const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
-const ipc = @import("ipc");
+
+// Platform detection
+const is_wasm32 = builtin.cpu.arch == .wasm32;
+
+// IPC module only available on native platforms (not wasm32)
+// On wasm32, we provide stub types that produce clear compile errors if used.
+const ipc = if (is_wasm32) struct {
+    /// IPC is not available on wasm32 - modules must be embedded at compile time.
+    /// Use `roc build` to create standalone WASM binaries with embedded modules.
+    pub const SharedMemoryAllocator = struct {
+        pub fn create(_: usize, _: usize) @This() {
+            @compileError("IPC/SharedMemory is not supported on wasm32. Use embedded mode via `roc build`.");
+        }
+        pub fn fromCoordination(_: anytype, _: usize) @This() {
+            @compileError("IPC/SharedMemory is not supported on wasm32. Use embedded mode via `roc build`.");
+        }
+    };
+} else @import("ipc");
+
+// Allocator: wasm32 uses a simple arena, native uses page_allocator
+const default_allocator = if (is_wasm32) wasm_allocator else std.heap.page_allocator;
+
+// Wasm32 allocator - uses roc_alloc from host
+const wasm_allocator = if (is_wasm32) std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = wasmAlloc,
+        .resize = wasmResize,
+        .remap = wasmRemap,
+        .free = wasmFree,
+    },
+} else undefined;
+
+// Wasm32 allocator vtable implementation
+fn wasmAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
+    // Pass the actual requested alignment to roc_alloc
+    const align_bytes: u32 = @intCast(alignment.toByteUnits());
+    const ptr = roc_alloc(len, align_bytes);
+    return if (ptr) |p| @ptrCast(p) else null;
+}
+
+fn wasmResize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
+    return false; // roc_realloc doesn't fit the Zig allocator model well
+}
+
+fn wasmRemap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+    return null; // remap not supported
+}
+
+fn wasmFree(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
+    // Bump allocator - no-op
+}
+
+// Host-provided allocation functions (for wasm32)
+extern fn roc_alloc(size: usize, alignment: u32) callconv(.c) ?*anyopaque;
+extern fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque;
+extern fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void;
 
 // Static empty import mapping for shim (no type name resolution needed)
-var shim_import_mapping = import_mapping_mod.ImportMapping.init(std.heap.page_allocator);
+var shim_import_mapping = import_mapping_mod.ImportMapping.init(default_allocator);
 
-const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
+const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllocator;
+
+/// Thread-safe initialization flag with unified interface.
+/// On wasm32: simple bool (single-threaded environment)
+/// On native: atomic with proper memory ordering for multi-threaded safety
+const InitializationFlag = struct {
+    inner: if (is_wasm32) bool else std.atomic.Value(bool),
+
+    const Self = @This();
+
+    pub fn init() Self {
+        return .{ .inner = if (is_wasm32) false else std.atomic.Value(bool).init(false) };
+    }
+
+    pub fn isSet(self: *const Self) bool {
+        return if (is_wasm32) self.inner else self.inner.load(.acquire);
+    }
+
+    pub fn set(self: *Self) void {
+        if (is_wasm32) {
+            self.inner = true;
+        } else {
+            self.inner.store(true, .release);
+        }
+    }
+};
+
+/// Platform-appropriate mutex with unified interface.
+/// On wasm32: no-op (single-threaded environment)
+/// On native: actual mutex for thread safety
+const PlatformMutex = struct {
+    inner: if (is_wasm32) void else std.Thread.Mutex,
+
+    const Self = @This();
+
+    pub fn init() Self {
+        return .{ .inner = if (is_wasm32) {} else .{} };
+    }
+
+    pub fn lock(self: *Self) void {
+        if (!is_wasm32) self.inner.lock();
+    }
+
+    pub fn unlock(self: *Self) void {
+        if (!is_wasm32) self.inner.unlock();
+    }
+};
 
 // Global base pointer for the serialized header + env.
 // Is a weak extern that can be overwritten by `roc build` when embedding module data.
@@ -26,13 +131,19 @@ extern var roc__serialized_base_ptr: ?[*]align(1) u8;
 extern var roc__serialized_size: usize;
 
 // Global state for shared memory - initialized once per process
-var shared_memory_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var global_shm: ?SharedMemoryAllocator = null;
+var shared_memory_initialized = InitializationFlag.init();
+var global_shm: if (is_wasm32) void else ?SharedMemoryAllocator = if (is_wasm32)
+{} else null;
 var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (platform or app)
 var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
-var shm_mutex: std.Thread.Mutex = .{};
+var shm_mutex = PlatformMutex.init();
+
+// Cached header info (set during initialization, used for evaluation)
+var global_entry_count: u32 = 0;
+var global_def_indices_offset: u64 = 0;
+var global_is_serialized_format: bool = false; // true = portable serialized format, false = legacy format
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
@@ -55,6 +166,11 @@ const Header = struct {
     platform_main_env_offset: u64, // 0 if no platform, entry points are in app
     app_env_offset: u64, // Always present, used for e_lookup_required resolution
 };
+
+// Import serialization types from the shared module
+const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
+const SerializedHeader = collections.SerializedHeader;
+const SerializedModuleInfo = collections.SerializedModuleInfo;
 
 /// Comprehensive error handling for the shim
 const ShimError = error{
@@ -93,23 +209,20 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
 /// Initialize shared memory and ModuleEnv once per process
 fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     // Fast path: if already initialized, return immediately
-    if (shared_memory_initialized.load(.acquire)) {
-        return;
-    }
+    if (shared_memory_initialized.isSet()) return;
 
     // Slow path: acquire mutex and check again (double-checked locking)
     shm_mutex.lock();
     defer shm_mutex.unlock();
 
     // Check again in case another thread initialized while we were waiting
-    if (shared_memory_initialized.load(.acquire)) {
-        return;
-    }
+    if (shared_memory_initialized.isSet()) return;
 
-    const allocator = std.heap.page_allocator;
+    const allocator = default_allocator;
     var buf: [256]u8 = undefined;
 
-    if (roc__serialized_base_ptr == null) {
+    // IPC path only available on native platforms (not wasm32)
+    if (!is_wasm32 and roc__serialized_base_ptr == null) {
         // Roc run path: Use the shared memory allocator.
 
         // Get page size
@@ -136,6 +249,12 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
         roc__serialized_size = shm.total_size;
     }
 
+    // For wasm32 embedded mode: roc__serialized_base_ptr must be set by linker
+    if (is_wasm32 and roc__serialized_base_ptr == null) {
+        roc_ops.crash("wasm32: serialized module data not embedded (roc__serialized_base_ptr is null)");
+        return error.SharedMemoryError;
+    }
+
     // Set up ModuleEnv from serialized data (embedded or shared memory)
     const setup_result = try setupModuleEnv(roc_ops);
 
@@ -152,7 +271,7 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     global_builtin_modules = builtin_modules;
 
     // Mark as initialized (release semantics ensure all writes above are visible)
-    shared_memory_initialized.store(true, .release);
+    shared_memory_initialized.set();
 }
 
 /// Cross-platform evaluation (works for both IPC and embedded modes)
@@ -171,24 +290,36 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     var interpreter = try createInterpreter(env_ptr, app_env, builtin_modules, roc_ops);
     defer interpreter.deinit();
 
-    // Get expression info from shared memory using entry_idx
+    // Get expression info using entry_idx
+    // Use the cached globals set during initialization (works for both formats)
     const base_ptr = roc__serialized_base_ptr.?;
     var buf: [256]u8 = undefined;
 
-    // Read the header structure from shared memory
-    const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
-    const header_ptr: *const Header = @ptrFromInt(header_addr);
-    if (entry_idx >= header_ptr.entry_count) {
-        const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, header_ptr.entry_count }) catch "Invalid entry_idx";
+    if (entry_idx >= global_entry_count) {
+        const err_msg = std.fmt.bufPrint(&buf, "Invalid entry_idx {} >= entry_count {}", .{ entry_idx, global_entry_count }) catch "Invalid entry_idx";
         roc_ops.crash(err_msg);
         return error.InvalidEntryIndex;
     }
 
-    const def_offset = header_ptr.def_indices_offset + entry_idx * @sizeOf(u32);
-    const def_idx_raw = safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), roc__serialized_size) catch |err| {
-        const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
-        roc_ops.crash(read_err);
-        return error.MemoryLayoutInvalid;
+    const def_offset = global_def_indices_offset + entry_idx * @sizeOf(u32);
+    const def_idx_raw: u32 = if (global_is_serialized_format) blk: {
+        // For serialized format, use unaligned reads since data may not be aligned
+        const byte_offset: usize = @intCast(def_offset);
+        if (byte_offset + 4 > roc__serialized_size) {
+            const err_msg = std.fmt.bufPrint(&buf, "def_idx out of bounds: offset={}, size={}", .{ byte_offset, roc__serialized_size }) catch "def_idx out of bounds";
+            roc_ops.crash(err_msg);
+            return error.MemoryLayoutInvalid;
+        }
+        const ptr: *const [4]u8 = @ptrCast(base_ptr + byte_offset);
+        const val = std.mem.readInt(u32, ptr, .little);
+        break :blk val;
+    } else blk: {
+        // For legacy format, use safe aligned read
+        break :blk safe_memory.safeRead(u32, base_ptr, @intCast(def_offset), roc__serialized_size) catch |err| {
+            const read_err = std.fmt.bufPrint(&buf, "Failed to read def_idx: {}", .{err}) catch "Failed to read def_idx";
+            roc_ops.crash(read_err);
+            return error.MemoryLayoutInvalid;
+        };
     };
     const def_idx: CIR.Def.Idx = @enumFromInt(def_idx_raw);
 
@@ -208,12 +339,22 @@ const SetupResult = struct {
 
 /// Set up ModuleEnv from serialized data with proper relocation (multi-module format)
 /// Works for both IPC mode (roc run) and embedded mode (roc build)
+/// Detects portable serialized format (cross-architecture) via magic number
 fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
     var buf: [256]u8 = undefined;
     const base_ptr = roc__serialized_base_ptr.?;
-    const allocator = std.heap.page_allocator;
+    const allocator = default_allocator;
 
-    // Read parent's shared memory base address from header and calculate relocation offset
+    // Check for portable serialized format by looking at first 4 bytes
+    // The magic number is at the very start of the buffer (no FIRST_ALLOC_OFFSET for portable format)
+    // Use unaligned read to avoid alignment issues in debug builds
+    const magic = std.mem.readInt(u32, base_ptr[0..4], .little);
+    if (magic == SERIALIZED_FORMAT_MAGIC) {
+        // Portable serialized format - use deserialize()
+        return setupModuleEnvFromSerialized(roc_ops, base_ptr, allocator);
+    }
+
+    // Legacy format: Read parent's shared memory base address from header and calculate relocation offset
     // For embedded mode: parent_base_addr == 0
     // For IPC mode: parent_base_addr == actual parent address
     const header_addr = @intFromPtr(base_ptr) + FIRST_ALLOC_OFFSET;
@@ -221,13 +362,19 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
     const parent_base_addr = header_ptr.parent_base_addr;
     const module_count = header_ptr.module_count;
 
+    // Store header info in globals for use during evaluation (legacy format)
+    global_entry_count = header_ptr.entry_count;
+    global_def_indices_offset = header_ptr.def_indices_offset;
+    global_is_serialized_format = false;
+
     // Calculate relocation offset
     const child_base_addr = @intFromPtr(base_ptr);
     // Use signed arithmetic to avoid overflow on 64-bit addresses
     const offset: i64 = @as(i64, @intCast(child_base_addr)) - @as(i64, @intCast(parent_base_addr));
 
     // Verify offset preserves alignment (ASLR can cause misaligned shared memory mapping)
-    if (comptime builtin.mode == .Debug) {
+    // Skip debug checks on freestanding as std.debug.print uses stderr which isn't available
+    if (comptime builtin.mode == .Debug and !is_wasm32) {
         const REQUIRED_ALIGNMENT: u64 = collections.SERIALIZATION_ALIGNMENT.toByteUnits();
         const abs_offset: u64 = @abs(offset);
         if (abs_offset % REQUIRED_ALIGNMENT != 0) {
@@ -349,9 +496,122 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
     };
 }
 
+/// Set up ModuleEnv from portable serialized format (cross-architecture builds)
+/// This format uses ModuleEnv.Serialized with fixed-size types
+fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allocator: std.mem.Allocator) ShimError!SetupResult {
+    var buf: [256]u8 = undefined;
+
+    // Read the serialized header (use unaligned reads since embedded data may not be aligned)
+    // Header layout: magic(4) + format_version(4) + module_count(4) + entry_count(4) +
+    //                primary_env_index(4) + app_env_index(4) + def_indices_offset(8) + module_infos_offset(8)
+    const header_magic = std.mem.readInt(u32, base_ptr[0..4], .little);
+    if (header_magic != SERIALIZED_FORMAT_MAGIC) {
+        const err_msg = std.fmt.bufPrint(&buf, "Invalid magic number: 0x{x}", .{header_magic}) catch "Invalid magic number";
+        roc_ops.crash(err_msg);
+        return error.MemoryLayoutInvalid;
+    }
+
+    const format_version = std.mem.readInt(u32, base_ptr[4..8], .little);
+    if (format_version != 1) {
+        const err_msg = std.fmt.bufPrint(&buf, "Unsupported serialized format version: {}", .{format_version}) catch "Unsupported format version";
+        roc_ops.crash(err_msg);
+        return error.MemoryLayoutInvalid;
+    }
+
+    const module_count = std.mem.readInt(u32, base_ptr[8..12], .little);
+    const entry_count = std.mem.readInt(u32, base_ptr[12..16], .little);
+    const primary_env_index = std.mem.readInt(u32, base_ptr[16..20], .little);
+    const app_env_index = std.mem.readInt(u32, base_ptr[20..24], .little);
+    const def_indices_offset = std.mem.readInt(u64, base_ptr[24..32], .little);
+    const module_infos_offset = std.mem.readInt(u64, base_ptr[32..40], .little);
+
+    // Store header info in globals for use during evaluation
+    global_entry_count = entry_count;
+    global_def_indices_offset = def_indices_offset;
+    global_is_serialized_format = true;
+
+    // Get module infos array address
+    const module_infos_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(module_infos_offset));
+    // For SerializedModuleInfo, we also need to use unaligned reads
+    const module_infos_bytes: [*]const u8 = @ptrFromInt(module_infos_addr);
+
+    // Allocate storage for pointers to deserialized ModuleEnvs
+    // Note: deserialize() overwrites the Serialized struct in place, so the returned
+    // pointer points to the same memory location (now reinterpreted as ModuleEnv)
+    var env_ptrs = allocator.alloc(*ModuleEnv, module_count) catch {
+        roc_ops.crash("Failed to allocate ModuleEnv pointer array");
+        return error.OutOfMemory;
+    };
+    // Note: Don't free - these are used for the lifetime of the process
+
+    // Each SerializedModuleInfo is 40 bytes: source_offset(8) + source_len(8) + module_name_offset(8) +
+    //                                        module_name_len(8) + env_serialized_offset(8)
+    const MODULE_INFO_SIZE: usize = 40;
+
+    // Deserialize each module
+    for (0..module_count) |i| {
+        const info_base = module_infos_bytes + (i * MODULE_INFO_SIZE);
+
+        // Read SerializedModuleInfo fields using unaligned reads
+        const source_offset = std.mem.readInt(u64, info_base[0..8], .little);
+        const source_len = std.mem.readInt(u64, info_base[8..16], .little);
+        const module_name_offset = std.mem.readInt(u64, info_base[16..24], .little);
+        const module_name_len = std.mem.readInt(u64, info_base[24..32], .little);
+        const env_serialized_offset = std.mem.readInt(u64, info_base[32..40], .little);
+
+        // Get source bytes
+        const source_ptr = base_ptr + @as(usize, @intCast(source_offset));
+        const source = source_ptr[0..@as(usize, @intCast(source_len))];
+
+        // Get module name
+        const name_ptr = base_ptr + @as(usize, @intCast(module_name_offset));
+        const module_name = name_ptr[0..@as(usize, @intCast(module_name_len))];
+
+        // Get serialized env address
+        // Note: ModuleEnv.Serialized.deserialize() requires proper alignment.
+        // The serialization code should ensure this, but if it doesn't, we'll crash here.
+        const env_serialized_addr = @intFromPtr(base_ptr) + @as(usize, @intCast(env_serialized_offset));
+        const env_serialized: *ModuleEnv.Serialized = @ptrFromInt(env_serialized_addr);
+
+        // Deserialize the ModuleEnv
+        // The offset parameter is the buffer base address - serialized offsets are relative to buffer start
+        env_ptrs[i] = env_serialized.deserialize(
+            @as(i64, @intCast(@intFromPtr(base_ptr))), // buffer base address as offset
+            allocator,
+            source,
+            module_name,
+        ) catch |err| {
+            const err_msg = std.fmt.bufPrint(&buf, "Failed to deserialize module {}: {s}", .{ i, @errorName(err) }) catch "Failed to deserialize module";
+            roc_ops.crash(err_msg);
+            return error.ModuleEnvSetupFailed;
+        };
+    }
+
+    // Build imported_envs array (all modules except app)
+    if (module_count > 1) {
+        var imported_envs = allocator.alloc(*const ModuleEnv, module_count - 1) catch {
+            roc_ops.crash("Failed to allocate imported envs array");
+            return error.OutOfMemory;
+        };
+        var j: usize = 0;
+        for (0..module_count) |i| {
+            if (i != app_env_index) {
+                imported_envs[j] = env_ptrs[i];
+                j += 1;
+            }
+        }
+        global_imported_envs = imported_envs;
+    }
+
+    return SetupResult{
+        .primary_env = env_ptrs[primary_env_index],
+        .app_env = env_ptrs[app_env_index],
+    };
+}
+
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
-    const allocator = std.heap.page_allocator;
+    const allocator = default_allocator;
 
     // Use builtin types from the loaded builtin modules
     // This provides the actual definitions of plus, minus, times, etc.
@@ -397,6 +657,30 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         if (a_env != env_ptr) {
             a_env.imports.resolveImports(a_env, imported_envs);
         }
+    }
+
+    // Enable runtime inserts on all deserialized module environments.
+    // The interpreter needs to insert new identifiers at runtime for:
+    // - Translating module names between different ident spaces
+    // - Building qualified type names for method lookup
+    // - Runtime type introspection
+    // Deserialized interners are read-only by default, so we explicitly enable inserts here.
+    // This copies the data from the read-only embedded buffer into growable allocated memory.
+    env_ptr.common.idents.interner.enableRuntimeInserts(allocator) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on platform env");
+        return error.InterpreterSetupFailed;
+    };
+    if (app_env) |a_env| {
+        @constCast(a_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on app env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+    for (imported_envs) |imp_env| {
+        @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on imported env");
+            return error.InterpreterSetupFailed;
+        };
     }
 
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {

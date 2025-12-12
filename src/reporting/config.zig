@@ -55,7 +55,10 @@ pub const ReportingConfig = struct {
     max_message_bytes: usize,
 
     pub fn init() ReportingConfig {
-        return initFromEnv(std.heap.page_allocator) catch |err| switch (err) {
+        // Use page_allocator on non-freestanding targets, undefined on freestanding
+        // (freestanding doesn't use the allocator in initFromEnv since env checks are skipped)
+        const allocator = if (comptime builtin.target.os.tag == .freestanding) undefined else std.heap.page_allocator;
+        return initFromEnv(allocator) catch |err| switch (err) {
             error.OutOfMemory => @panic("Out of memory while initializing reporting config"),
         };
     }
@@ -74,49 +77,52 @@ pub const ReportingConfig = struct {
 
         // Check if output is TTY
         config.is_tty = isTty: {
-            if (comptime builtin.target.os.tag == .freestanding and builtin.target.abi == .wasm32) {
-                // can't use stdio in WASM
+            if (comptime builtin.target.os.tag == .freestanding) {
+                // can't use stdio on freestanding targets (e.g., wasm32)
                 break :isTty false;
             } else {
                 break :isTty std.fs.File.stdout().isTty();
             }
         };
 
-        // Check NO_COLOR environment variable
-        const no_color = std.process.getEnvVarOwned(allocator, "NO_COLOR") catch null;
-        if (no_color) |value| {
-            defer allocator.free(value);
-            if (value.len > 0) {
-                config.color_preference = .never;
+        // Environment variable checks only available on non-freestanding targets
+        if (comptime builtin.target.os.tag != .freestanding) {
+            // Check NO_COLOR environment variable
+            const no_color = std.process.getEnvVarOwned(allocator, "NO_COLOR") catch null;
+            if (no_color) |value| {
+                defer allocator.free(value);
+                if (value.len > 0) {
+                    config.color_preference = .never;
+                }
             }
-        }
 
-        // Check FORCE_COLOR environment variable
-        const force_color = std.process.getEnvVarOwned(allocator, "FORCE_COLOR") catch null;
-        if (force_color) |value| {
-            defer allocator.free(value);
-            if (value.len > 0) {
-                config.color_preference = .always;
+            // Check FORCE_COLOR environment variable
+            const force_color = std.process.getEnvVarOwned(allocator, "FORCE_COLOR") catch null;
+            if (force_color) |value| {
+                defer allocator.free(value);
+                if (value.len > 0) {
+                    config.color_preference = .always;
+                }
             }
-        }
 
-        // Check ROC_HIGH_CONTRAST environment variable
-        const high_contrast = std.process.getEnvVarOwned(allocator, "ROC_HIGH_CONTRAST") catch null;
-        if (high_contrast) |value| {
-            defer allocator.free(value);
-            if (std.mem.eql(u8, value, "1")) {
-                config.color_preference = .high_contrast;
+            // Check ROC_HIGH_CONTRAST environment variable
+            const high_contrast = std.process.getEnvVarOwned(allocator, "ROC_HIGH_CONTRAST") catch null;
+            if (high_contrast) |value| {
+                defer allocator.free(value);
+                if (std.mem.eql(u8, value, "1")) {
+                    config.color_preference = .high_contrast;
+                }
             }
-        }
 
-        // Check ROC_MAX_LINE_WIDTH environment variable
-        const max_width = std.process.getEnvVarOwned(allocator, "ROC_MAX_LINE_WIDTH") catch null;
-        if (max_width) |value| {
-            defer allocator.free(value);
-            if (std.fmt.parseInt(u32, value, 10)) |width| {
-                config.max_line_width = @max(40, @min(200, width)); // Clamp between 40-200
-            } else |_| {
-                // Invalid value, keep default
+            // Check ROC_MAX_LINE_WIDTH environment variable
+            const max_width = std.process.getEnvVarOwned(allocator, "ROC_MAX_LINE_WIDTH") catch null;
+            if (max_width) |value| {
+                defer allocator.free(value);
+                if (std.fmt.parseInt(u32, value, 10)) |width| {
+                    config.max_line_width = @max(40, @min(200, width)); // Clamp between 40-200
+                } else |_| {
+                    // Invalid value, keep default
+                }
             }
         }
 

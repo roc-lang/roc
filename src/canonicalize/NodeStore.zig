@@ -141,9 +141,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 39;
+pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 16;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -352,6 +352,15 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                     .name = name,
                     .anno = anno,
                     .where = where_clause,
+                },
+            };
+        },
+        .statement_type_var_alias => {
+            return CIR.Statement{
+                .s_type_var_alias = .{
+                    .alias_name = @bitCast(node.data_1),
+                    .type_var_name = @bitCast(node.data_2),
+                    .type_var_anno = @enumFromInt(node.data_3),
                 },
             };
         },
@@ -678,6 +687,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_return => {
             return CIR.Expr{ .e_return = .{
                 .expr = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_type_var_dispatch => {
+            // Retrieve type var dispatch data from node and extra_data
+            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const method_name: base.Ident.Idx = @bitCast(node.data_2);
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+
+            return CIR.Expr{ .e_type_var_dispatch = .{
+                .type_var_alias_stmt = type_var_alias_stmt,
+                .method_name = method_name,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
             } };
         },
         .expr_hosted_lambda => {
@@ -1197,9 +1222,12 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
             .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
-        .ty_record => return CIR.TypeAnno{ .record = .{
-            .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-        } },
+        .ty_record => return CIR.TypeAnno{
+            .record = .{
+                .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
+            },
+        },
         .ty_fn => {
             const extra_data_idx = node.data_3;
             const effectful = store.extra_data.items.items[extra_data_idx] != 0;
@@ -1473,6 +1501,12 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             // Store the extra data start position in the node
             node.data_1 = @intCast(extra_start);
         },
+        .s_type_var_alias => |s| {
+            node.tag = .statement_type_var_alias;
+            node.data_1 = @bitCast(s.alias_name);
+            node.data_2 = @bitCast(s.type_var_name);
+            node.data_3 = @intFromEnum(s.type_var_anno);
+        },
         .s_runtime_error => |s| {
             node.data_1 = @intFromEnum(s.diagnostic);
             node.tag = .malformed;
@@ -1646,6 +1680,20 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_return => |ret| {
             node.tag = .expr_return;
             node.data_1 = @intFromEnum(ret.expr);
+        },
+        .e_type_var_dispatch => |tvd| {
+            node.tag = .expr_type_var_dispatch;
+            // data_1 = type_var_alias_stmt (Statement.Idx)
+            // data_2 = method_name (Ident.Idx)
+            // extra_data: args span start, args span len
+            node.data_1 = @intFromEnum(tvd.type_var_alias_stmt);
+            node.data_2 = @bitCast(tvd.method_name);
+
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, tvd.args.span.start);
+            _ = try store.extra_data.append(store.gpa, tvd.args.span.len);
+
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_hosted_lambda => |hosted| {
             node.tag = .expr_hosted_lambda;
@@ -2203,6 +2251,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .record => |r| {
             node.data_1 = r.fields.span.start;
             node.data_2 = r.fields.span.len;
+            node.data_3 = if (r.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0;
             node.tag = .ty_record;
         },
         .@"fn" => |f| {

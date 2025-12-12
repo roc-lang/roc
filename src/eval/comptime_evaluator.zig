@@ -4,6 +4,7 @@
 //! converting any crashes into diagnostics that are reported normally.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
@@ -92,12 +93,15 @@ fn comptimeRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
 }
 
 fn comptimeRocDbg(dbg_args: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    var stderr_buffer: [256]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    const stderr = &stderr_writer.interface;
-    const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
-    stderr.print("[dbg] {s}\n", .{msg_slice}) catch {};
-    stderr.flush() catch {};
+    // stderr not available on freestanding targets
+    if (comptime builtin.os.tag != .freestanding) {
+        var stderr_buffer: [256]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const stderr = &stderr_writer.interface;
+        const msg_slice = dbg_args.utf8_bytes[0..dbg_args.len];
+        stderr.print("[dbg] {s}\n", .{msg_slice}) catch {};
+        stderr.flush() catch {};
+    }
 }
 
 fn comptimeRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {

@@ -133,6 +133,20 @@ pub const Interpreter = struct {
         var_: types.Var,
     };
 
+    /// Key for caching method resolution results.
+    /// Caches the expensive lookupMethodIdentFromTwoEnvsConst + getExposedNodeIndexById chain.
+    const MethodResolutionKey = struct {
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name_ident: base_pkg.Ident.Idx,
+    };
+
+    /// Cached result of method resolution.
+    const MethodResolutionResult = struct {
+        origin_env: *const can.ModuleEnv,
+        def_idx: can.CIR.Def.Idx,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -235,8 +249,11 @@ pub const Interpreter = struct {
     poly_context_generation: u64,
 
     // Polymorphic instantiation cache
-
     poly_cache: HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80),
+
+    // Method resolution cache: (origin_module, nominal_ident, method_name_ident) -> (origin_env, def_idx)
+    // This caches the expensive lookupMethodIdentFromTwoEnvsConst + getExposedNodeIndexById lookups
+    method_resolution_cache: std.AutoHashMap(MethodResolutionKey, MethodResolutionResult),
 
     // Runtime unification context
     env: *can.ModuleEnv,
@@ -413,6 +430,7 @@ pub const Interpreter = struct {
             .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_context_generation = 0,
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
+            .method_resolution_cache = std.AutoHashMap(MethodResolutionKey, MethodResolutionResult).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
@@ -461,11 +479,13 @@ pub const Interpreter = struct {
         // (handles both unset NONE and corrupted undefined values from deserialized data)
         const hasValidModuleName = struct {
             fn check(mod_env: *const can.ModuleEnv) bool {
-                // Check for NONE sentinel
+                // Check for NONE sentinel - deserialized modules have NONE
                 if (mod_env.module_name_idx.isNone()) return false;
+
                 // Bounds check - module_name_idx.idx must be within the ident store
                 const ident_store_size = mod_env.common.idents.interner.bytes.items.items.len;
-                return mod_env.module_name_idx.idx < ident_store_size;
+                const idx_val = mod_env.module_name_idx.idx;
+                return idx_val < ident_store_size;
             }
         }.check;
 
@@ -2665,6 +2685,15 @@ pub const Interpreter = struct {
                     .list_of_zst => break :copy &builtins.list.copy_list_zst,
                     else => break :copy &builtins.list.copy_fallback,
                 };
+
+                // Increment refcount of the element being appended.
+                // The element is copied into the list, creating a second reference,
+                // so we need to increment its refcount before the copy.
+                // Without this, when the original element is freed, the list would
+                // hold a dangling reference (use-after-free bug).
+                if (elements_refcounted) {
+                    elt_arg.incref(&self.runtime_layout_store);
+                }
 
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
@@ -7474,6 +7503,7 @@ pub const Interpreter = struct {
             }
         }
         self.poly_cache.deinit();
+        self.method_resolution_cache.deinit();
         self.module_envs.deinit(self.allocator);
         self.translated_module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
@@ -7586,38 +7616,59 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         receiver_rt_var: ?types.Var,
     ) Error!StackValue {
-        // Get the module environment for this type's origin
-        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
-            return error.MethodLookupFailed;
+        // Check method resolution cache first
+        const cache_key = MethodResolutionKey{
+            .origin_module = origin_module,
+            .nominal_ident = nominal_ident,
+            .method_name_ident = method_name_ident,
         };
 
-        // Use index-based lookup to find the qualified method ident.
-        // nominal_ident comes from runtime types - always in runtime_layout_store.env
-        // method_name_ident comes from the CIR - in self.env
-        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-            self.runtime_layout_store.env,
-            nominal_ident,
-            self.env,
-            method_name_ident,
-        ) orelse {
-            return error.MethodLookupFailed;
-        };
+        const resolution = self.method_resolution_cache.get(cache_key) orelse blk: {
+            // Cache miss - do the expensive lookups
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-            // Fallback: search all definitions for the method
-            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = origin_env.store.getDef(def_idx);
-                const pat = origin_env.store.getPattern(def.pattern);
-                if (pat == .assign and pat.assign.ident == method_ident) {
-                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+            // Get the module environment for this type's origin
+            const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+                return error.MethodLookupFailed;
+            };
+
+            // Use index-based lookup to find the qualified method ident.
+            // nominal_ident comes from runtime types - always in runtime_layout_store.env
+            // method_name_ident comes from the CIR - in self.env
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                self.env,
+                method_name_ident,
+            ) orelse {
+                return error.MethodLookupFailed;
+            };
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+                // Fallback: search all definitions for the method
+                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = origin_env.store.getDef(def_idx);
+                    const pat = origin_env.store.getPattern(def.pattern);
+                    if (pat == .assign and pat.assign.ident == method_ident) {
+                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                    }
                 }
-            }
-            return error.MethodLookupFailed;
+                return error.MethodLookupFailed;
+            };
+
+            const result = MethodResolutionResult{
+                .origin_env = origin_env,
+                .def_idx = @enumFromInt(node_idx),
+            };
+
+            // Cache the result for future lookups
+            self.method_resolution_cache.put(cache_key, result) catch {};
+
+            break :blk result;
         };
 
-        // The node should be a Def
-        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const origin_env = resolution.origin_env;
+        const target_def_idx = resolution.def_idx;
         const target_def = origin_env.store.getDef(target_def_idx);
 
         // Save current environment and bindings
@@ -7675,37 +7726,58 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         receiver_rt_var: ?types.Var,
     ) Error!?StackValue {
-        // Get the module environment for this type's origin
-        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
-            return null;
+        // Check method resolution cache first
+        const cache_key = MethodResolutionKey{
+            .origin_module = origin_module,
+            .nominal_ident = nominal_ident,
+            .method_name_ident = method_name_ident,
         };
 
-        // Use index-based method lookup - the method_name_ident is in self.env's ident space,
-        // nominal_ident is in runtime_layout_store.env's ident space
-        const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
-            self.runtime_layout_store.env,
-            nominal_ident,
-            self.env,
-            method_name_ident,
-        ) orelse {
-            return null;
-        };
+        const resolution = self.method_resolution_cache.get(cache_key) orelse blk: {
+            // Cache miss - do the expensive lookups
 
-        const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-            // Fallback: search all definitions for the method
-            const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = origin_env.store.getDef(def_idx);
-                const pat = origin_env.store.getPattern(def.pattern);
-                if (pat == .assign and pat.assign.ident == method_ident) {
-                    break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+            // Get the module environment for this type's origin
+            const origin_env = self.getModuleEnvForOrigin(origin_module) orelse {
+                return null;
+            };
+
+            // Use index-based method lookup - the method_name_ident is in self.env's ident space,
+            // nominal_ident is in runtime_layout_store.env's ident space
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                self.env,
+                method_name_ident,
+            ) orelse {
+                return null;
+            };
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+                // Fallback: search all definitions for the method
+                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = origin_env.store.getDef(def_idx);
+                    const pat = origin_env.store.getPattern(def.pattern);
+                    if (pat == .assign and pat.assign.ident == method_ident) {
+                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
+                    }
                 }
-            }
-            return null;
+                return null;
+            };
+
+            const result = MethodResolutionResult{
+                .origin_env = origin_env,
+                .def_idx = @enumFromInt(node_idx),
+            };
+
+            // Cache the result for future lookups
+            self.method_resolution_cache.put(cache_key, result) catch {};
+
+            break :blk result;
         };
 
-        // The node should be a Def
-        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(node_idx);
+        const origin_env = resolution.origin_env;
+        const target_def_idx = resolution.def_idx;
         const target_def = origin_env.store.getDef(target_def_idx);
 
         // Save current environment and bindings
@@ -9044,9 +9116,7 @@ pub const Interpreter = struct {
         return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
 
-    // ============================================================================
     // Stack-Safe Interpreter Infrastructure
-    // ============================================================================
     //
     // The following types and functions implement a stack-safe interpreter that
     // uses explicit work and value stacks instead of recursive calls. This avoids
@@ -9161,6 +9231,12 @@ pub const Interpreter = struct {
 
         /// Dot access method call - collect arguments after receiver is evaluated.
         dot_access_collect_args: DotAccessCollectArgs,
+
+        /// Type var dispatch - collect arguments for static method call.
+        type_var_dispatch_collect_args: TypeVarDispatchCollectArgs,
+
+        /// Type var dispatch - invoke the method after arguments are collected.
+        type_var_dispatch_invoke: TypeVarDispatchInvoke,
 
         /// For loop/expression - iterate over list elements after list is evaluated.
         for_iterate: ForIterate,
@@ -9512,6 +9588,35 @@ pub const Interpreter = struct {
             remaining_args: []const can.CIR.Expr.Idx,
             /// Receiver runtime type variable (for method resolution)
             receiver_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Type var dispatch - collect arguments for a static method call on a type variable.
+        /// Similar to DotAccessCollectArgs but without a receiver value.
+        /// Used for Thing.method(args) where Thing is a type var alias.
+        pub const TypeVarDispatchCollectArgs = struct {
+            /// Method name
+            method_name: base_pkg.Ident.Idx,
+            /// Number of arguments already collected on the value stack
+            collected_count: usize,
+            /// Remaining argument expression indices
+            remaining_args: []const can.CIR.Expr.Idx,
+            /// Runtime type variable for the type being dispatched on
+            dispatch_rt_var: types.Var,
+            /// Expression index (for return type)
+            expr_idx: can.CIR.Expr.Idx,
+        };
+
+        /// Type var dispatch - invoke the method after arguments are collected.
+        /// Stack contains: [method_func, arg0, arg1, ...]
+        pub const TypeVarDispatchInvoke = struct {
+            /// Method name (for error messages)
+            method_name: base_pkg.Ident.Idx,
+            /// Number of arguments collected on the value stack
+            arg_count: usize,
+            /// Runtime type variable for the type being dispatched on
+            dispatch_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
         };
@@ -9915,9 +10020,7 @@ pub const Interpreter = struct {
         const expr = self.env.store.getExpr(expr_idx);
 
         switch (expr) {
-            // ================================================================
             // Immediate values - no sub-expressions to evaluate
-            // ================================================================
 
             .e_num => |num_lit| {
                 const value = try self.evalNum(expr_idx, expected_rt_var, num_lit);
@@ -9989,9 +10092,7 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            // ================================================================
             // Lambda/Closure creation
-            // ================================================================
 
             .e_lambda => |lam| {
                 const value = try self.evalLambda(expr_idx, expected_rt_var, lam, roc_ops);
@@ -10013,9 +10114,7 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
-            // ================================================================
             // Variable lookups
-            // ================================================================
 
             .e_lookup_local => |lookup| {
                 const value = try self.evalLookupLocal(lookup, expected_rt_var, roc_ops);
@@ -10086,9 +10185,195 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
 
-            // ================================================================
+            .e_type_var_dispatch => |tvd| {
+                // Type variable dispatch: Thing.method(args) where Thing is a type var alias.
+                // Get the type variable from the type var alias statement
+                const type_var_alias_stmt = self.env.store.getStatement(tvd.type_var_alias_stmt);
+                const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
+
+                // Translate the type annotation to a runtime type variable
+                const ct_var = can.ModuleEnv.varFrom(type_var_anno);
+                const dispatch_rt_var = try self.translateTypeVar(self.env, ct_var);
+
+                // Resolve the type to find the nominal type info
+                var resolved = self.runtime_types.resolveVar(dispatch_rt_var);
+
+                // Follow aliases to get to the underlying type
+                while (resolved.desc.content == .alias) {
+                    const alias = resolved.desc.content.alias;
+                    const backing = self.runtime_types.getAliasBackingVar(alias);
+                    resolved = self.runtime_types.resolveVar(backing);
+                }
+
+                // Get nominal type info for method resolution
+                const nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = switch (resolved.desc.content) {
+                    .structure => |s| switch (s) {
+                        .nominal_type => |nom| .{
+                            .origin = nom.origin_module,
+                            .ident = nom.ident.ident_idx,
+                        },
+                        else => null,
+                    },
+                    else => null,
+                };
+
+                if (nominal_info == null) {
+                    self.triggerCrash("type variable dispatch requires a nominal type", false, roc_ops);
+                    return error.Crash;
+                }
+
+                // Resolve the method function
+                const method_func = self.resolveMethodFunction(
+                    nominal_info.?.origin,
+                    nominal_info.?.ident,
+                    tvd.method_name,
+                    roc_ops,
+                    dispatch_rt_var,
+                ) catch |err| {
+                    if (err == error.MethodLookupFailed) {
+                        const layout_env = self.runtime_layout_store.env;
+                        const type_name = import_mapping_mod.getDisplayName(
+                            self.import_mapping,
+                            layout_env.common.getIdentStore(),
+                            nominal_info.?.ident,
+                        );
+                        const method_name = self.env.getIdent(tvd.method_name);
+                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
+                            self.triggerCrash("Method not found", false, roc_ops);
+                            return error.Crash;
+                        };
+                        self.triggerCrash(crash_msg, true, roc_ops);
+                        return error.Crash;
+                    }
+                    return err;
+                };
+
+                if (method_func.layout.tag != .closure) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                const arg_exprs = self.env.store.exprSlice(tvd.args);
+
+                if (arg_exprs.len == 0) {
+                    // No arguments - invoke method directly
+                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                    const saved_env = self.env;
+                    const saved_bindings_len = self.bindings.items.len;
+                    self.env = @constCast(closure_header.source_env);
+
+                    // Check if low-level lambda
+                    const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                    if (lambda_expr == .e_low_level_lambda) {
+                        const low_level = lambda_expr.e_low_level_lambda;
+                        var args = [0]StackValue{};
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                        try value_stack.push(result);
+                    } else if (lambda_expr == .e_lambda) {
+                        // Regular lambda - invoke
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                        // Push cleanup continuation
+                        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                            .saved_bindings_len = saved_bindings_len,
+                            .saved_env = saved_env,
+                            .param_count = 0,
+                            .has_active_closure = false,
+                            .did_instantiate = false,
+                            .call_ret_rt_var = return_rt_var,
+                            .saved_rigid_subst = null,
+                            .saved_flex_type_context = null,
+                            .arg_rt_vars_to_free = null,
+                        } } });
+
+                        // Push body evaluation
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = lambda_expr.e_lambda.body,
+                            .expected_rt_var = return_rt_var,
+                        } });
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                    } else if (lambda_expr == .e_closure) {
+                        // Closure - follow to underlying lambda
+                        const underlying_lambda = self.env.store.getExpr(lambda_expr.e_closure.lambda_idx);
+                        if (underlying_lambda != .e_lambda) {
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            self.env = saved_env;
+                            return error.TypeMismatch;
+                        }
+
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                        // Push cleanup continuation
+                        try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                            .saved_bindings_len = saved_bindings_len,
+                            .saved_env = saved_env,
+                            .param_count = 0,
+                            .has_active_closure = false,
+                            .did_instantiate = false,
+                            .call_ret_rt_var = return_rt_var,
+                            .saved_rigid_subst = null,
+                            .saved_flex_type_context = null,
+                            .arg_rt_vars_to_free = null,
+                        } } });
+
+                        // Push body evaluation
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = underlying_lambda.e_lambda.body,
+                            .expected_rt_var = return_rt_var,
+                        } });
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                    } else {
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        return error.TypeMismatch;
+                    }
+                } else {
+                    // Has arguments - need to evaluate them first
+                    // Push method func to value stack
+                    try value_stack.push(method_func);
+
+                    // Push invoke continuation (will be executed after all args collected)
+                    try work_stack.push(.{ .apply_continuation = .{ .type_var_dispatch_invoke = .{
+                        .method_name = tvd.method_name,
+                        .arg_count = arg_exprs.len,
+                        .dispatch_rt_var = dispatch_rt_var,
+                        .expr_idx = expr_idx,
+                    } } });
+
+                    // If more than one arg, push collect continuation
+                    if (arg_exprs.len > 1) {
+                        try work_stack.push(.{ .apply_continuation = .{ .type_var_dispatch_collect_args = .{
+                            .method_name = tvd.method_name,
+                            .collected_count = 0,
+                            .remaining_args = arg_exprs[1..],
+                            .dispatch_rt_var = dispatch_rt_var,
+                            .expr_idx = expr_idx,
+                        } } });
+                    }
+
+                    // Push first arg evaluation
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = arg_exprs[0],
+                        .expected_rt_var = first_arg_rt_var,
+                    } });
+                }
+            },
+
             // Binary operations
-            // ================================================================
 
             .e_binop => |binop| {
                 switch (binop.op) {
@@ -10242,9 +10527,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Conditionals
-            // ================================================================
 
             .e_if => |if_expr| {
                 const branches = self.env.store.sliceIfBranches(if_expr.branches);
@@ -10272,9 +10555,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Blocks
-            // ================================================================
 
             .e_block => |blk| {
                 const stmts = self.env.store.sliceStatements(blk.stmts);
@@ -10309,9 +10590,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Tuples
-            // ================================================================
 
             .e_tuple => |tup| {
                 const elems = self.env.store.sliceExpr(tup.elems);
@@ -10336,9 +10615,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Lists
-            // ================================================================
 
             .e_list => |list_expr| {
                 const elems = self.env.store.sliceExpr(list_expr.elems);
@@ -10378,9 +10655,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Records
-            // ================================================================
 
             .e_record => |rec| {
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -10422,9 +10697,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Nominal types - evaluate backing expression
-            // ================================================================
 
             .e_nominal => |nom| {
                 // Compute the backing type variable for the nominal.
@@ -10526,9 +10799,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Simple error/crash expressions
-            // ================================================================
 
             .e_crash => |crash_expr| {
                 // Get the crash message string and trigger crash
@@ -10558,9 +10829,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Tag unions with payloads
-            // ================================================================
 
             .e_tag => |tag| {
                 // Determine runtime type and tag index.
@@ -10705,9 +10974,7 @@ pub const Interpreter = struct {
                 }
             },
 
-            // ================================================================
             // Pattern matching
-            // ================================================================
 
             .e_match => |m| {
                 // Get type info for scrutinee and result
@@ -10732,9 +10999,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Debugging and assertions
-            // ================================================================
 
             .e_expect => |expect_expr| {
                 const bool_rt_var = try self.getCanonicalBoolRuntimeVar();
@@ -10798,9 +11063,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Function calls
-            // ================================================================
 
             .e_call => |call| {
                 const func_idx = call.func;
@@ -10957,9 +11220,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Unary operations
-            // ================================================================
 
             .e_unary_minus => |unary_minus| {
                 // Desugar `-a` to `a.negate()`
@@ -11011,9 +11272,7 @@ pub const Interpreter = struct {
                 } });
             },
 
-            // ================================================================
             // Dot access (field access and method calls)
-            // ================================================================
 
             .e_dot_access => |dot_access| {
                 const receiver_ct_var = can.ModuleEnv.varFrom(dot_access.receiver);
@@ -11031,42 +11290,22 @@ pub const Interpreter = struct {
                     receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
                 }
 
-                // Evaluate receiver synchronously with isolated stacks to prevent value stack interleaving.
-                // This ensures the receiver is captured immediately before other dot_access expressions
-                // can push values that would corrupt the expected stack order.
-                const receiver_value = try self.evalWithExpectedType(dot_access.receiver, roc_ops, receiver_rt_var);
-
-                // Copy receiver to persistent memory (evalWithExpectedType uses temporary stacks that are freed)
-                const copied_receiver = try self.pushCopy(receiver_value);
-
-                // Decref the original receiver_value since we made a copy.
-                // This is necessary for records/tuples containing refcounted values like lists.
-                receiver_value.decref(&self.runtime_layout_store, roc_ops);
-
-                // After evaluation, prefer the actual runtime type from the receiver value
-                // over the translated/defaulted compile-time type. This handles cases like:
-                // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
-                //   runtime value has the concrete String type from dec_to_str
-                // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
-                //   will be Dec (from evalNum's concrete type assignment)
-                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
-                const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
-                    // Use the concrete type from evaluation (handles bindings to non-numeric results)
-                    copied_receiver.rt_var
-                else
-                    // Evaluation result is still flex/rigid - use the (possibly Dec-defaulted) receiver_rt_var
-                    receiver_rt_var;
-
-                // Push to outer value_stack so dot_access_await_receiver can pop it
-                try value_stack.push(copied_receiver);
-
-                // Schedule await_receiver which will pop from value stack and create resolve with carried value
+                // Schedule receiver evaluation on the same work_stack (not via nested evalWithExpectedType).
+                // This ensures early returns can find call_cleanup continuations properly.
+                // The dot_access_await_receiver continuation will pop the receiver from value_stack
+                // and transition to dot_access_resolve.
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_await_receiver = .{
                     .field_name = dot_access.field_name,
                     .method_args = dot_access.args,
-                    .receiver_rt_var = final_receiver_rt_var,
+                    .receiver_rt_var = receiver_rt_var,
                     .expr_idx = expr_idx,
                 } } });
+
+                // Push receiver evaluation - will be executed first, result goes on value_stack
+                try work_stack.push(.{ .eval_expr = .{
+                    .expr_idx = dot_access.receiver,
+                    .expected_rt_var = receiver_rt_var,
+                } });
             },
 
             // If we reach here, there's a new expression type that hasn't been added.
@@ -11074,9 +11313,7 @@ pub const Interpreter = struct {
         }
     }
 
-    // ========================================================================
     // Helper functions for evaluating immediate values (no sub-expressions)
-    // ========================================================================
 
     /// Evaluate a numeric literal (e_num)
     fn evalNum(
@@ -11584,9 +11821,7 @@ pub const Interpreter = struct {
         return error.Crash;
     }
 
-    // ========================================================================
     // Helper functions for lambda/closure creation
-    // ========================================================================
 
     /// Evaluate a lambda expression (e_lambda) - creates a closure value with empty captures
     fn evalLambda(
@@ -11859,9 +12094,7 @@ pub const Interpreter = struct {
         return null;
     }
 
-    // ========================================================================
     // Helper functions for variable lookups
-    // ========================================================================
 
     /// Evaluate a local variable lookup (e_lookup_local)
     /// Searches bindings in reverse order, checks closure captures, and handles
@@ -12021,9 +12254,7 @@ pub const Interpreter = struct {
         return result;
     }
 
-    // ========================================================================
     // Helper functions for block evaluation
-    // ========================================================================
 
     /// Add closure placeholders for mutual recursion support.
     /// This is the first pass over statements that creates bindings for closures
@@ -12874,7 +13105,7 @@ pub const Interpreter = struct {
                 const return_value = value_stack.pop() orelse return error.Crash;
                 self.early_return_value = return_value;
 
-                // Drain work stack until we find call_cleanup (function boundary)
+                // Drain work stack until we find call_cleanup (function boundary) or return_result (evaluation root)
                 // This skips any remaining work items for the current function body
                 while (work_stack.pop()) |pending_item| {
                     switch (pending_item) {
@@ -12885,9 +13116,22 @@ pub const Interpreter = struct {
                                     try work_stack.push(pending_item);
                                     break;
                                 },
+                                .return_result => {
+                                    // This should never happen - we should always find call_cleanup
+                                    // before return_result during early_return processing.
+                                    // If we hit this, it means there's a bug in how we're structuring
+                                    // the work stack (likely a nested evalWithExpectedType call that
+                                    // shouldn't be nested).
+                                    self.triggerCrash("early_return hit return_result without finding call_cleanup - this indicates a work stack structure bug", false, roc_ops);
+                                    return error.Crash;
+                                },
                                 .call_invoke_closure => |ci| {
-                                    // Free arg_rt_vars if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                                    if (ci.saved_rigid_subst) |saved| {
+                                        var saved_copy = saved;
+                                        saved_copy.deinit();
+                                    }
                                 },
                                 .for_iterate => |fl| {
                                     // Decref the list value when skipping a for loop
@@ -12897,6 +13141,65 @@ pub const Interpreter = struct {
                                     // Decref the list value and clean up bindings
                                     self.trimBindingList(&self.bindings, fl.loop_bindings_start, roc_ops);
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .str_collect => |sc| {
+                                    // Clean up any already-collected string segments on the value stack
+                                    for (0..sc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .tuple_collect => |tc| {
+                                    // Clean up any already-collected tuple elements on the value stack
+                                    for (0..tc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .list_collect => |lc| {
+                                    // Clean up any already-collected list elements on the value stack
+                                    for (0..lc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .record_collect => |rc| {
+                                    // Clean up any already-collected record fields on the value stack
+                                    // Also clean up base record value if present (from record extension)
+                                    for (0..rc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                    if (rc.has_extension) {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .tag_collect => |tc| {
+                                    // Clean up any already-collected tag arguments on the value stack
+                                    for (0..tc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                },
+                                .call_collect_args => |cc| {
+                                    // Clean up any already-collected arguments on the value stack
+                                    // Also clean up function value
+                                    for (0..cc.collected_count) |_| {
+                                        if (value_stack.pop()) |val| {
+                                            val.decref(&self.runtime_layout_store, roc_ops);
+                                        }
+                                    }
+                                    // Function value is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
                                 },
                                 else => {
                                     // Skip this continuation - it's part of the function body being early-returned from
@@ -14391,16 +14694,36 @@ pub const Interpreter = struct {
                 return true;
             },
             .dot_access_await_receiver => |da| {
-                // Pop the receiver from value stack (pushed by e_dot_access after evalWithExpectedType)
-                // and schedule dot_access_resolve with the receiver carried directly
+                // Pop the receiver from value stack (pushed by eval_expr for the receiver)
                 const receiver_value = value_stack.pop() orelse return error.Crash;
+
+                // Copy receiver to persistent memory (the value from eval may be on temporary stack)
+                const copied_receiver = try self.pushCopy(receiver_value);
+
+                // Decref the original receiver_value since we made a copy.
+                // This is necessary for records/tuples containing refcounted values like lists.
+                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // After evaluation, prefer the actual runtime type from the receiver value
+                // over the translated/defaulted compile-time type. This handles cases like:
+                // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
+                //   runtime value has the concrete String type from dec_to_str
+                // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
+                //   will be Dec (from evalNum's concrete type assignment)
+                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
+                const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
+                    // Use the concrete type from evaluation (handles bindings to non-numeric results)
+                    copied_receiver.rt_var
+                else
+                    // Evaluation result is still flex/rigid - use the (possibly Dec-defaulted) receiver_rt_var
+                    da.receiver_rt_var;
 
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_resolve = .{
                     .field_name = da.field_name,
                     .method_args = da.method_args,
-                    .receiver_rt_var = da.receiver_rt_var,
+                    .receiver_rt_var = final_receiver_rt_var,
                     .expr_idx = da.expr_idx,
-                    .receiver_value = receiver_value,
+                    .receiver_value = copied_receiver,
                 } } });
                 return true;
             },
@@ -14642,6 +14965,41 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
 
+                    // Get the method function's type and unify parameter with receiver.
+                    // This properly constrains rigid type variables (like `item` in List.first).
+                    const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const method_lambda_rt_var = try self.translateTypeVar(self.env, method_lambda_ct_var);
+                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+
+                    // Get the function's return type and first parameter for unification
+                    const effective_ret_var: types.Var = blk: {
+                        const func_info = method_resolved.desc.content.unwrapFunc() orelse {
+                            // Fall back to translating from call site if not a function type
+                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                            break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                        };
+
+                        // Unify the method's first parameter with the receiver type
+                        const method_params = self.runtime_types.sliceVars(func_info.args);
+                        if (method_params.len >= 1) {
+                            _ = try unify.unifyWithConf(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.type_writer,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                method_params[0],
+                                da.receiver_rt_var,
+                                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                            );
+                        }
+
+                        // Now the return type has rigid vars properly substituted
+                        break :blk func_info.ret;
+                    };
+
                     try self.active_closures.append(method_func);
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
@@ -14656,14 +15014,14 @@ pub const Interpreter = struct {
                         .param_count = 1,
                         .has_active_closure = true,
                         .did_instantiate = false,
-                        .call_ret_rt_var = null,
+                        .call_ret_rt_var = effective_ret_var,
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = null,
+                        .expected_rt_var = effective_ret_var,
                     } });
                     return true;
                 }
@@ -14939,22 +15297,63 @@ pub const Interpreter = struct {
 
                 try self.active_closures.append(method_func);
 
-                // Bind receiver first
-                try self.bindings.append(.{
-                    .pattern_idx = params[0],
-                    .value = receiver_value,
-                    .expr_idx = null, // expr_idx not used for method call parameter bindings
-                    .source_env = self.env,
-                });
+                // Save the current flex_type_context before adding parameter mappings
+                // This will be restored in call_cleanup (like call_invoke_closure does)
+                var saved_flex_type_context = try self.flex_type_context.clone();
+                errdefer saved_flex_type_context.deinit();
 
-                // Bind explicit arguments
+                // Bind receiver using patternMatchesBind (like call_invoke_closure does)
+                // This creates a copy of the value for the binding
+                const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+
+                // Propagate flex mappings for receiver (needed for polymorphic type propagation)
+                const receiver_rt_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                if (receiver_rt_resolved.desc.content == .structure) {
+                    const receiver_param_ct_var = can.ModuleEnv.varFrom(params[0]);
+                    try self.propagateFlexMappings(self.env, receiver_param_ct_var, dac.receiver_rt_var);
+                }
+
+                if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
+                    // Pattern match failed - cleanup and error
+                    self.env = saved_env;
+                    _ = self.active_closures.pop();
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    if (saved_rigid_subst) |*saved| saved.deinit();
+                    self.flex_type_context.deinit();
+                    self.flex_type_context = saved_flex_type_context;
+                    self.poly_context_generation +%= 1;
+                    return error.TypeMismatch;
+                }
+                // Decref the original receiver value since patternMatchesBind made a copy
+                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                // Bind explicit arguments using patternMatchesBind
                 for (arg_values, 0..) |arg, idx| {
-                    try self.bindings.append(.{
-                        .pattern_idx = params[1 + idx],
-                        .value = arg,
-                        .expr_idx = null, // expr_idx not used for method call parameter bindings
-                        .source_env = self.env,
-                    });
+                    const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[1 + idx]));
+
+                    // Propagate flex mappings for each argument (needed for polymorphic type propagation)
+                    const arg_rt_resolved = self.runtime_types.resolveVar(arg.rt_var);
+                    if (arg_rt_resolved.desc.content == .structure) {
+                        const param_ct_var = can.ModuleEnv.varFrom(params[1 + idx]);
+                        try self.propagateFlexMappings(self.env, param_ct_var, arg.rt_var);
+                    }
+
+                    if (!try self.patternMatchesBind(params[1 + idx], arg, param_rt_var, roc_ops, &self.bindings, null)) {
+                        // Pattern match failed - cleanup and error
+                        self.env = saved_env;
+                        _ = self.active_closures.pop();
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        for (arg_values[idx..]) |remaining_arg| remaining_arg.decref(&self.runtime_layout_store, roc_ops);
+                        if (saved_rigid_subst) |*saved| saved.deinit();
+                        self.flex_type_context.deinit();
+                        self.flex_type_context = saved_flex_type_context;
+                        self.poly_context_generation +%= 1;
+                        return error.TypeMismatch;
+                    }
+                    // Decref the original argument value since patternMatchesBind made a copy
+                    arg.decref(&self.runtime_layout_store, roc_ops);
                 }
 
                 try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
@@ -14965,7 +15364,7 @@ pub const Interpreter = struct {
                     .did_instantiate = did_instantiate,
                     .call_ret_rt_var = null,
                     .saved_rigid_subst = saved_rigid_subst,
-                    .saved_flex_type_context = null,
+                    .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
@@ -14973,6 +15372,180 @@ pub const Interpreter = struct {
                     .expected_rt_var = null,
                 } });
                 return true;
+            },
+            .type_var_dispatch_collect_args => |tvdc| {
+                // Type var dispatch: collecting arguments
+                // Stack: [method_func, arg0, arg1, ...]
+                if (tvdc.remaining_args.len > 0) {
+                    // More arguments to evaluate
+                    try work_stack.push(.{ .apply_continuation = .{ .type_var_dispatch_collect_args = .{
+                        .method_name = tvdc.method_name,
+                        .collected_count = tvdc.collected_count + 1,
+                        .remaining_args = tvdc.remaining_args[1..],
+                        .dispatch_rt_var = tvdc.dispatch_rt_var,
+                        .expr_idx = tvdc.expr_idx,
+                    } } });
+
+                    // Translate argument type
+                    const next_arg_ct_var = can.ModuleEnv.varFrom(tvdc.remaining_args[0]);
+                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = tvdc.remaining_args[0],
+                        .expected_rt_var = next_arg_rt_var,
+                    } });
+                }
+                return true;
+            },
+            .type_var_dispatch_invoke => |tvdi| {
+                // Type var dispatch: all arguments collected, invoke the method
+                // Stack: [method_func, arg0, arg1, ...]
+
+                // Pop all arguments
+                var arg_values = try self.allocator.alloc(StackValue, tvdi.arg_count);
+                defer self.allocator.free(arg_values);
+                var i: usize = tvdi.arg_count;
+                while (i > 0) {
+                    i -= 1;
+                    arg_values[i] = value_stack.pop() orelse return error.Crash;
+                }
+
+                // Pop method function
+                const method_func = value_stack.pop() orelse return error.Crash;
+
+                if (method_func.layout.tag != .closure) {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
+
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                const saved_env = self.env;
+                const saved_bindings_len = self.bindings.items.len;
+                self.env = @constCast(closure_header.source_env);
+
+                // Check if low-level lambda
+                const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (lambda_expr == .e_low_level_lambda) {
+                    const low_level = lambda_expr.e_low_level_lambda;
+                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    const result = try self.callLowLevelBuiltin(low_level.op, arg_values, roc_ops, return_rt_var);
+
+                    // Decref based on ownership semantics
+                    const arg_ownership = low_level.op.getArgOwnership();
+                    for (arg_values, 0..) |arg, idx| {
+                        if (idx < arg_ownership.len and arg_ownership[idx] == .borrow) {
+                            arg.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                    }
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                    try value_stack.push(result);
+                    return true;
+                } else if (lambda_expr == .e_lambda) {
+                    // Regular lambda - bind parameters and evaluate body
+                    const params_slice = self.env.store.slicePatterns(lambda_expr.e_lambda.args);
+
+                    // Bind all arguments to parameters
+                    for (params_slice, 0..) |param, idx| {
+                        if (idx >= arg_values.len) break;
+                        const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
+                            self.env = saved_env;
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            return error.TypeMismatch;
+                        }
+                        // patternMatchesBind makes a copy, so decref the original
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                    // Push cleanup continuation
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_bindings_len = saved_bindings_len,
+                        .saved_env = saved_env,
+                        .param_count = @intCast(params_slice.len),
+                        .has_active_closure = false,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = return_rt_var,
+                        .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+
+                    // Push body evaluation
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = lambda_expr.e_lambda.body,
+                        .expected_rt_var = return_rt_var,
+                    } });
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return true;
+                } else if (lambda_expr == .e_closure) {
+                    // Closure - follow to underlying lambda
+                    const underlying_lambda = self.env.store.getExpr(lambda_expr.e_closure.lambda_idx);
+                    if (underlying_lambda != .e_lambda) {
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+
+                    const params_slice = self.env.store.slicePatterns(underlying_lambda.e_lambda.args);
+
+                    // Bind all arguments to parameters
+                    for (params_slice, 0..) |param, idx| {
+                        if (idx >= arg_values.len) break;
+                        const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+                        if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
+                            self.env = saved_env;
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                            return error.TypeMismatch;
+                        }
+                        // patternMatchesBind makes a copy, so decref the original
+                        arg_values[idx].decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                    // Push cleanup continuation
+                    try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                        .saved_bindings_len = saved_bindings_len,
+                        .saved_env = saved_env,
+                        .param_count = @intCast(params_slice.len),
+                        .has_active_closure = false,
+                        .did_instantiate = false,
+                        .call_ret_rt_var = return_rt_var,
+                        .saved_rigid_subst = null,
+                        .saved_flex_type_context = null,
+                        .arg_rt_vars_to_free = null,
+                    } } });
+
+                    // Push body evaluation
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = underlying_lambda.e_lambda.body,
+                        .expected_rt_var = return_rt_var,
+                    } });
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return true;
+                } else {
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    for (arg_values) |arg| arg.decref(&self.runtime_layout_store, roc_ops);
+                    return error.TypeMismatch;
+                }
             },
             .for_iterate => |fl_in| {
                 // For loop/expression iteration: list has been evaluated, start iterating

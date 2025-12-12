@@ -88,6 +88,8 @@ pub const BuildArgs = struct {
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
+    wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
+    wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
 };
@@ -142,7 +144,11 @@ pub const ExperimentalLspArgs = struct {
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
 
-    if (mem.eql(u8, args[0], "run")) return try parseRun(alloc, args[1..]);
+    // "run" is not a valid subcommand - give a helpful error
+    // The correct usage is: roc path/to/app.roc (without "run")
+    if (mem.eql(u8, args[0], "run")) {
+        return CliArgs{ .help = run_not_a_command_help };
+    }
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);
@@ -189,6 +195,20 @@ const main_help =
     \\      --target=<target>      Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache             Force a rebuild of the interpreted host (useful for compiler and platform developers)
     \\      --allow-errors         Allow execution even if there are type errors (warnings are always allowed)
+    \\
+;
+
+const run_not_a_command_help =
+    \\Error: 'run' is not a valid subcommand.
+    \\
+    \\To run a Roc application, use:
+    \\    roc path/to/app.roc
+    \\
+    \\For example:
+    \\    roc main.roc           Run main.roc in the current directory
+    \\    roc examples/hello.roc Run hello.roc from the examples folder
+    \\
+    \\Use 'roc help' to see all available commands.
     \\
 ;
 
@@ -247,6 +267,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var output: ?[]const u8 = null;
     var debug: bool = false;
     var allow_errors: bool = false;
+    var wasm_memory: ?usize = null;
+    var wasm_stack_size: ?usize = null;
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
     for (args) |arg| {
@@ -265,6 +287,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
+            \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
+            \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
             \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
             \\      -h, --help                     Print help
@@ -308,6 +332,22 @@ fn parseBuild(args: []const []const u8) CliArgs {
             debug = true;
         } else if (mem.eql(u8, arg, "--allow-errors")) {
             allow_errors = true;
+        } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
+            if (getFlagValue(arg)) |value| {
+                wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--wasm-memory", .value = value, .valid_options = "positive integer (bytes)" } } };
+                };
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--wasm-memory" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "--wasm-stack-size")) {
+            if (getFlagValue(arg)) |value| {
+                wasm_stack_size = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--wasm-stack-size", .value = value, .valid_options = "positive integer (bytes)" } } };
+                };
+            } else {
+                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--wasm-stack-size" } } };
+            }
         } else {
             if (path != null) {
                 return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -315,7 +355,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

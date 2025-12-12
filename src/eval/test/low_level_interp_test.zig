@@ -2076,9 +2076,7 @@ test "e_low_level_lambda - U8.plus method call syntax" {
     try testing.expectEqual(@as(i128, 8), value);
 }
 
-// =============================================================================
 // mod_by tests for integer types
-// =============================================================================
 
 test "e_low_level_lambda - U8.mod_by basic" {
     const src =
@@ -2187,9 +2185,7 @@ test "e_low_level_lambda - I64.mod_by with zero result" {
     try testing.expectEqual(@as(i128, 0), value);
 }
 
-// =============================================================================
 // List.sort_with tests
-// =============================================================================
 
 test "e_low_level_lambda - List.sort_with basic ascending sort" {
     const src =

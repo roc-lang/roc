@@ -2503,3 +2503,96 @@ test "check type - try return with match and error propagation should type-check
     // Expected: should pass type-checking with combined error type (open tag union)
     try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
 }
+
+// record extension in type annotations //
+
+test "check type - record extension - basic open record annotation" {
+    // Test that a function accepting { name: Str, ..others } can take records with extra fields
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, name: Str } -> Str");
+}
+
+test "check type - record extension - closed record satisfies open record" {
+    // A closed record { name: Str, age: I64 } should satisfy { name: Str, ..others }
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+        \\
+        \\result = getName({ name: "Alice", age: 30 })
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - record extension - multiple fields with extension" {
+    // Test with multiple required fields and an extension
+    const source =
+        \\getFullName : { first: Str, last: Str, ..others } -> Str
+        \\getFullName = |record| Str.concat(Str.concat(record.first, " "), record.last)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, first: Str, last: Str } -> Str");
+}
+
+test "check type - record extension - nested records with extension" {
+    // Test record extension with nested record types
+    const source =
+        \\getPersonName : { person: { name: Str, ..inner }, ..outer } -> Str
+        \\getPersonName = |record| record.person.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..outer, person: { ..inner, name: Str } } -> Str");
+}
+
+test "check type - record extension - empty record with extension" {
+    // An empty record with extension means "any record"
+    const source =
+        \\takeAnyRecord : { ..others } -> Str
+        \\takeAnyRecord = |_record| "got a record"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others } -> Str");
+}
+
+test "check type - record extension - mismatch should fail" {
+    // Test that a record missing a required field should fail
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+        \\
+        \\result = getName({ age: 30 })
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// List method syntax tests
+
+test "check type - List.get method syntax" {
+    // Check what type is inferred for [1].get(0) (this works at runtime)
+    const source =
+        \\result = [1].get(0)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(item, [OutOfBounds, ..others]) where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+}
+
+// List.first method syntax tests - REGRESSION TEST for cycle detection bug
+
+test "check type - List.first method syntax should not create cyclic types" {
+    // REGRESSION TEST: This test reproduces a bug where calling [1].first() (method syntax)
+    // would cause an infinite loop in layout computation because the interpreter was creating
+    // cyclic rigid var mappings in the TypeScope when building layouts.
+    //
+    // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
+    // When the return type is Try(item, [ListWasEmpty, ..others]) with an open tag union,
+    // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
+    //
+    // Method syntax: [1].first()
+    // Should have same type as function syntax: List.first([1])
+    //
+    // NOTE: The type checking itself is correct - this test verifies type checking produces
+    // the right type. The bug manifests in the interpreter's layout computation phase.
+    const source =
+        \\result = [1].first()
+    ;
+    // Expected: Try(item, [ListWasEmpty, ..others]) with item having from_numeral constraint
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(item, [ListWasEmpty, ..others]) where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+}

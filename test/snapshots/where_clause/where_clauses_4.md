@@ -13,6 +13,7 @@ decodeThings = ...
 ~~~
 # EXPECTED
 MODULE NOT FOUND - where_clauses_4.md:1:1:1:32
+UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `Decode` was not found in this Roc project.
@@ -23,6 +24,17 @@ You're attempting to use this module here:
 import Decode exposing [Decode]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _Decode_ is not supported:
+**where_clauses_4.md:4:9:4:17:**
+```roc
+	where [a.Decode]
+```
+	       ^^^^^^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
 
 # TOKENS

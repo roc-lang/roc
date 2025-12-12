@@ -21,6 +21,13 @@ pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuil
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
 
+/// Serialization format definitions for embedded module data.
+pub const serialization = @import("serialization.zig");
+pub const SerializedHeader = serialization.SerializedHeader;
+pub const SerializedModuleInfo = serialization.SerializedModuleInfo;
+pub const SERIALIZED_FORMAT_MAGIC = serialization.SERIALIZED_FORMAT_MAGIC;
+pub const SERIALIZED_FORMAT_VERSION = serialization.SERIALIZED_FORMAT_VERSION;
+
 /// Re-exported alignment constant from CompactWriter for convenience.
 /// This alignment is required for all serialization buffers to ensure proper memory access.
 pub const SERIALIZATION_ALIGNMENT = CompactWriter.SERIALIZATION_ALIGNMENT;
@@ -98,5 +105,6 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
 }
