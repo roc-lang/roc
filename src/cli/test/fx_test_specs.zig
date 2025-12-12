@@ -205,6 +205,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
     },
     .{
+        .roc_file = "test/fx/list_append_stdin_uaf.roc",
+        .io_spec = "0<000000010000000100000001|1>000000010000000100000001",
+        .description = "Regression test: List.append with effectful call on big string (24+ chars)",
+    },
+    .{
         .roc_file = "test/fx/list_first_method.roc",
         .io_spec = "1>ok",
         .description = "Regression test: List.first with method syntax",
