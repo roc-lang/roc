@@ -645,6 +645,9 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         }
         return out.toOwnedSlice();
     }
+    if (value.layout.tag == .zst) {
+        return try std.fmt.allocPrint(gpa, "<zero-sized-type>", .{});
+    }
     return try std.fmt.allocPrint(gpa, "<unsupported>", .{});
 }
 

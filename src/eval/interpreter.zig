@@ -2626,7 +2626,19 @@ pub const Interpreter = struct {
                 const elt_arg = args[1];
 
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
-                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
+
+                if (elt_arg.ptr == null) {
+                    // only ZST elements can have null pointer
+                    std.debug.assert(roc_list_arg.layout.tag == .list_of_zst);
+                    std.debug.assert(elt_arg.layout.tag == .zst);
+                    const roc_list: *RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    if (roc_list.isUnique()) {
+                        // Mutate in place
+                        roc_list.length += 1;
+                        return roc_list_arg;
+                    }
+                    unreachable; // TODO In my testing this was never reached, so I could not test it
+                }
 
                 // Extract element layout from List(a)
                 std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
@@ -2636,9 +2648,8 @@ pub const Interpreter = struct {
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
-                // Get element layout
-                const elem_layout_idx = roc_list_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                // Get element layout: use elt_arg, because list could be empty
+                const elem_layout = elt_arg.layout;
                 const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
@@ -2698,7 +2709,13 @@ pub const Interpreter = struct {
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
-                const result_layout = roc_list_arg.layout; // Same layout as input
+                var result_layout = roc_list_arg.layout;
+                if (roc_list_arg.layout.tag == .list_of_zst) {
+                    // Change layout to .list, because the list is no longer empty
+                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(elt_arg.layout);
+                    result_layout = Layout.list(elem_layout_idx);
+                }
+
                 var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
                 out.is_initialized = false;
 
@@ -12907,7 +12924,7 @@ pub const Interpreter = struct {
 
                         // Create the list layout with the correct element layout
                         const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                        const actual_list_layout: Layout = if (actual_elem_layout.tag == .zst) .listOfZst() else .list(correct_elem_idx);
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
