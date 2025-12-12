@@ -14757,7 +14757,10 @@ pub const Interpreter = struct {
                     }
 
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
+                    // Translate field name from current module's ident space to runtime layout store's ident space
+                    const field_name_str = self.env.getIdent(da.field_name);
+                    const rt_field_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(field_name_str));
+                    const field_idx = accessor.findFieldIndex(rt_field_name) orelse return error.TypeMismatch;
 
                     // Get the field's rt_var from the receiver's record type
                     const receiver_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
