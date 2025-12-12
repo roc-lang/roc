@@ -64,6 +64,40 @@ pub const PlatformValidation = struct {
     platform_dir: []const u8,
 };
 
+/// Check if a file is a platform header (has `platform` at the start).
+/// This is a quick check without side effects - useful for finding which file
+/// in a set of .roc files is the actual platform file.
+/// Returns true if the file is a platform, false if it's a module/app, or null on error.
+pub fn isPlatformFile(
+    allocator: std.mem.Allocator,
+    source_path: []const u8,
+) ?bool {
+    // Read source file
+    const source = std.fs.cwd().readFileAlloc(allocator, source_path, std.math.maxInt(usize)) catch {
+        return null;
+    };
+    defer allocator.free(source);
+
+    // Initialize parse environment
+    var env = base.CommonEnv.init(allocator, source) catch {
+        return null;
+    };
+
+    // Parse the file
+    const ast = parse.parse(&env, allocator) catch {
+        return null;
+    };
+
+    // Check the header type
+    const file = ast.store.getFile();
+    const header = ast.store.getHeader(file.header);
+
+    return switch (header) {
+        .platform => true,
+        else => false,
+    };
+}
+
 /// Parse and validate a platform header.
 /// Returns the TargetsConfig if valid, or an error with details.
 pub fn validatePlatformHeader(

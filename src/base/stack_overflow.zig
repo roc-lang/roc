@@ -8,12 +8,12 @@
 //!
 //! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
-//! WASI is not currently supported (no signal handling available).
+//! Freestanding targets (like wasm32) are not supported (no signal handling available).
 
 const std = @import("std");
 const builtin = @import("builtin");
 const handlers = @import("builtins").handlers;
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
+const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
 
 /// Error message to display on stack overflow
 const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
@@ -36,7 +36,7 @@ fn handleStackOverflow() noreturn {
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(134);
-    } else if (comptime builtin.os.tag != .wasi) {
+    } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use direct write syscall for signal-safety
         _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
         posix.exit(134);
@@ -66,7 +66,7 @@ fn handleArithmeticError() noreturn {
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
-    } else if (comptime builtin.os.tag != .wasi) {
+    } else if (comptime builtin.os.tag != .freestanding) {
         _ = posix.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE) catch {};
         posix.exit(136); // 128 + 8 (SIGFPE)
     } else {
@@ -173,8 +173,8 @@ pub fn checkAndTriggerIfSubprocess() bool {
 }
 
 test "stack overflow handler produces helpful error message" {
-    // Skip on WASI - no process spawning or signal handling
-    if (comptime builtin.os.tag == .wasi) {
+    // Skip on freestanding targets - no process spawning or signal handling
+    if (comptime builtin.os.tag == .freestanding) {
         return error.SkipZigTest;
     }
 

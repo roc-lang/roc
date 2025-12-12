@@ -390,7 +390,10 @@ extern fn ___tracy_wait_shutdown() void;
 pub fn waitForShutdown() !void {
     if (!enable) return;
 
-    try std.fs.File.stderr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
+    // stderr not available on freestanding
+    if (comptime builtin.os.tag != .freestanding) {
+        try std.fs.File.stderr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
+    }
     ___tracy_wait_shutdown();
 }
 

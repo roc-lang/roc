@@ -9,11 +9,11 @@
 //!
 //! On Windows, we use SetUnhandledExceptionFilter to catch various exceptions.
 //!
-//! WASI is not currently supported (no signal handling available).
+//! Freestanding targets (like wasm32) are not supported (no signal handling available).
 
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
+const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
 
 // Windows types and constants
 const DWORD = u32;
@@ -105,8 +105,8 @@ pub fn install(
         return installWindows();
     }
 
-    if (comptime builtin.os.tag == .wasi) {
-        // WASI doesn't support signal handling
+    if (comptime builtin.os.tag == .freestanding) {
+        // Freestanding targets (like wasm32) don't support signal handling
         return false;
     }
 

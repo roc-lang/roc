@@ -141,9 +141,7 @@ fn checkTestSuccess(result: std.process.Child.RunResult) !void {
     }
 }
 
-// ============================================================================
 // IO Spec Tests (using shared specs from fx_test_specs.zig)
-// ============================================================================
 // These tests use the --test mode with IO specifications to verify that
 // roc applications produce the expected stdout/stderr output for given stdin.
 // The specs are defined in fx_test_specs.zig and shared with the cross-compile
@@ -1046,4 +1044,53 @@ test "fx platform inline expect succeeds as expected" {
     defer allocator.free(result.stderr);
 
     try checkTestSuccess(result);
+}
+
+test "fx platform index out of bounds in instantiate regression" {
+    // Regression test: A specific combination of features causes an index out of bounds
+    // panic in the type instantiation code (instantiate.zig:344). The panic occurs during
+    // type checking when instantiating a tag union type.
+    //
+    // The crash requires:
+    // - A value alias (day_input = demo_input)
+    // - A print! function using split_on().for_each!()
+    // - Two similar effectful functions (part1!, part2!) with:
+    //   - for loop over input.trim().split_on()
+    //   - print! call inside the for loop
+    //   - parse_range call with ? operator
+    //   - while loop calling a function with sublist()
+    // - has_repeating_pattern using slice->repeat(n // $d) with mutable var $d
+    // - String interpolation calling part2!
+    //
+    // The bug manifests as: panic: index out of bounds: index 2863311530, len 1035
+    // The index 0xAAAAAAAA suggests uninitialized/corrupted memory.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/index_oob_instantiate.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The compiler should not panic/crash. Once the bug is fixed, this test will pass.
+    // Currently it fails with a panic in instantiate.zig.
+    try checkSuccess(run_result);
+}
+
+test "fx platform fold_rev static dispatch regression" {
+    // Regression test: Calling fold_rev with static dispatch (method syntax) panics,
+    // but calling it qualified as List.fold_rev(...) works fine.
+    //
+    // The panic occurs with: [1].fold_rev([], |elem, acc| acc.append(elem))
+    // But this works: List.fold_rev([1], [], |elem, acc| acc.append(elem))
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/fold_rev_static_dispatch.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify the expected output
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Start reverse") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Reversed: 3 elements") != null);
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Done") != null);
 }

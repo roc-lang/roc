@@ -123,7 +123,6 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
 /// - `Name :` followed by a valid type start token
 /// - `Name :=` followed by a valid type start token
 /// - `Name ::` followed by a valid type start token
-/// - `Name a b :` etc. (with type params)
 /// - `Name(a, b) :` etc. (with parenthesized type params)
 ///
 /// The key insight is that after the `:` (or `:=` or `::`), we must see a token that
@@ -150,16 +149,9 @@ fn looksLikeTypeDecl(self: *Parser) bool {
             }
             lookahead += 1;
         }
-    } else {
-        // Skip past any lowercase identifiers (type parameters like `a`, `b`)
-        while (true) {
-            const tok = self.peekN(lookahead);
-            switch (tok) {
-                .LowerIdent, .Underscore, .NamedUnderscore => lookahead += 1,
-                else => break,
-            }
-        }
     }
+    // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
+    // Only `Name(a, b) :` with parenthesized type params is supported.
 
     // Now check for : or := or ::
     const op_tok = self.peekN(lookahead);
@@ -176,7 +168,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
         .LowerIdent, // Type variable: a, b, etc.
         .OpenRound, // Tuple or grouping: (a, b)
         .NoSpaceOpenRound, // Tuple or grouping without space
-        .OpenSquare, // Tag union: [Ok a, Err e]
+        .OpenSquare, // Tag union: [Ok(a), Err(e)]
         .OpenCurly, // Record type: { name: Str }
         .Underscore, // Wildcard type: _
         .NamedUnderscore, // Named wildcard: _foo
@@ -479,6 +471,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
     const signatures_span = try self.store.annoRecordFieldSpanFrom(signatures_top);
     const signatures = try self.store.addTypeAnno(.{ .record = .{
         .fields = signatures_span,
+        .ext = null,
         .region = .{
             .start = signatures_start,
             .end = self.pos,
@@ -1148,15 +1141,16 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
 
     var files_path: ?TokenIdx = null;
     var exe: ?AST.TargetLinkType.Idx = null;
+    var static_lib: ?AST.TargetLinkType.Idx = null;
 
     // Parse fields until closing curly brace
-    // Field identification is done by value type, not field name (deferred to CLI)
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         // Expect field name (lower identifier)
         if (self.peek() != .LowerIdent) {
             return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
         }
 
+        const field_name_tok = self.pos; // Capture field name token before advancing
         self.advance(); // Advance past field name
 
         // Expect colon
@@ -1184,8 +1178,16 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
             },
             .OpenCurly => {
                 // Parse link type section (exe, static_lib, shared_lib)
-                // For now, we only support exe
-                exe = try self.parseTargetLinkType();
+                const parsed_link_type = try self.parseTargetLinkType();
+                // Get field name from source using token region
+                const region = self.tok_buf.resolve(field_name_tok);
+                const field_name = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
+                if (std.mem.eql(u8, field_name, "exe")) {
+                    exe = parsed_link_type;
+                } else if (std.mem.eql(u8, field_name, "static_lib")) {
+                    static_lib = parsed_link_type;
+                }
+                // Unknown fields are ignored (shared_lib to be added later)
             },
             else => {
                 return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
@@ -1206,6 +1208,7 @@ pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
     return try self.store.addTargetsSection(.{
         .files_path = files_path,
         .exe = exe,
+        .static_lib = static_lib,
         .region = .{ .start = start, .end = self.pos },
     });
 }
@@ -3037,20 +3040,38 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenCurly => {
             self.advance(); // Advance past OpenCurly
             const scratch_top = self.store.scratchAnnoRecordFieldTop();
-            self.parseCollectionSpan(AST.AnnoRecordField.Idx, .CloseCurly, NodeStore.addScratchAnnoRecordField, parseAnnoRecordField) catch |err| {
-                switch (err) {
-                    error.ExpectedNotFound => {
-                        self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
-                        return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                    },
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.TooNested => return error.TooNested,
+            var ext_anno: ?AST.TypeAnno.Idx = null;
+
+            // Parse record fields, with support for record extension
+            while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+                if (self.peek() == .DoubleDot) {
+                    // Handle record extension: { field: Type, ..ext }
+                    self.advance(); // consume DoubleDot
+
+                    if (self.peek() == .LowerIdent) {
+                        // Parse the extension type variable
+                        ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    }
+                    // If no identifier follows .., it's an anonymous extension (just ..)
+                    // Break out since .. must be the last element
+                    break;
+                } else {
+                    // Regular record field
+                    try NodeStore.addScratchAnnoRecordField(&self.store, try parseAnnoRecordField(self));
+                    self.expect(.Comma) catch {
+                        break;
+                    };
                 }
+            }
+            self.expect(.CloseCurly) catch {
+                self.store.clearScratchAnnoRecordFieldsFrom(scratch_top);
+                return try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
             };
             const fields = try self.store.annoRecordFieldSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .record = .{
                 .region = .{ .start = start, .end = self.pos },
                 .fields = fields,
+                .ext = ext_anno,
             } });
         },
         .OpenSquare => {
@@ -3109,9 +3130,12 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         const next_is_not_lower_ident = next_tok != .LowerIdent;
         const not_followed_by_colon = two_away_tok != .OpColon;
         const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
+        // Don't treat comma as function argument separator if followed by:
+        // - CloseCurly (end of record)
+        // - DoubleDot (record extension like { field: Type, ..ext })
         if ((looking_for_args == .not_looking_for_args) and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);

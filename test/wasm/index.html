@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Roc WASM Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 { color: #7c3aed; }
+        .output {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .success { border-color: #10b981; }
+        .error { border-color: #ef4444; color: #fca5a5; }
+        .label { color: #9ca3af; font-size: 12px; margin-bottom: 5px; }
+        button {
+            background: #7c3aed;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover { background: #6d28d9; }
+        button:disabled { background: #4b5563; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <h1>Roc WASM Static Library Test</h1>
+    <p>This page tests a Roc application compiled to a WebAssembly static library.</p>
+
+    <button id="runBtn" onclick="runWasm()">Run WASM Module</button>
+
+    <div class="label">Result:</div>
+    <div id="result" class="output">Click "Run WASM Module" to execute...</div>
+
+    <div class="label">Debug Output:</div>
+    <div id="debug" class="output"></div>
+
+    <div class="label">Console Log:</div>
+    <div id="log" class="output"></div>
+
+    <script>
+        let wasmModule = null;
+        const logOutput = [];
+
+        function log(msg) {
+            logOutput.push(msg);
+            document.getElementById('log').textContent = logOutput.join('\n');
+        }
+
+        function decodeString(memory, ptr, len) {
+            const bytes = new Uint8Array(memory.buffer, ptr, len);
+            return new TextDecoder().decode(bytes);
+        }
+
+        // Import functions that Roc expects from the environment
+        const imports = {
+            env: {
+                roc_panic: (ptr, len) => {
+                    const msg = decodeString(wasmModule.exports.memory, ptr, len);
+                    log(`[PANIC] ${msg}`);
+                    throw new Error(`Roc panic: ${msg}`);
+                },
+                roc_dbg: (ptr, len) => {
+                    const msg = decodeString(wasmModule.exports.memory, ptr, len);
+                    log(`[DBG] ${msg}`);
+                    document.getElementById('debug').textContent += msg + '\n';
+                },
+                roc_expect_failed: (ptr, len) => {
+                    const msg = decodeString(wasmModule.exports.memory, ptr, len);
+                    log(`[EXPECT FAILED] ${msg}`);
+                    document.getElementById('debug').textContent += `Expect failed: ${msg}\n`;
+                }
+            }
+        };
+
+        async function runWasm() {
+            const resultDiv = document.getElementById('result');
+            const runBtn = document.getElementById('runBtn');
+
+            try {
+                runBtn.disabled = true;
+                resultDiv.className = 'output';
+                resultDiv.textContent = 'Loading WASM module...';
+                log('Fetching app.wasm...');
+
+                // Load the WASM module
+                const response = await fetch('app.wasm');
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch app.wasm: ${response.status} ${response.statusText}`);
+                }
+
+                const wasmBytes = await response.arrayBuffer();
+                log(`Loaded ${wasmBytes.byteLength} bytes`);
+
+                // Instantiate with imports
+                log('Instantiating WASM module...');
+                const result = await WebAssembly.instantiate(wasmBytes, imports);
+                wasmModule = result.instance;
+
+                log('Calling wasm_main()...');
+
+                // Call the main function
+                const resultPtr = wasmModule.exports.wasm_main();
+                const heapUsed = wasmModule.exports.wasm_heap_used();
+
+                log(`Result pointer: ${resultPtr}`);
+                log(`Heap used: ${heapUsed} bytes`);
+
+                // Read the result string from memory
+                // For RocStr, we need to read the string data
+                // The pointer points to the string bytes
+                if (resultPtr) {
+                    // Try to read as a null-terminated string or fixed length
+                    const memory = new Uint8Array(wasmModule.exports.memory.buffer);
+                    let len = 0;
+                    const maxLen = 1024;
+                    while (len < maxLen && memory[resultPtr + len] !== 0) {
+                        len++;
+                    }
+                    const resultStr = decodeString(wasmModule.exports.memory, resultPtr, len);
+                    resultDiv.textContent = resultStr || '(empty result)';
+                    resultDiv.className = 'output success';
+                    log(`Result: "${resultStr}"`);
+                } else {
+                    resultDiv.textContent = '(null result)';
+                    resultDiv.className = 'output';
+                }
+
+            } catch (error) {
+                resultDiv.textContent = `Error: ${error.message}`;
+                resultDiv.className = 'output error';
+                log(`Error: ${error.stack || error.message}`);
+            } finally {
+                runBtn.disabled = false;
+            }
+        }
+
+        log('Page loaded. Ready to run WASM module.');
+    </script>
+</body>
+</html>

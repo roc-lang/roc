@@ -12,7 +12,7 @@ const testing = std.testing;
 const runExpectInt = helpers.runExpectInt;
 const runExpectStr = helpers.runExpectStr;
 
-// ===== Tuples with Lists =====
+// Tuples with Lists
 
 test "list refcount containers - single list in tuple" {
     // Simplified: List used before tuple, verify it still works
@@ -56,7 +56,7 @@ test "list refcount containers - tuple with string list" {
     , "a", .no_trace);
 }
 
-// ===== Records with Lists =====
+// Records with Lists
 
 test "list refcount containers - single field record with list" {
     try runExpectInt(
@@ -120,7 +120,7 @@ test "list refcount containers - record with mixed types" {
     , 42, .no_trace);
 }
 
-// ===== Tags with Lists =====
+// Tags with Lists
 
 test "list refcount containers - tag with list payload" {
     // Simplified: Inline list in tag construction
@@ -154,7 +154,7 @@ test "list refcount containers - Ok/Err with lists" {
     , 6, .no_trace);
 }
 
-// ===== Complex Combinations =====
+// Complex Combinations
 
 test "list refcount containers - tuple of records with lists" {
     try runExpectInt(

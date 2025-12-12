@@ -197,6 +197,28 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Closed: TagB|1>With payload: Value(42)|1>Number: 123",
         .description = "Str.inspect on tag unions",
     },
+
+    // Bug regression tests
+    .{
+        .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
+    },
+    .{
+        .roc_file = "test/fx/list_append_stdin_uaf.roc",
+        .io_spec = "0<000000010000000100000001|1>000000010000000100000001",
+        .description = "Regression test: List.append with effectful call on big string (24+ chars)",
+    },
+    .{
+        .roc_file = "test/fx/list_first_method.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with method syntax",
+    },
+    .{
+        .roc_file = "test/fx/list_first_function.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: List.first with function syntax",
+    },
 };
 
 /// Get the total number of IO spec tests

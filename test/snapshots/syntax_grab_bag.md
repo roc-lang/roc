@@ -266,8 +266,7 @@ UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
-TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
-UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
+TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
 UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
@@ -878,8 +877,8 @@ This expression produces a value, but it's not being used:
 It has the type:
     __d_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `match_time` expects 2 arguments, but 1 was provided:
 **syntax_grab_bag.md:155:2:157:3:**
 ```roc
 	match_time(
@@ -887,23 +886,8 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
+The function has the signature:
     _[Red, ..[Blue, Green, .._others2]], _arg -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**syntax_grab_bag.md:155:2:157:3:**
-```roc
-	match_time(
-		..., # Single args with comment
-	)
-```
-
-It has the type:
-    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

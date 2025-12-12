@@ -21,7 +21,6 @@ const CompactWriter = collections.CompactWriter;
 const CommonEnv = @This();
 
 idents: Ident.Store,
-// ident_ids_for_slicing: SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,
@@ -131,12 +130,17 @@ pub const Serialized = extern struct {
         // We deserialize by overwriting the Serialized memory with the runtime struct.
         const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
 
+        // Read values BEFORE any writes to avoid corruption from in-place deserialization
+        const idents_val = self.idents.deserialize(offset).*;
+        const strings_val = self.strings.deserialize(offset).*;
+        const exposed_items_val = self.exposed_items.deserialize(offset).*;
+        const line_starts_val = self.line_starts.deserialize(offset).*;
+
         env.* = CommonEnv{
-            .idents = self.idents.deserialize(offset).*,
-            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
-            .strings = self.strings.deserialize(offset).*,
-            .exposed_items = self.exposed_items.deserialize(offset).*,
-            .line_starts = self.line_starts.deserialize(offset).*,
+            .idents = idents_val,
+            .strings = strings_val,
+            .exposed_items = exposed_items_val,
+            .line_starts = line_starts_val,
             .source = source,
         };
 

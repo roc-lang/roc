@@ -45,30 +45,23 @@ test "cross-module - check type - monomorphic function passes" {
 }
 
 test "cross-module - check type - monomorphic function fails" {
-    // This test is temporarily skipped due to a regression from auto-import changes.
-    // The test expects a TYPE MISMATCH error when calling A.main!(1) where main! expects Str->Str,
-    // but the error is not being detected (expected 1 error, found 0).
-    // This appears to be related to how auto-imports interact with error reporting in test environments.
-    // The other 3 cross-module tests pass, so cross-module - check type works in general.
-    // TODO: Investigate why type errors aren't being reported in this specific cross-module test case
+    const source_a =
+        \\main! : Str -> Str
+        \\main! = |s| s
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertLastDefType("Str -> Str");
 
-    // const source_a =
-    //     \\main! : Str -> Str
-    //     \\main! = |s| s
-    // ;
-    // var test_env_a = try TestEnv.init(source_a);
-    // defer test_env_a.deinit();
-    // try test_env_a.assertLastDefType("Str -> Str");
-
-    // const source_b =
-    //     \\import A
-    //     \\
-    //     \\main : U8
-    //     \\main = A.main!(1)
-    // ;
-    // var test_env_b = try TestEnv.initWithImport(source_b, "A", test_env_a.module_env);
-    // defer test_env_b.deinit();
-    // try test_env_b.assertOneTypeError("TYPE MISMATCH");
+    const source_b =
+        \\import A
+        \\
+        \\main : U8
+        \\main = A.main!(1)
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+    try test_env_b.assertOneTypeError("TYPE MISMATCH");
 }
 
 test "cross-module - check type - polymorphic function passes" {

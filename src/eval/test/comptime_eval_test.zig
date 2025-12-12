@@ -1147,9 +1147,7 @@ test "comptime eval - I8: -129 does not fit" {
     try testing.expect(result.problems.len() >= 1);
 }
 
-// =============================================================================
 // Comprehensive numeric literal validation tests with error message verification
-// =============================================================================
 
 /// Helper to extract error message from first comptime_eval_error problem
 fn getFirstComptimeEvalErrorMessage(problems: *check.problem.Store) ?[]const u8 {

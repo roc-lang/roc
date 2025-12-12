@@ -67,7 +67,7 @@ fn freeConstSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
 }
 
-// ===== Global unified work-stealing queue =====
+// Global unified work-stealing queue
 
 const GlobalQueue = struct {
     const Task = struct {

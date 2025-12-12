@@ -31,8 +31,9 @@ pub const EntryPoint = struct {
 /// the actual implementation of this function, which acts as a dispatcher
 /// based on the entry_idx parameter.
 fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Index {
-    // Create pointer type for generic pointers (i8* in LLVM)
-    const ptr_type = try builder.ptrType(.default);
+    // For wasm32, use i32 explicitly for pointer parameters (wasm32 C ABI uses 32-bit pointers)
+    // For other targets, use opaque pointer type which LLVM sizes based on target
+    const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
 
     // Create the roc_entrypoint function type:
     // void roc_entrypoint(u32 entry_idx, RocOps* ops, void* ret_ptr, void* arg_ptr)
@@ -76,8 +77,9 @@ fn addRocEntrypoint(builder: *Builder, target: RocTarget) !Builder.Function.Inde
 /// 3. Efficient code generation since each wrapper is just a simple function call
 /// 4. Easy addition/removal of platform functions without changing the pre-built interpreter binary which is embedded in the roc cli executable.
 fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Index, name: []const u8, entry_idx: u32, target: RocTarget) !Builder.Function.Index {
-    // Create pointer type for generic pointers
-    const ptr_type = try builder.ptrType(.default);
+    // For wasm32, use i32 explicitly for pointer parameters (wasm32 C ABI uses 32-bit pointers)
+    // For other targets, use opaque pointer type which LLVM sizes based on target
+    const ptr_type: Builder.Type = if (target == .wasm32) .i32 else try builder.ptrType(.default);
 
     // Create the Roc function type following the ABI:
     // void roc_function(RocOps* ops, void* ret_ptr, void* arg_ptr)
@@ -178,6 +180,7 @@ pub fn createInterpreterShim(builder: *Builder, entrypoints: []const EntryPoint,
 /// When data is provided, an internal constant array is created and the base_ptr
 /// points to it. When data is null, both values are set to null/zero.
 fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_module: ?[]const u8) !void {
+    // Use opaque pointer type for globals - LLVM sizes them correctly based on target data layout
     const ptr_type = try builder.ptrType(.default);
 
     // Determine usize type based on target pointer width
@@ -210,11 +213,14 @@ fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_modul
         const str_const = try builder.stringConst(str);
 
         // Create an internal constant variable to hold the array
+        // IMPORTANT: Set 8-byte alignment to ensure ModuleEnv.Serialized can be accessed properly
+        // (ModuleEnv.Serialized contains u64/i64 fields that require 8-byte alignment)
         const internal_name = try builder.strtabString(".roc_serialized_data");
         const array_var = try builder.addVariable(internal_name, str_const.typeOf(builder), .default);
         try array_var.setInitializer(str_const, builder);
         array_var.setLinkage(.internal, builder);
         array_var.setMutability(.global, builder);
+        array_var.setAlignment(Builder.Alignment.fromByteUnits(8), builder);
 
         // Create the external base_ptr variable pointing to the internal array
         const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);

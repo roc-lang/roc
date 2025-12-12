@@ -66,7 +66,7 @@ pub fn printLeadingWhitespace(writer: anytype, line: []const u8, target_column: 
     }
 }
 
-// ===== TESTS =====
+// TESTS
 
 test "calculateLineNumberWidth" {
     try testing.expectEqual(@as(u32, 1), calculateLineNumberWidth(0));
