@@ -361,13 +361,15 @@ test "nested ZST detection - deeply nested" {
 }
 
 test "addTypeVar - flex var with method constraint returning open tag union" {
-    // This test reproduces a bug where calling list.first() (method syntax) causes
-    // an infinite loop in layout computation. The issue is that:
+    // This test verifies that layout computation handles method constraints
+    // with open tag unions correctly. The scenario is:
     // 1. Method syntax creates a flex var with a StaticDispatchConstraint
     // 2. The constraint's fn_var points to: List(a) -> Try(a, [ListWasEmpty, ..others])
     // 3. The ..others is a flex var extension on the tag union
     //
-    // The layout computation was not properly handling this case.
+    // The actual fix for List.first() method syntax was in the interpreter
+    // (unifying the method's parameter type with the receiver type), but this
+    // test ensures the layout store handles such types correctly.
     var lt: LayoutTest = undefined;
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
