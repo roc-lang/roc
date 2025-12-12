@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  zigPkg = pkgs.zig;
+  zigPkg = pkgs.zig_0_13;
   llvmPkgs = pkgs.llvm_18;
   llvmVersion = builtins.splitVersion llvmPkgs.release_version;
   llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
