@@ -99,7 +99,7 @@ effect_demo! : Str => {}
 effect_demo! = |msg|
 	Stdout.line!(msg)
 
-# thread 229407 panic
+# TODO issue #8646
 # question_postfix : List(Str) -> Try(I64, _)
 # question_postfix = |strings| {
 #     # `?` to immediately return the error if there is one
@@ -174,7 +174,7 @@ tuple_demo =
 type_var : List(a) -> List(a)
 type_var = |lst| lst
 
-# TODO Roc crashed: Error evaluating: TypeMismatch
+# TODO issue #8647
 # destructuring = || {
 #     tup = ("Roc", 1)
 #     (str, num) = tup
@@ -260,10 +260,7 @@ main! = || {
 
 	effect_demo!("This is an effectful function!")
 
-	# Stdout.line!(Str.inspect(question_postfix(["1", "not a number", "100"])))
-
-	# panic: index out of bounds
-	# print!(for_loop([1,2,3,4,5]))
+	#Stdout.line!(Str.inspect(question_postfix(["1", "not a number", "100"])))
 
 	sum = for_loop([1, 2, 3, 4, 5])
 	print!(sum)
