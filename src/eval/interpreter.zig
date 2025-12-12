@@ -12547,6 +12547,22 @@ pub const Interpreter = struct {
                     .expected_rt_var = cond_rt_var,
                 } });
             },
+            .s_type_var_alias => {
+                // Type var alias is a compile-time construct, no runtime effect
+                // Just continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    // Evaluate final expression
+                    const final_ct_var = can.ModuleEnv.varFrom(final_expr);
+                    const final_rt_var = try self.translateTypeVar(self.env, final_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = if (expected_rt_var) |e| e else final_rt_var,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
+                }
+            },
             else => {
                 @panic("statement type not yet implemented");
             },
