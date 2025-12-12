@@ -359,3 +359,120 @@ test "nested ZST detection - deeply nested" {
     // Since the entire nested structure is ZST, the list should be list_of_zst
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
 }
+
+test "addTypeVar - flex var with method constraint returning open tag union" {
+    // This test verifies that layout computation handles method constraints
+    // with open tag unions correctly. The scenario is:
+    // 1. Method syntax creates a flex var with a StaticDispatchConstraint
+    // 2. The constraint's fn_var points to: List(a) -> Try(a, [ListWasEmpty, ..others])
+    // 3. The ..others is a flex var extension on the tag union
+    //
+    // The actual fix for List.first() method syntax was in the interpreter
+    // (unifying the method's parameter type with the receiver type), but this
+    // test ensures the layout store handles such types correctly.
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers BEFORE Store.init
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create the element type variable `a` (will be the list element)
+    const elem_var = try lt.type_store.fresh();
+
+    // Create List(a)
+    const list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        elem_var,
+        &[_]types.Var{elem_var},
+        builtin_module_idx,
+        false,
+    );
+    const list_var = try lt.type_store.freshFromContent(list_content);
+
+    // Create [ListWasEmpty, ..others] - open tag union with flex extension
+    const others_flex_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+    const list_was_empty_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("ListWasEmpty")),
+        .args = types.Var.SafeList.Range.empty(),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{list_was_empty_tag});
+    const error_tag_union = types.TagUnion{ .tags = tags_range, .ext = others_flex_var };
+    const error_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = error_tag_union } });
+
+    // Create Try(a, [ListWasEmpty, ..others]) as a nominal type wrapping [Ok(a), Err([ListWasEmpty, ..others])]
+    const ok_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Ok")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{elem_var}),
+    };
+    const err_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Err")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{error_tag_union_var}),
+    };
+    const try_tags_range = try lt.type_store.appendTags(&[_]types.Tag{ ok_tag, err_tag });
+    const try_backing_tag_union = types.TagUnion{
+        .tags = try_tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const try_backing_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = try_backing_tag_union } });
+    const try_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = try_ident_idx },
+        try_backing_var,
+        &[_]types.Var{ elem_var, error_tag_union_var },
+        builtin_module_idx,
+        false,
+    );
+    const try_var = try lt.type_store.freshFromContent(try_content);
+
+    // Create function type: List(a) -> Try(a, [ListWasEmpty, ..others])
+    const fn_content = try lt.type_store.mkFuncPure(&[_]types.Var{list_var}, try_var);
+    const fn_var = try lt.type_store.freshFromContent(fn_content);
+
+    // Create StaticDispatchConstraint for `.first` method
+    const first_constraint = types.StaticDispatchConstraint{
+        .fn_name = first_ident_idx,
+        .fn_var = fn_var,
+        .origin = .method_call,
+    };
+    const constraints_range = try lt.type_store.appendStaticDispatchConstraints(&[_]types.StaticDispatchConstraint{first_constraint});
+
+    // Create flex var with the constraint (this is what method syntax produces)
+    const constrained_flex = try lt.type_store.freshFromContent(.{
+        .flex = types.Flex.init().withConstraints(constraints_range),
+    });
+
+    // Now create a List with this constrained flex element
+    const outer_list_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        constrained_flex,
+        &[_]types.Var{constrained_flex},
+        builtin_module_idx,
+        false,
+    );
+    const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
+
+    // This should NOT cause an infinite loop - should handle the open tag union extension properly
+    const result_idx = try lt.layout_store.addTypeVar(outer_list_var, &lt.type_scope);
+    const result_layout = lt.layout_store.getLayout(result_idx);
+
+    // The list should have a valid layout - either list or list_of_zst
+    // The flex var with a constraint should be treated as ZST (since no from_numeral constraint)
+    try testing.expect(result_layout.tag == .list or result_layout.tag == .list_of_zst);
+
+    // Also test computing layout of the Try return type directly
+    // This is what would happen when evaluating the result of list.first()
+    const try_result_idx = try lt.layout_store.addTypeVar(try_var, &lt.type_scope);
+    const try_result_layout = lt.layout_store.getLayout(try_result_idx);
+    // Try should be a tag_union
+    try testing.expect(try_result_layout.tag == .tag_union);
+}

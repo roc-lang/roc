@@ -947,16 +947,15 @@ pub const Store = struct {
         // We reuse that stack from call to call to avoid reallocating it.
         self.work.clearRetainingCapacity();
 
-        var iterations: u32 = 0;
-        const max_iterations = 10000; // Safety limit to prevent infinite loops
         var layout_idx: Idx = undefined;
 
-        outer: while (true) {
-            iterations += 1;
-            if (iterations > max_iterations) {
-                @panic("Layout computation exceeded iteration limit - possible infinite loop");
-            }
+        // Debug-only: track vars visited via TypeScope lookup to detect cycles.
+        // Cycles in layout computation indicate a bug in type checking - they should
+        // have been detected earlier. In release builds we skip this check entirely.
+        var scope_lookup_visited: if (@import("builtin").mode == .Debug) [32]Var else void = if (@import("builtin").mode == .Debug) undefined else {};
+        var scope_lookup_count: if (@import("builtin").mode == .Debug) u8 else void = if (@import("builtin").mode == .Debug) 0 else {};
 
+        outer: while (true) {
             if (current.desc.content == .structure) {}
 
             var layout = switch (current.desc.content) {
@@ -1388,7 +1387,19 @@ pub const Store = struct {
                 .flex => |flex| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
+                        // Debug-only cycle detection: if we've visited this var before,
+                        // there's a cycle which indicates a bug in type checking.
+                        if (@import("builtin").mode == .Debug) {
+                            for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                if (visited == current.var_) {
+                                    @panic("Cycle detected in layout computation for flex var - this is a type checking bug");
+                                }
+                            }
+                            if (scope_lookup_count < 32) {
+                                scope_lookup_visited[scope_lookup_count] = current.var_;
+                                scope_lookup_count += 1;
+                            }
+                        }
                         current = self.types_store.resolveVar(mapped_var);
                         continue :outer;
                     }
@@ -1413,7 +1424,19 @@ pub const Store = struct {
                 .rigid => |rigid| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
+                        // Debug-only cycle detection: if we've visited this var before,
+                        // there's a cycle which indicates a bug in type checking.
+                        if (@import("builtin").mode == .Debug) {
+                            for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                if (visited == current.var_) {
+                                    @panic("Cycle detected in layout computation for rigid var - this is a type checking bug");
+                                }
+                            }
+                            if (scope_lookup_count < 32) {
+                                scope_lookup_visited[scope_lookup_count] = current.var_;
+                                scope_lookup_count += 1;
+                            }
+                        }
                         current = self.types_store.resolveVar(mapped_var);
                         continue :outer;
                     }

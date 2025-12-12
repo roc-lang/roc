@@ -14965,6 +14965,41 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
 
+                    // Get the method function's type and unify parameter with receiver.
+                    // This properly constrains rigid type variables (like `item` in List.first).
+                    const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const method_lambda_rt_var = try self.translateTypeVar(self.env, method_lambda_ct_var);
+                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+
+                    // Get the function's return type and first parameter for unification
+                    const effective_ret_var: types.Var = blk: {
+                        const func_info = method_resolved.desc.content.unwrapFunc() orelse {
+                            // Fall back to translating from call site if not a function type
+                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                            break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                        };
+
+                        // Unify the method's first parameter with the receiver type
+                        const method_params = self.runtime_types.sliceVars(func_info.args);
+                        if (method_params.len >= 1) {
+                            _ = try unify.unifyWithConf(
+                                self.env,
+                                self.runtime_types,
+                                &self.problems,
+                                &self.snapshots,
+                                &self.type_writer,
+                                &self.unify_scratch,
+                                &self.unify_scratch.occurs_scratch,
+                                method_params[0],
+                                da.receiver_rt_var,
+                                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                            );
+                        }
+
+                        // Now the return type has rigid vars properly substituted
+                        break :blk func_info.ret;
+                    };
+
                     try self.active_closures.append(method_func);
                     try self.bindings.append(.{
                         .pattern_idx = params[0],
@@ -14979,14 +15014,14 @@ pub const Interpreter = struct {
                         .param_count = 1,
                         .has_active_closure = true,
                         .did_instantiate = false,
-                        .call_ret_rt_var = null,
+                        .call_ret_rt_var = effective_ret_var,
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = null,
+                        .expected_rt_var = effective_ret_var,
                     } });
                     return true;
                 }
