@@ -258,10 +258,21 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 },
             } };
         },
-        .statement_var => return CIR.Statement{ .s_var = .{
-            .pattern_idx = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
+        .statement_var => {
+            return CIR.Statement{ .s_var = .{
+                .pattern_idx = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    if (extra_data[0] != 0) {
+                        break :blk @enumFromInt(extra_data[1]);
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_reassign => return CIR.Statement{ .s_reassign = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
@@ -1389,9 +1400,18 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_3 = extra_data_start;
         },
         .s_var => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
             node.tag = .statement_var;
             node.data_1 = @intFromEnum(s.pattern_idx);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;

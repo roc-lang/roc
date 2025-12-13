@@ -8923,6 +8923,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
                 .pattern_idx = pattern_idx,
                 .expr = expr.idx,
+                .anno = null,
             } }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
@@ -9282,6 +9283,115 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                     else => {},
                                 }
                                 break :create_new new_pattern_idx;
+                            };
+
+                            // Create the e_anno_only expression
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                            // Create the annotation structure
+                            const annotation = CIR.Annotation{
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Add the decl as a def so it gets included in all_defs
+                            const def_idx = try self.env.addDef(.{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            }, region);
+                            try self.env.store.addScratchDef(def_idx);
+
+                            // Create the statement
+                            const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .anno = annotation_idx,
+                            } }, region);
+                            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+                            stmts_processed = .one;
+                        }
+                    },
+                    .@"var" => |var_stmt| {
+                        // Check if the var name matches the anno name
+                        const names_match = if (self.parse_ir.tokens.resolveIdentifier(var_stmt.name)) |var_ident|
+                            name_ident.idx == var_ident.idx
+                        else
+                            false;
+
+                        if (names_match) {
+                            // Names match - process the var with the annotation attached
+                            const var_region = self.parse_ir.tokenizedRegionToRegion(var_stmt.region);
+
+                            // Canonicalize the initial value
+                            const expr = try self.canonicalizeExprOrMalformed(var_stmt.body);
+
+                            // Create pattern for the var
+                            const pattern_idx = try self.env.addPattern(
+                                Pattern{ .assign = .{ .ident = name_ident } },
+                                var_region,
+                            );
+
+                            // Introduce the var with function boundary tracking
+                            _ = try self.scopeIntroduceVar(name_ident, pattern_idx, var_region, true, Pattern.Idx);
+
+                            // Create the annotation structure
+                            const annotation = CIR.Annotation{
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Create var statement with annotation
+                            const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
+                                .pattern_idx = pattern_idx,
+                                .expr = expr.idx,
+                                .anno = annotation_idx,
+                            } }, var_region);
+
+                            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+                            stmts_processed = .two;
+                        } else {
+                            // Names don't match - create anno-only def for this anno
+                            // and let the var be processed separately in the next iteration
+
+                            // Check if a placeholder already exists (from Phase 1.5.5)
+                            const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check_var: {
+                                // Reuse the existing placeholder pattern
+                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                const existing_pattern = current_scope.idents.get(name_ident) orelse {
+                                    const pattern = Pattern{
+                                        .assign = .{
+                                            .ident = name_ident,
+                                        },
+                                    };
+                                    break :placeholder_check_var try self.env.addPattern(pattern, region);
+                                };
+                                _ = self.placeholder_idents.remove(name_ident);
+                                break :placeholder_check_var existing_pattern;
+                            } else create_new_var: {
+                                const pattern = Pattern{
+                                    .assign = .{
+                                        .ident = name_ident,
+                                    },
+                                };
+                                const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+                                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+                                    .success => {},
+                                    .shadowing_warning => |shadowed_pattern_idx| {
+                                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                            .ident = name_ident,
+                                            .region = region,
+                                            .original_region = original_region,
+                                        } });
+                                    },
+                                    else => {},
+                                }
+                                break :create_new_var new_pattern_idx;
                             };
 
                             // Create the e_anno_only expression
