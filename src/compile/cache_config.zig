@@ -225,4 +225,3 @@ pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
     const version_info = build_options.compiler_version;
     return allocator.dupe(u8, version_info);
 }
-

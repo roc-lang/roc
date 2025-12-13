@@ -19,6 +19,7 @@ pub const CacheManager = manager.CacheManager;
 pub const CacheResult = manager.CacheResult;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
+/// Cache cleanup utilities for managing temporary and persistent cache files.
 pub const CacheCleanup = cleanup;
 pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
