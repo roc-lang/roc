@@ -171,7 +171,13 @@ pub const Generalizer = struct {
         // Copy all variables at this rank into the temporary pool, resolving redirects
         for (vars_to_generalize) |var_| {
             const resolved = self.store.resolveVar(var_);
-            try self.tmp_var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+            // Cap the rank at rank_to_generalize. If the resolved variable has a higher
+            // rank than what we're generalizing, this can happen when a variable is
+            // redirected (via setVarRedirect) to a higher-rank variable after being
+            // added to the var_pool. We handle this by treating it as if it's at the
+            // current rank - it will be properly handled during rank adjustment.
+            const effective_rank = resolved.desc.rank.min(rank_to_generalize);
+            try self.tmp_var_pool.addVarToRank(resolved.var_, effective_rank);
             try self.vars_to_generalized.put(resolved.var_, {});
         }
 
