@@ -1426,3 +1426,26 @@ test "for loop element type extracted from list runtime type - regression #8664"
         \\}
     , "3.0", .no_trace);
 }
+
+test "record destructuring with assignment - regression" {
+    // Regression test for GitHub issue #8647
+    // Record destructuring should not cause TypeMismatch error during evaluation
+    try runExpectInt(
+        \\{
+        \\    rec = { x: 1, y: 2 }
+        \\    { x, y } = rec
+        \\    x + y
+        \\}
+    , 3, .no_trace);
+}
+
+test "record field access - regression 8647" {
+    // Regression test for GitHub issue #8647
+    // Record field access should work properly
+    try runExpectStr(
+        \\{
+        \\    rec = { name: "test" }
+        \\    rec.name
+        \\}
+    , "test", .no_trace);
+}
