@@ -240,7 +240,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/issue8664.roc",
-        .io_spec = "1>num: 8|1>num: 7|1>result: 7",
+        .io_spec = "1>num: 8.0|1>num: 7.0|1>result: 7.0",
         .description = "Regression test: Issue #8664 - InvalidMethodReceiver when calling methods on elements from untyped list parameter",
     },
 };

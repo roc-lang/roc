@@ -17,7 +17,7 @@ calc = |line| {
 }
 
 main! = || {
-    line = [8i64, 7i64, 6i64]
+    line = [8, 7, 6]
     num = calc(line)
     Stdout.line!("result: ${num.to_str()}")
 }
