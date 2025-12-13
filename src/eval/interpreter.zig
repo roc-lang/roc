@@ -45,6 +45,61 @@ const RefcountContext = struct {
     roc_ops: *RocOps,
 };
 
+/// Check if a layout contains any refcounted data (directly or transitively).
+/// This is more comprehensive than Layout.isRefcounted() which only checks if
+/// the layout itself is heap-allocated. This function also returns true for
+/// tuples/records that contain strings, lists, or boxes.
+fn layoutContainsRefcounted(l: Layout, layout_store: *layout.Store) bool {
+    return switch (l.tag) {
+        .scalar => switch (l.data.scalar.tag) {
+            .str => true,
+            else => false,
+        },
+        .list, .list_of_zst => true,
+        .box, .box_of_zst => true,
+        .tuple => {
+            const tuple_data = layout_store.getTupleData(l.data.tuple.idx);
+            const fields = layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+            for (0..fields.len) |i| {
+                const field_layout = layout_store.getLayout(fields.get(i).layout);
+                if (layoutContainsRefcounted(field_layout, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .record => {
+            const record_data = layout_store.getRecordData(l.data.record.idx);
+            const fields = layout_store.record_fields.sliceRange(record_data.getFields());
+            for (0..fields.len) |i| {
+                const field_layout = layout_store.getLayout(fields.get(i).layout);
+                if (layoutContainsRefcounted(field_layout, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .tag_union => {
+            const tu_data = layout_store.getTagUnionData(l.data.tag_union.idx);
+            const variants = layout_store.getTagUnionVariants(tu_data);
+            for (0..variants.len) |i| {
+                const variant_layout = layout_store.getLayout(variants.get(i).payload_layout);
+                if (layoutContainsRefcounted(variant_layout, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .closure => {
+            // Closures capture variables which may be refcounted
+            // TODO: Check the captures layout for refcounted data
+            // For now, assume closures may contain refcounted data
+            return true;
+        },
+        .zst => false,
+    };
+}
+
 /// Increment callback for list operations - increments refcount of element via StackValue
 fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
     const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
@@ -2643,8 +2698,10 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                // Determine if elements contain refcounted data (directly or transitively).
+                // This is more comprehensive than isRefcounted() - it also catches tuples/records
+                // containing strings, which need proper refcounting (fixes issue #8650).
+                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
 
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique()) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
