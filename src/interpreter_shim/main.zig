@@ -688,8 +688,15 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         };
     }
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
+    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
+        return error.InterpreterSetupFailed;
+    };
+
+    // Setup for-clause type mappings from platform to app.
+    // This maps rigid variable names (like "model") to their concrete app types.
+    interpreter.setupForClauseTypeMappings(env_ptr) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
         return error.InterpreterSetupFailed;
     };
 

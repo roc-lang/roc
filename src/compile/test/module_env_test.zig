@@ -97,6 +97,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,
         .requires_types = deserialized_ptr.requires_types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .builtin_statements = deserialized_ptr.builtin_statements,
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .imports = (try deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc)).*,
@@ -109,6 +110,7 @@ test "ModuleEnv.Serialized roundtrip" {
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
         .method_idents = deserialized_ptr.method_idents.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
     // Verify original data before serialization was correct

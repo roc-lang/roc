@@ -325,20 +325,28 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
     // This ensures host exports (init, handleEvent, update) aren't stripped even when
     // not referenced by other code
     const is_wasm = config.target_format == .wasm;
+    const is_macos = target_os == .macos;
     if (is_wasm and config.platform_files_pre.len > 0) {
         try args.append("--whole-archive");
     }
 
     // Add platform-provided files that come before object files
-    // Use --whole-archive to include all members from static libraries (e.g., libhost.a)
+    // Use --whole-archive (or -all_load on macOS) to include all members from static libraries
     // This ensures host-exported functions like init, handleEvent, update are included
     // even though they're not referenced by the Roc app's compiled code
     if (config.platform_files_pre.len > 0) {
-        try args.append("--whole-archive");
+        if (is_macos) {
+            // macOS uses -all_load to include all members from static libraries
+            try args.append("-all_load");
+        } else {
+            try args.append("--whole-archive");
+        }
         for (config.platform_files_pre) |platform_file| {
             try args.append(platform_file);
         }
-        try args.append("--no-whole-archive");
+        if (!is_macos) {
+            try args.append("--no-whole-archive");
+        }
     }
 
     // Add object files (Roc shim libraries - don't need --whole-archive)
@@ -349,11 +357,17 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
     // Add platform-provided files that come after object files
     // Also use --whole-archive in case there are static libs here too
     if (config.platform_files_post.len > 0) {
-        try args.append("--whole-archive");
+        if (is_macos) {
+            try args.append("-all_load");
+        } else {
+            try args.append("--whole-archive");
+        }
         for (config.platform_files_post) |platform_file| {
             try args.append(platform_file);
         }
-        try args.append("--no-whole-archive");
+        if (!is_macos) {
+            try args.append("--no-whole-archive");
+        }
     }
 
     // Add any extra arguments

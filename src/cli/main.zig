@@ -2006,6 +2006,23 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
             if (app_env.common.findIdent(platform_ident_text)) |app_ident| {
                 try platform_to_app_idents.put(required_type.ident, app_ident);
             }
+
+            // Also add for-clause type alias names (Model, model) to the translation map
+            const all_aliases = penv.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                // Add alias name (e.g., "Model") - must exist in app since it's required
+                const alias_name_text = penv.getIdent(alias.alias_name);
+                if (app_env.common.findIdent(alias_name_text)) |app_ident| {
+                    try platform_to_app_idents.put(alias.alias_name, app_ident);
+                }
+                // Add rigid name (e.g., "model") - insert it into app's ident store since
+                // the rigid name is a platform concept that gets copied during type processing.
+                // Using insert (not find) ensures the app's ident store has this name for later lookups.
+                const rigid_name_text = penv.getIdent(alias.rigid_name);
+                const app_ident = try app_env.common.insertIdent(allocs.gpa, base.Ident.for_text(rigid_name_text));
+                try platform_to_app_idents.put(alias.rigid_name, app_ident);
+            }
         }
 
         try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);

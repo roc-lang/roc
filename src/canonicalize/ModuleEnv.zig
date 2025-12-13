@@ -403,10 +403,17 @@ all_defs: CIR.Def.Span,
 all_statements: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
-/// Required type signatures for platform modules (from `requires {} { main! : () => {} }`)
+/// Required type signatures for platform modules (from `requires { main! : () => {} }`)
 /// Maps identifier names to their expected type annotations.
 /// Empty for non-platform modules.
 requires_types: RequiredType.SafeList,
+/// Type alias mappings from for-clauses in requires declarations.
+/// Stores (alias_name, rigid_name) pairs like (Model, model).
+for_clause_aliases: ForClauseAlias.SafeList,
+/// Rigid type variable mappings from platform for-clause after unification.
+/// Maps rigid names (e.g., "model") to their resolved type variables in the app's type store.
+/// Populated during checkPlatformRequirements when the platform has a for-clause.
+rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, TypeVar),
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
@@ -457,6 +464,19 @@ pub const DeferredNumericLiteral = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A type alias mapping from a for-clause: [Model : model]
+/// Maps an alias name (Model) to a rigid variable name (model)
+pub const ForClauseAlias = struct {
+    /// The alias name (e.g., "Model") - to be looked up in the app
+    alias_name: Ident.Idx,
+    /// The rigid variable name (e.g., "model") - the rigid in the required type
+    rigid_name: Ident.Idx,
+    /// The type annotation index of the rigid_var for this alias
+    rigid_anno_idx: CIR.TypeAnno.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Required type for platform modules - maps an identifier to its expected type annotation.
 /// Used to enforce that apps provide values matching the platform's required types.
 pub const RequiredType = struct {
@@ -466,6 +486,9 @@ pub const RequiredType = struct {
     type_anno: CIR.TypeAnno.Idx,
     /// Region of the requirement for error reporting
     region: Region,
+    /// Type alias mappings from the for-clause (e.g., [Model : model])
+    /// These specify which app type aliases should be substituted for which rigids
+    type_aliases: ForClauseAlias.SafeList.Range,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -478,6 +501,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.requires_types.relocate(offset);
+    self.for_clause_aliases.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
@@ -534,6 +558,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
+        .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
+        .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
@@ -555,6 +581,8 @@ pub fn deinit(self: *Self) void {
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
+    self.for_clause_aliases.deinit(self.gpa);
+    self.rigid_vars.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
@@ -1953,6 +1981,7 @@ pub const Serialized = extern struct {
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
+    for_clause_aliases: ForClauseAlias.SafeList.Serialized,
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
@@ -1986,6 +2015,7 @@ pub const Serialized = extern struct {
         self.builtin_statements = env.builtin_statements;
 
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
+        try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -2045,6 +2075,7 @@ pub const Serialized = extern struct {
             .all_statements = self.all_statements,
             .exports = self.exports,
             .requires_types = self.requires_types.deserialize(offset).*,
+            .for_clause_aliases = self.for_clause_aliases.deserialize(offset).*,
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = (try self.imports.deserialize(offset, gpa)).*,
@@ -2057,6 +2088,7 @@ pub const Serialized = extern struct {
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserialize(offset).*,
+            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
         return env;

@@ -1,5 +1,11 @@
 platform ""
-    requires { model } { init : {} -> model, update : model, I64 -> model, render : model -> I64 }
+    requires {
+        [Model : model] for main : {} -> {
+            init : {} -> model,
+            update : model, I64 -> model,
+            render : model -> I64
+        }
+    }
     exposes []
     packages {}
     provides { init_for_host: "init", update_for_host: "update", render_for_host: "render" }
@@ -15,21 +21,27 @@ platform ""
         }
     }
 
-# Returns Box(model) - this works (return value)
+# Explicit type annotations for host-facing functions
 init_for_host : {} -> Box(model)
-init_for_host = |{}| Box.box(init({}))
+init_for_host = |{}| {
+    callbacks = main({})
+    init_fn = callbacks.init
+    record = init_fn({})
+    Box.box(record)
+}
 
-# Takes Box(model) as parameter - this should trigger the bug
-# Also takes I64 which host can provide
 update_for_host : Box(model), I64 -> Box(model)
 update_for_host = |boxed_model, value| {
     m = Box.unbox(boxed_model)
-    Box.box(update(m, value))
+    callbacks = main({})
+    update_fn = callbacks.update
+    Box.box(update_fn(m, value))
 }
 
-# Takes Box(model) as parameter, returns I64 for host verification
 render_for_host : Box(model) -> I64
 render_for_host = |boxed_model| {
     m = Box.unbox(boxed_model)
-    render(m)
+    callbacks = main({})
+    render_fn = callbacks.render
+    render_fn(m)
 }

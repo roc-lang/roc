@@ -1077,6 +1077,17 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const requires_types_slice = self.cir.requires_types.items.items;
     for (requires_types_slice) |required_type| {
+        // First, process any for-clause rigids for this required type.
+        // These are standalone rigid_var annotations introduced by the for-clause
+        // that are referenced by the main type but not part of its annotation tree.
+        // We process them first so they're properly initialized before the main type.
+        const type_aliases_range = required_type.type_aliases;
+        const all_aliases = self.cir.for_clause_aliases.items.items;
+        const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
+        for (type_aliases_slice) |alias| {
+            try self.generateAnnoTypeInPlace(alias.rigid_anno_idx, env, .annotation);
+        }
+
         // Generate the type from the annotation
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
     }
@@ -1135,15 +1146,82 @@ pub fn checkPlatformRequirements(
             const copied_required_var = try self.copyVar(required_type_var, platform_env, required_type.region);
 
             // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
-            const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
+            // Use instantiateVarPreserveRigids so that rigid type variables from the for-clause
+            // remain as rigids and can be looked up by name during interpretation.
+            const instantiated_required_var = try self.instantiateVarPreserveRigids(copied_required_var, &env, .{ .explicit = required_type.region });
+
+            // Extract rigid name -> instantiated var mappings from the var_map.
+            // At this point, fresh vars still have rigid content with their names.
+            // After unification, these vars will redirect to concrete types.
+            // This allows the interpreter to substitute platform rigid type vars with app concrete types.
+            var var_map_iter = self.var_map.iterator();
+            while (var_map_iter.next()) |entry| {
+                const fresh_var = entry.value_ptr.*;
+                const resolved = self.types.resolveVar(fresh_var);
+                switch (resolved.desc.content) {
+                    .rigid => |rigid| {
+                        // Store the rigid name -> instantiated var mapping in the app's module env
+                        try self.cir.rigid_vars.put(self.gpa, rigid.name, fresh_var);
+                    },
+                    else => {},
+                }
+            }
+
+            // For each for-clause type alias (e.g., [Model : model]), look up the app's
+            // corresponding type alias and unify it with the rigid type variable.
+            // This substitutes concrete app types for platform rigid type variables.
+            const type_aliases_range = required_type.type_aliases;
+            const all_aliases = platform_env.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
+            for (type_aliases_slice) |alias| {
+                // Translate the platform's alias name to the app's namespace
+                const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse continue;
+
+                // Look up the rigid var we stored earlier.
+                // rigid_vars is keyed by the APP's ident index (the rigid name was translated when copied),
+                // so we translate the platform's rigid_name to the app's ident space using the pre-built map.
+                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
+                const rigid_var = self.cir.rigid_vars.get(app_rigid_name) orelse continue;
+
+                // Look up the app's type alias body (the underlying type, not the alias wrapper)
+                const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse continue;
+
+                // Redirect the rigid var to the app's type alias body.
+                // This substitutes the concrete app type for the platform's rigid type variable.
+                // We use redirect instead of unify because rigids can't be unified with concrete types.
+                try self.types.setVarRedirect(rigid_var, app_type_var);
+            }
 
             // Unify the platform's required type with the app's export type.
             // This constrains type variables in the export (e.g., closure params)
-            // to match the platform's expected types.
+            // to match the platform's expected types. After this, the fresh vars
+            // stored in rigid_vars will redirect to the concrete app types.
             _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }
+}
+
+/// Find a type alias declaration by name and return the var for its underlying type.
+/// This returns the var for the alias's body (e.g., for `Model : { value: I64 }` returns the var for `{ value: I64 }`),
+/// not the var for the alias declaration itself.
+/// Returns null if no type alias declaration with the given name is found.
+fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
+    const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
+    for (stmts_slice) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_alias_decl => |alias| {
+                const header = self.cir.store.getTypeHeader(alias.header);
+                if (header.relative_name == name) {
+                    // Return the var for the alias body annotation, not the statement
+                    return ModuleEnv.varFrom(alias.anno);
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 // repl //

@@ -223,6 +223,11 @@ pub const Interpreter = struct {
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
+    // Rigid name substitution for platform-app type variable mappings
+    // Maps rigid ident names (in runtime ident store) to concrete runtime type vars
+    // Maps rigid variable name string indices to concrete runtime type vars.
+    // Keyed by the raw string index (u29) to ignore attribute differences.
+    rigid_name_subst: std.AutoHashMap(u29, types.Var),
     // Compile-time rigid substitution for nominal type backing translation
     // Maps CT rigid vars in backing type to CT type arg vars
     translate_rigid_subst: std.AutoHashMap(types.Var, types.Var),
@@ -414,6 +419,7 @@ pub const Interpreter = struct {
             .translate_cache = std.AutoHashMap(ModuleVarKey, CacheEntry).init(allocator),
             .translation_in_progress = std.AutoHashMap(ModuleVarKey, void).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .rigid_name_subst = std.AutoHashMap(u29, types.Var).init(allocator),
             .translate_rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_context_generation = 0,
@@ -535,6 +541,72 @@ pub const Interpreter = struct {
         return result;
     }
 
+    /// Setup for-clause type mappings from the platform's required types.
+    /// This maps rigid variable names (like "model") to their concrete app types (like { value: I64 }).
+    pub fn setupForClauseTypeMappings(self: *Interpreter, platform_env: *const can.ModuleEnv) Error!void {
+        const app_env = self.app_env orelse return;
+
+        // Get the platform's for_clause_aliases
+        const all_aliases = platform_env.for_clause_aliases.items.items;
+        if (all_aliases.len == 0) return;
+
+        // Iterate through all required types and their for-clause aliases
+        const requires_types_slice = platform_env.requires_types.items.items;
+        for (requires_types_slice) |required_type| {
+            // Get the type aliases for this required type
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+
+            for (type_aliases_slice) |alias| {
+                // Get the alias name (e.g., "Model") - translate to app's ident store
+                const alias_name_str = platform_env.getIdent(alias.alias_name);
+                // Use insertIdent (not findIdent) to translate the platform ident to app ident
+                const app_alias_ident = @constCast(app_env).common.insertIdent(self.allocator, base_pkg.Ident.for_text(alias_name_str)) catch continue;
+
+                // Get the rigid name (e.g., "model") - insert into runtime ident store
+                const rigid_name_str = platform_env.getIdent(alias.rigid_name);
+                const rt_rigid_name = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(rigid_name_str)) catch continue;
+
+                // Find the app's type alias definition and get its underlying type var
+                const app_type_var = findTypeAliasBodyVar(app_env, app_alias_ident) orelse continue;
+
+                // Translate the app's type variable to a runtime type variable
+                const app_rt_var = self.translateTypeVar(@constCast(app_env), app_type_var) catch continue;
+
+                // Add the mapping: rigid_name -> app's concrete type
+                // Use just the string index (u29), ignoring attributes
+                self.rigid_name_subst.put(rt_rigid_name.idx, app_rt_var) catch continue;
+            }
+        }
+
+        // CRITICAL: Clear the translate_cache after adding for-clause mappings.
+        // During the translations above, the platform's rigid type vars (like `model`)
+        // may have been cached before their mappings were established. Clear the cache
+        // so that subsequent translations will pick up the for-clause mappings.
+        self.translate_cache.clearRetainingCapacity();
+        // Also clear the var_to_layout_slot cache
+        @memset(self.var_to_layout_slot.items, 0);
+    }
+
+    /// Find a type alias declaration by name in a module and return the var for its underlying type.
+    /// Returns null if no type alias declaration with the given name is found.
+    fn findTypeAliasBodyVar(module: *const can.ModuleEnv, name: base_pkg.Ident.Idx) ?types.Var {
+        const stmts_slice = module.store.sliceStatements(module.all_statements);
+        for (stmts_slice) |stmt_idx| {
+            const stmt = module.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl => |alias_decl| {
+                    const header = module.store.getTypeHeader(alias_decl.header);
+                    if (header.relative_name == name) {
+                        // Return the var for the alias body annotation
+                        return can.ModuleEnv.varFrom(alias_decl.anno);
+                    }
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
     /// Evaluates a Roc expression and returns the result.
     pub fn eval(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
         // Clear flex_type_context at the start of each top-level evaluation.
@@ -654,6 +726,13 @@ pub const Interpreter = struct {
                     if (!matched) {
                         @panic("TypeMismatch at patternMatchesBind line 664");
                     }
+                    // Decref refcounted argument values (lists, strings) after binding.
+                    // patternMatchesBind made copies, so we need to decref the originals.
+                    // EXCEPT: Don't decref Box types because that zeros the slot in host memory.
+                    // The host owns box slots and will manage them.
+                    if (arg_value.layout.tag != .box and arg_value.layout.tag != .box_of_zst) {
+                        arg_value.decref(&self.runtime_layout_store, roc_ops);
+                    }
                 }
             }
 
@@ -665,9 +744,6 @@ pub const Interpreter = struct {
                 }
                 temp_binds.items.len = 0;
             }
-
-            // Decref args after body evaluation (caller transfers ownership)
-            defer if (params.len > 0) args_tuple_value.decref(&self.runtime_layout_store, roc_ops);
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
@@ -7599,6 +7675,7 @@ pub const Interpreter = struct {
         self.translate_cache.deinit();
         self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
+        self.rigid_name_subst.deinit();
         self.translate_rigid_subst.deinit();
         self.flex_type_context.deinit();
         var it = self.poly_cache.iterator();
@@ -8150,9 +8227,18 @@ pub const Interpreter = struct {
         // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
         var count: u32 = 0;
         while (resolved.desc.content == .rigid) {
+            const rigid_name = resolved.desc.content.rigid.name;
+            // First check rigid_subst (by type variable)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 count += 1;
                 std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
+                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
+                // Fall back to rigid_name_subst (by string index) - used for for-clause type mappings
+                // Also add this to rigid_subst for faster future lookups
+                self.rigid_subst.put(resolved.var_, substituted_var) catch {};
+                count += 1;
+                std.debug.assert(count < 1000);
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -8898,6 +8984,17 @@ pub const Interpreter = struct {
                 .rigid => |rigid| {
                     // Check if this rigid should be substituted (during nominal type backing translation)
                     if (self.translate_rigid_subst.get(resolved.var_)) |substitute_var| {
+                        // Check if the substitute_var is itself a rigid with a for-clause mapping
+                        const sub_resolved = module.types.resolveVar(substitute_var);
+                        if (sub_resolved.desc.content == .rigid) {
+                            const sub_rigid = sub_resolved.desc.content.rigid;
+                            const sub_name_str = module.getIdent(sub_rigid.name);
+                            const sub_rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(sub_name_str));
+                            if (self.rigid_name_subst.get(sub_rt_name.idx)) |for_clause_var| {
+                                // Use the for-clause mapping instead
+                                break :blk for_clause_var;
+                            }
+                        }
                         // Translate the substitute type instead of the rigid
                         break :blk try self.translateTypeVar(module, substitute_var);
                     }
@@ -8936,7 +9033,22 @@ pub const Interpreter = struct {
                     };
 
                     const content: types.Content = .{ .rigid = rt_rigid };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    const rt_rigid_var = try self.runtime_types.freshFromContent(content);
+
+                    // If there's a for-clause mapping for this rigid name, add it to empty_scope
+                    // so the layout store can find it during Box/List layout computation
+                    if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
+                        // Ensure we have at least one scope level
+                        if (self.empty_scope.scopes.items.len == 0) {
+                            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                        }
+                        // Add the mapping to empty_scope
+                        try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                        // Also add to rigid_subst for consistency
+                        try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
+                    }
+
+                    break :blk rt_rigid_var;
                 },
                 .err => {
                     // Handle generic type parameters from compiled builtin modules.
@@ -9951,9 +10063,6 @@ pub const Interpreter = struct {
             switch (work_item) {
                 .eval_expr => |eval_item| {
                     self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops) catch |err| {
-                        if (err == error.TypeMismatch) {
-                            @panic("TypeMismatch from scheduleExprEval");
-                        }
                         return err;
                     };
                 },
@@ -11280,7 +11389,7 @@ pub const Interpreter = struct {
 
                 // Check if this is an error expression that shouldn't be called
                 if (func_expr_check == .e_runtime_error or func_expr_check == .e_anno_only or func_expr_check == .e_crash) {
-                    @panic("TypeMismatch: func is error/anno_only/crash");
+                    return error.TypeMismatch;
                 }
 
                 // Get function type and potentially instantiate
@@ -14964,8 +15073,16 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
 
+                    // Translate field name from compile-time ident store to runtime ident store.
+                    // The field name in da.field_name is from self.env's ident store, but the
+                    // record layout was built with runtime ident store field names.
+                    const ct_field_name_str = self.env.getIdent(da.field_name);
+                    const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
+
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
+                    const field_idx = accessor.findFieldIndex(rt_field_name) orelse {
+                        return error.TypeMismatch;
+                    };
 
                     // Get the field's rt_var from the receiver's record type
                     const receiver_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
@@ -14981,7 +15098,8 @@ pub const Interpreter = struct {
                             var i: usize = 0;
                             while (i < fields.len) : (i += 1) {
                                 const f = fields.get(i);
-                                if (f.name == da.field_name) {
+                                // Use translated field name for comparison (both are in runtime ident store)
+                                if (f.name == rt_field_name) {
                                     break :blk f.var_;
                                 }
                             }
@@ -15111,7 +15229,6 @@ pub const Interpreter = struct {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.InvalidMethodReceiver;
                 }
-
 
                 // Handle Box.box intrinsic - must intercept before resolveMethodFunction
                 // since Box.box has no implementation body

@@ -1780,10 +1780,10 @@ pub fn canonicalizeFile(
             // These need to be in the exposed scope so they become exports
             // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
             try self.addPlatformProvidesItems(h.provides);
-            // Extract required type signatures for type checking
+            // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
-            // Pass requires_rigids so R1, R2, etc. are in scope when processing signatures
-            try self.processRequiresSignatures(h.requires_rigids, h.requires_signatures);
+            // Also introduces type aliases (like Model) into the platform's top-level scope
+            try self.processRequiresEntries(h.requires_entries);
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -2722,83 +2722,94 @@ fn addPlatformProvidesItems(
     }
 }
 
-/// Process the requires_signatures from a platform header.
+/// Process the requires entries from a platform header using the new for-clause syntax.
 ///
-/// This extracts the required type signatures (like `main! : () => {}`) from the platform
-/// header and stores them in `env.requires_types`. These are used during app type checking
-/// to ensure the app's provided values match the platform's expected types.
+/// This extracts the required type signatures from the platform header and stores them
+/// in `env.requires_types`. These are used during app type checking to ensure the app's
+/// provided values match the platform's expected types.
 ///
-/// The requires_rigids parameter contains the type variables declared in `requires { R1, R2 }`.
-/// These are introduced into scope before processing the signatures so that references to
-/// R1, R2, etc. in the signatures are properly resolved as type variables.
+/// The new syntax is: requires { [Model : model] for main : () -> { init : ... } }
 ///
-/// Note: Required identifiers (like `main!`) are NOT introduced into scope here. Instead,
-/// when an identifier is looked up and not found, we check env.requires_types to see if it's
-/// a required identifier from the platform. This avoids conflicts with local definitions.
-fn processRequiresSignatures(self: *Self, requires_rigids_idx: AST.Collection.Idx, requires_signatures_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
-    // Enter a type var scope for the rigids - they should only be in scope while processing signatures
-    const type_var_scope = self.scopeEnterTypeVar();
-    defer self.scopeExitTypeVar(type_var_scope);
+/// For each requires entry, this function:
+/// 1. Introduces the rigid type variables (e.g., `model`) into a temporary scope
+/// 2. Creates aliases (e.g., `Model`) that refer to the SAME type annotation as the rigid
+/// 3. Canonicalizes the entrypoint type annotation with rigids in scope
+/// 4. Stores the required type for type checking
+///
+/// IMPORTANT: Both the rigid (`model`) and the alias (`Model`) point to the SAME
+/// type annotation. This ensures that when the type is unified, both names resolve
+/// to the same concrete type.
+fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span) std.mem.Allocator.Error!void {
+    for (self.parse_ir.store.requiresEntrySlice(requires_entries)) |entry_idx| {
+        const entry = self.parse_ir.store.getRequiresEntry(entry_idx);
+        const entry_region = self.parse_ir.tokenizedRegionToRegion(entry.region);
 
-    // First, process the requires_rigids to add them to the type variable scope
-    // This allows R1, R2, etc. to be recognized when processing the signatures
-    const rigids_collection = self.parse_ir.store.getCollection(requires_rigids_idx);
-    for (self.parse_ir.store.exposedItemSlice(.{ .span = rigids_collection.span })) |exposed_idx| {
-        const exposed_item = self.parse_ir.store.getExposedItem(exposed_idx);
-        switch (exposed_item) {
-            .upper_ident => |upper| {
-                // Get the identifier for this rigid type variable (e.g., "R1")
-                const rigid_name = self.parse_ir.tokens.resolveIdentifier(upper.ident) orelse continue;
-                const rigid_region = self.parse_ir.tokenizedRegionToRegion(upper.region);
+        // Enter a type var scope for the rigids in this entry
+        const type_var_scope = self.scopeEnterTypeVar();
+        defer self.scopeExitTypeVar(type_var_scope);
 
-                // Create a type annotation for this rigid variable
-                const rigid_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
-                    .name = rigid_name,
-                } }, rigid_region);
+        // Record start of type aliases for this entry
+        const type_aliases_start = self.env.for_clause_aliases.len();
 
-                // Introduce it into the type variable scope
-                _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
-            },
-            else => {
-                // Skip lower_ident, upper_ident_star, malformed - these aren't valid for requires rigids
-            },
+        // Process type aliases: [Model : model, Foo : foo]
+        // For each alias:
+        // 1. Create a SINGLE type annotation for the rigid
+        // 2. Introduce BOTH the rigid name (model) AND the alias name (Model)
+        //    pointing to the SAME type annotation
+        // 3. Store the alias mapping for later use during type checking
+        for (self.parse_ir.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
+            const alias = self.parse_ir.store.getForClauseTypeAlias(alias_idx);
+            const alias_region = self.parse_ir.tokenizedRegionToRegion(alias.region);
+
+            // Get the rigid name (lowercase, e.g., "model")
+            const rigid_name = self.parse_ir.tokens.resolveIdentifier(alias.rigid_name) orelse continue;
+
+            // Get the alias name (uppercase, e.g., "Model")
+            const alias_name = self.parse_ir.tokens.resolveIdentifier(alias.alias_name) orelse continue;
+
+            // Create a SINGLE type annotation for this rigid variable
+            // IMPORTANT: We use the rigid_name in the annotation, but introduce it
+            // under BOTH names in the scope
+            const rigid_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                .name = rigid_name,
+            } }, alias_region);
+
+            // Introduce the rigid (model) into the type variable scope
+            _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
+
+            // Introduce the alias (Model) pointing to the SAME type annotation
+            // This means both "model" and "Model" will resolve to the same type!
+            _ = try self.scopeIntroduceTypeVar(alias_name, rigid_anno_idx);
+
+            // Store the alias mapping for use during type checking
+            _ = try self.env.for_clause_aliases.append(self.env.gpa, .{
+                .alias_name = alias_name,
+                .rigid_name = rigid_name,
+                .rigid_anno_idx = rigid_anno_idx,
+            });
         }
-    }
 
-    // Now process the requires_signatures with the rigids in scope
-    const requires_signatures = self.parse_ir.store.getTypeAnno(requires_signatures_idx);
+        // Calculate type aliases range for this entry
+        const type_aliases_end = self.env.for_clause_aliases.len();
+        const type_aliases_range = ModuleEnv.ForClauseAlias.SafeList.Range{
+            .start = @enumFromInt(type_aliases_start),
+            .count = @intCast(type_aliases_end - type_aliases_start),
+        };
 
-    // The requires_signatures should be a record type like { main! : () => {} }
-    switch (requires_signatures) {
-        .record => |record| {
-            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
-                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch |err| switch (err) {
-                    error.MalformedNode => {
-                        // Skip malformed fields
-                        continue;
-                    },
-                };
+        // Get the entrypoint name (e.g., "main")
+        const entrypoint_name = self.parse_ir.tokens.resolveIdentifier(entry.entrypoint_name) orelse continue;
 
-                // Get the field name (e.g., "main!")
-                const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse continue;
-                const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
+        // Canonicalize the type annotation for this entrypoint
+        var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
+        const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
-                // Canonicalize the type annotation for this required identifier
-                var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
-                const type_anno_idx = try self.canonicalizeTypeAnnoHelp(field.ty, &type_anno_ctx);
-
-                // Store the required type in the module env
-                _ = try self.env.requires_types.append(self.env.gpa, .{
-                    .ident = field_name,
-                    .type_anno = type_anno_idx,
-                    .region = field_region,
-                });
-            }
-        },
-        else => {
-            // requires_signatures should always be a record type from parsing
-            // If it's not, just skip processing (parser would have reported an error)
-        },
+        // Store the required type in the module env
+        _ = try self.env.requires_types.append(self.env.gpa, .{
+            .ident = entrypoint_name,
+            .type_anno = type_anno_idx,
+            .region = entry_region,
+            .type_aliases = type_aliases_range,
+        });
     }
 }
 

@@ -128,7 +128,6 @@ fn platform_main() !void {
     success_count += 1;
 
     // Test 2: render takes Box(model), returns I64
-    // This should trigger the TypeMismatch bug if it exists
     try stdout.print("\n=== Test 2: render(Box(model)) -> I64 ===\n", .{});
     var render_result: i64 = undefined;
     roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&render_result)), @as(*anyopaque, @ptrCast(&boxed_model)));
@@ -142,7 +141,6 @@ fn platform_main() !void {
     }
 
     // Test 3: update takes (Box(model), I64), returns Box(model)
-    // This should also trigger the TypeMismatch bug if it exists
     try stdout.print("\n=== Test 3: update(Box(model), 42) -> Box(model) ===\n", .{});
     const UpdateArgs = extern struct { boxed_model: Box, delta: i64 };
     var update_args = UpdateArgs{ .boxed_model = boxed_model, .delta = 42 };
