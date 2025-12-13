@@ -238,6 +238,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<short|1>short|0<|1>",
         .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
+    .{
+        .roc_file = "test/fx/issue8656.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: rank panic when variable redirects to higher-rank variable during generalization",
+    },
 };
 
 /// Get the total number of IO spec tests
