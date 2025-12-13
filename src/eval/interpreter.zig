@@ -11395,15 +11395,27 @@ pub const Interpreter = struct {
 
         var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+
         // If the layout isn't a numeric type (e.g., ZST from unconstrained flex/rigid),
-        // default to Dec since we're evaluating a numeric literal
+        // default to Dec since we're evaluating a numeric literal.
+        // Also update the rt_var to be a concrete Dec type so method dispatch works.
         const is_numeric_layout = layout_val.tag == .scalar and
             (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
-        if (!is_numeric_layout) {
-            layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+        var final_rt_var = layout_rt_var;
+        if (!is_numeric_layout or is_flex_or_rigid) {
+            if (!is_numeric_layout) {
+                layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+            }
+            // Create a proper Dec nominal type for the rt_var
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            final_rt_var = try self.runtime_types.freshFromContent(dec_content);
         }
 
-        var value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
         value.is_initialized = false;
         switch (layout_val.tag) {
             .scalar => switch (layout_val.data.scalar.tag) {
@@ -11487,7 +11499,16 @@ pub const Interpreter = struct {
         };
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete F32 type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const f32_content = try self.mkNumberTypeContentRuntime("F32");
+            break :blk try self.runtime_types.freshFromContent(f32_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
             typed_ptr.* = lit.value;
@@ -11508,7 +11529,16 @@ pub const Interpreter = struct {
         };
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete F64 type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const f64_content = try self.mkNumberTypeContentRuntime("F64");
+            break :blk try self.runtime_types.freshFromContent(f64_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
             typed_ptr.* = lit.value;
@@ -11529,7 +11559,16 @@ pub const Interpreter = struct {
         };
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            break :blk try self.runtime_types.freshFromContent(dec_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
             typed_ptr.* = dec_lit.value;
@@ -11556,7 +11595,16 @@ pub const Interpreter = struct {
             layout_val.data.scalar.tag == .frac and
             layout_val.data.scalar.data.frac == .dec);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            break :blk try self.runtime_types.freshFromContent(dec_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
             const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
@@ -14966,6 +15014,45 @@ pub const Interpreter = struct {
                             const result_val = try self.makeBoolValue(result);
                             try value_stack.push(result_val);
                             return true;
+                        }
+                        // For flex/rigid numeric types with other method calls (like to_str),
+                        // derive the nominal type from the layout
+                        if (receiver_value.layout.tag == .scalar) {
+                            const scalar_tag = receiver_value.layout.data.scalar.tag;
+                            if (scalar_tag == .int) {
+                                const int_info = receiver_value.layout.data.scalar.data.int;
+                                const type_name: []const u8 = switch (int_info) {
+                                    .i8 => "I8",
+                                    .i16 => "I16",
+                                    .i32 => "I32",
+                                    .i64 => "I64",
+                                    .i128 => "I128",
+                                    .u8 => "U8",
+                                    .u16 => "U16",
+                                    .u32 => "U32",
+                                    .u64 => "U64",
+                                    .u128 => "U128",
+                                };
+                                const content = try self.mkNumberTypeContentRuntime(type_name);
+                                const nom = content.structure.nominal_type;
+                                break :blk .{
+                                    .origin = nom.origin_module,
+                                    .ident = nom.ident.ident_idx,
+                                };
+                            } else if (scalar_tag == .frac) {
+                                const frac_info = receiver_value.layout.data.scalar.data.frac;
+                                const type_name: []const u8 = switch (frac_info) {
+                                    .f32 => "F32",
+                                    .f64 => "F64",
+                                    .dec => "Dec",
+                                };
+                                const content = try self.mkNumberTypeContentRuntime(type_name);
+                                const nom = content.structure.nominal_type;
+                                break :blk .{
+                                    .origin = nom.origin_module,
+                                    .ident = nom.ident.ident_idx,
+                                };
+                            }
                         }
                         break :blk null;
                     },
