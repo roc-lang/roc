@@ -93,16 +93,26 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator) CoordinationError!FdInfo {
     };
     defer allocator.free(exe_path);
 
-    // Get the directory containing our executable (should be "roc-tmp-<random>")
+    // Get the directory containing our executable (should be "{temp}/roc/{version}/{random}")
     const exe_dir = std.fs.path.dirname(exe_path) orelse {
         std.log.err("Invalid executable path: no directory component", .{});
         return error.FdInfoReadFailed;
     };
-    const dir_basename = std.fs.path.basename(exe_dir);
 
-    // Verify it has the expected prefix (roc-{pid} or roc-{pid}-{suffix})
-    if (!std.mem.startsWith(u8, dir_basename, "roc-")) {
-        std.log.err("Unexpected directory name: expected 'roc-*', got '{s}'", .{dir_basename});
+    // Verify we're in a roc temp directory structure: {temp}/roc/{version}/{random}
+    // The grandparent of the exe directory should be "roc"
+    const version_dir = std.fs.path.dirname(exe_dir) orelse {
+        std.log.err("Invalid executable path: missing version directory component", .{});
+        return error.FdInfoReadFailed;
+    };
+    const roc_dir = std.fs.path.dirname(version_dir) orelse {
+        std.log.err("Invalid executable path: missing roc directory component", .{});
+        return error.FdInfoReadFailed;
+    };
+    const roc_basename = std.fs.path.basename(roc_dir);
+
+    if (!std.mem.eql(u8, roc_basename, "roc")) {
+        std.log.err("Unexpected directory structure: expected 'roc' grandparent, got '{s}'", .{roc_basename});
         return error.FdInfoReadFailed;
     }
 
