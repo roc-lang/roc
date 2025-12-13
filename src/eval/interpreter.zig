@@ -9330,6 +9330,10 @@ pub const Interpreter = struct {
         /// Negate boolean result on value stack (for != operator).
         negate_bool: void,
 
+        /// Wrap backing expression result with nominal type's rt_var.
+        /// This ensures method dispatch finds the nominal type info.
+        nominal_wrap: NominalWrap,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -9446,6 +9450,12 @@ pub const Interpreter = struct {
 
         /// Return the value on the stack as an early return.
         pub const EarlyReturn = struct {};
+
+        /// Wrap backing expression result with nominal type's rt_var.
+        pub const NominalWrap = struct {
+            /// The nominal type's rt_var to set on the result
+            nominal_rt_var: types.Var,
+        };
 
         pub const TagCollect = struct {
             /// Number of collected payload values on the value stack
@@ -10769,8 +10779,12 @@ pub const Interpreter = struct {
                 // Use expected_rt_var if available - this carries the correctly instantiated type
                 // from the call site (with concrete type args), avoiding re-translation from
                 // the builtins module which would have rigid type args.
-                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
-                    try self.getCanonicalBoolRuntimeVar()
+                //
+                // Also track the outer nominal rt_var so we can wrap the result with it.
+                // This is needed for method dispatch to find methods defined on the nominal type.
+                const BackingInfo = struct { backing: types.Var, nominal: ?types.Var };
+                const backing_info: BackingInfo = if (nom.nominal_type_decl == self.builtins.bool_stmt)
+                    .{ .backing = try self.getCanonicalBoolRuntimeVar(), .nominal = null }
                 else if (expected_rt_var) |expected| blk: {
                     // Use the expected type's backing - but we need to set up rigid substitution
                     // because the backing may still have rigids that need to map to concrete type args
@@ -10816,11 +10830,12 @@ pub const Interpreter = struct {
                                         try self.rigid_subst.put(rigids.items[i], concrete_type);
                                     }
                                 }
-                                break :blk backing;
+                                // Return backing and preserve the nominal type for wrapping
+                                break :blk BackingInfo{ .backing = backing, .nominal = expected };
                             },
-                            else => break :blk expected,
+                            else => break :blk BackingInfo{ .backing = expected, .nominal = null },
                         },
-                        else => break :blk expected,
+                        else => break :blk BackingInfo{ .backing = expected, .nominal = null },
                     }
                 } else blk: {
                     // Fall back to translating from current env
@@ -10829,16 +10844,28 @@ pub const Interpreter = struct {
                     const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
                     break :blk switch (nominal_resolved.desc.content) {
                         .structure => |st| switch (st) {
-                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                            else => nominal_rt_var,
+                            .nominal_type => |nt| BackingInfo{
+                                .backing = self.runtime_types.getNominalBackingVar(nt),
+                                .nominal = nominal_rt_var,
+                            },
+                            else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                         },
-                        else => nominal_rt_var,
+                        else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                     };
                 };
+
+                // If we extracted backing from a nominal, push continuation to wrap result
+                // with the nominal type's rt_var (for method dispatch to find nominal methods)
+                if (backing_info.nominal) |nominal_rt_var| {
+                    try work_stack.push(.{ .apply_continuation = .{ .nominal_wrap = .{
+                        .nominal_rt_var = nominal_rt_var,
+                    } } });
+                }
+
                 // Schedule evaluation of the backing expression
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = nom.backing_expr,
-                    .expected_rt_var = backing_rt_var,
+                    .expected_rt_var = backing_info.backing,
                 } });
             },
 
@@ -16156,6 +16183,17 @@ pub const Interpreter = struct {
                 result.decref(&self.runtime_layout_store, roc_ops);
                 const negated = try self.makeBoolValue(!is_true);
                 try value_stack.push(negated);
+                return true;
+            },
+            .nominal_wrap => |nw| {
+                // Wrap the backing expression result with the nominal type's rt_var.
+                // This ensures method dispatch can find methods defined on the nominal type.
+                var result = value_stack.pop() orelse {
+                    self.triggerCrash("nominal_wrap: expected value on stack", false, roc_ops);
+                    return error.Crash;
+                };
+                result.rt_var = nw.nominal_rt_var;
+                try value_stack.push(result);
                 return true;
             },
         }
