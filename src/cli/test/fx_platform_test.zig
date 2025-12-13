@@ -1149,6 +1149,25 @@ test "fx platform fold_rev static dispatch regression" {
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "Done") != null);
 }
 
+test "fx platform tag pattern in lambda parameter regression" {
+    // Regression test: Tag patterns with arguments in lambda parameters (like |It(val)|)
+    // were causing crashes with "e_lookup_local: definition not found in current scope".
+    // The bug was that the interpreter was directly appending parameter patterns to bindings
+    // instead of using patternMatchesBind, which meant inner variables weren't being bound.
+    //
+    // Example that previously crashed:
+    //   Iter(s) := [It(s)].{
+    //       identity = |It(val)| It(val)  # 'val' was not found
+    //   }
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/tag_pattern_lambda_param.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+}
+
 test "external platform memory alignment regression" {
     // This test verifies that external platforms with the memory alignment fix work correctly.
     // The bug was in roc-platform-template-zig < 0.6 where rocDeallocFn used

@@ -15029,12 +15029,20 @@ pub const Interpreter = struct {
                     };
 
                     try self.active_closures.append(method_func);
-                    try self.bindings.append(.{
-                        .pattern_idx = params[0],
-                        .value = receiver_value,
-                        .expr_idx = null, // expr_idx not used for field access method parameter bindings
-                        .source_env = self.env,
-                    });
+
+                    // Bind receiver using patternMatchesBind to properly handle tag patterns
+                    // (e.g., |Wrap(x)| where we need to bind x, not just the Wrap pattern)
+                    const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+                    if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
+                        // Pattern match failed - cleanup and error
+                        self.env = saved_env;
+                        _ = self.active_closures.pop();
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        return error.TypeMismatch;
+                    }
+                    // Decref the original receiver value since patternMatchesBind made a copy
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
