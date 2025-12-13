@@ -238,6 +238,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<short|1>short|0<|1>",
         .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
+    .{
+        .roc_file = "test/fx/issue8647.roc",
+        .io_spec = "1>test",
+        .description = "Regression test: Record field access should not cause TypeMismatch error during evaluation",
+    },
 };
 
 /// Get the total number of IO spec tests
