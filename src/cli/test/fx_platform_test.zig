@@ -231,6 +231,43 @@ test "fx platform expect with numeric literal" {
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
+test "fx platform all_syntax_test.roc prints expected output" {
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/all_syntax_test.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    const expected_stdout =
+        "Hello, world!\n" ++
+        "Hello, world! (using alias)\n" ++
+        "{ diff: 5, div: 2, div_trunc: 2, eq: False, gt: True, gteq: True, lt: False, lteq: False, neg: -10, neq: True, prod: 50, rem: 0, sum: 15 }\n" ++
+        "{ bool_and_keyword: False, bool_or_keyword: True, not_a: False }\n" ++
+        "\"One Two\"\n" ++
+        "The color is red.\n" ++
+        "78\n" ++
+        "Success\n" ++
+        "Line 1\n" ++
+        "Line 2\n" ++
+        "Line 3\n" ++
+        "Unicode escape sequence: \u{00A0}\n" ++
+        "This is an effectful function!\n" ++
+        "15\n" ++
+        "42\n" ++
+        "NotOneTwo\n" ++
+        "(\"Roc\", 1)\n" ++
+        "Builtin.List.[\"a\", \"b\"]\n" ++
+        "{ age: 31, name: \"Alice\" }\n" ++
+        "{ binary: 5, explicit_dec: 5, explicit_f32: 5, explicit_f64: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
+        "False\n" ++
+        "99\n";
+
+    try testing.expectEqualStrings(expected_stdout, run_result.stdout);
+    try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);
+}
+
 test "fx platform match returning string" {
     // Tests that match expressions with string returns work correctly
     const allocator = testing.allocator;
