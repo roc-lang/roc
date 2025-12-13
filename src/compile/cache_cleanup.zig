@@ -67,6 +67,17 @@ pub fn startBackgroundCleanup(allocator: Allocator) !CleanupThread {
 
 /// Run the full cleanup process (called on background thread).
 fn runCleanup(allocator: Allocator) void {
+    // ---------------------------------------------------------------------------
+    // TODO: REMOVE THIS FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
+    // This is just to clean up people who have old stale Roc caches from before
+    // we restructured the cache directories to use roc/{version}/ structure.
+    // ---------------------------------------------------------------------------
+    cleanupLegacyTempDirs(allocator, null);
+    cleanupLegacyPersistentCache(allocator, null);
+    // ---------------------------------------------------------------------------
+    // END OF LEGACY CLEANUP - REMOVE ABOVE FOR 0.1.0
+    // ---------------------------------------------------------------------------
+
     // Clean up temp directories (5 minute threshold)
     cleanupTempDirs(allocator, null);
 
@@ -266,9 +277,121 @@ pub fn deleteTempDir(allocator: Allocator, temp_dir_path: []const u8) void {
     std.fs.cwd().deleteFile(txt_path) catch {};
 }
 
-// ============================================================================
+// ---------------------------------------------------------------------------
+// LEGACY CLEANUP FUNCTIONS
+// TODO: REMOVE THESE FOR THE 0.1.0 RELEASE - NOT NEEDED ANYMORE
+// These clean up old cache directories from before we restructured to use
+// the roc/{version}/ directory structure.
+// ---------------------------------------------------------------------------
+
+/// Clean up legacy temp directories that used the old "roc-*" prefix pattern.
+/// Old structure: /tmp/roc-{random}/ (directly in temp, with roc- prefix)
+/// New structure: /tmp/roc/{version}/{random}/
+fn cleanupLegacyTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
+    const temp_base = switch (builtin.target.os.tag) {
+        .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
+            std.process.getEnvVarOwned(allocator, "TMP") catch
+            return,
+        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+            allocator.dupe(u8, "/tmp") catch return,
+    };
+    defer allocator.free(temp_base);
+
+    var temp_dir = std.fs.cwd().openDir(temp_base, .{ .iterate = true }) catch return;
+    defer temp_dir.close();
+
+    // Look for directories matching "roc-*" pattern (old naming convention)
+    var iter = temp_dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .directory) continue;
+
+        // Check if it starts with "roc-" (old prefix pattern)
+        if (std.mem.startsWith(u8, entry.name, "roc-")) {
+            const entry_path = std.fs.path.join(allocator, &.{ temp_base, entry.name }) catch continue;
+            defer allocator.free(entry_path);
+
+            // Delete the directory and its contents
+            std.fs.cwd().deleteTree(entry_path) catch {
+                if (maybe_stats) |stats| stats.errors += 1;
+                continue;
+            };
+            if (maybe_stats) |stats| stats.temp_dirs_deleted += 1;
+        }
+    }
+}
+
+/// Clean up legacy persistent cache that used the old flat structure.
+/// Old structure: ~/.cache/roc/{hash}/ or ~/.cache/roc/*.rcache (flat)
+/// New structure: ~/.cache/roc/{version}/mod/ and ~/.cache/roc/{version}/exe/
+fn cleanupLegacyPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
+    const config = CacheConfig{};
+
+    const cache_base = config.getEffectiveCacheDir(allocator) catch return;
+    defer allocator.free(cache_base);
+
+    var cache_dir = std.fs.cwd().openDir(cache_base, .{ .iterate = true }) catch return;
+    defer cache_dir.close();
+
+    // Look for old-style entries (hash directories or direct cache files)
+    var iter = cache_dir.iterate();
+    while (iter.next() catch null) |entry| {
+        const entry_path = std.fs.path.join(allocator, &.{ cache_base, entry.name }) catch continue;
+        defer allocator.free(entry_path);
+
+        if (entry.kind == .file) {
+            // Old-style: direct .rcache files in the cache root
+            if (std.mem.endsWith(u8, entry.name, ".rcache")) {
+                std.fs.cwd().deleteFile(entry_path) catch {
+                    if (maybe_stats) |stats| stats.errors += 1;
+                    continue;
+                };
+                if (maybe_stats) |stats| stats.cache_files_deleted += 1;
+            }
+        } else if (entry.kind == .directory) {
+            // Check if this is an old-style hash directory (not a version directory)
+            // Old hash dirs were like "a0b1c2d3..." (hex chars only, typically 16+ chars)
+            // New version dirs are like "debug-abcd1234" (contain hyphen)
+            const is_old_hash_dir = isLegacyHashDir(entry.name);
+
+            if (is_old_hash_dir) {
+                // Delete the entire old hash directory
+                std.fs.cwd().deleteTree(entry_path) catch {
+                    if (maybe_stats) |stats| stats.errors += 1;
+                    continue;
+                };
+                if (maybe_stats) |stats| stats.temp_dirs_deleted += 1;
+            }
+        }
+    }
+}
+
+/// Check if a directory name looks like an old-style hash directory.
+/// Old hash dirs: all hex characters, typically 16+ chars (blake3 hash prefix)
+/// New version dirs: contain hyphens like "debug-abcd1234"
+fn isLegacyHashDir(name: []const u8) bool {
+    // New version directories always contain a hyphen
+    if (std.mem.indexOfScalar(u8, name, '-') != null) {
+        return false;
+    }
+
+    // Old hash directories are all hex characters and fairly long
+    if (name.len < 8) return false;
+
+    for (name) |c| {
+        const is_hex = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+        if (!is_hex) return false;
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// END OF LEGACY CLEANUP FUNCTIONS - REMOVE FOR 0.1.0
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Tests
-// ============================================================================
+// ---------------------------------------------------------------------------
 
 test "Config constants are reasonable" {
     // 5 minutes in nanoseconds
