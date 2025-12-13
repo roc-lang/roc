@@ -149,12 +149,13 @@ fn cleanupTempDirs(allocator: Allocator, maybe_stats: ?*CleanupStats) void {
             }
         }
 
-        // Try to remove empty version directory
-        std.fs.cwd().deleteDir(version_path) catch {};
+        // NOTE: We intentionally do NOT delete empty version directories here.
+        // Doing so would race with other processes that just created the version
+        // directory and are about to create a random subdirectory in it.
     }
 
-    // Try to remove empty roc temp directory
-    std.fs.cwd().deleteDir(temp_base) catch {};
+    // NOTE: We intentionally do NOT delete the empty roc temp directory.
+    // It's harmless and avoids race conditions with concurrent processes.
 }
 
 /// Clean up persistent cache files older than 30 days.
@@ -189,12 +190,11 @@ fn cleanupPersistentCache(allocator: Allocator, maybe_stats: ?*CleanupStats) voi
         cleanupCacheSubdir(allocator, exe_path, now, maybe_stats);
         allocator.free(exe_path);
 
-        // Try to remove empty version directory
-        tryDeleteEmptyDir(version_path);
+        // NOTE: We intentionally do NOT delete empty version directories.
+        // Empty directories are harmless and deleting them can cause race conditions.
     }
 
-    // Try to remove empty cache base directory (won't succeed if not empty)
-    std.fs.cwd().deleteDir(cache_base) catch {};
+    // NOTE: We intentionally do NOT delete the empty cache base directory.
 }
 
 /// Clean up files in a cache subdirectory (mod/ or exe/) older than 30 days.
@@ -249,12 +249,11 @@ fn cleanupCacheSubdir(allocator: Allocator, subdir_path: []const u8, now: i128, 
             }
         }
 
-        // Try to remove empty bucket directory
-        tryDeleteEmptyDir(bucket_path);
+        // NOTE: We intentionally do NOT delete empty bucket directories.
+        // Empty directories are harmless and deleting them can cause race conditions.
     }
 
-    // Try to remove empty subdir
-    tryDeleteEmptyDir(subdir_path);
+    // NOTE: We intentionally do NOT delete empty subdirs.
 }
 
 /// Try to delete a directory if it's empty.
