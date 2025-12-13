@@ -1974,14 +1974,17 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 /// Serialized representation of ModuleEnv.
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
 pub const Serialized = extern struct {
+    // Field order must match the runtime ModuleEnv struct exactly for in-place deserialization
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
+    module_kind: ModuleKind.Serialized,
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
+    rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
@@ -1989,7 +1992,6 @@ pub const Serialized = extern struct {
     module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
@@ -2033,6 +2035,8 @@ pub const Serialized = extern struct {
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
+        // rigid_vars is runtime-only and initialized fresh during deserialization
+        self.rigid_vars_reserved = .{ 0, 0, 0, 0 };
 
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
