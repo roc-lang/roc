@@ -7407,13 +7407,23 @@ pub const Interpreter = struct {
                     return value.layout.tag == .record or value.layout.tag == .zst;
                 }
 
-                if (value.layout.tag != .record) return false;
+                // Fail fast with a clear crash message for non-record values (issue #8647 debugging)
+                if (value.layout.tag != .record) {
+                    self.triggerCrash("record_destructure: value layout tag is not .record", false, roc_ops);
+                    return error.Crash;
+                }
                 var accessor = try value.asRecord(&self.runtime_layout_store);
 
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
 
-                    const field_index = accessor.findFieldIndex(destruct.label) orelse return false;
+                    // Translate field name from pattern's ident store to runtime layout store's ident store
+                    const pattern_label_str = self.env.getIdent(destruct.label);
+                    const runtime_label = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(pattern_label_str)) catch return error.Crash;
+                    const field_index = accessor.findFieldIndex(runtime_label) orelse {
+                        self.triggerCrash("record_destructure: field not found in record", false, roc_ops);
+                        return error.Crash;
+                    };
                     const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
                     const field_var = try self.translateTypeVar(self.env, field_ct_var);
                     const field_value = try accessor.getFieldByIndex(field_index, field_var);
@@ -11374,10 +11384,12 @@ pub const Interpreter = struct {
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
                 const is_flex_or_rigid = receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid;
 
-                // If the receiver type is a flex/rigid var, default to Dec for evaluation.
-                // This ensures numeric literals get proper type resolution.
-                // (Unsuffixed numeric literals default to Dec in Roc)
-                if (is_flex_or_rigid) {
+                // For METHOD CALLS (args != null) with flex/rigid receiver type, default to Dec.
+                // This ensures numeric literals like `(-3.14).abs()` get proper type resolution.
+                // For FIELD ACCESS (args == null), don't default to Dec - the receiver could be
+                // a record type that just hasn't been fully resolved at compile time.
+                // (Fix for GitHub issue #8647 - record field access was broken by Dec defaulting)
+                if (is_flex_or_rigid and dot_access.args != null) {
                     const dec_content = try self.mkNumberTypeContentRuntime("Dec");
                     receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
                 }
@@ -11394,9 +11406,11 @@ pub const Interpreter = struct {
                 } } });
 
                 // Push receiver evaluation - will be executed first, result goes on value_stack
+                // For field access, pass null to let the receiver determine its own type.
+                // For method calls, pass the (possibly Dec-defaulted) receiver_rt_var.
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dot_access.receiver,
-                    .expected_rt_var = receiver_rt_var,
+                    .expected_rt_var = if (dot_access.args != null) receiver_rt_var else null,
                 } });
             },
 
@@ -13159,6 +13173,8 @@ pub const Interpreter = struct {
                     self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
 
                     var dest = try self.pushRaw(rec_layout, 0, rc.rt_var);
+                    // Debug assertion for issue #8647
+                    std.debug.assert(dest.layout.tag == .record);
                     var accessor = try dest.asRecord(&self.runtime_layout_store);
 
                     // Copy base record fields first
@@ -14857,7 +14873,11 @@ pub const Interpreter = struct {
                     }
 
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
+                    // Translate field name from CIR's ident store to runtime layout store's ident store
+                    // (fix for GitHub issue #8647 - identifier spaces can differ between modules)
+                    const cir_field_name_str = self.env.getIdent(da.field_name);
+                    const runtime_field_name = try @constCast(self.runtime_layout_store.env).insertIdent(base_pkg.Ident.for_text(cir_field_name_str));
+                    const field_idx = accessor.findFieldIndex(runtime_field_name) orelse return error.TypeMismatch;
 
                     // Get the field's rt_var from the receiver's record type
                     const receiver_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
