@@ -132,7 +132,7 @@ pub const Expr = union(enum) {
     /// This represents a value that the app provides to the platform.
     /// ```roc
     /// platform "..."
-    ///     requires {} { main! : () => {} }
+    ///     requires { main! : () => {} }
     /// ...
     /// main_for_host! = main!  # "main!" here is a required lookup
     /// ```

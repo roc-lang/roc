@@ -1,8 +1,14 @@
 platform ""
-    requires {} { add_ints : I64, I64 -> I64, multiply_ints : I64, I64 -> I64 }
+    requires {
+        [Model : model] for main : {
+            init : {} -> model,
+            update : model, I64 -> model,
+            render : model -> I64
+        }
+    }
     exposes []
     packages {}
-    provides { add_ints_for_host: "add_ints", multiply_ints_for_host: "multiply_ints" }
+    provides { init_for_host: "init", update_for_host: "update", render_for_host: "render" }
     targets: {
         files: "targets/",
         exe: {
@@ -15,8 +21,24 @@ platform ""
         }
     }
 
-add_ints_for_host : I64, I64 -> I64
-add_ints_for_host = add_ints
+# Explicit type annotations for host-facing functions
+init_for_host : {} -> Box(model)
+init_for_host = |{}| {
+    init_fn = main.init
+    record = init_fn({})
+    Box.box(record)
+}
 
-multiply_ints_for_host : I64, I64 -> I64
-multiply_ints_for_host = multiply_ints
+update_for_host : Box(model), I64 -> Box(model)
+update_for_host = |boxed_model, value| {
+    m = Box.unbox(boxed_model)
+    update_fn = main.update
+    Box.box(update_fn(m, value))
+}
+
+render_for_host : Box(model) -> I64
+render_for_host = |boxed_model| {
+    m = Box.unbox(boxed_model)
+    render_fn = main.render
+    render_fn(m)
+}

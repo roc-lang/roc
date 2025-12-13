@@ -42,6 +42,8 @@ scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
 scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 scratch_target_entries: base.Scratch(AST.TargetEntry.Idx),
 scratch_target_files: base.Scratch(AST.TargetFile.Idx),
+scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
+scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from AST unions. Update these when modifying the unions.
@@ -78,6 +80,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_where_clauses = try base.Scratch(AST.WhereClause.Idx).init(gpa),
         .scratch_target_entries = try base.Scratch(AST.TargetEntry.Idx).init(gpa),
         .scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa),
+        .scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa),
+        .scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa),
     };
 
     _ = try store.nodes.append(gpa, .{
@@ -114,6 +118,8 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_where_clauses.deinit();
     store.scratch_target_entries.deinit();
     store.scratch_target_files.deinit();
+    store.scratch_for_clause_type_aliases.deinit();
+    store.scratch_requires_entries.deinit();
 }
 
 /// Ensures that all scratch buffers in the store
@@ -132,6 +138,8 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_where_clauses.clearFrom(0);
     store.scratch_target_entries.clearFrom(0);
     store.scratch_target_files.clearFrom(0);
+    store.scratch_for_clause_type_aliases.clearFrom(0);
+    store.scratch_requires_entries.clearFrom(0);
 }
 
 /// Prints debug information about all nodes and scratch buffers in the store.
@@ -243,8 +251,9 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.main_token = platform.name;
 
             const ed_start = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.requires_rigids));
-            try store.extra_data.append(store.gpa, @intFromEnum(platform.requires_signatures));
+            // Store requires_entries span (start and len)
+            try store.extra_data.append(store.gpa, platform.requires_entries.span.start);
+            try store.extra_data.append(store.gpa, platform.requires_entries.span.len);
             try store.extra_data.append(store.gpa, @intFromEnum(platform.exposes));
             try store.extra_data.append(store.gpa, @intFromEnum(platform.packages));
             try store.extra_data.append(store.gpa, @intFromEnum(platform.provides));
@@ -1104,8 +1113,10 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
 
             return .{ .platform = .{
                 .name = node.main_token,
-                .requires_rigids = @enumFromInt(store.extra_data.items[ed_start]),
-                .requires_signatures = @enumFromInt(store.extra_data.items[ed_start + 1]),
+                .requires_entries = .{ .span = .{
+                    .start = store.extra_data.items[ed_start],
+                    .len = store.extra_data.items[ed_start + 1],
+                } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
                 .provides = @enumFromInt(store.extra_data.items[ed_start + 4]),
@@ -2613,4 +2624,131 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
             std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
         },
     }
+}
+
+/// Adds a ForClauseTypeAlias node and returns its index.
+pub fn addForClauseTypeAlias(store: *NodeStore, alias: AST.ForClauseTypeAlias) std.mem.Allocator.Error!AST.ForClauseTypeAlias.Idx {
+    const node = Node{
+        .tag = .for_clause_type_alias,
+        .main_token = alias.alias_name,
+        .data = .{
+            .lhs = alias.rigid_name,
+            .rhs = 0,
+        },
+        .region = alias.region,
+    };
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Returns the start position for a new Span of ForClauseTypeAlias.Idxs in scratch
+pub fn scratchForClauseTypeAliasTop(store: *NodeStore) u32 {
+    return store.scratch_for_clause_type_aliases.top();
+}
+
+/// Places a new AST.ForClauseTypeAlias.Idx in the scratch.
+pub fn addScratchForClauseTypeAlias(store: *NodeStore, idx: AST.ForClauseTypeAlias.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_for_clause_type_aliases.append(idx);
+}
+
+/// Creates a new span starting at start. Moves the items from scratch to extra_data.
+pub fn forClauseTypeAliasSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.ForClauseTypeAlias.Span {
+    const end = store.scratch_for_clause_type_aliases.top();
+    defer store.scratch_for_clause_type_aliases.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_for_clause_type_aliases.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Clears any ForClauseTypeAlias.Idxs added to scratch from start until the end.
+pub fn clearScratchForClauseTypeAliasesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_for_clause_type_aliases.clearFrom(start);
+}
+
+/// Returns a new ForClauseTypeAlias slice for iteration.
+pub fn forClauseTypeAliasSlice(store: *const NodeStore, span: AST.ForClauseTypeAlias.Span) []AST.ForClauseTypeAlias.Idx {
+    return store.sliceFromSpan(AST.ForClauseTypeAlias.Idx, span.span);
+}
+
+/// Retrieves a ForClauseTypeAlias from a stored node.
+pub fn getForClauseTypeAlias(store: *const NodeStore, idx: AST.ForClauseTypeAlias.Idx) AST.ForClauseTypeAlias {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    std.debug.assert(node.tag == .for_clause_type_alias);
+
+    return .{
+        .alias_name = node.main_token,
+        .rigid_name = node.data.lhs,
+        .region = node.region,
+    };
+}
+
+/// Adds a RequiresEntry node and returns its index.
+pub fn addRequiresEntry(store: *NodeStore, entry: AST.RequiresEntry) std.mem.Allocator.Error!AST.RequiresEntry.Idx {
+    // Pack type_aliases len and type_anno idx into rhs
+    const rhs_packed: u32 = (@as(u32, entry.type_aliases.span.len) << 16) | @as(u32, @intFromEnum(entry.type_anno));
+    const node = Node{
+        .tag = .requires_entry,
+        .main_token = entry.entrypoint_name,
+        .data = .{
+            .lhs = entry.type_aliases.span.start,
+            .rhs = rhs_packed,
+        },
+        .region = entry.region,
+    };
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Returns the start position for a new Span of RequiresEntry.Idxs in scratch
+pub fn scratchRequiresEntryTop(store: *NodeStore) u32 {
+    return store.scratch_requires_entries.top();
+}
+
+/// Places a new AST.RequiresEntry.Idx in the scratch.
+pub fn addScratchRequiresEntry(store: *NodeStore, idx: AST.RequiresEntry.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_requires_entries.append(idx);
+}
+
+/// Creates a new span starting at start. Moves the items from scratch to extra_data.
+pub fn requiresEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.RequiresEntry.Span {
+    const end = store.scratch_requires_entries.top();
+    defer store.scratch_requires_entries.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_requires_entries.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Clears any RequiresEntry.Idxs added to scratch from start until the end.
+pub fn clearScratchRequiresEntriesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_requires_entries.clearFrom(start);
+}
+
+/// Returns a new RequiresEntry slice for iteration.
+pub fn requiresEntrySlice(store: *const NodeStore, span: AST.RequiresEntry.Span) []AST.RequiresEntry.Idx {
+    return store.sliceFromSpan(AST.RequiresEntry.Idx, span.span);
+}
+
+/// Retrieves a RequiresEntry from a stored node.
+pub fn getRequiresEntry(store: *const NodeStore, idx: AST.RequiresEntry.Idx) AST.RequiresEntry {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    std.debug.assert(node.tag == .requires_entry);
+
+    // Unpack type_aliases len and type_anno idx from rhs
+    const type_aliases_len: u32 = node.data.rhs >> 16;
+    const type_anno_idx: u16 = @truncate(node.data.rhs);
+
+    return .{
+        .type_aliases = .{ .span = .{ .start = node.data.lhs, .len = type_aliases_len } },
+        .entrypoint_name = node.main_token,
+        .type_anno = @enumFromInt(type_anno_idx),
+        .region = node.region,
+    };
 }

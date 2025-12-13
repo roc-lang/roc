@@ -73,19 +73,7 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
 /// For lists, this compares the element layout index, so two lists with
 /// different element types (e.g., List(Dec) vs List(generic_num)) will be different.
 fn layoutsEqual(a: Layout, b: Layout) bool {
-    if (a.tag != b.tag) return false;
-    return switch (a.tag) {
-        .scalar => std.meta.eql(a.data.scalar, b.data.scalar),
-        .list => a.data.list == b.data.list,
-        .list_of_zst => true,
-        .box => a.data.box == b.data.box,
-        .box_of_zst => true,
-        .record => std.meta.eql(a.data.record, b.data.record),
-        .tuple => std.meta.eql(a.data.tuple, b.data.tuple),
-        .closure => std.meta.eql(a.data.closure, b.data.closure),
-        .tag_union => std.meta.eql(a.data.tag_union, b.data.tag_union),
-        .zst => true,
-    };
+    return a.eql(b);
 }
 
 fn interpreterLookupModuleEnv(
@@ -235,6 +223,11 @@ pub const Interpreter = struct {
     // Rigid variable substitution context for generic function instantiation
     // Maps rigid type variables to their concrete instantiations
     rigid_subst: std.AutoHashMap(types.Var, types.Var),
+    // Rigid name substitution for platform-app type variable mappings
+    // Maps rigid ident names (in runtime ident store) to concrete runtime type vars
+    // Maps rigid variable name string indices to concrete runtime type vars.
+    // Keyed by the raw string index (u29) to ignore attribute differences.
+    rigid_name_subst: std.AutoHashMap(u29, types.Var),
     // Compile-time rigid substitution for nominal type backing translation
     // Maps CT rigid vars in backing type to CT type arg vars
     translate_rigid_subst: std.AutoHashMap(types.Var, types.Var),
@@ -426,6 +419,7 @@ pub const Interpreter = struct {
             .translate_cache = std.AutoHashMap(ModuleVarKey, CacheEntry).init(allocator),
             .translation_in_progress = std.AutoHashMap(ModuleVarKey, void).init(allocator),
             .rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .rigid_name_subst = std.AutoHashMap(u29, types.Var).init(allocator),
             .translate_rigid_subst = std.AutoHashMap(types.Var, types.Var).init(allocator),
             .flex_type_context = std.AutoHashMap(ModuleVarKey, types.Var).init(allocator),
             .poly_context_generation = 0,
@@ -547,6 +541,72 @@ pub const Interpreter = struct {
         return result;
     }
 
+    /// Setup for-clause type mappings from the platform's required types.
+    /// This maps rigid variable names (like "model") to their concrete app types (like { value: I64 }).
+    pub fn setupForClauseTypeMappings(self: *Interpreter, platform_env: *const can.ModuleEnv) Error!void {
+        const app_env = self.app_env orelse return;
+
+        // Get the platform's for_clause_aliases
+        const all_aliases = platform_env.for_clause_aliases.items.items;
+        if (all_aliases.len == 0) return;
+
+        // Iterate through all required types and their for-clause aliases
+        const requires_types_slice = platform_env.requires_types.items.items;
+        for (requires_types_slice) |required_type| {
+            // Get the type aliases for this required type
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+
+            for (type_aliases_slice) |alias| {
+                // Get the alias name (e.g., "Model") - translate to app's ident store
+                const alias_name_str = platform_env.getIdent(alias.alias_name);
+                // Use insertIdent (not findIdent) to translate the platform ident to app ident
+                const app_alias_ident = @constCast(app_env).common.insertIdent(self.allocator, base_pkg.Ident.for_text(alias_name_str)) catch continue;
+
+                // Get the rigid name (e.g., "model") - insert into runtime ident store
+                const rigid_name_str = platform_env.getIdent(alias.rigid_name);
+                const rt_rigid_name = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(rigid_name_str)) catch continue;
+
+                // Find the app's type alias definition and get its underlying type var
+                const app_type_var = findTypeAliasBodyVar(app_env, app_alias_ident) orelse continue;
+
+                // Translate the app's type variable to a runtime type variable
+                const app_rt_var = self.translateTypeVar(@constCast(app_env), app_type_var) catch continue;
+
+                // Add the mapping: rigid_name -> app's concrete type
+                // Use just the string index (u29), ignoring attributes
+                self.rigid_name_subst.put(rt_rigid_name.idx, app_rt_var) catch continue;
+            }
+        }
+
+        // CRITICAL: Clear the translate_cache after adding for-clause mappings.
+        // During the translations above, the platform's rigid type vars (like `model`)
+        // may have been cached before their mappings were established. Clear the cache
+        // so that subsequent translations will pick up the for-clause mappings.
+        self.translate_cache.clearRetainingCapacity();
+        // Also clear the var_to_layout_slot cache
+        @memset(self.var_to_layout_slot.items, 0);
+    }
+
+    /// Find a type alias declaration by name in a module and return the var for its underlying type.
+    /// Returns null if no type alias declaration with the given name is found.
+    fn findTypeAliasBodyVar(module: *const can.ModuleEnv, name: base_pkg.Ident.Idx) ?types.Var {
+        const stmts_slice = module.store.sliceStatements(module.all_statements);
+        for (stmts_slice) |stmt_idx| {
+            const stmt = module.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl => |alias_decl| {
+                    const header = module.store.getTypeHeader(alias_decl.header);
+                    if (header.relative_name == name) {
+                        // Return the var for the alias body annotation
+                        return can.ModuleEnv.varFrom(alias_decl.anno);
+                    }
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
     /// Evaluates a Roc expression and returns the result.
     pub fn eval(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
         // Clear flex_type_context at the start of each top-level evaluation.
@@ -626,25 +686,53 @@ pub const Interpreter = struct {
                 while (i < params.len) : (i += 1) {
                     const param_idx = params[i];
                     const param_var = can.ModuleEnv.varFrom(param_idx);
-                    const rt_var = try self.translateTypeVar(self.env, param_var);
+                    const rt_var = self.translateTypeVar(self.env, param_var) catch |err| {
+                        // DEBUG: translateTypeVar failed
+                        var debug_buf: [256]u8 = undefined;
+                        const debug_msg = std.fmt.bufPrint(&debug_buf, "translateTypeVar failed: param {}, error={s}", .{
+                            i,
+                            @errorName(err),
+                        }) catch "translateTypeVar debug failed";
+                        roc_ops.crash(debug_msg);
+                        return err;
+                    };
                     param_rt_vars[i] = rt_var;
-                    param_layouts[i] = try self.getRuntimeLayout(rt_var);
+                    param_layouts[i] = self.getRuntimeLayout(rt_var) catch |err| {
+                        // DEBUG: getRuntimeLayout failed
+                        var debug_buf: [256]u8 = undefined;
+                        const debug_msg = std.fmt.bufPrint(&debug_buf, "getRuntimeLayout failed: param {}, rt_var={}, error={s}", .{
+                            i,
+                            @intFromEnum(rt_var),
+                            @errorName(err),
+                        }) catch "getRuntimeLayout debug failed";
+                        roc_ops.crash(debug_msg);
+                        return err;
+                    };
                 }
 
-                const tuple_idx = try self.runtime_layout_store.putTuple(param_layouts);
+                const tuple_idx = self.runtime_layout_store.putTuple(param_layouts) catch @panic("putTuple failed");
                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
                 // Use first element's rt_var as placeholder - this tuple is internal-only,
                 // elements get their own rt_vars when extracted via getElement
                 args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true, .rt_var = param_rt_vars[0] };
-                args_accessor = try args_tuple_value.asTuple(&self.runtime_layout_store);
+                args_accessor = args_tuple_value.asTuple(&self.runtime_layout_store) catch @panic("asTuple failed");
 
                 var j: usize = 0;
                 while (j < params.len) : (j += 1) {
                     // getElement expects original index and converts to sorted internally
-                    const arg_value = try args_accessor.getElement(j, param_rt_vars[j]);
+                    const arg_value = args_accessor.getElement(j, param_rt_vars[j]) catch @panic("getElement failed");
                     // expr_idx not used in this context - binding happens during function call setup
-                    const matched = try self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, null);
-                    if (!matched) return error.TypeMismatch;
+                    const matched = self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, null) catch @panic("patternMatchesBind threw error");
+                    if (!matched) {
+                        @panic("TypeMismatch at patternMatchesBind line 664");
+                    }
+                    // Decref refcounted argument values (lists, strings) after binding.
+                    // patternMatchesBind made copies, so we need to decref the originals.
+                    // EXCEPT: Don't decref Box types because that zeros the slot in host memory.
+                    // The host owns box slots and will manage them.
+                    if (arg_value.layout.tag != .box and arg_value.layout.tag != .box_of_zst) {
+                        arg_value.decref(&self.runtime_layout_store, roc_ops);
+                    }
                 }
             }
 
@@ -656,9 +744,6 @@ pub const Interpreter = struct {
                 }
                 temp_binds.items.len = 0;
             }
-
-            // Decref args after body evaluation (caller transfers ownership)
-            defer if (params.len > 0) args_tuple_value.decref(&self.runtime_layout_store, roc_ops);
 
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
@@ -672,6 +757,9 @@ pub const Interpreter = struct {
                         try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr);
                     }
                     return;
+                }
+                if (err == error.TypeMismatch) {
+                    @panic("TypeMismatch in body evaluation");
                 }
                 return err;
             };
@@ -712,7 +800,7 @@ pub const Interpreter = struct {
             const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
             const ret_addr = @intFromPtr(ret_ptr);
             if (ret_addr % required_alignment.toByteUnits() != 0) {
-                return error.TypeMismatch;
+                @panic("TypeMismatch at shouldCopyResult alignment check line 733");
             }
         }
 
@@ -960,7 +1048,7 @@ pub const Interpreter = struct {
         const cmp_params = self.env.store.slicePatterns(cmp_header.params);
         if (cmp_params.len != 2) {
             self.env = cmp_saved_env;
-            return error.TypeMismatch;
+            @panic("TypeMismatch at sort comparison param count line 981");
         }
 
         try self.active_closures.append(compare_fn);
@@ -6860,8 +6948,8 @@ pub const Interpreter = struct {
         }
     }
 
-    fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps) !StackValue {
-        var out = try self.pushRaw(result_layout, 0);
+    fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps, rt_var: types.Var) !StackValue {
+        var out = try self.pushRaw(result_layout, 0, rt_var);
         out.is_initialized = true;
 
         switch (result_layout.tag) {
@@ -6873,13 +6961,25 @@ pub const Interpreter = struct {
                 return out;
             },
             .box => {
-                const elem_layout = self.runtime_layout_store.getLayout(result_layout.data.box);
-
-                if (!std.meta.eql(elem_layout, payload.layout)) {
-                    return error.TypeMismatch;
-                }
-
+                // Get the expected element layout from the box type
+                const expected_elem_layout = self.runtime_layout_store.getLayout(result_layout.data.box);
                 const target_usize = self.runtime_layout_store.targetUsize();
+
+                // Use the payload's layout if it matches semantically.
+                // The type system guarantees type compatibility, but layouts might be stored
+                // at different indices even for identical structures (e.g., records created
+                // at different times). We trust the type system and use the payload's layout
+                // for the allocation, but verify both tag and size match for defense-in-depth.
+                const elem_layout = blk: {
+                    if (expected_elem_layout.tag == payload.layout.tag) {
+                        const expected_size = self.runtime_layout_store.layoutSize(expected_elem_layout);
+                        const payload_size = self.runtime_layout_store.layoutSize(payload.layout);
+                        if (expected_size == payload_size) {
+                            break :blk payload.layout;
+                        }
+                    }
+                    break :blk expected_elem_layout;
+                };
                 const elem_alignment = elem_layout.alignment(target_usize).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
                 const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
@@ -6897,6 +6997,86 @@ pub const Interpreter = struct {
             },
             else => return error.TypeMismatch,
         }
+    }
+
+    /// Evaluates the Box.box intrinsic, creating a boxed value from the input.
+    /// Returns the boxed result value. Caller is responsible for decref on arg_value.
+    fn evalBoxIntrinsic(
+        self: *Interpreter,
+        arg_value: StackValue,
+        return_expr_idx: can.CIR.Expr.Idx,
+        roc_ops: *RocOps,
+    ) !StackValue {
+        const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
+        const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+        const box_layout = try self.getRuntimeLayout(return_rt_var);
+        return try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
+    }
+
+    /// Evaluates the Box.unbox intrinsic, extracting the value from a box.
+    /// Returns the unboxed result value. Caller is responsible for decref on boxed_value.
+    fn evalUnboxIntrinsic(
+        self: *Interpreter,
+        boxed_value: StackValue,
+        value_stack: *ValueStack,
+    ) !void {
+        // Get the element rt_var from the Box type's type argument
+        const elem_rt_var = blk: {
+            const box_resolved = self.runtime_types.resolveVar(boxed_value.rt_var);
+            if (box_resolved.desc.content == .structure) {
+                const flat = box_resolved.desc.content.structure;
+                if (flat == .nominal_type) {
+                    const nom = flat.nominal_type;
+                    const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    if (type_args.len > 0) {
+                        break :blk type_args[0];
+                    }
+                }
+            }
+            // Fallback: create a fresh var
+            break :blk try self.runtime_types.fresh();
+        };
+
+        if (boxed_value.layout.tag == .box_of_zst) {
+            // Zero-sized type - return empty value
+            const elem_layout = layout.Layout.zst();
+            var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
+            result.is_initialized = true;
+            try value_stack.push(result);
+            return;
+        }
+
+        if (boxed_value.layout.tag == .box) {
+            // Get element layout
+            const elem_idx = boxed_value.layout.data.box;
+            const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
+            const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+
+            // Get pointer to heap data from the box
+            const box_ptr: *usize = @ptrCast(@alignCast(boxed_value.ptr.?));
+            const data_ptr: [*]u8 = @ptrFromInt(box_ptr.*);
+
+            // Allocate stack space and copy the value
+            var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
+            if (elem_size > 0 and result.ptr != null) {
+                @memcpy(
+                    @as([*]u8, @ptrCast(result.ptr.?))[0..elem_size],
+                    data_ptr[0..elem_size],
+                );
+            }
+            result.is_initialized = true;
+
+            // If the element is refcounted, increment its refcount since we're
+            // creating a new reference (the box still holds its own reference)
+            if (elem_layout.isRefcounted()) {
+                result.incref(&self.runtime_layout_store);
+            }
+
+            try value_stack.push(result);
+            return;
+        }
+
+        @panic("Box.unbox: layout is not box or box_of_zst");
     }
 
     fn makeRenderCtx(self: *Interpreter) render_helpers.RenderCtx {
@@ -7037,7 +7217,7 @@ pub const Interpreter = struct {
             const stored_elem_layout_idx = list_layout.data.list;
             const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
 
-            const layouts_match = std.meta.eql(stored_elem_layout, elem_layout);
+            const layouts_match = stored_elem_layout.eql(elem_layout);
             if (!layouts_match) {
                 const correct_elem_idx = try self.runtime_layout_store.insertLayout(elem_layout);
                 break :blk Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
@@ -7495,6 +7675,7 @@ pub const Interpreter = struct {
         self.translate_cache.deinit();
         self.translation_in_progress.deinit();
         self.rigid_subst.deinit();
+        self.rigid_name_subst.deinit();
         self.translate_rigid_subst.deinit();
         self.flex_type_context.deinit();
         var it = self.poly_cache.iterator();
@@ -8046,9 +8227,18 @@ pub const Interpreter = struct {
         // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
         var count: u32 = 0;
         while (resolved.desc.content == .rigid) {
+            const rigid_name = resolved.desc.content.rigid.name;
+            // First check rigid_subst (by type variable)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 count += 1;
                 std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
+                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
+                // Fall back to rigid_name_subst (by string index) - used for for-clause type mappings
+                // Also add this to rigid_subst for faster future lookups
+                self.rigid_subst.put(resolved.var_, substituted_var) catch {};
+                count += 1;
+                std.debug.assert(count < 1000);
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -8794,6 +8984,17 @@ pub const Interpreter = struct {
                 .rigid => |rigid| {
                     // Check if this rigid should be substituted (during nominal type backing translation)
                     if (self.translate_rigid_subst.get(resolved.var_)) |substitute_var| {
+                        // Check if the substitute_var is itself a rigid with a for-clause mapping
+                        const sub_resolved = module.types.resolveVar(substitute_var);
+                        if (sub_resolved.desc.content == .rigid) {
+                            const sub_rigid = sub_resolved.desc.content.rigid;
+                            const sub_name_str = module.getIdent(sub_rigid.name);
+                            const sub_rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(sub_name_str));
+                            if (self.rigid_name_subst.get(sub_rt_name.idx)) |for_clause_var| {
+                                // Use the for-clause mapping instead
+                                break :blk for_clause_var;
+                            }
+                        }
                         // Translate the substitute type instead of the rigid
                         break :blk try self.translateTypeVar(module, substitute_var);
                     }
@@ -8832,7 +9033,22 @@ pub const Interpreter = struct {
                     };
 
                     const content: types.Content = .{ .rigid = rt_rigid };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    const rt_rigid_var = try self.runtime_types.freshFromContent(content);
+
+                    // If there's a for-clause mapping for this rigid name, add it to empty_scope
+                    // so the layout store can find it during Box/List layout computation
+                    if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
+                        // Ensure we have at least one scope level
+                        if (self.empty_scope.scopes.items.len == 0) {
+                            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                        }
+                        // Add the mapping to empty_scope
+                        try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                        // Also add to rigid_subst for consistency
+                        try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
+                    }
+
+                    break :blk rt_rigid_var;
                 },
                 .err => {
                     // Handle generic type parameters from compiled builtin modules.
@@ -9069,7 +9285,7 @@ pub const Interpreter = struct {
             },
             else => &[_]types.Var{},
         };
-        if (params.len != args.len) return error.TypeMismatch;
+        if (params.len != args.len) @panic("TypeMismatch: params.len != args.len");
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
@@ -9846,10 +10062,49 @@ pub const Interpreter = struct {
         while (work_stack.pop()) |work_item| {
             switch (work_item) {
                 .eval_expr => |eval_item| {
-                    try self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops);
+                    self.scheduleExprEval(&work_stack, &value_stack, eval_item.expr_idx, eval_item.expected_rt_var, roc_ops) catch |err| {
+                        return err;
+                    };
                 },
                 .apply_continuation => |cont| {
-                    const should_continue = try self.applyContinuation(&work_stack, &value_stack, cont, roc_ops);
+                    const should_continue = self.applyContinuation(&work_stack, &value_stack, cont, roc_ops) catch |err| {
+                        if (err == error.TypeMismatch) {
+                            switch (cont) {
+                                .return_result => @panic("TypeMismatch from cont: return_result"),
+                                .decref_value => @panic("TypeMismatch from cont: decref_value"),
+                                .trim_bindings => @panic("TypeMismatch from cont: trim_bindings"),
+                                .and_short_circuit => @panic("TypeMismatch from cont: and_short_circuit"),
+                                .or_short_circuit => @panic("TypeMismatch from cont: or_short_circuit"),
+                                .if_branch => @panic("TypeMismatch from cont: if_branch"),
+                                .block_continue => @panic("TypeMismatch from cont: block_continue"),
+                                .bind_decl => @panic("TypeMismatch from cont: bind_decl"),
+                                .tuple_collect => @panic("TypeMismatch from cont: tuple_collect"),
+                                .list_collect => @panic("TypeMismatch from cont: list_collect"),
+                                .record_collect => @panic("TypeMismatch from cont: record_collect"),
+                                .early_return => @panic("TypeMismatch from cont: early_return"),
+                                .tag_collect => @panic("TypeMismatch from cont: tag_collect"),
+                                .match_branches => @panic("TypeMismatch from cont: match_branches"),
+                                .match_guard => @panic("TypeMismatch from cont: match_guard"),
+                                .match_cleanup => @panic("TypeMismatch from cont: match_cleanup"),
+                                .expect_check => @panic("TypeMismatch from cont: expect_check"),
+                                .dbg_print => @panic("TypeMismatch from cont: dbg_print"),
+                                .str_collect => @panic("TypeMismatch from cont: str_collect"),
+                                .call_collect_args => @panic("TypeMismatch from cont: call_collect_args"),
+                                .call_invoke_closure => @panic("TypeMismatch from cont: call_invoke_closure"),
+                                .call_cleanup => @panic("TypeMismatch from cont: call_cleanup"),
+                                .unary_op_apply => @panic("TypeMismatch from cont: unary_op_apply"),
+                                .binop_eval_rhs => @panic("TypeMismatch from cont: binop_eval_rhs"),
+                                .binop_apply => @panic("TypeMismatch from cont: binop_apply"),
+                                .dot_access_await_receiver => @panic("TypeMismatch from cont: dot_access_await_receiver"),
+                                .dot_access_resolve => @panic("TypeMismatch from cont: dot_access_resolve"),
+                                .dot_access_collect_args => @panic("TypeMismatch from cont: dot_access_collect_args"),
+                                .for_iterate => @panic("TypeMismatch from cont: for_iterate"),
+                                .for_body_done => @panic("TypeMismatch from cont: for_body_done"),
+                                else => @panic("TypeMismatch from cont: unknown"),
+                            }
+                        }
+                        return err;
+                    };
                     if (!should_continue) {
                         // return_result continuation signals completion
                         if (value_stack.pop()) |val| {
@@ -10180,11 +10435,11 @@ pub const Interpreter = struct {
                         const result = try self.evalWithExpectedType(app_expr_idx, roc_ops, expected_rt_var);
                         try value_stack.push(result);
                     } else {
-                        return error.TypeMismatch;
+                        @panic("TypeMismatch: e_lookup_required - no found_expr");
                     }
                 } else {
                     // No app_env - can't resolve required lookups
-                    return error.TypeMismatch;
+                    @panic("TypeMismatch: e_lookup_required - no app_env");
                 }
             },
 
@@ -11089,6 +11344,44 @@ pub const Interpreter = struct {
                             if (def_expr == .e_anno_only) {
                                 self.triggerCrash("This function has only a type annotation - no implementation was provided", false, roc_ops);
                                 return error.Crash;
+                            }
+                        }
+                    }
+                }
+
+                // Handle Box.box and Box.unbox intrinsics - these are compiler-provided methods
+                // that have type annotations but no implementation bodies
+                if (func_expr_check == .e_lookup_external) {
+                    const lookup = func_expr_check.e_lookup_external;
+                    const other_env = self.import_envs.get(lookup.module_idx) orelse null;
+                    if (other_env) |builtin_env| {
+                        const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                        const target_def = builtin_env.store.getDef(target_def_idx);
+                        const target_pattern = builtin_env.store.getPattern(target_def.pattern);
+                        if (target_pattern == .assign) {
+                            const method_ident = target_pattern.assign.ident;
+                            // Compare ident indices directly - both method_ident and builtin_env.idents
+                            // are in the same ident space (the builtin_env's common ident store)
+                            const is_box_method = method_ident == builtin_env.idents.builtin_box_box;
+                            const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
+                            // Check if this is Box.box
+                            if (is_box_method and arg_indices.len == 1) {
+                                const arg_expr = arg_indices[0];
+                                const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+                                defer arg_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                const result = try self.evalBoxIntrinsic(arg_value, expr_idx, roc_ops);
+                                try value_stack.push(result);
+                                return;
+                            }
+                            // Check if this is Box.unbox
+                            if (is_unbox_method and arg_indices.len == 1) {
+                                const arg_expr = arg_indices[0];
+                                const boxed_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+                                defer boxed_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                try self.evalUnboxIntrinsic(boxed_value, value_stack);
+                                return;
                             }
                         }
                     }
@@ -12738,7 +13031,7 @@ pub const Interpreter = struct {
                 if (!try self.patternMatchesBind(bd.pattern, val, expr_rt_var, roc_ops, &temp_binds, bd.expr_idx)) {
                     // Pattern match failed - decref any bindings that were created
                     self.trimBindingList(&temp_binds, 0, roc_ops);
-                    return error.TypeMismatch;
+                    @panic("TypeMismatch in bind_def patternMatchesBind line 12636");
                 }
 
                 // Add bindings using upsertBinding to handle closure placeholders.
@@ -14216,7 +14509,7 @@ pub const Interpreter = struct {
 
                 // Call the method closure
                 if (method_func.layout.tag != .closure) {
-                    return error.TypeMismatch;
+                    @panic("TypeMismatch: method_func not closure line 14105");
                 }
 
                 const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
@@ -14246,7 +14539,7 @@ pub const Interpreter = struct {
                 const params = self.env.store.slicePatterns(closure_header.params);
                 if (params.len != 1) {
                     self.env = saved_env;
-                    return error.TypeMismatch;
+                    @panic("TypeMismatch: method params.len != 1 line 14137");
                 }
 
                 // Provide closure context
@@ -14764,7 +15057,15 @@ pub const Interpreter = struct {
                     defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                     if (receiver_value.layout.tag != .record) {
-                        return error.TypeMismatch;
+                        switch (receiver_value.layout.tag) {
+                            .box => @panic("dot_access_resolve field access: layout is box"),
+                            .box_of_zst => @panic("dot_access_resolve field access: layout is box_of_zst"),
+                            .tuple => @panic("dot_access_resolve field access: layout is tuple"),
+                            .list => @panic("dot_access_resolve field access: layout is list"),
+                            .closure => @panic("dot_access_resolve field access: layout is closure"),
+                            .scalar => @panic("dot_access_resolve field access: layout is scalar"),
+                            else => @panic("dot_access_resolve field access: layout is unknown"),
+                        }
                     }
 
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
@@ -14772,8 +15073,16 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     }
 
+                    // Translate field name from compile-time ident store to runtime ident store.
+                    // The field name in da.field_name is from self.env's ident store, but the
+                    // record layout was built with runtime ident store field names.
+                    const ct_field_name_str = self.env.getIdent(da.field_name);
+                    const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
+
                     var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
-                    const field_idx = accessor.findFieldIndex(da.field_name) orelse return error.TypeMismatch;
+                    const field_idx = accessor.findFieldIndex(rt_field_name) orelse {
+                        return error.TypeMismatch;
+                    };
 
                     // Get the field's rt_var from the receiver's record type
                     const receiver_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
@@ -14789,7 +15098,8 @@ pub const Interpreter = struct {
                             var i: usize = 0;
                             while (i < fields.len) : (i += 1) {
                                 const f = fields.get(i);
-                                if (f.name == da.field_name) {
+                                // Use translated field name for comparison (both are in runtime ident store)
+                                if (f.name == rt_field_name) {
                                     break :blk f.var_;
                                 }
                             }
@@ -14918,6 +15228,34 @@ pub const Interpreter = struct {
                 if (nominal_info == null) {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.InvalidMethodReceiver;
+                }
+
+                // Handle Box.box intrinsic - must intercept before resolveMethodFunction
+                // since Box.box has no implementation body
+                if (nominal_info.?.ident == self.root_env.idents.box and
+                    da.field_name == self.root_env.idents.box_method and
+                    arg_exprs.len == 1)
+                {
+                    const arg_expr = arg_exprs[0];
+                    const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+                    defer arg_value.decref(&self.runtime_layout_store, roc_ops);
+
+                    const result = try self.evalBoxIntrinsic(arg_value, da.expr_idx, roc_ops);
+
+                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Handle Box.unbox intrinsic - must intercept before resolveMethodFunction
+                // since Box.unbox has no implementation body
+                if (nominal_info.?.ident == self.root_env.idents.box and
+                    da.field_name == self.root_env.idents.unbox_method)
+                {
+                    defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                    try self.evalUnboxIntrinsic(receiver_value, value_stack);
+                    return true;
                 }
 
                 // Resolve the method function

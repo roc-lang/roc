@@ -1,5 +1,7 @@
 platform ""
-    requires {} { main! : () => {} }
+    requires {
+        main! : () => {}
+    }
     exposes [Stdout, Stderr, Stdin]
     packages {}
     provides { main_for_host!: "main" }

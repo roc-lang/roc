@@ -506,6 +506,17 @@ pub const Tag = enum {
     /// A special identifier in a target list: app, win_gui
     /// * main_token - identifier token
     target_file_ident,
+
+    /// A for-clause type alias: Model : model
+    /// * main_token - alias name token (UpperIdent)
+    /// * lhs - rigid name token index
+    for_clause_type_alias,
+
+    /// A requires entry: [Model : model] for main : () -> { ... }
+    /// * main_token - entrypoint name token
+    /// * lhs - start of type_aliases span
+    /// * rhs - packed: type_aliases len (16 bits) + type_anno idx (16 bits)
+    requires_entry,
 };
 
 /// Unstructured information about a Node.  These

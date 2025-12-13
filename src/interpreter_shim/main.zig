@@ -328,7 +328,12 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const expr_idx = def.expr;
 
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
+        if (err == error.TypeMismatch) {
+            roc_ops.crash("TypeMismatch from evaluateExpression");
+        }
+        return err;
+    };
 }
 
 /// Result of setting up module environments
@@ -683,8 +688,15 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         };
     }
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
+    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
+        return error.InterpreterSetupFailed;
+    };
+
+    // Setup for-clause type mappings from platform to app.
+    // This maps rigid variable names (like "model") to their concrete app types.
+    interpreter.setupForClauseTypeMappings(env_ptr) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
         return error.InterpreterSetupFailed;
     };
 

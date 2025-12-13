@@ -11,7 +11,7 @@ requires{}{n:0[import S	exposing[
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_061.md:1:9:1:10
 UNEXPECTED TOKEN IN TYPE ANNOTATION - fuzz_crash_061.md:2:14:2:15
-PARSE ERROR - fuzz_crash_061.md:2:11:2:12
+PARSE ERROR - fuzz_crash_061.md:2:9:2:10
 PARSE ERROR - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
 **UNCLOSED STRING**
@@ -39,11 +39,11 @@ requires{}{n:0[import S	exposing[
 A parsing error occurred: `expected_requires_signatures_close_curly`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_061.md:2:11:2:12:**
+**fuzz_crash_061.md:2:9:2:10:**
 ```roc
 requires{}{n:0[import S	exposing[
 ```
-          ^
+        ^
 
 
 **PARSE ERROR**
