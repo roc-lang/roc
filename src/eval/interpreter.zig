@@ -2414,7 +2414,10 @@ pub const Interpreter = struct {
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                const index = index_arg.asI128(); // U64 stored as i128
+                // Extract the index as an integer. Handle both integer and decimal types,
+                // as polymorphic numeric types may default to Dec at runtime even when
+                // used in an integer context (e.g., for loop iteration variable).
+                const index = self.extractIndexAsI128(index_arg);
 
                 // Get element layout
                 const elem_layout_idx = list_arg.layout.data.list;
@@ -6030,6 +6033,37 @@ pub const Interpreter = struct {
                 },
             },
             else => error.NotNumeric,
+        };
+    }
+
+    /// Extract an integer value from a numeric StackValue.
+    /// Handles both integer layouts (returns value directly) and fractional layouts
+    /// (converts Dec/F32/F64 to integer). This is needed when polymorphic numeric types
+    /// default to Dec at runtime but are used in integer contexts (e.g., list indices).
+    fn extractIndexAsI128(_: *Interpreter, value: StackValue) i128 {
+        std.debug.assert(value.layout.tag == .scalar);
+        const scalar = value.layout.data.scalar;
+        return switch (scalar.tag) {
+            .int => value.asI128(),
+            .frac => switch (scalar.data.frac) {
+                .dec => {
+                    const raw_ptr = value.ptr orelse unreachable;
+                    const ptr = @as(*const RocDec, @ptrCast(@alignCast(raw_ptr)));
+                    // Convert Dec to integer by dividing by the scale factor (10^18)
+                    return @divTrunc(ptr.num, RocDec.one_point_zero_i128);
+                },
+                .f32 => {
+                    const raw_ptr = value.ptr orelse unreachable;
+                    const ptr = @as(*const f32, @ptrCast(@alignCast(raw_ptr)));
+                    return @intFromFloat(ptr.*);
+                },
+                .f64 => {
+                    const raw_ptr = value.ptr orelse unreachable;
+                    const ptr = @as(*const f64, @ptrCast(@alignCast(raw_ptr)));
+                    return @intFromFloat(ptr.*);
+                },
+            },
+            else => unreachable,
         };
     }
 
