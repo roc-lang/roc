@@ -8936,7 +8936,7 @@ pub const Interpreter = struct {
         // Redirect the placeholder to the final var so any code that grabbed the placeholder
         // during recursion will now resolve to the correct type
         if (@intFromEnum(placeholder) != @intFromEnum(final_var)) {
-            try self.runtime_types.setVarRedirect(placeholder, final_var);
+            try self.runtime_types.dangerousSetVarRedirect(placeholder, final_var);
         }
 
         return final_var;

@@ -191,7 +191,12 @@ pub const Store = struct {
     // setting variables //
 
     /// Set a type variable to the provided content
-    pub fn setVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
+    ///
+    /// IMPORTANT: When using this function during type checking, it's possible
+    /// to loose `rank` information! You should prefer to use regular `unify`
+    /// over this function, which correctly propagates rank, unless you already
+    /// know the two vars are of  the same rank.
+    pub fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
         self.descs.set(resolved.desc_idx, desc);
@@ -206,8 +211,14 @@ pub const Store = struct {
         self.descs.set(resolved.desc_idx, desc);
     }
 
-    /// Set a type variable to redirect to the provided redirect
-    pub fn setVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
+    /// Set a type variable to redirect to the provided variables.
+    /// During type-checking, you probably don't want to use this function.
+    ///
+    /// IMPORTANT: When using this function during type checking, it's possible
+    /// to loose `rank` information! You should prefer to use regular `unify`
+    /// over this function, which correctly propagates rank, unless you already
+    /// know the two vars are of the same rank.
+    pub fn dangerousSetVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
         // Self-redirects cause infinite loops in resolveVar
