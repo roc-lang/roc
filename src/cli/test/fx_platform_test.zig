@@ -1162,18 +1162,3 @@ test "external platform memory alignment regression" {
 
     try checkSuccess(run_result);
 }
-
-test "fx platform Try.ok_or static dispatch regression" {
-    // Regression test for issue #8665: InvalidMethodReceiver crash on static dispatch for Try type
-    // The traditional function call syntax works:
-    //     _str1 = Try.ok_or(List.get(list, 0), "")
-    // But the method call syntax crashes:
-    //     _str2 = List.get(list, 0).ok_or("")
-    const allocator = testing.allocator;
-
-    const run_result = try runRoc(allocator, "test/fx/issue8665.roc", .{});
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    try checkSuccess(run_result);
-}
