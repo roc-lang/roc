@@ -1407,6 +1407,19 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
     , "3", .no_trace);
 }
 
+test "List.get method dispatch on Try type - issue 8665" {
+    // Regression test for issue #8665: InvalidMethodReceiver crash when calling
+    // ok_or() method on the result of List.get() using dot notation.
+    // The function call syntax works: Try.ok_or(List.get(list, 0), "fallback")
+    // But method syntax crashes: List.get(list, 0).ok_or("fallback")
+    try runExpectStr(
+        \\{
+        \\    list = ["hello"]
+        \\    List.get(list, 0).ok_or("fallback")
+        \\}
+    , "hello", .no_trace);
+}
+
 test "record destructuring with assignment - regression" {
     // Regression test for GitHub issue #8647
     // Record destructuring should not cause TypeMismatch error during evaluation
