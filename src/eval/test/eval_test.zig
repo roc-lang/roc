@@ -1406,3 +1406,27 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
         \\}
     , "3", .no_trace);
 }
+
+test "List.get with polymorphic numeric index from for loop - regression" {
+    // Regression test for GitHub issue #8666: interpreter panic when using
+    // a polymorphic numeric type (from an unannotated list) as a list index.
+    //
+    // The bug occurred because:
+    // 1. Polymorphic numerics default to Dec layout at runtime
+    // 2. list_get_unsafe used asI128() which asserts the layout is integer
+    // 3. But the value had a frac.dec layout, causing the assertion to fail
+    //
+    // Using List.first to exercise list_get_unsafe with a polymorphic index
+    // (indices list is unannotated so element type is polymorphic Num)
+    try runExpectInt(
+        \\{
+        \\    list = [10, 20, 30]
+        \\    indices = [0]
+        \\    var result = 0
+        \\    for i in indices {
+        \\        result = match List.get(list, i) { Ok(v) => v, _ => 0 }
+        \\    }
+        \\    result
+        \\}
+    , 10, .no_trace);
+}

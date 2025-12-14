@@ -238,11 +238,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<short|1>short|0<|1>",
         .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
-    .{
-        .roc_file = "test/fx/issue8666.roc",
-        .io_spec = "1>ok",
-        .description = "Regression test: List.get with inferred index type in for loop",
-    },
 };
 
 /// Get the total number of IO spec tests
