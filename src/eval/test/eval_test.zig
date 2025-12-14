@@ -1430,3 +1430,63 @@ test "List.get with polymorphic numeric index from for loop - regression" {
         \\}
     , 10, .no_trace);
 }
+
+test "List.get method dispatch on Try type - issue 8665" {
+    // Regression test for issue #8665: InvalidMethodReceiver crash when calling
+    // ok_or() method on the result of List.get() using dot notation.
+    // The function call syntax works: Try.ok_or(List.get(list, 0), "fallback")
+    // But method syntax crashes: List.get(list, 0).ok_or("fallback")
+    try runExpectStr(
+        \\{
+        \\    list = ["hello"]
+        \\    List.get(list, 0).ok_or("fallback")
+        \\}
+    , "hello", .no_trace);
+}
+
+test "record destructuring with assignment - regression" {
+    // Regression test for GitHub issue #8647
+    // Record destructuring should not cause TypeMismatch error during evaluation
+    try runExpectInt(
+        \\{
+        \\    rec = { x: 1, y: 2 }
+        \\    { x, y } = rec
+        \\    x + y
+        \\}
+    , 3, .no_trace);
+}
+
+test "record field access - regression 8647" {
+    // Regression test for GitHub issue #8647
+    // Record field access should work properly
+    try runExpectStr(
+        \\{
+        \\    rec = { name: "test" }
+        \\    rec.name
+        \\}
+    , "test", .no_trace);
+}
+
+test "method calls on numeric variables with flex types - regression" {
+    // Regression test for InvalidMethodReceiver when calling methods on numeric
+    // variables that have unconstrained (flex/rigid) types at compile time.
+    // Bug report: https://github.com/roc-lang/roc/issues/8663
+    // The issue was that when a numeric variable's compile-time type is flex,
+    // method dispatch would fail because it requires a nominal type (like Dec).
+
+    // Simple case: variable bound to numeric literal
+    try runExpectStr(
+        \\{
+        \\    x = 7.0
+        \\    x.to_str()
+        \\}
+    , "7.0", .no_trace);
+
+    // With integer literal (defaults to Dec, so output has decimal point)
+    try runExpectStr(
+        \\{
+        \\    x = 42
+        \\    x.to_str()
+        \\}
+    , "42.0", .no_trace);
+}
