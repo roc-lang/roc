@@ -1442,3 +1442,27 @@ test "record field access - regression 8647" {
         \\}
     , "test", .no_trace);
 }
+
+test "method calls on numeric variables with flex types - regression" {
+    // Regression test for InvalidMethodReceiver when calling methods on numeric
+    // variables that have unconstrained (flex/rigid) types at compile time.
+    // Bug report: https://github.com/roc-lang/roc/issues/8663
+    // The issue was that when a numeric variable's compile-time type is flex,
+    // method dispatch would fail because it requires a nominal type (like Dec).
+
+    // Simple case: variable bound to numeric literal
+    try runExpectStr(
+        \\{
+        \\    x = 7.0
+        \\    x.to_str()
+        \\}
+    , "7.0", .no_trace);
+
+    // With integer literal (defaults to Dec, so output has decimal point)
+    try runExpectStr(
+        \\{
+        \\    x = 42
+        \\    x.to_str()
+        \\}
+    , "42.0", .no_trace);
+}
