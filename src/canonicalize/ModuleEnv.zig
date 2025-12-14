@@ -416,6 +416,9 @@ for_clause_aliases: ForClauseAlias.SafeList,
 rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, TypeVar),
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
+/// Statements for for-clause type aliases (like Model : model) created during header processing.
+/// These need to be processed by the type checker separately from all_statements.
+for_clause_alias_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
 external_decls: CIR.ExternalDecl.SafeList,
 /// Store for interned module imports
@@ -522,6 +525,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) !void {
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.exports = .{ .span = .{ .start = 0, .len = 0 } };
     self.builtin_statements = .{ .span = .{ .start = 0, .len = 0 } };
+    self.for_clause_alias_statements = .{ .span = .{ .start = 0, .len = 0 } };
     // Note: external_decls already exists from ModuleEnv.init(), so we don't create a new one
     self.imports = CIR.Import.Store.init();
     self.module_name = module_name;
@@ -561,6 +565,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
         .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
+        .for_clause_alias_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
         .module_name = undefined, // Will be set later during canonicalization
@@ -1986,6 +1991,7 @@ pub const Serialized = extern struct {
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
     rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
     builtin_statements: CIR.Statement.Span,
+    for_clause_alias_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
@@ -2015,6 +2021,7 @@ pub const Serialized = extern struct {
         self.all_statements = env.all_statements;
         self.exports = env.exports;
         self.builtin_statements = env.builtin_statements;
+        self.for_clause_alias_statements = env.for_clause_alias_statements;
 
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
         try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
@@ -2081,6 +2088,7 @@ pub const Serialized = extern struct {
             .requires_types = self.requires_types.deserialize(offset).*,
             .for_clause_aliases = self.for_clause_aliases.deserialize(offset).*,
             .builtin_statements = self.builtin_statements,
+            .for_clause_alias_statements = self.for_clause_alias_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = (try self.imports.deserialize(offset, gpa)).*,
             .module_name = module_name,

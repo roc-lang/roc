@@ -9105,13 +9105,11 @@ pub const Interpreter = struct {
                     // If there's a for-clause mapping for this rigid name, add it to empty_scope
                     // so the layout store can find it during Box/List layout computation
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Ensure we have at least one scope level
+                        // Mapping found! Add to empty_scope and rigid_subst
                         if (self.empty_scope.scopes.items.len == 0) {
                             try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
                         }
-                        // Add the mapping to empty_scope
                         try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
-                        // Also add to rigid_subst for consistency
                         try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                     }
 

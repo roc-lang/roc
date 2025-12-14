@@ -985,6 +985,25 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
+    // Process for-clause alias statements (like Model : model) from platform headers.
+    // These are created during header processing and need to be type-checked so that
+    // when platform functions use Box(Model), the type resolves correctly.
+    const for_clause_stmts_slice = self.cir.store.sliceStatements(self.cir.for_clause_alias_statements);
+    for (for_clause_stmts_slice) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        const stmt_var = ModuleEnv.varFrom(stmt_idx);
+        try self.setVarRank(stmt_var, &env);
+
+        switch (stmt) {
+            .s_alias_decl => |alias| {
+                try self.generateAliasDecl(stmt_idx, stmt_var, alias, &env);
+            },
+            else => {
+                // For-clause alias statements should only contain alias declarations
+            },
+        }
+    }
+
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
 
     // First pass: generate types for each type declaration
@@ -1077,18 +1096,11 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     const requires_types_slice = self.cir.requires_types.items.items;
     for (requires_types_slice) |required_type| {
-        // First, process any for-clause rigids for this required type.
-        // These are standalone rigid_var annotations introduced by the for-clause
-        // that are referenced by the main type but not part of its annotation tree.
-        // We process them first so they're properly initialized before the main type.
-        const type_aliases_range = required_type.type_aliases;
-        const all_aliases = self.cir.for_clause_aliases.items.items;
-        const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
-        for (type_aliases_slice) |alias| {
-            try self.generateAnnoTypeInPlace(alias.rigid_anno_idx, env, .annotation);
-        }
+        // Note: for-clause rigid annotations (like `model` in `[Model : model]`) are already
+        // processed when the for-clause alias statements are generated earlier in checkFile().
+        // We don't need to process them again here.
 
-        // Generate the type from the annotation
+        // Generate the type from the main annotation (e.g., `R1 -> R2` in `for main : R1 -> R2`)
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
     }
 }
@@ -1222,6 +1234,22 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
         }
     }
     return null;
+}
+
+/// Check if a statement index is a for-clause alias statement.
+/// For-clause alias statements are created during platform header processing
+/// for type aliases like [Model : model] in the requires clause.
+/// When these are looked up, we need to preserve rigids so they can be
+/// substituted with concrete types from the app.
+fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
+    // Slice the for-clause alias statements and check if stmt_idx is in the list
+    const for_clause_stmts = self.cir.store.sliceStatements(self.cir.for_clause_alias_statements);
+    for (for_clause_stmts) |for_clause_stmt_idx| {
+        if (stmt_idx == for_clause_stmt_idx) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // repl //
@@ -1743,6 +1771,25 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                             // Otherwise, we're in an annotation and this cannot
                             // be recursive
                         },
+                    }
+
+                    // Check if this is a for-clause alias (like Model in [Model : model]).
+                    // For for-clause aliases, we want to use the backing rigid directly,
+                    // not the alias wrapper, so that it can be substituted with the app's
+                    // concrete type during checkPlatformRequirements.
+                    const is_for_clause_alias = self.isForClauseAliasStatement(local.decl_idx);
+                    if (is_for_clause_alias) {
+                        // Get the alias statement and return the backing var (rigid) directly
+                        const stmt = self.cir.store.getStatement(local.decl_idx);
+                        if (stmt == .s_alias_decl) {
+                            // Get the rigid var directly from the annotation without instantiation.
+                            // For for-clause aliases, we want to use the SAME rigid var everywhere,
+                            // not create fresh copies. This allows it to be unified with the app's
+                            // concrete type during checkPlatformRequirements.
+                            const alias_anno_var = ModuleEnv.varFrom(stmt.s_alias_decl.anno);
+                            _ = try self.unify(anno_var, alias_anno_var, env);
+                            return;
+                        }
                     }
 
                     const instantiated_var = try self.instantiateVar(

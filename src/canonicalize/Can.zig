@@ -1780,10 +1780,14 @@ pub fn canonicalizeFile(
             // These need to be in the exposed scope so they become exports
             // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
             try self.addPlatformProvidesItems(h.provides);
+            // Track start of for-clause alias statements
+            const for_clause_stmts_start = self.env.store.scratch.?.statements.top();
             // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
             // Also introduces type aliases (like Model) into the platform's top-level scope
             try self.processRequiresEntries(h.requires_entries);
+            // Capture all statements added during processRequiresEntries as for_clause_alias_statements
+            self.env.for_clause_alias_statements = try self.env.store.statementSpanFrom(for_clause_stmts_start);
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -2786,6 +2790,37 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
                 .alias_name = alias_name,
                 .rigid_name = rigid_name,
                 .rigid_anno_idx = rigid_anno_idx,
+            });
+
+            // IMPORTANT: Also introduce Model as a type alias in the module-level scope.
+            // This allows platform functions to use `Box(Model)` in their type signatures.
+            // The alias points to the same rigid annotation, which will be unified with
+            // the app's concrete type during type checking.
+            //
+            // Create a type header for the alias (no type parameters)
+            const alias_header = CIR.TypeHeader{
+                .name = alias_name,
+                .relative_name = alias_name,
+                .args = .{ .span = .{ .start = 0, .len = 0 } },
+            };
+            const alias_header_idx = try self.env.addTypeHeader(alias_header, alias_region);
+
+            // Create an s_alias_decl statement: Model : model
+            const alias_stmt = Statement{
+                .s_alias_decl = .{
+                    .header = alias_header_idx,
+                    .anno = rigid_anno_idx,
+                },
+            };
+            const alias_stmt_idx = try self.env.addStatement(alias_stmt, alias_region);
+            // Add to scratch statements so it can be captured in for_clause_alias_statements span
+            try self.env.store.addScratchStatement(alias_stmt_idx);
+
+            // Add to the module-level scope (index 0) as a local_alias binding
+            // This makes Model available for use in type annotations throughout the platform module
+            const module_scope = &self.scopes.items[0];
+            try module_scope.type_bindings.put(self.env.gpa, alias_name, Scope.TypeBinding{
+                .local_alias = alias_stmt_idx,
             });
         }
 

@@ -22,21 +22,23 @@ platform ""
     }
 
 # Explicit type annotations for host-facing functions
-init_for_host : {} -> Box(model)
+# Note: Use uppercase Model here - it's a type alias introduced by the for-clause [Model : model]
+# that gets unified with the app's concrete type during type checking.
+init_for_host : {} -> Box(Model)
 init_for_host = |{}| {
     init_fn = main.init
     record = init_fn({})
     Box.box(record)
 }
 
-update_for_host : Box(model), I64 -> Box(model)
+update_for_host : Box(Model), I64 -> Box(Model)
 update_for_host = |boxed_model, value| {
     m = Box.unbox(boxed_model)
     update_fn = main.update
     Box.box(update_fn(m, value))
 }
 
-render_for_host : Box(model) -> I64
+render_for_host : Box(Model) -> I64
 render_for_host = |boxed_model| {
     m = Box.unbox(boxed_model)
     render_fn = main.render
