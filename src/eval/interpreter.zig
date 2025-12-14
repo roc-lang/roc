@@ -15377,43 +15377,42 @@ pub const Interpreter = struct {
                 var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
                 var did_instantiate = false;
 
+                // Unify the method's first parameter with the receiver type to properly
+                // resolve rigid type variables (like `item` in List.get).
+                // This is the same approach used for no-args method dispatch.
+                // IMPORTANT: Create a copy of the receiver type before unification because
+                // unification modifies BOTH sides, which would corrupt the receiver's type.
+                const fn_args = switch (lambda_resolved.desc.content.structure) {
+                    .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                    .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                    .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                    else => &[_]types.Var{},
+                };
+                if (fn_args.len >= 1) {
+                    // Create a copy of the receiver's type to avoid corrupting the original
+                    const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                    const recv_copy = try self.runtime_types.register(.{
+                        .content = recv_resolved.desc.content,
+                        .rank = recv_resolved.desc.rank,
+                        .mark = types.Mark.none,
+                    });
+                    _ = unify.unifyWithConf(
+                        self.env,
+                        self.runtime_types,
+                        &self.problems,
+                        &self.snapshots,
+                        &self.type_writer,
+                        &self.unify_scratch,
+                        &self.unify_scratch.occurs_scratch,
+                        fn_args[0],
+                        recv_copy,
+                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                    ) catch {};
+                }
+
                 if (should_instantiate_method) {
                     // Instantiate the method type (replaces rigid vars with fresh flex vars)
                     _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
-
-                    // Map the fresh flex vars to concrete types from the receiver.
-                    const recv_type_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
-                    if (recv_type_resolved.desc.content == .structure and
-                        recv_type_resolved.desc.content.structure == .nominal_type)
-                    {
-                        const receiver_nom = recv_type_resolved.desc.content.structure.nominal_type;
-                        const receiver_args = self.runtime_types.sliceNominalArgs(receiver_nom);
-
-                        const fn_args = switch (lambda_resolved.desc.content.structure) {
-                            .fn_pure => |f| self.runtime_types.sliceVars(f.args),
-                            .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
-                            .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
-                            else => &[_]types.Var{},
-                        };
-
-                        if (fn_args.len > 0) {
-                            const first_param_resolved = self.runtime_types.resolveVar(fn_args[0]);
-                            if (first_param_resolved.desc.content == .structure and
-                                first_param_resolved.desc.content.structure == .nominal_type)
-                            {
-                                const param_nom = first_param_resolved.desc.content.structure.nominal_type;
-                                const param_args = self.runtime_types.sliceNominalArgs(param_nom);
-
-                                const min_args = @min(param_args.len, receiver_args.len);
-                                for (0..min_args) |arg_idx| {
-                                    const param_arg_resolved = self.runtime_types.resolveVar(param_args[arg_idx]);
-                                    if (param_arg_resolved.desc.content == .rigid) {
-                                        try method_subst_map.put(param_arg_resolved.var_, receiver_args[arg_idx]);
-                                    }
-                                }
-                            }
-                        }
-                    }
 
                     // Save and update rigid_subst
                     saved_rigid_subst = try self.rigid_subst.clone();
