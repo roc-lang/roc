@@ -239,9 +239,9 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
     .{
-        .roc_file = "test/fx/issue8648.roc",
-        .io_spec = "1>a",
-        .description = "Regression test: Record field access with app module ident space (issue #8648)",
+        .roc_file = "test/fx/list_method_get.roc",
+        .io_spec = "1>is ok",
+        .description = "Regression test: List.get with method syntax (issue #8662)",
     },
 };
 
