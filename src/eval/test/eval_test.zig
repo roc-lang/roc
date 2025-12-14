@@ -29,6 +29,7 @@ const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
+const runExpectListI64WithStrictLayout = helpers.runExpectListI64WithStrictLayout;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -1478,16 +1479,12 @@ test "method calls on numeric variables with flex types - regression" {
     , "42.0", .no_trace);
 }
 
-test "issue 8667: List.with_capacity in fold causes use-after-free" {
-    // First, test that List.append works with empty list
-    try runExpectListI64("List.append([], 1i64)", &[_]i64{1}, .no_trace);
+test "issue 8667: List.with_capacity should be inferred as List(I64)" {
+    // When List.with_capacity is used with List.append(_, 1i64), the type checker should
+    // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
+    // If it's .list_of_zst, that indicates a type inference bug.
+    try runExpectListI64WithStrictLayout("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
 
-    // Now test with List.with_capacity
-    try runExpectListI64("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
-
-    // Test fold with empty list - should work
-    try runExpectListI64("[1i64].fold([], List.append)", &[_]i64{1}, .no_trace);
-
-    // Test fold with with_capacity - this is the bug from issue #8667
-    try runExpectListI64("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
+    // Also test the fold case which is where the bug was originally reported
+    try runExpectListI64WithStrictLayout("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
 }

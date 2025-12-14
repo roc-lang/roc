@@ -14158,14 +14158,57 @@ pub const Interpreter = struct {
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
 
-                        // Get the actual return type from the lambda's function type.
-                        // This is needed because ci.call_ret_rt_var may be a polymorphic type
-                        // that hasn't been unified with the actual return type (e.g., when
-                        // passing a builtin like U64.from_str directly to a higher-order function).
-                        const low_level_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
-                        const low_level_rt_var = try self.translateTypeVar(self.env, low_level_ct_var);
-                        const resolved_func = self.runtime_types.resolveVar(low_level_rt_var);
-                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
+                        // Determine the return type for this low-level builtin call.
+                        //
+                        // There are two cases to consider:
+                        // 1. Direct call with unified types (e.g., List.append(List.with_capacity(1), 1i64))
+                        //    - ci.call_ret_rt_var has the correct unified type (List(I64))
+                        //    - The lambda's function type has type parameters (List(item))
+                        //    - We should use ci.call_ret_rt_var
+                        //
+                        // 2. Passing builtin to higher-order function (e.g., List.map(strs, U64.from_str))
+                        //    - ci.call_ret_rt_var may be polymorphic (not properly unified)
+                        //    - The lambda's function type has the concrete return type
+                        //    - We should use func.ret
+                        //
+                        // Strategy: Check if ci.call_ret_rt_var contains unresolved type parameters.
+                        // If it's concrete, use it. Otherwise, fall back to the lambda's return type.
+                        const ret_rt_var = blk: {
+                            const call_ret_resolved = self.runtime_types.resolveVar(ci.call_ret_rt_var);
+                            // Check if the call return type is concrete (no unresolved flex/rigid parameters)
+                            const is_concrete = switch (call_ret_resolved.desc.content) {
+                                .structure => |st| switch (st) {
+                                    .nominal_type => |nom| is_concrete: {
+                                        // Check if any type args are unresolved flex/rigid
+                                        const type_args = self.runtime_types.sliceNominalArgs(nom);
+                                        for (type_args) |arg| {
+                                            const arg_resolved = self.runtime_types.resolveVar(arg);
+                                            switch (arg_resolved.desc.content) {
+                                                .flex => |flex| if (flex.constraints.count == 0) break :is_concrete false,
+                                                .rigid => |rigid| if (rigid.constraints.count == 0) break :is_concrete false,
+                                                else => {},
+                                            }
+                                        }
+                                        break :is_concrete true;
+                                    },
+                                    else => true,
+                                },
+                                .flex => |flex| flex.constraints.count > 0,
+                                .rigid => |rigid| rigid.constraints.count > 0,
+                                else => true,
+                            };
+
+                            if (is_concrete) {
+                                // Use the call site's return type - it has concrete type info
+                                break :blk ci.call_ret_rt_var;
+                            } else {
+                                // Fall back to the lambda's function return type
+                                const low_level_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                                const low_level_rt_var = try self.translateTypeVar(self.env, low_level_ct_var);
+                                const resolved_func = self.runtime_types.resolveVar(low_level_rt_var);
+                                break :blk if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
+                            }
+                        };
 
                         // Special handling for list_sort_with which requires continuation-based evaluation
                         if (low_level.op == .list_sort_with) {
