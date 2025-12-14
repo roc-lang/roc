@@ -1443,6 +1443,17 @@ test "record field access - regression 8647" {
     , "test", .no_trace);
 }
 
+test "record field access with multiple string fields - regression 8648" {
+    // Regression test for GitHub issue #8648
+    // Record field access with app module ident space
+    try runExpectStr(
+        \\{
+        \\    record = { x: "a", y: "b" }
+        \\    record.x
+        \\}
+    , "a", .no_trace);
+}
+
 test "method calls on numeric variables with flex types - regression" {
     // Regression test for InvalidMethodReceiver when calling methods on numeric
     // variables that have unconstrained (flex/rigid) types at compile time.
