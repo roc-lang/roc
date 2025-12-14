@@ -58,7 +58,7 @@ pub fn copyVar(
     const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
 
     // Update the placeholder with the actual content
-    try dest_store.setVarDesc(placeholder_var, .{
+    try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
         .mark = types_mod.Mark.none,
