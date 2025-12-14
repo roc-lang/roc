@@ -1466,3 +1466,17 @@ test "method calls on numeric variables with flex types - regression" {
         \\}
     , "42.0", .no_trace);
 }
+
+test "issue 8667: List.with_capacity in fold causes use-after-free" {
+    // First, test that List.append works with empty list
+    try runExpectListI64("List.append([], 1i64)", &[_]i64{1}, .no_trace);
+
+    // Now test with List.with_capacity
+    try runExpectListI64("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
+
+    // Test fold with empty list - should work
+    try runExpectListI64("[1i64].fold([], List.append)", &[_]i64{1}, .no_trace);
+
+    // Test fold with with_capacity - this is the bug from issue #8667
+    try runExpectListI64("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
+}

@@ -2686,6 +2686,112 @@ pub const Interpreter = struct {
                 // Extract element layout from List(a)
                 std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
 
+                // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
+                // The list header tracks the length but elements are zero-sized.
+                if (roc_list_arg.layout.tag == .list_of_zst) {
+                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+
+                    // If the element is also ZST, just bump the length
+                    if (elt_arg.layout.tag == .zst) {
+                        var result_list = roc_list.*;
+                        result_list.length += 1;
+                        var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
+                        out.is_initialized = false;
+                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                        result_ptr.* = result_list;
+                        out.is_initialized = true;
+                        return out;
+                    }
+
+                    // The list was inferred as list_of_zst (e.g., from List.with_capacity with unknown element type)
+                    // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
+                    // The original list_of_zst should be empty (or contain only ZST elements that we can discard).
+                    // Create a new list with the element's layout and append to it.
+                    const elem_layout = elt_arg.layout;
+                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(elem_layout);
+                    var new_list_layout = roc_list_arg.layout;
+                    new_list_layout.tag = .list;
+                    new_list_layout.data = .{ .list = elem_layout_idx };
+
+                    // Create new empty list with correct element layout
+                    const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                    const append_elt: builtins.list.Opaque = non_null_bytes;
+                    const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
+                    const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                    const elem_alignment_u32: u32 = @intCast(elem_alignment);
+
+                    // Determine if elements contain refcounted data
+                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+
+                    // Set up context for refcount callbacks
+                    const elem_rt_var = try self.runtime_types.fresh();
+                    var refcount_context = RefcountContext{
+                        .layout_store = &self.runtime_layout_store,
+                        .elem_layout = elem_layout,
+                        .elem_rt_var = elem_rt_var,
+                        .roc_ops = roc_ops,
+                    };
+
+                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
+                        .scalar => {
+                            switch (elem_layout.data.scalar.tag) {
+                                .str => break :copy &builtins.list.copy_str,
+                                .int => {
+                                    switch (elem_layout.data.scalar.data.int) {
+                                        .u8 => break :copy &builtins.list.copy_u8,
+                                        .u16 => break :copy &builtins.list.copy_u16,
+                                        .u32 => break :copy &builtins.list.copy_u32,
+                                        .u64 => break :copy &builtins.list.copy_u64,
+                                        .u128 => break :copy &builtins.list.copy_u128,
+                                        .i8 => break :copy &builtins.list.copy_i8,
+                                        .i16 => break :copy &builtins.list.copy_i16,
+                                        .i32 => break :copy &builtins.list.copy_i32,
+                                        .i64 => break :copy &builtins.list.copy_i64,
+                                        .i128 => break :copy &builtins.list.copy_i128,
+                                    }
+                                },
+                                else => break :copy &builtins.list.copy_fallback,
+                            }
+                        },
+                        .box => break :copy &builtins.list.copy_box,
+                        .box_of_zst => break :copy &builtins.list.copy_box_zst,
+                        .list => break :copy &builtins.list.copy_list,
+                        .list_of_zst => break :copy &builtins.list.copy_list_zst,
+                        else => break :copy &builtins.list.copy_fallback,
+                    };
+
+                    // Increment refcount of the element being appended
+                    if (elements_refcounted) {
+                        elt_arg.incref(&self.runtime_layout_store);
+                    }
+
+                    // Append to an empty list (ignoring the old list_of_zst content)
+                    const empty_list = builtins.list.RocList.empty();
+                    const result_list = builtins.list.listAppend(
+                        empty_list,
+                        elem_alignment_u32,
+                        append_elt,
+                        elem_size,
+                        elements_refcounted,
+                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
+                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                        builtins.utils.UpdateMode.Immutable,
+                        copy_fn,
+                        roc_ops,
+                    );
+
+                    // Decref the original list_of_zst (it may have capacity allocated)
+                    roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
+
+                    // Push result with upgraded layout
+                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    out.is_initialized = false;
+                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                    result_ptr.* = result_list;
+                    out.is_initialized = true;
+                    return out;
+                }
+
                 // Format arguments into proper types
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
