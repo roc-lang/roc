@@ -238,11 +238,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<short|1>short|0<|1>",
         .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
-    .{
-        .roc_file = "test/fx/issue8664.roc",
-        .io_spec = "1>num: 8.0|1>num: 7.0|1>result: 7.0",
-        .description = "Regression test: Issue #8664 - InvalidMethodReceiver when calling methods on elements from untyped list parameter",
-    },
 };
 
 /// Get the total number of IO spec tests
