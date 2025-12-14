@@ -45,6 +45,61 @@ const RefcountContext = struct {
     roc_ops: *RocOps,
 };
 
+/// Check if a layout contains any refcounted data (directly or transitively).
+/// This is more comprehensive than Layout.isRefcounted() which only checks if
+/// the layout itself is heap-allocated. This function also returns true for
+/// tuples/records that contain strings, lists, or boxes.
+fn layoutContainsRefcounted(l: Layout, layout_store: *layout.Store) bool {
+    return switch (l.tag) {
+        .scalar => switch (l.data.scalar.tag) {
+            .str => true,
+            else => false,
+        },
+        .list, .list_of_zst => true,
+        .box, .box_of_zst => true,
+        .tuple => {
+            const tuple_data = layout_store.getTupleData(l.data.tuple.idx);
+            const fields = layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+            for (0..fields.len) |i| {
+                const field_layout = layout_store.getLayout(fields.get(i).layout);
+                if (layoutContainsRefcounted(field_layout, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .record => {
+            const record_data = layout_store.getRecordData(l.data.record.idx);
+            const fields = layout_store.record_fields.sliceRange(record_data.getFields());
+            for (0..fields.len) |i| {
+                const field_layout = layout_store.getLayout(fields.get(i).layout);
+                if (layoutContainsRefcounted(field_layout, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .tag_union => {
+            const tu_data = layout_store.getTagUnionData(l.data.tag_union.idx);
+            const variants = layout_store.getTagUnionVariants(tu_data);
+            for (0..variants.len) |i| {
+                const variant_layout = layout_store.getLayout(variants.get(i).payload_layout);
+                if (layoutContainsRefcounted(variant_layout, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .closure => {
+            // Closures capture variables which may be refcounted
+            // TODO: Check the captures layout for refcounted data
+            // For now, assume closures may contain refcounted data
+            return true;
+        },
+        .zst => false,
+    };
+}
+
 /// Increment callback for list operations - increments refcount of element via StackValue
 fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
     const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
@@ -2731,8 +2786,10 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
-                // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                // Determine if elements contain refcounted data (directly or transitively).
+                // This is more comprehensive than isRefcounted() - it also catches tuples/records
+                // containing strings, which need proper refcounting (fixes issue #8650).
+                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
 
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique()) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
@@ -7530,13 +7587,23 @@ pub const Interpreter = struct {
                     return value.layout.tag == .record or value.layout.tag == .zst;
                 }
 
-                if (value.layout.tag != .record) return false;
+                // Fail fast with a clear crash message for non-record values (issue #8647 debugging)
+                if (value.layout.tag != .record) {
+                    self.triggerCrash("record_destructure: value layout tag is not .record", false, roc_ops);
+                    return error.Crash;
+                }
                 var accessor = try value.asRecord(&self.runtime_layout_store);
 
                 for (destructs) |destruct_idx| {
                     const destruct = self.env.store.getRecordDestruct(destruct_idx);
 
-                    const field_index = accessor.findFieldIndex(destruct.label) orelse return false;
+                    // Translate field name from pattern's ident store to runtime layout store's ident store
+                    const pattern_label_str = self.env.getIdent(destruct.label);
+                    const runtime_label = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(pattern_label_str)) catch return error.Crash;
+                    const field_index = accessor.findFieldIndex(runtime_label) orelse {
+                        self.triggerCrash("record_destructure: field not found in record", false, roc_ops);
+                        return error.Crash;
+                    };
                     const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
                     const field_var = try self.translateTypeVar(self.env, field_ct_var);
                     const field_value = try accessor.getFieldByIndex(field_index, field_var);
@@ -9489,6 +9556,10 @@ pub const Interpreter = struct {
         /// Negate boolean result on value stack (for != operator).
         negate_bool: void,
 
+        /// Wrap backing expression result with nominal type's rt_var.
+        /// This ensures method dispatch finds the nominal type info.
+        nominal_wrap: NominalWrap,
+
         pub const DecrefValue = struct {
             value: StackValue,
         };
@@ -9605,6 +9676,12 @@ pub const Interpreter = struct {
 
         /// Return the value on the stack as an early return.
         pub const EarlyReturn = struct {};
+
+        /// Wrap backing expression result with nominal type's rt_var.
+        pub const NominalWrap = struct {
+            /// The nominal type's rt_var to set on the result
+            nominal_rt_var: types.Var,
+        };
 
         pub const TagCollect = struct {
             /// Number of collected payload values on the value stack
@@ -10967,8 +11044,12 @@ pub const Interpreter = struct {
                 // Use expected_rt_var if available - this carries the correctly instantiated type
                 // from the call site (with concrete type args), avoiding re-translation from
                 // the builtins module which would have rigid type args.
-                const backing_rt_var = if (nom.nominal_type_decl == self.builtins.bool_stmt)
-                    try self.getCanonicalBoolRuntimeVar()
+                //
+                // Also track the outer nominal rt_var so we can wrap the result with it.
+                // This is needed for method dispatch to find methods defined on the nominal type.
+                const BackingInfo = struct { backing: types.Var, nominal: ?types.Var };
+                const backing_info: BackingInfo = if (nom.nominal_type_decl == self.builtins.bool_stmt)
+                    .{ .backing = try self.getCanonicalBoolRuntimeVar(), .nominal = null }
                 else if (expected_rt_var) |expected| blk: {
                     // Use the expected type's backing - but we need to set up rigid substitution
                     // because the backing may still have rigids that need to map to concrete type args
@@ -11014,11 +11095,12 @@ pub const Interpreter = struct {
                                         try self.rigid_subst.put(rigids.items[i], concrete_type);
                                     }
                                 }
-                                break :blk backing;
+                                // Return backing and preserve the nominal type for wrapping
+                                break :blk BackingInfo{ .backing = backing, .nominal = expected };
                             },
-                            else => break :blk expected,
+                            else => break :blk BackingInfo{ .backing = expected, .nominal = null },
                         },
-                        else => break :blk expected,
+                        else => break :blk BackingInfo{ .backing = expected, .nominal = null },
                     }
                 } else blk: {
                     // Fall back to translating from current env
@@ -11027,16 +11109,28 @@ pub const Interpreter = struct {
                     const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
                     break :blk switch (nominal_resolved.desc.content) {
                         .structure => |st| switch (st) {
-                            .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                            else => nominal_rt_var,
+                            .nominal_type => |nt| BackingInfo{
+                                .backing = self.runtime_types.getNominalBackingVar(nt),
+                                .nominal = nominal_rt_var,
+                            },
+                            else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                         },
-                        else => nominal_rt_var,
+                        else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
                     };
                 };
+
+                // If we extracted backing from a nominal, push continuation to wrap result
+                // with the nominal type's rt_var (for method dispatch to find nominal methods)
+                if (backing_info.nominal) |nominal_rt_var| {
+                    try work_stack.push(.{ .apply_continuation = .{ .nominal_wrap = .{
+                        .nominal_rt_var = nominal_rt_var,
+                    } } });
+                }
+
                 // Schedule evaluation of the backing expression
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = nom.backing_expr,
-                    .expected_rt_var = backing_rt_var,
+                    .expected_rt_var = backing_info.backing,
                 } });
             },
 
@@ -11583,10 +11677,12 @@ pub const Interpreter = struct {
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
                 const is_flex_or_rigid = receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid;
 
-                // If the receiver type is a flex/rigid var, default to Dec for evaluation.
-                // This ensures numeric literals get proper type resolution.
-                // (Unsuffixed numeric literals default to Dec in Roc)
-                if (is_flex_or_rigid) {
+                // For METHOD CALLS (args != null) with flex/rigid receiver type, default to Dec.
+                // This ensures numeric literals like `(-3.14).abs()` get proper type resolution.
+                // For FIELD ACCESS (args == null), don't default to Dec - the receiver could be
+                // a record type that just hasn't been fully resolved at compile time.
+                // (Fix for GitHub issue #8647 - record field access was broken by Dec defaulting)
+                if (is_flex_or_rigid and dot_access.args != null) {
                     const dec_content = try self.mkNumberTypeContentRuntime("Dec");
                     receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
                 }
@@ -11603,9 +11699,11 @@ pub const Interpreter = struct {
                 } } });
 
                 // Push receiver evaluation - will be executed first, result goes on value_stack
+                // For field access, pass null to let the receiver determine its own type.
+                // For method calls, pass the (possibly Dec-defaulted) receiver_rt_var.
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dot_access.receiver,
-                    .expected_rt_var = receiver_rt_var,
+                    .expected_rt_var = if (dot_access.args != null) receiver_rt_var else null,
                 } });
             },
 
@@ -11631,15 +11729,27 @@ pub const Interpreter = struct {
 
         var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+
         // If the layout isn't a numeric type (e.g., ZST from unconstrained flex/rigid),
-        // default to Dec since we're evaluating a numeric literal
+        // default to Dec since we're evaluating a numeric literal.
+        // Also update the rt_var to be a concrete Dec type so method dispatch works.
         const is_numeric_layout = layout_val.tag == .scalar and
             (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
-        if (!is_numeric_layout) {
-            layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+        var final_rt_var = layout_rt_var;
+        if (!is_numeric_layout or is_flex_or_rigid) {
+            if (!is_numeric_layout) {
+                layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+            }
+            // Create a proper Dec nominal type for the rt_var
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            final_rt_var = try self.runtime_types.freshFromContent(dec_content);
         }
 
-        var value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
         value.is_initialized = false;
         switch (layout_val.tag) {
             .scalar => switch (layout_val.data.scalar.tag) {
@@ -11723,7 +11833,16 @@ pub const Interpreter = struct {
         };
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete F32 type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const f32_content = try self.mkNumberTypeContentRuntime("F32");
+            break :blk try self.runtime_types.freshFromContent(f32_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *f32 = @ptrCast(@alignCast(ptr));
             typed_ptr.* = lit.value;
@@ -11744,7 +11863,16 @@ pub const Interpreter = struct {
         };
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete F64 type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const f64_content = try self.mkNumberTypeContentRuntime("F64");
+            break :blk try self.runtime_types.freshFromContent(f64_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *f64 = @ptrCast(@alignCast(ptr));
             typed_ptr.* = lit.value;
@@ -11765,7 +11893,16 @@ pub const Interpreter = struct {
         };
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            break :blk try self.runtime_types.freshFromContent(dec_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
             typed_ptr.* = dec_lit.value;
@@ -11792,7 +11929,16 @@ pub const Interpreter = struct {
             layout_val.data.scalar.tag == .frac and
             layout_val.data.scalar.data.frac == .dec);
 
-        const value = try self.pushRaw(layout_val, 0, layout_rt_var);
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+        const final_rt_var = if (is_flex_or_rigid) blk: {
+            const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+            break :blk try self.runtime_types.freshFromContent(dec_content);
+        } else layout_rt_var;
+
+        const value = try self.pushRaw(layout_val, 0, final_rt_var);
         if (value.ptr) |ptr| {
             const typed_ptr: *RocDec = @ptrCast(@alignCast(ptr));
             const scale_factor = std.math.pow(i128, 10, RocDec.decimal_places - small.value.denominator_power_of_ten);
@@ -13368,6 +13514,8 @@ pub const Interpreter = struct {
                     self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
 
                     var dest = try self.pushRaw(rec_layout, 0, rc.rt_var);
+                    // Debug assertion for issue #8647
+                    std.debug.assert(dest.layout.tag == .record);
                     var accessor = try dest.asRecord(&self.runtime_layout_store);
 
                     // Copy base record fields first
@@ -15220,6 +15368,45 @@ pub const Interpreter = struct {
                             try value_stack.push(result_val);
                             return true;
                         }
+                        // For flex/rigid numeric types with other method calls (like to_str),
+                        // derive the nominal type from the layout
+                        if (receiver_value.layout.tag == .scalar) {
+                            const scalar_tag = receiver_value.layout.data.scalar.tag;
+                            if (scalar_tag == .int) {
+                                const int_info = receiver_value.layout.data.scalar.data.int;
+                                const type_name: []const u8 = switch (int_info) {
+                                    .i8 => "I8",
+                                    .i16 => "I16",
+                                    .i32 => "I32",
+                                    .i64 => "I64",
+                                    .i128 => "I128",
+                                    .u8 => "U8",
+                                    .u16 => "U16",
+                                    .u32 => "U32",
+                                    .u64 => "U64",
+                                    .u128 => "U128",
+                                };
+                                const content = try self.mkNumberTypeContentRuntime(type_name);
+                                const nom = content.structure.nominal_type;
+                                break :blk .{
+                                    .origin = nom.origin_module,
+                                    .ident = nom.ident.ident_idx,
+                                };
+                            } else if (scalar_tag == .frac) {
+                                const frac_info = receiver_value.layout.data.scalar.data.frac;
+                                const type_name: []const u8 = switch (frac_info) {
+                                    .f32 => "F32",
+                                    .f64 => "F64",
+                                    .dec => "Dec",
+                                };
+                                const content = try self.mkNumberTypeContentRuntime(type_name);
+                                const nom = content.structure.nominal_type;
+                                break :blk .{
+                                    .origin = nom.origin_module,
+                                    .ident = nom.ident.ident_idx,
+                                };
+                            }
+                        }
                         break :blk null;
                     },
                     else => null,
@@ -15611,43 +15798,42 @@ pub const Interpreter = struct {
                 var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
                 var did_instantiate = false;
 
+                // Unify the method's first parameter with the receiver type to properly
+                // resolve rigid type variables (like `item` in List.get).
+                // This is the same approach used for no-args method dispatch.
+                // IMPORTANT: Create a copy of the receiver type before unification because
+                // unification modifies BOTH sides, which would corrupt the receiver's type.
+                const fn_args = switch (lambda_resolved.desc.content.structure) {
+                    .fn_pure => |f| self.runtime_types.sliceVars(f.args),
+                    .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
+                    .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
+                    else => &[_]types.Var{},
+                };
+                if (fn_args.len >= 1) {
+                    // Create a copy of the receiver's type to avoid corrupting the original
+                    const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                    const recv_copy = try self.runtime_types.register(.{
+                        .content = recv_resolved.desc.content,
+                        .rank = recv_resolved.desc.rank,
+                        .mark = types.Mark.none,
+                    });
+                    _ = unify.unifyWithConf(
+                        self.env,
+                        self.runtime_types,
+                        &self.problems,
+                        &self.snapshots,
+                        &self.type_writer,
+                        &self.unify_scratch,
+                        &self.unify_scratch.occurs_scratch,
+                        fn_args[0],
+                        recv_copy,
+                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                    ) catch {};
+                }
+
                 if (should_instantiate_method) {
                     // Instantiate the method type (replaces rigid vars with fresh flex vars)
                     _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
-
-                    // Map the fresh flex vars to concrete types from the receiver.
-                    const recv_type_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
-                    if (recv_type_resolved.desc.content == .structure and
-                        recv_type_resolved.desc.content.structure == .nominal_type)
-                    {
-                        const receiver_nom = recv_type_resolved.desc.content.structure.nominal_type;
-                        const receiver_args = self.runtime_types.sliceNominalArgs(receiver_nom);
-
-                        const fn_args = switch (lambda_resolved.desc.content.structure) {
-                            .fn_pure => |f| self.runtime_types.sliceVars(f.args),
-                            .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
-                            .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
-                            else => &[_]types.Var{},
-                        };
-
-                        if (fn_args.len > 0) {
-                            const first_param_resolved = self.runtime_types.resolveVar(fn_args[0]);
-                            if (first_param_resolved.desc.content == .structure and
-                                first_param_resolved.desc.content.structure == .nominal_type)
-                            {
-                                const param_nom = first_param_resolved.desc.content.structure.nominal_type;
-                                const param_args = self.runtime_types.sliceNominalArgs(param_nom);
-
-                                const min_args = @min(param_args.len, receiver_args.len);
-                                for (0..min_args) |arg_idx| {
-                                    const param_arg_resolved = self.runtime_types.resolveVar(param_args[arg_idx]);
-                                    if (param_arg_resolved.desc.content == .rigid) {
-                                        try method_subst_map.put(param_arg_resolved.var_, receiver_args[arg_idx]);
-                                    }
-                                }
-                            }
-                        }
-                    }
 
                     // Save and update rigid_subst
                     saved_rigid_subst = try self.rigid_subst.clone();
@@ -16437,6 +16623,17 @@ pub const Interpreter = struct {
                 result.decref(&self.runtime_layout_store, roc_ops);
                 const negated = try self.makeBoolValue(!is_true);
                 try value_stack.push(negated);
+                return true;
+            },
+            .nominal_wrap => |nw| {
+                // Wrap the backing expression result with the nominal type's rt_var.
+                // This ensures method dispatch can find methods defined on the nominal type.
+                var result = value_stack.pop() orelse {
+                    self.triggerCrash("nominal_wrap: expected value on stack", false, roc_ops);
+                    return error.Crash;
+                };
+                result.rt_var = nw.nominal_rt_var;
+                try value_stack.push(result);
                 return true;
             },
         }
