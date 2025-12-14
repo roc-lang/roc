@@ -118,6 +118,13 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 
+/// Check if the token at the given position is a var identifier (starts with '$')
+fn isVarIdent(self: *Parser, token_pos: Token.Idx) bool {
+    const region = self.tok_buf.resolve(token_pos);
+    const text = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
+    return text.len > 0 and text[0] == '$';
+}
+
 /// Check if the current position looks like a type declaration with a valid type following.
 /// This peeks ahead without consuming tokens to determine if we have:
 /// - `Name :` followed by a valid type start token
@@ -1425,6 +1432,19 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             }
             const name = self.pos;
             self.advance();
+            // Check if this is a type annotation (var $foo : Type) or assignment (var $foo = expr)
+            if (self.peek() == .OpColon) {
+                // Type annotation: var $foo : Type
+                self.advance(); // Advance past OpColon
+                const anno = try self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = try self.store.addStatement(.{ .type_anno = .{
+                    .anno = anno,
+                    .name = name,
+                    .where = try self.parseWhereConstraint(),
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            }
             self.expect(.OpAssign) catch {
                 return try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
             };
@@ -1453,6 +1473,10 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 } });
                 return statement_idx;
             } else if (self.peekNext() == .OpColon) {
+                // Check if this is a var identifier (starts with $) - those require "var" keyword
+                if (self.isVarIdent(start)) {
+                    return try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
+                }
                 self.advance(); // Advance past LowerIdent
                 self.advance(); // Advance past OpColon
                 const anno = try self.parseTypeAnno(.not_looking_for_args);

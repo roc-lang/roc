@@ -717,6 +717,7 @@ pub const Diagnostic = struct {
         var_only_allowed_in_a_body,
         var_must_have_ident,
         var_expected_equals,
+        var_type_anno_needs_var_keyword,
         for_expected_in,
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
