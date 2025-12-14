@@ -15934,12 +15934,34 @@ pub const Interpreter = struct {
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
                 const list_len = list_header.len();
 
+                // Extract the element type from the list's runtime type.
+                // This is important when the pattern's compile-time type was a flex variable
+                // (e.g., when iterating over a list passed to an untyped function parameter).
+                // The list's actual runtime type (e.g., List(I64)) has the concrete element type
+                // that we need for method resolution to work correctly.
+                const elem_rt_var = blk: {
+                    const list_resolved = self.runtime_types.resolveVar(list_value.rt_var);
+                    if (list_resolved.desc.content == .structure) {
+                        if (list_resolved.desc.content.structure == .nominal_type) {
+                            const list_nom = list_resolved.desc.content.structure.nominal_type;
+                            const list_args = self.runtime_types.sliceNominalArgs(list_nom);
+                            if (list_args.len > 0) {
+                                // List(elem) - the first type arg is the element type
+                                break :blk list_args[0];
+                            }
+                        }
+                    }
+                    // Fall back to the pattern's translated type
+                    break :blk fl_in.patt_rt_var;
+                };
+
                 // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
                 fl.list_value = list_value;
                 fl.list_len = list_len;
                 fl.elem_size = elem_size;
                 fl.elem_layout = elem_layout;
+                fl.patt_rt_var = elem_rt_var;
 
                 // If list is empty, handle completion
                 if (list_len == 0) {

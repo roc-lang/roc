@@ -1408,6 +1408,26 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
     , "3", .no_trace);
 }
 
+test "for loop element type extracted from list runtime type - regression #8664" {
+    // Regression test for InvalidMethodReceiver when calling methods on elements
+    // from a for loop over a list passed to an untyped function parameter.
+    // The fix: extract element type from list's runtime type (e.g., List(Dec))
+    // instead of using the pattern's compile-time flex variable.
+    // Note: unsuffixed number literals default to Dec in Roc.
+    try runExpectStr(
+        \\{
+        \\    calc = |list| {
+        \\        var $result = ""
+        \\        for elem in list {
+        \\            $result = elem.to_str()
+        \\        }
+        \\        $result
+        \\    }
+        \\    calc([1, 2, 3])
+        \\}
+    , "3.0", .no_trace);
+}
+
 test "List.get method dispatch on Try type - issue 8665" {
     // Regression test for issue #8665: InvalidMethodReceiver crash when calling
     // ok_or() method on the result of List.get() using dot notation.
