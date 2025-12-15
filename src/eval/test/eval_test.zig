@@ -1408,26 +1408,22 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
     , "3", .no_trace);
 }
 
-test "List.get with polymorphic numeric index from for loop - regression" {
+test "List.get with polymorphic numeric index - regression #8666" {
     // Regression test for GitHub issue #8666: interpreter panic when using
-    // a polymorphic numeric type (from an unannotated list) as a list index.
+    // a polymorphic numeric type as a list index.
     //
-    // The bug occurred because:
-    // 1. Polymorphic numerics default to Dec layout at runtime
-    // 2. list_get_unsafe used asI128() which asserts the layout is integer
-    // 3. But the value had a frac.dec layout, causing the assertion to fail
+    // The bug occurred because numeric literals with from_numeral constraints
+    // were being generalized, causing each use to get a fresh instantiation.
+    // This meant the concrete U64 type from List.get didn't propagate back
+    // to the original definition, leaving it as a flex var that defaulted to Dec.
     //
-    // Using List.first to exercise list_get_unsafe with a polymorphic index
-    // (indices list is unannotated so element type is polymorphic Num)
+    // The fix: don't generalize vars with from_numeral constraints, and don't
+    // instantiate them during lookup, so constraint propagation works correctly.
     try runExpectInt(
         \\{
         \\    list = [10, 20, 30]
-        \\    indices = [0]
-        \\    var result = 0
-        \\    for i in indices {
-        \\        result = match List.get(list, i) { Ok(v) => v, _ => 0 }
-        \\    }
-        \\    result
+        \\    index = 0
+        \\    match List.get(list, index) { Ok(v) => v, _ => 0 }
         \\}
     , 10, .no_trace);
 }
