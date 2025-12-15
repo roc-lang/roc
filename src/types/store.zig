@@ -2,6 +2,7 @@
 //! Contains both Slot & Descriptor stores
 
 const std = @import("std");
+const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
 const serialization = @import("serialization");
@@ -143,6 +144,8 @@ pub const Store = struct {
     /// Create a new unbound, flexible type variable without a name
     /// Used in canonicalization when creating type slots
     pub fn fresh(self: *Self) std.mem.Allocator.Error!Var {
+        const trace = tracy.traceNamed(@src(), "typesStore.fresh");
+        defer trace.end();
         return try self.freshFromContent(Content{ .flex = Flex.init() });
     }
 
@@ -155,6 +158,8 @@ pub const Store = struct {
     /// Create a new variable with the provided desc
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
+        const trace = tracy.traceNamed(@src(), "typesStore.freshFromContent");
+        defer trace.end();
         const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -457,6 +462,8 @@ pub const Store = struct {
 
     /// Append a var to the backing list, returning the idx
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
+        defer trace.end();
         return try self.vars.appendSlice(self.gpa, s);
     }
 
@@ -609,6 +616,8 @@ pub const Store = struct {
 
     /// Given a type var, follow all redirects until finding the root descriptor
     pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
+        const trace = tracy.traceNamed(@src(), "typesStore.resolveVar");
+        defer trace.end();
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
         var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
 

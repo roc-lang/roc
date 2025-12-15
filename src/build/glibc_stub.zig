@@ -39,6 +39,13 @@ pub fn generateComprehensiveStub(
         "munmap",
         "mremap",
         "msync",
+        // Used by Zig's CAllocator
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "posix_memalign",
+        "malloc_usable_size",
         // File I/O
         "close",
         "read",

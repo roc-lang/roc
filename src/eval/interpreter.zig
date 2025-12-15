@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const tracy = @import("tracy");
 
 /// Stack size for the interpreter. WASM targets use a smaller stack to avoid
 /// memory pressure from repeated allocations that can't be efficiently coalesced.
@@ -604,6 +605,9 @@ pub const Interpreter = struct {
 
     /// Evaluates a Roc expression and returns the result.
     pub fn eval(self: *Interpreter, expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Clear flex_type_context at the start of each top-level evaluation.
         // This prevents stale type mappings from previous evaluations from
         // interfering with polymorphic function instantiation.
@@ -632,6 +636,9 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         arg_ptr: ?*anyopaque,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         if (arg_ptr) |args_ptr| {
             const func_val = try self.eval(expr_idx, roc_ops);
             defer func_val.decref(&self.runtime_layout_store, roc_ops);
@@ -917,6 +924,9 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         work_stack: *WorkStack,
     ) !SortWithResult {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var saved_rigid_subst = saved_rigid_subst_in;
 
         std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
@@ -1064,6 +1074,9 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         return_rt_var: types.Var,
     ) !StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Validate index is within bounds
         if (hosted_fn_index >= roc_ops.hosted_fns.count) {
             self.triggerCrash("Hosted function index out of bounds", false, roc_ops);
@@ -1128,6 +1141,9 @@ pub const Interpreter = struct {
 
     /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
     pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // For num_from_numeral, we need to pass the target type through a different mechanism
         // since the standard handler extracts it from the return type which has a generic parameter.
         // Store the target type temporarily so the handler can use it.
@@ -1138,6 +1154,9 @@ pub const Interpreter = struct {
     }
 
     pub fn callLowLevelBuiltin(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var) !StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (op) {
             .str_is_empty => {
                 // Str.is_empty : Str -> Bool
@@ -6131,6 +6150,9 @@ pub const Interpreter = struct {
         _: types.Var, // rhs_var unused
         roc_ops: *RocOps,
     ) StructuralEqError!bool {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Handle scalar comparisons (numbers, strings) directly.
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
             const lhs_scalar = lhs.layout.data.scalar;
@@ -7199,6 +7221,8 @@ pub const Interpreter = struct {
         out_binds: *std.array_list.AlignedManaged(Binding, null),
         expr_idx: ?can.CIR.Expr.Idx,
     ) !bool {
+        const trace = tracy.trace(@src());
+        defer trace.end();
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
             .assign => |_| {
@@ -7684,6 +7708,9 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         receiver_rt_var: ?types.Var,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Check method resolution cache first
         const cache_key = MethodResolutionKey{
             .origin_module = origin_module,
@@ -8106,6 +8133,9 @@ pub const Interpreter = struct {
 
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var resolved = self.runtime_types.resolveVar(type_var);
 
         // Apply rigid variable substitution if this is a rigid variable
@@ -8504,6 +8534,9 @@ pub const Interpreter = struct {
     /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
     /// Uses caching to handle recursive types and avoid duplicate work.
     pub fn translateTypeVar(self: *Interpreter, module: *can.ModuleEnv, compile_var: types.Var) Error!types.Var {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const resolved = module.types.resolveVar(compile_var);
 
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
@@ -8554,6 +8587,9 @@ pub const Interpreter = struct {
                 .structure => |flat| {
                     switch (flat) {
                         .tag_union => |tu| {
+                            const tu_trace = tracy.traceNamed(@src(), "translateTypeVar.tag_union");
+                            defer tu_trace.end();
+
                             var rt_tag_args = try std.ArrayList(types.Var).initCapacity(self.allocator, 8);
                             defer rt_tag_args.deinit(self.allocator);
 
@@ -8609,6 +8645,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
                         },
                         .tuple => |t| {
+                            const tup_trace = tracy.traceNamed(@src(), "translateTypeVar.tuple");
+                            defer tup_trace.end();
+
                             const ct_elems = module.types.sliceVars(t.elems);
                             var buf = try self.allocator.alloc(types.Var, ct_elems.len);
                             defer self.allocator.free(buf);
@@ -8619,6 +8658,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = range } } });
                         },
                         .record => |rec| {
+                            const rec_trace = tracy.traceNamed(@src(), "translateTypeVar.record");
+                            defer rec_trace.end();
+
                             var acc = try FieldAccumulator.init(self.allocator);
                             defer acc.deinit();
                             var visited = std.AutoHashMap(types.Var, void).init(self.allocator);
@@ -8651,6 +8693,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .{ .record = .{ .fields = rt_fields, .ext = rt_ext } } });
                         },
                         .record_unbound => |fields_range| {
+                            const rub_trace = tracy.traceNamed(@src(), "translateTypeVar.record_unbound");
+                            defer rub_trace.end();
+
                             // record_unbound has no extension - it's a complete set of fields
                             const ct_fields = module.types.getRecordFieldsSlice(fields_range);
                             var runtime_fields = try self.allocator.alloc(types.RecordField, ct_fields.len);
@@ -8674,6 +8719,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
                         },
                         .fn_pure => |f| {
+                            const fnp_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_pure");
+                            defer fnp_trace.end();
+
                             const ct_args = module.types.sliceVars(f.args);
                             var buf = try self.allocator.alloc(types.Var, ct_args.len);
                             defer self.allocator.free(buf);
@@ -8685,6 +8733,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .fn_effectful => |f| {
+                            const fne_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_effectful");
+                            defer fne_trace.end();
+
                             const ct_args = module.types.sliceVars(f.args);
                             var buf = try self.allocator.alloc(types.Var, ct_args.len);
                             defer self.allocator.free(buf);
@@ -8696,6 +8747,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .fn_unbound => |f| {
+                            const fnu_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_unbound");
+                            defer fnu_trace.end();
+
                             const ct_args = module.types.sliceVars(f.args);
                             var buf = try self.allocator.alloc(types.Var, ct_args.len);
                             defer self.allocator.free(buf);
@@ -8707,6 +8761,9 @@ pub const Interpreter = struct {
                             break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
                         },
                         .nominal_type => |nom| {
+                            const nom_trace = tracy.traceNamed(@src(), "translateTypeVar.nominal_type");
+                            defer nom_trace.end();
+
                             const ct_backing = module.types.getNominalBackingVar(nom);
                             const ct_args = module.types.sliceNominalArgs(nom);
 
@@ -8946,6 +9003,9 @@ pub const Interpreter = struct {
     /// Uses the standard Instantiator, filtering its output to only rigid->flex mappings
     /// (the Instantiator maps all types, but layout computation only needs rigids).
     fn instantiateType(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!types.Var {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         self.instantiate_scratch.clearRetainingCapacity();
 
         var instantiator = types.instantiate.Instantiator{
@@ -8977,6 +9037,9 @@ pub const Interpreter = struct {
         module: *can.ModuleEnv,
         tag_union: types.TagUnion,
     ) std.mem.Allocator.Error!std.ArrayList(types.Tag) {
+        const gt_trace = tracy.traceNamed(@src(), "gatherTags");
+        defer gt_trace.end();
+
         var scratch_tags = try std.ArrayList(types.Tag).initCapacity(ctx.allocator, 8);
 
         const tag_slice = module.types.getTagsSlice(tag_union.tags);
@@ -9112,6 +9175,9 @@ pub const Interpreter = struct {
     /// Prepare a call using a known runtime function type var.
     /// Builds and inserts a cache entry on miss using the function's declared return var.
     pub fn prepareCallWithFuncVar(self: *Interpreter, module_id: u32, func_id: u32, func_type_var: types.Var, args: []const types.Var) !PolyEntry {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
         const func_resolved = self.runtime_types.resolveVar(func_type_var);
@@ -9902,6 +9968,9 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
         expected_rt_var: ?types.Var,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var work_stack = try WorkStack.init(self.allocator);
         defer work_stack.deinit();
 
@@ -10102,6 +10171,9 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const expr = self.env.store.getExpr(expr_idx);
 
         switch (expr) {
@@ -10615,6 +10687,8 @@ pub const Interpreter = struct {
             // Conditionals
 
             .e_if => |if_expr| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.if");
+                defer sched_trace.end();
                 const branches = self.env.store.sliceIfBranches(if_expr.branches);
                 if (branches.len > 0) {
                     // Get first branch
@@ -10643,6 +10717,8 @@ pub const Interpreter = struct {
             // Blocks
 
             .e_block => |blk| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.block");
+                defer sched_trace.end();
                 const stmts = self.env.store.sliceStatements(blk.stmts);
                 const bindings_start = self.bindings.items.len;
 
@@ -10678,6 +10754,8 @@ pub const Interpreter = struct {
             // Tuples
 
             .e_tuple => |tup| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.tuple");
+                defer sched_trace.end();
                 const elems = self.env.store.sliceExpr(tup.elems);
                 if (elems.len == 0) {
                     // Empty tuple - create immediately
@@ -10703,6 +10781,8 @@ pub const Interpreter = struct {
             // Lists
 
             .e_list => |list_expr| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.list");
+                defer sched_trace.end();
                 const elems = self.env.store.sliceExpr(list_expr.elems);
 
                 // Get list type variable
@@ -10743,6 +10823,8 @@ pub const Interpreter = struct {
             // Records
 
             .e_record => |rec| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.record");
+                defer sched_trace.end();
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const rt_var = try self.translateTypeVar(self.env, ct_var);
                 const fields = self.env.store.sliceRecordFields(rec.fields);
@@ -10921,6 +11003,8 @@ pub const Interpreter = struct {
             },
 
             .e_return => |ret| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.return");
+                defer sched_trace.end();
                 // Schedule the early return continuation after evaluating the inner expression
                 const inner_ct_var = can.ModuleEnv.varFrom(ret.expr);
                 const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
@@ -10934,6 +11018,8 @@ pub const Interpreter = struct {
             // Tag unions with payloads
 
             .e_tag => |tag| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.tag");
+                defer sched_trace.end();
                 // Determine runtime type and tag index.
                 // Use expected_rt_var if it's resolved to something concrete (structure or alias).
                 // If expected_rt_var is flex (unresolved), fall back to ct_var translation.
@@ -11079,6 +11165,8 @@ pub const Interpreter = struct {
             // Pattern matching
 
             .e_match => |m| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.match");
+                defer sched_trace.end();
                 // Get type info for scrutinee and result
                 const scrutinee_ct_var = can.ModuleEnv.varFrom(m.cond);
                 const scrutinee_rt_var = try self.translateTypeVar(self.env, scrutinee_ct_var);
@@ -11131,6 +11219,8 @@ pub const Interpreter = struct {
             },
 
             .e_for => |for_expr| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.for");
+                defer sched_trace.end();
                 // For expression: first evaluate the list, then set up iteration
                 const expr_ct_var = can.ModuleEnv.varFrom(for_expr.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
@@ -11168,12 +11258,17 @@ pub const Interpreter = struct {
             // Function calls
 
             .e_call => |call| {
+                const sched_trace = tracy.traceNamed(@src(), "sched.call");
+                defer sched_trace.end();
                 const func_idx = call.func;
                 const arg_indices = self.env.store.sliceExpr(call.args);
 
                 // Check if the function is an anno-only lookup that will crash
                 const func_expr_check = self.env.store.getExpr(func_idx);
                 if (func_expr_check == .e_lookup_local) {
+                    const anno_trace = tracy.traceNamed(@src(), "sched.call.anno_check");
+                    defer anno_trace.end();
+
                     const lookup = func_expr_check.e_lookup_local;
                     const all_defs = self.env.store.sliceDefs(self.env.all_defs);
                     for (all_defs) |def_idx| {
@@ -11206,6 +11301,8 @@ pub const Interpreter = struct {
 
                 var saved_rigid_subst: ?std.AutoHashMap(types.Var, types.Var) = null;
                 if (should_instantiate) {
+                    const clone_trace = tracy.traceNamed(@src(), "sched.call.rigid_clone");
+                    defer clone_trace.end();
                     saved_rigid_subst = try self.rigid_subst.clone();
                 }
                 errdefer {
@@ -11221,6 +11318,9 @@ pub const Interpreter = struct {
 
                 // If we instantiated, update rigid_subst and empty_scope (will be restored in cleanup)
                 if (should_instantiate) {
+                    const setup_trace = tracy.traceNamed(@src(), "sched.call.instantiate_setup");
+                    defer setup_trace.end();
+
                     // Ensure we have at least one scope level
                     if (self.empty_scope.scopes.items.len == 0) {
                         try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
@@ -11428,6 +11528,9 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         num_lit: @TypeOf(@as(can.CIR.Expr, undefined).e_num),
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Get the layout type variable - use expected_rt_var if provided for layout determination
         const layout_rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
@@ -11776,6 +11879,9 @@ pub const Interpreter = struct {
         zero: @TypeOf(@as(can.CIR.Expr, undefined).e_zero_argument_tag),
         roc_ops: *RocOps,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var rt_var = expected_rt_var orelse blk: {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
@@ -11985,6 +12091,9 @@ pub const Interpreter = struct {
         lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
         roc_ops: *RocOps,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Build a closure value with empty captures using the runtime layout for the lambda's type
         const rt_var = if (expected_rt_var) |provided_var|
             provided_var
@@ -12086,6 +12195,9 @@ pub const Interpreter = struct {
         cls: @TypeOf(@as(can.CIR.Expr, undefined).e_closure),
         roc_ops: *RocOps,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const lam_expr = self.env.store.getExpr(cls.lambda_idx);
         if (lam_expr != .e_lambda) {
             self.triggerCrash("e_closure: lambda_idx does not point to e_lambda", false, roc_ops);
@@ -12259,6 +12371,9 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         // Search bindings in reverse
         var i: usize = self.bindings.items.len;
         while (i > 0) {
@@ -12383,6 +12498,9 @@ pub const Interpreter = struct {
         expected_rt_var: ?types.Var,
         roc_ops: *RocOps,
     ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const other_env = self.import_envs.get(lookup.module_idx) orelse {
             self.triggerCrash("e_lookup_external: import_envs missing entry for module", false, roc_ops);
             return error.Crash;
@@ -12741,22 +12859,35 @@ pub const Interpreter = struct {
         cont: Continuation,
         roc_ops: *RocOps,
     ) Error!bool {
+        // Increased quota needed: 40+ tracy.traceNamed() calls generate comptime structs
+        @setEvalBranchQuota(5000);
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         switch (cont) {
             .return_result => {
+                const cont_trace = tracy.traceNamed(@src(), "cont.return_result");
+                defer cont_trace.end();
                 // Signal to exit the main loop - the result is on the value stack
                 return false;
             },
             .decref_value => |dv| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.decref_value");
+                defer cont_trace.end();
                 // Decrement reference count of the value
                 dv.value.decref(&self.runtime_layout_store, roc_ops);
                 return true;
             },
             .trim_bindings => |tb| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.trim_bindings");
+                defer cont_trace.end();
                 // Restore bindings to a previous length
                 self.trimBindingList(&self.bindings, tb.target_len, roc_ops);
                 return true;
             },
             .and_short_circuit => |sc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.and_short_circuit");
+                defer cont_trace.end();
                 // Pop LHS value from stack
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
@@ -12775,6 +12906,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .or_short_circuit => |sc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.or_short_circuit");
+                defer cont_trace.end();
                 // Pop LHS value from stack
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
@@ -12793,6 +12926,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .if_branch => |ib| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.if_branch");
+                defer cont_trace.end();
                 // Pop condition value from stack
                 const cond = value_stack.pop() orelse return error.Crash;
                 defer cond.decref(&self.runtime_layout_store, roc_ops);
@@ -12830,6 +12965,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .block_continue => |bc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.block_continue");
+                defer cont_trace.end();
                 // For s_expr statements, we need to pop and discard the value
                 // Only pop if should_discard_value is set (meaning this was scheduled after an s_expr)
                 if (bc.should_discard_value) {
@@ -12851,6 +12988,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .bind_decl => |bd| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.bind_decl");
+                defer cont_trace.end();
                 // Pop evaluated value from stack
                 const val = value_stack.pop() orelse return error.Crash;
                 if (comptime trace_refcount and builtin.os.tag != .freestanding) {
@@ -12919,6 +13058,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .tuple_collect => |tc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.tuple_collect");
+                defer cont_trace.end();
                 // Tuple collection works by evaluating elements one at a time
                 // and tracking how many we've collected
                 if (tc.remaining_elems.len > 0) {
@@ -12948,6 +13089,7 @@ pub const Interpreter = struct {
                         try value_stack.push(tuple_val);
                     } else {
                         // Gather layouts and values
+                        const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
                         var elem_layouts = try self.allocator.alloc(Layout, total_count);
                         defer self.allocator.free(elem_layouts);
 
@@ -12959,6 +13101,7 @@ pub const Interpreter = struct {
                         // Collect element rt_vars for constructing tuple type
                         var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                         defer self.allocator.free(elem_rt_vars);
+                        alloc_trace.end();
 
                         // Pop values in reverse order (last evaluated is on top)
                         var i: usize = total_count;
@@ -12988,8 +13131,12 @@ pub const Interpreter = struct {
                         }
 
                         // Decref temporary values after they've been copied into the tuple
-                        for (values) |val| {
-                            val.decref(&self.runtime_layout_store, roc_ops);
+                        {
+                            const decref_trace = tracy.traceNamed(@src(), "tuple_collect.decref_elements");
+                            defer decref_trace.end();
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         }
 
                         try value_stack.push(dest);
@@ -12998,6 +13145,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .list_collect => |lc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.list_collect");
+                defer cont_trace.end();
                 // List collection works by evaluating elements one at a time
                 // and tracking how many we've collected
                 if (lc.remaining_elems.len > 0) {
@@ -13038,8 +13187,10 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     } else {
                         // Pop all collected values from the value stack
+                        const alloc_trace = tracy.traceNamed(@src(), "list_collect.alloc_temps");
                         var values = try self.allocator.alloc(StackValue, total_count);
                         defer self.allocator.free(values);
+                        alloc_trace.end();
 
                         // Pop values in reverse order (last evaluated is on top)
                         var i: usize = total_count;
@@ -13093,8 +13244,12 @@ pub const Interpreter = struct {
                         header.* = runtime_list;
 
                         // Decref temporary values after they've been copied into the list
-                        for (values) |val| {
-                            val.decref(&self.runtime_layout_store, roc_ops);
+                        {
+                            const decref_trace = tracy.traceNamed(@src(), "list_collect.decref_elements");
+                            defer decref_trace.end();
+                            for (values) |val| {
+                                val.decref(&self.runtime_layout_store, roc_ops);
+                            }
                         }
 
                         // Set the runtime type variable so method dispatch works correctly.
@@ -13118,6 +13273,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .record_collect => |rc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.record_collect");
+                defer cont_trace.end();
                 // Record collection: evaluate extension (if any), then fields in order
                 if (rc.remaining_fields.len > 0) {
                     // More fields to evaluate - schedule next one
@@ -13143,6 +13300,7 @@ pub const Interpreter = struct {
                     const total_field_values = rc.collected_count;
 
                     // Build layout info from collected values
+                    const alloc_trace = tracy.traceNamed(@src(), "record_collect.alloc_temps");
                     var union_names = std.array_list.AlignedManaged(base_pkg.Ident.Idx, null).init(self.allocator);
                     defer union_names.deinit();
                     var union_layouts = std.array_list.AlignedManaged(layout.Layout, null).init(self.allocator);
@@ -13153,6 +13311,7 @@ pub const Interpreter = struct {
                     // Pop field values from stack (in reverse order since last evaluated is on top)
                     var field_values = try self.allocator.alloc(StackValue, total_field_values);
                     defer self.allocator.free(field_values);
+                    alloc_trace.end();
 
                     var i: usize = total_field_values;
                     while (i > 0) {
@@ -13261,11 +13420,15 @@ pub const Interpreter = struct {
                     }
 
                     // Decref base value and field values after they've been copied
-                    if (base_value_opt) |base_value| {
-                        base_value.decref(&self.runtime_layout_store, roc_ops);
-                    }
-                    for (field_values) |val| {
-                        val.decref(&self.runtime_layout_store, roc_ops);
+                    {
+                        const decref_trace = tracy.traceNamed(@src(), "record_collect.decref_fields");
+                        defer decref_trace.end();
+                        if (base_value_opt) |base_value| {
+                            base_value.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        for (field_values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
                     }
 
                     try value_stack.push(dest);
@@ -13273,6 +13436,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .early_return => {
+                const cont_trace = tracy.traceNamed(@src(), "cont.early_return");
+                defer cont_trace.end();
                 // Pop the evaluated value and signal early return
                 const return_value = value_stack.pop() orelse return error.Crash;
                 self.early_return_value = return_value;
@@ -13386,6 +13551,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .tag_collect => |tc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.tag_collect");
+                defer cont_trace.end();
                 // Tag payload collection: evaluate each argument, then finalize tag
                 if (tc.remaining_args.len > 0) {
                     // More arguments to evaluate
@@ -13677,6 +13844,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .match_branches => |mb| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.match_branches");
+                defer cont_trace.end();
                 // Scrutinee is on value stack - get it but keep it there for potential later use
                 const scrutinee_temp = value_stack.pop() orelse return error.Crash;
                 // Make a copy to protect from corruption
@@ -13759,6 +13928,8 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .match_guard => |mg| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.match_guard");
+                defer cont_trace.end();
                 // Guard result is on value stack
                 const guard_val = value_stack.pop() orelse return error.Crash;
                 defer guard_val.decref(&self.runtime_layout_store, roc_ops);
@@ -13802,11 +13973,15 @@ pub const Interpreter = struct {
                 return true;
             },
             .match_cleanup => |mc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.match_cleanup");
+                defer cont_trace.end();
                 // Result is on value stack - leave it there, just trim bindings
                 self.trimBindingList(&self.bindings, mc.bindings_start, roc_ops);
                 return true;
             },
             .expect_check => |ec| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.expect_check");
+                defer cont_trace.end();
                 // Pop condition value from stack
                 const cond_val = value_stack.pop() orelse return error.Crash;
                 const succeeded = self.boolValueEquals(true, cond_val);
@@ -13824,6 +13999,8 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .dbg_print => |dp| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.dbg_print");
+                defer cont_trace.end();
                 // Pop evaluated value from stack
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
@@ -13839,6 +14016,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .str_collect => |sc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.str_collect");
+                defer cont_trace.end();
                 // State machine for string interpolation:
                 // 1. If needs_conversion, convert top of value stack to string
                 // 2. If remaining segments, process next one
@@ -13975,6 +14154,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .call_collect_args => |cc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.call_collect_args");
+                defer cont_trace.end();
                 // Function call: collect arguments one by one
                 if (cc.remaining_args.len > 0) {
                     // More arguments to evaluate
@@ -13997,6 +14178,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .call_invoke_closure => |ci| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.call_invoke_closure");
+                defer cont_trace.end();
                 // All arguments collected - pop them and the function, then invoke
                 // Stack state: [func_val, arg0, arg1, ...] (func at bottom, args on top)
                 var saved_rigid_subst = ci.saved_rigid_subst;
@@ -14231,6 +14414,8 @@ pub const Interpreter = struct {
                 return error.Crash;
             },
             .call_cleanup => |cleanup| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.call_cleanup");
+                defer cont_trace.end();
                 // Function body evaluated - cleanup and return result
                 // Check for early return
                 if (self.early_return_value) |return_val_in| {
@@ -14315,6 +14500,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .unary_op_apply => |ua| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.unary_op_apply");
+                defer cont_trace.end();
                 // Unary operation: operand is on stack, apply method
                 const operand = value_stack.pop() orelse return error.Crash;
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
@@ -14427,6 +14614,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .binop_eval_rhs => |be| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.binop_eval_rhs");
+                defer cont_trace.end();
                 // Binary operation: LHS is on stack, now evaluate RHS
                 // We keep LHS on stack, push continuation to apply method after RHS is evaluated
                 try work_stack.push(.{ .apply_continuation = .{ .binop_apply = .{
@@ -14442,6 +14631,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .binop_apply => |ba| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.binop_apply");
+                defer cont_trace.end();
                 // Binary operation: both operands on stack, apply method
                 // Stack: [lhs, rhs] - RHS on top
                 const rhs = value_stack.pop() orelse return error.Crash;
@@ -14870,6 +15061,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .dot_access_await_receiver => |da| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.dot_access_await_receiver");
+                defer cont_trace.end();
                 // Pop the receiver from value stack (pushed by eval_expr for the receiver)
                 const receiver_value = value_stack.pop() orelse return error.Crash;
 
@@ -14904,6 +15097,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .dot_access_resolve => |da| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.dot_access_resolve");
+                defer cont_trace.end();
                 // Dot access: receiver is carried in continuation to avoid value stack interleaving
                 const receiver_value = da.receiver_value;
 
@@ -15274,6 +15469,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .dot_access_collect_args => |dac| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.dot_access_collect_args");
+                defer cont_trace.end();
                 // Dot access method call: collecting arguments
                 // Stack: [receiver, method_func, arg0, arg1, ...]
                 if (dac.remaining_args.len > 1) {
@@ -15592,6 +15789,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .type_var_dispatch_collect_args => |tvdc| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.type_var_dispatch_collect_args");
+                defer cont_trace.end();
                 // Type var dispatch: collecting arguments
                 // Stack: [method_func, arg0, arg1, ...]
                 if (tvdc.remaining_args.len > 0) {
@@ -15615,6 +15814,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .type_var_dispatch_invoke => |tvdi| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.type_var_dispatch_invoke");
+                defer cont_trace.end();
                 // Type var dispatch: all arguments collected, invoke the method
                 // Stack: [method_func, arg0, arg1, ...]
 
@@ -15766,6 +15967,8 @@ pub const Interpreter = struct {
                 }
             },
             .for_iterate => |fl_in| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.for_iterate");
+                defer cont_trace.end();
                 // For loop/expression iteration: list has been evaluated, start iterating
                 const list_value = value_stack.pop() orelse {
                     self.triggerCrash("for_iterate: value_stack empty", false, roc_ops);
@@ -15848,6 +16051,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .for_body_done => |fl| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.for_body_done");
+                defer cont_trace.end();
                 // For loop/expression body completed, clean up and continue to next iteration
                 const body_result = value_stack.pop() orelse {
                     self.triggerCrash("for_body_done: value_stack empty", false, roc_ops);
@@ -15917,6 +16122,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .while_loop_check => |wl| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.while_loop_check");
+                defer cont_trace.end();
                 // While loop: condition has been evaluated
                 const cond_value = value_stack.pop() orelse return error.Crash;
                 const cond_is_true = self.boolValueEquals(true, cond_value);
@@ -15952,6 +16159,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .while_loop_body_done => |wl| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.while_loop_body_done");
+                defer cont_trace.end();
                 // While loop body completed, check condition again
                 const body_result = value_stack.pop() orelse return error.Crash;
                 body_result.decref(&self.runtime_layout_store, roc_ops);
@@ -15975,6 +16184,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .expect_check_stmt => |ec| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.expect_check_stmt");
+                defer cont_trace.end();
                 // Expect statement: check condition result
                 const cond_val = value_stack.pop() orelse return error.Crash;
                 const is_true = self.boolValueEquals(true, cond_val);
@@ -15995,6 +16206,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .reassign_value => |rv| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.reassign_value");
+                defer cont_trace.end();
                 // Reassign statement: update binding
                 const new_val = value_stack.pop() orelse {
                     self.triggerCrash("reassign_value: value_stack empty", false, roc_ops);
@@ -16023,6 +16236,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .dbg_print_stmt => |dp| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.dbg_print_stmt");
+                defer cont_trace.end();
                 // Dbg statement: print value
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
@@ -16042,6 +16257,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .sort_compare_result => |sc_in| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.sort_compare_result");
+                defer cont_trace.end();
                 var sc = sc_in;
                 var saved_rigid_subst = sc.saved_rigid_subst;
                 defer {
@@ -16280,6 +16497,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .negate_bool => {
+                const cont_trace = tracy.traceNamed(@src(), "cont.negate_bool");
+                defer cont_trace.end();
                 // Negate the boolean result on top of value stack (for != operator)
                 var result = value_stack.pop() orelse {
                     self.triggerCrash("negate_bool: expected value on stack", false, roc_ops);
@@ -16292,6 +16511,8 @@ pub const Interpreter = struct {
                 return true;
             },
             .nominal_wrap => |nw| {
+                const cont_trace = tracy.traceNamed(@src(), "cont.nominal_wrap");
+                defer cont_trace.end();
                 // Wrap the backing expression result with the nominal type's rt_var.
                 // This ensures method dispatch can find methods defined on the nominal type.
                 var result = value_stack.pop() orelse {
