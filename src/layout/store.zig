@@ -1581,6 +1581,27 @@ pub const Store = struct {
                             break :blk self.getLayout(cached_idx);
                         }
 
+                        // Check if the resolved structure is a nominal type that's in progress.
+                        // If so, use its reserved placeholder layout. This is critical for recursive
+                        // types inside List/Box containers - we need to use the actual placeholder
+                        // index (which will be updated later) instead of opaquePtr().
+                        if (resolved_structure.desc.content == .structure) {
+                            const flat_type = resolved_structure.desc.content.structure;
+                            if (flat_type == .nominal_type) {
+                                const nominal_type = flat_type.nominal_type;
+                                const nominal_key = work.NominalKey{
+                                    .ident_idx = nominal_type.ident.ident_idx,
+                                    .origin_module = nominal_type.origin_module,
+                                };
+                                if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
+                                    if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
+                                        // Use the placeholder - it will be updated with the real layout.
+                                        break :blk self.getLayout(cached_idx);
+                                    }
+                                }
+                            }
+                        }
+
                         // If we're inside a List or Box, the recursive reference will be heap-allocated,
                         // so we can use opaque_ptr as a placeholder. The actual layout will be computed
                         // when we return to process the outer type.
