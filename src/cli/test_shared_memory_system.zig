@@ -121,8 +121,13 @@ test "integration - shared memory setup and parsing" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
+    // Get absolute path from current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    defer allocs.gpa.free(cwd_path);
+
     // Use the real int test platform
-    const roc_path = "test/int/app.roc";
+    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/int/app.roc" }) catch return;
+    defer allocs.gpa.free(roc_path);
 
     // Test that we can set up shared memory with ModuleEnv
     const shm_result = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true);
@@ -161,6 +166,10 @@ test "integration - compilation pipeline for different platforms" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
+    // Get absolute path from current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    defer allocs.gpa.free(cwd_path);
+
     // Test with our real test platforms
     const test_apps = [_][]const u8{
         "test/int/app.roc",
@@ -168,7 +177,9 @@ test "integration - compilation pipeline for different platforms" {
         "test/fx/app.roc",
     };
 
-    for (test_apps) |roc_path| {
+    for (test_apps) |relative_path| {
+        const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, relative_path }) catch continue;
+        defer allocs.gpa.free(roc_path);
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
         const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true) catch |err| {
             std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
@@ -208,8 +219,13 @@ test "integration - error handling for non-existent file" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
+    // Get absolute path from current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    defer allocs.gpa.free(cwd_path);
+
     // Test with a non-existent file path
-    const roc_path = "test/nonexistent/app.roc";
+    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/nonexistent/app.roc" }) catch return;
+    defer allocs.gpa.free(roc_path);
 
     // This should fail because the file doesn't exist
     const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true);
