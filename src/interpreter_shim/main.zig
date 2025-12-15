@@ -718,6 +718,15 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         }
     }
 
+    // Also resolve imports for all imported module environments.
+    // This is needed when module A imports module B, and the interpreter evaluates
+    // code in A that calls into B (transitive module calls).
+    // Without this, A's import of B remains unresolved, causing "unresolved import"
+    // or TypeMismatch errors when A's code tries to call B.
+    for (imported_envs) |imp_env| {
+        @constCast(imp_env).imports.resolveImports(imp_env, imported_envs);
+    }
+
     // Enable runtime inserts on all deserialized module environments.
     // The interpreter needs to insert new identifiers at runtime for:
     // - Translating module names between different ident spaces

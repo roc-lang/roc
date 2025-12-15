@@ -1683,6 +1683,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // Compile platform sibling modules FIRST (Stdout, Stderr, Stdin, etc.)
     // This must happen before platform main.roc so that when main.roc is canonicalized,
     // we can pass the sibling modules to module_envs and validate imports correctly.
+    //
+    // NOTE: Modules are compiled in the order they appear in the platform's `exposes` list.
+    // If module A imports module B, then B must appear before A in the exposes list.
+    // This is the platform author's responsibility to ensure correct ordering.
     var platform_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, exposed_modules.items.len);
     defer allocs.gpa.free(platform_env_ptrs);
 
@@ -1696,13 +1700,16 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
         const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ plat_dir, module_filename });
         defer allocs.gpa.free(module_path);
 
+        // Pass previously compiled sibling modules so this module can resolve imports to them.
+        // This enables transitive module calls (e.g., a module `Helper` imports `Core`, then calls `Core.wrap`).
+        const sibling_modules = platform_env_ptrs[0..i];
         const module_env_ptr = try compileModuleToSharedMemory(
             allocs,
             module_path,
             module_name, // Use just "Stdout" (not "Stdout.roc") so type-module detection works
             shm_allocator,
             &builtin_modules,
-            &.{},
+            sibling_modules,
         );
 
         // Store platform modules at indices 0..N-2, app will be at N-1
@@ -2177,19 +2184,54 @@ fn compileModuleToSharedMemory(
     );
 
     for (additional_modules) |mod_env| {
-        // Add with full module name (e.g., "Stdout.roc")
-        const name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
-        // For user modules, the qualified name is just the module name itself
-        const qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(mod_env.module_name));
-        try module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
+        // Get the base module name (without .roc extension if present)
+        var base_module_name = mod_env.module_name;
+        if (std.mem.endsWith(u8, base_module_name, ".roc")) {
+            base_module_name = base_module_name[0 .. base_module_name.len - 4];
+        }
 
-        // Also add without .roc suffix (e.g., "Stdout") for import validation
-        // The import statement `import Stdout` uses the name without .roc
-        if (std.mem.endsWith(u8, mod_env.module_name, ".roc")) {
-            const name_without_roc = mod_env.module_name[0 .. mod_env.module_name.len - 4];
-            const short_name = try env.insertIdent(base.Ident.for_text(name_without_roc));
-            const short_qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(name_without_roc));
-            try module_envs_map.put(short_name, .{ .env = mod_env, .qualified_type_ident = short_qualified_ident });
+        // Check if this module is a "type module" (defines a type with the same name as the module).
+        // For type modules like Core (which uses `Core := [].{ wrap = ... }`), functions are exposed
+        // as qualified names like "Core.wrap", so we need to set statement_idx for proper lookup.
+        const type_ident_in_module = mod_env.common.findIdent(base_module_name);
+        const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
+            mod_env.getExposedNodeIndexById(ident)
+        else
+            null;
+
+        const name = try env.insertIdent(base.Ident.for_text(base_module_name));
+        const qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
+
+        if (type_node_idx) |node_idx| {
+            // This is a type module - set statement_idx for proper qualified lookup
+            try module_envs_map.put(name, .{
+                .env = mod_env,
+                .statement_idx = @enumFromInt(node_idx),
+                .qualified_type_ident = qualified_ident,
+            });
+        } else {
+            // Regular module - no statement_idx needed
+            try module_envs_map.put(name, .{
+                .env = mod_env,
+                .qualified_type_ident = qualified_ident,
+            });
+        }
+
+        // Also add with full .roc suffix if different
+        if (!std.mem.eql(u8, mod_env.module_name, base_module_name)) {
+            const full_name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
+            if (type_node_idx) |node_idx| {
+                try module_envs_map.put(full_name, .{
+                    .env = mod_env,
+                    .statement_idx = @enumFromInt(node_idx),
+                    .qualified_type_ident = qualified_ident,
+                });
+            } else {
+                try module_envs_map.put(full_name, .{
+                    .env = mod_env,
+                    .qualified_type_ident = qualified_ident,
+                });
+            }
         }
     }
 
@@ -2502,7 +2544,19 @@ fn compileAndSerializeModulesForEmbedding(
     var app_env_index: u32 = 0;
 
     // Compile platform sibling modules first
-    for (exposed_modules.items) |module_name| {
+    // We need to track pointers to already-compiled modules so later modules can import from earlier ones.
+    //
+    // NOTE: Modules are compiled in the order they appear in the platform's `exposes` list.
+    // If module A imports module B, then B must appear before A in the exposes list.
+    // This is the platform author's responsibility to ensure correct ordering.
+    //
+    // Pre-allocate compiled_modules to avoid reallocation invalidating pointers in sibling_env_ptrs.
+    try compiled_modules.ensureTotalCapacity(exposed_modules.items.len + 2); // +2 for platform main and app
+
+    var sibling_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, exposed_modules.items.len);
+    defer allocs.gpa.free(sibling_env_ptrs);
+
+    for (exposed_modules.items, 0..) |module_name, i| {
         const plat_dir = platform_dir orelse unreachable;
         const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
         defer allocs.gpa.free(module_filename);
@@ -2510,16 +2564,20 @@ fn compileAndSerializeModulesForEmbedding(
         const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ plat_dir, module_filename });
         defer allocs.gpa.free(module_path);
 
+        // Pass previously compiled sibling modules so this module can resolve imports to them.
+        // This enables transitive module calls (e.g., Helper imports Core, then calls Core.wrap).
         const compiled = try compileModuleForSerialization(
             allocs,
             module_path,
             module_name,
             &builtin_modules,
-            &.{},
+            sibling_env_ptrs[0..i],
             null, // No type modules when compiling sibling modules
         );
         total_error_count += compiled.error_count;
-        try compiled_modules.append(compiled);
+        compiled_modules.appendAssumeCapacity(compiled);
+        // Store pointer to the env we just appended (safe because we pre-allocated)
+        sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
     }
 
     // Compile platform main.roc if present

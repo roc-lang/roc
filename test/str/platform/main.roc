@@ -1,6 +1,6 @@
 platform ""
     requires {} { process_string : Str -> Str }
-    exposes []
+    exposes [Core, Helper]
     packages {}
     provides { process_string_for_host: "process_string" }
     targets: {
@@ -14,6 +14,9 @@ platform ""
             arm64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
         }
     }
+
+import Core
+import Helper
 
 process_string_for_host : Str -> Str
 process_string_for_host = process_string

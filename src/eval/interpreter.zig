@@ -11670,7 +11670,12 @@ pub const Interpreter = struct {
                 // that have type annotations but no implementation bodies
                 if (func_expr_check == .e_lookup_external) {
                     const lookup = func_expr_check.e_lookup_external;
-                    const other_env = self.import_envs.get(lookup.module_idx) orelse null;
+                    // Use the current module's resolved imports (not import_envs which only has primary/app imports)
+                    const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse null;
+                    const other_env: ?*const can.ModuleEnv = if (resolved_idx != null and resolved_idx.? < self.all_module_envs.len)
+                        self.all_module_envs[resolved_idx.?]
+                    else
+                        null;
                     if (other_env) |builtin_env| {
                         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                         const target_def = builtin_env.store.getDef(target_def_idx);
@@ -12926,17 +12931,17 @@ pub const Interpreter = struct {
 
         // Resolve the import to find the target module environment.
         //
-        // Import indices (lookup.module_idx) are module-local - they index into a specific module's
-        // import list. We need to map this to the actual ModuleEnv.
+        // Import indices (lookup.module_idx) are module-local - they index into a specific
+        // module's import list. We need to map this to the actual ModuleEnv.
         //
         // There are two sources for this mapping:
         // 1. import_envs: Populated during Interpreter.init for the primary module's imports.
-        //    This is used when evaluating code in the primary module context.
+        //    Used in unit tests and single-module scenarios where resolveImports isn't called.
         // 2. env.imports.resolved_modules: Each module has its own resolved import mappings.
-        //    This is used when evaluating code in secondary modules (e.g., Html calling Elem).
+        //    This is the primary mechanism for cross-module calls when imports are resolved.
         //
-        // We check import_envs first for efficiency (most calls are from the primary module),
-        // then fall back to the current module's resolved imports for cross-module calls.
+        // We check import_envs first for backwards compatibility with unit tests,
+        // then fall back to the current module's resolved imports for transitive calls.
         const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
             const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse {
                 self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);

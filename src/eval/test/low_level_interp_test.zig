@@ -30,6 +30,10 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
     checker: *Check,
+    /// Heap-allocated array of imported module envs.
+    /// This must stay alive for the lifetime of the evaluator since
+    /// interpreter.all_module_envs points to this memory.
+    imported_envs: []*const ModuleEnv,
 } {
     const gpa = test_allocator;
 
@@ -79,14 +83,18 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
 
     try czer.canonicalizeFile();
 
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+    // Heap-allocate imported_envs so it outlives this function.
+    // The interpreter's all_module_envs is a slice that points to this memory.
+    const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
+    errdefer gpa.free(imported_envs);
+    imported_envs[0] = builtin_module.env;
 
     // Resolve imports - map each import to its index in imported_envs
-    module_env.imports.resolveImports(module_env, &imported_envs);
+    module_env.imports.resolveImports(module_env, imported_envs);
 
     const checker = try gpa.create(Check);
     errdefer gpa.destroy(checker);
-    checker.* = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, builtin_ctx);
+    checker.* = try Check.init(gpa, &module_env.types, module_env, imported_envs, null, &module_env.store.regions, builtin_ctx);
     errdefer checker.deinit();
 
     try checker.checkFile();
@@ -95,7 +103,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,
@@ -103,6 +111,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
         .problems = problems,
         .builtin_module = builtin_module,
         .checker = checker,
+        .imported_envs = imported_envs,
     };
 }
 
@@ -124,6 +133,9 @@ fn cleanupEvalModule(result: anytype) void {
 
     var builtin_module_mut = result.builtin_module;
     builtin_module_mut.deinit();
+
+    // Free heap-allocated imported_envs (must happen after evaluator deinit)
+    test_allocator.free(result.imported_envs);
 }
 
 /// Helper to evaluate multi-declaration modules and get the integer value of a specific declaration
