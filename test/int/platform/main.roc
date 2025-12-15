@@ -3,10 +3,10 @@ platform ""
         [Model : model] for main : {
             init : {} -> model,
             update : model, I64 -> model,
-            render : model -> I64
+            render : model -> Simple(model)
         }
     }
-    exposes []
+    exposes [Simple]
     packages {}
     provides { init_for_host: "init", update_for_host: "update", render_for_host: "render" }
     targets: {
@@ -20,6 +20,8 @@ platform ""
             arm64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
         }
     }
+
+import Simple exposing [Simple]
 
 # Explicit type annotations for host-facing functions
 # Note: Use uppercase Model here - it's a type alias introduced by the for-clause [Model : model]
@@ -38,7 +40,8 @@ update_for_host = |boxed_model, value| {
     Box.box(update_fn(m, value))
 }
 
-render_for_host : Box(Model) -> I64
+# This now returns Simple(Model) - an opaque type from an imported module
+render_for_host : Box(Model) -> Simple(Model)
 render_for_host = |boxed_model| {
     m = Box.unbox(boxed_model)
     render_fn = main.render

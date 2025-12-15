@@ -6,6 +6,14 @@ const types = @import("types");
 const layout = @import("./layout.zig");
 const Ident = @import("base").Ident;
 
+/// Key to identify a nominal type by its identity (ident + origin module)
+/// Used for cycle detection in recursive nominal types where different vars
+/// can reference the same nominal type definition.
+pub const NominalKey = struct {
+    ident_idx: Ident.Idx,
+    origin_module: Ident.Idx,
+};
+
 /// Work queue for layout computation, tracking pending and resolved containers
 pub const Work = struct {
     pending_containers: std.MultiArrayList(PendingContainerItem),
@@ -15,6 +23,20 @@ pub const Work = struct {
     resolved_tags: std.MultiArrayList(ResolvedTag),
     pending_tuple_fields: std.MultiArrayList(TupleField),
     resolved_tuple_fields: std.MultiArrayList(ResolvedTupleField),
+    /// Vars currently being processed - used to detect recursive type references
+    in_progress_vars: std.AutoArrayHashMap(types.Var, void),
+    /// Nominal types currently being processed - used to detect recursive nominal types.
+    /// Unlike in_progress_vars, this tracks by nominal identity (ident + origin_module)
+    /// because recursive references to the same nominal type may have different vars.
+    /// The value contains the nominal's var (for cache lookup) and its backing var
+    /// (to know when to update the placeholder).
+    in_progress_nominals: std.AutoArrayHashMap(NominalKey, NominalProgress),
+
+    /// Info about a nominal type being processed
+    pub const NominalProgress = struct {
+        nominal_var: types.Var,
+        backing_var: types.Var,
+    };
 
     pub const PendingContainerItem = struct { var_: types.Var, container: PendingContainer };
 
@@ -90,6 +112,8 @@ pub const Work = struct {
             .resolved_tags = resolved_tags,
             .pending_tuple_fields = pending_tuple_fields,
             .resolved_tuple_fields = resolved_tuple_fields,
+            .in_progress_vars = std.AutoArrayHashMap(types.Var, void).init(allocator),
+            .in_progress_nominals = std.AutoArrayHashMap(NominalKey, NominalProgress).init(allocator),
         };
     }
 
@@ -101,10 +125,22 @@ pub const Work = struct {
         self.resolved_tags.deinit(allocator);
         self.pending_tuple_fields.deinit(allocator);
         self.resolved_tuple_fields.deinit(allocator);
+        self.in_progress_vars.deinit();
+        self.in_progress_nominals.deinit();
     }
 
     pub fn clearRetainingCapacity(self: *Work) void {
-        self.pending_containers.clearRetainingCapacity();
+        // NOTE: We intentionally do NOT clear pending_containers, in_progress_vars,
+        // or in_progress_nominals here. They need to persist across recursive addTypeVar
+        // calls (e.g., when processing tag union variants) to:
+        // 1. pending_containers: track container context for recursive type detection
+        // 2. in_progress_vars: detect cycles in recursive types
+        // 3. in_progress_nominals: detect cycles in recursive nominal types from other modules
+        //
+        // These are cleaned up individually via swapRemove when types finish processing,
+        // and should be empty at the start of a fresh top-level addTypeVar call.
+        //
+        // The other fields are local to a single manual-stack iteration and can be cleared.
         self.pending_record_fields.clearRetainingCapacity();
         self.resolved_record_fields.clearRetainingCapacity();
         self.pending_tags.clearRetainingCapacity();
