@@ -1,6 +1,4 @@
 # Helper module - imports Core and provides convenience functions
-# This is analogous to Html.roc in roc-dom (which imports Elem)
-
 import Core
 
 Helper := [].{
