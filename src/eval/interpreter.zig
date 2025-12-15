@@ -266,7 +266,9 @@ pub const Interpreter = struct {
     allocator: std.mem.Allocator,
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
-    // O(1) Var -> Layout slot cache (0 = unset, else layout_idx + 1)
+    // O(1) Var -> Layout slot cache with generation-based invalidation.
+    // Encoding: (generation << 24) | (layout_idx + 1), where low 24 bits = 0 means unset.
+    // Generation (high 8 bits) is from poly_context_generation for cache invalidation.
     var_to_layout_slot: std.array_list.Managed(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
@@ -8458,13 +8460,23 @@ pub const Interpreter = struct {
         if (resolved.desc.content == .flex) {
             const dec_layout = layout.Layout.frac(types.Frac.Precision.dec);
             const dec_layout_idx = try self.runtime_layout_store.insertLayout(dec_layout);
-            slot_ptr.* = @intFromEnum(dec_layout_idx) + 1;
+            // Encode: (generation << 24) | (slot + 1)
+            const gen_byte: u8 = @truncate(self.poly_context_generation);
+            slot_ptr.* = (@as(u32, gen_byte) << 24) | (@intFromEnum(dec_layout_idx) + 1);
             return dec_layout;
         }
-        if (slot_ptr.* != 0) {
-            const layout_idx_plus_one = slot_ptr.*;
-            const layout_idx: layout.Idx = @enumFromInt(layout_idx_plus_one - 1);
-            return self.runtime_layout_store.getLayout(layout_idx);
+        // Check cache with generation validation
+        // Encoding: (generation << 24) | (slot + 1), where slot + 1 > 0 means valid entry
+        const stored = slot_ptr.*;
+        const stored_slot = stored & 0xFFFFFF;
+        if (stored_slot != 0) {
+            const stored_gen: u8 = @truncate(stored >> 24);
+            const current_gen: u8 = @truncate(self.poly_context_generation);
+            if (stored_gen == current_gen) {
+                const layout_idx: layout.Idx = @enumFromInt(stored_slot - 1);
+                return self.runtime_layout_store.getLayout(layout_idx);
+            }
+            // Generation mismatch - treat as cache miss, entry is stale
         }
 
         const layout_idx = switch (resolved.desc.content) {
@@ -8475,7 +8487,9 @@ pub const Interpreter = struct {
             },
             else => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
         };
-        slot_ptr.* = @intFromEnum(layout_idx) + 1;
+        // Encode: (generation << 24) | (slot + 1)
+        const gen_byte: u8 = @truncate(self.poly_context_generation);
+        slot_ptr.* = (@as(u32, gen_byte) << 24) | (@intFromEnum(layout_idx) + 1);
         return self.runtime_layout_store.getLayout(layout_idx);
     }
 
@@ -9486,7 +9500,9 @@ pub const Interpreter = struct {
             _ = try self.getRuntimeLayout(ret);
             const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret).var_);
             try self.ensureVarLayoutCapacity(root_idx + 1);
-            const slot = self.var_to_layout_slot.items[root_idx];
+            // Decode: extract layout slot from encoded value (low 24 bits)
+            const encoded_slot = self.var_to_layout_slot.items[root_idx];
+            const slot = encoded_slot & 0xFFFFFF;
             const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
             errdefer self.allocator.free(args_copy_mut);
             std.mem.copyForwards(types.Var, args_copy_mut, args);
@@ -9568,7 +9584,9 @@ pub const Interpreter = struct {
         _ = try self.getRuntimeLayout(substituted_ret);
         const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(substituted_ret).var_);
         try self.ensureVarLayoutCapacity(root_idx + 1);
-        const slot = self.var_to_layout_slot.items[root_idx];
+        // Decode: extract layout slot from encoded value (low 24 bits)
+        const encoded_slot = self.var_to_layout_slot.items[root_idx];
+        const slot = encoded_slot & 0xFFFFFF;
         const args_copy_mut = try self.allocator.alloc(types.Var, args.len);
         errdefer self.allocator.free(args_copy_mut);
         std.mem.copyForwards(types.Var, args_copy_mut, args);
@@ -11719,8 +11737,9 @@ pub const Interpreter = struct {
                 else
                     func_rt_var_orig;
 
-                // If we instantiated, update rigid_subst and empty_scope (will be restored in cleanup)
-                if (should_instantiate) {
+                // If we instantiated AND there are actual substitutions, update rigid_subst and empty_scope.
+                // Skip this block entirely if subst_map is empty (no rigid vars to substitute).
+                if (should_instantiate and subst_map.count() > 0) {
                     const setup_trace = tracy.traceNamed(@src(), "sched.call.instantiate_setup");
                     defer setup_trace.end();
 
@@ -11738,8 +11757,9 @@ pub const Interpreter = struct {
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
-                    // Clear the layout cache so layouts are recomputed with substitutions
-                    @memset(self.var_to_layout_slot.items, 0);
+                    // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
+                    // poly_context_generation increments when flex_type_context changes, which invalidates
+                    // stale layout cache entries. No explicit @memset needed.
                 }
 
                 // Compute argument runtime type variables
@@ -13796,11 +13816,12 @@ pub const Interpreter = struct {
                     const record_layout_idx = try self.runtime_layout_store.putRecord(self.runtime_layout_store.env, union_layouts.items, union_names.items);
                     const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
 
-                    // Cache the layout for this var
+                    // Cache the layout for this var with generation encoding
                     const resolved_rt = self.runtime_types.resolveVar(rc.rt_var);
                     const root_idx: usize = @intFromEnum(resolved_rt.var_);
                     try self.ensureVarLayoutCapacity(root_idx + 1);
-                    self.var_to_layout_slot.items[root_idx] = @intFromEnum(record_layout_idx) + 1;
+                    const gen_byte: u8 = @truncate(self.poly_context_generation);
+                    self.var_to_layout_slot.items[root_idx] = (@as(u32, gen_byte) << 24) | (@intFromEnum(record_layout_idx) + 1);
 
                     var dest = try self.pushRaw(rec_layout, 0, rc.rt_var);
                     // Debug assertion for issue #8647
@@ -16213,7 +16234,8 @@ pub const Interpreter = struct {
                         if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
-                    @memset(self.var_to_layout_slot.items, 0);
+                    // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
+                    // No explicit @memset needed.
                     did_instantiate = true;
                 }
 
