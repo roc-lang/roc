@@ -8030,9 +8030,11 @@ pub const Interpreter = struct {
     pub fn ensureVarLayoutCapacity(self: *Interpreter, min_len: usize) !void {
         if (self.var_to_layout_slot.items.len >= min_len) return;
         const old_len = self.var_to_layout_slot.items.len;
-        try self.var_to_layout_slot.ensureTotalCapacityPrecise(min_len);
+        // grow with at least factor 1.5 to avoid frequent reallocs
+        const new_len = @max(old_len * 2 / 3, min_len);
+        try self.var_to_layout_slot.ensureTotalCapacity(new_len);
         // Set new length and zero-fill
-        self.var_to_layout_slot.items.len = min_len;
+        self.var_to_layout_slot.items.len = new_len;
         @memset(self.var_to_layout_slot.items[old_len..], 0);
     }
 
