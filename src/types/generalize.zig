@@ -169,8 +169,18 @@ pub const Generalizer = struct {
         try self.vars_to_generalized.ensureUnusedCapacity(@intCast(vars_to_generalize.len));
 
         // Copy all variables at this rank into the temporary pool, resolving redirects
+        //
+        // A var may have been added to var_pool at this rank, but later unified with
+        // a var at a higher rank. In that case, the resolved var's rank will be higher
+        // than rank_to_generalize. We skip such vars here - they will be handled when
+        // generalizing at their actual rank (or during rank adjustment).
         for (vars_to_generalize) |var_| {
             const resolved = self.store.resolveVar(var_);
+            if (@intFromEnum(resolved.desc.rank) > @intFromEnum(rank_to_generalize)) {
+                // This var's effective rank has increased due to unification.
+                // Skip it - it will be generalized at its actual rank.
+                continue;
+            }
             try self.tmp_var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
             try self.vars_to_generalized.put(resolved.var_, {});
         }

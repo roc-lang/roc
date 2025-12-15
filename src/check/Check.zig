@@ -553,15 +553,31 @@ fn instantiateVarHelp(
     if (instantiator.var_map.count() > 0) {
         var iterator = instantiator.var_map.iterator();
         while (iterator.next()) |x| {
-            // Get the newly created var
+            // Get the original and mapped vars
+            const old_var = x.key_ptr.*;
             const fresh_var = x.value_ptr.*;
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
-            // Add to pool
-            try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
+            // When using substitute_rigids, the var_map contains both:
+            // 1. Rigid vars mapped to their substitution vars (existing, already in var_pool)
+            // 2. Other vars mapped to fresh copies (new, need to be added to var_pool)
+            //
+            // We must NOT add substitution vars to var_pool because:
+            // - They were already added when the annotation was processed
+            // - Their rank may have changed due to unification with nested-rank vars
+            // - Re-adding them would cause rank inconsistencies during generalization
+            //
+            // We detect substitution vars by checking if the original var was a rigid.
+            const old_resolved = self.types.resolveVar(old_var);
+            const is_substitution = old_resolved.desc.content == .rigid;
 
-            // Set the region
+            if (!is_substitution) {
+                // Only add fresh vars (non-substitutions) to var_pool
+                try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
+            }
+
+            // Set the region for all vars (both fresh and substitution vars may need regions)
             try self.fillInRegionsThrough(fresh_var);
             switch (region_behavior) {
                 .explicit => |region| {
@@ -571,7 +587,6 @@ fn instantiateVarHelp(
                     self.setRegionAt(fresh_var, root_instantiated_region);
                 },
                 .use_last_var => {
-                    const old_var = x.key_ptr.*;
                     const old_region = self.regions.get(@enumFromInt(@intFromEnum(old_var))).*;
                     self.setRegionAt(fresh_var, old_region);
                 },
