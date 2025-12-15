@@ -9268,9 +9268,15 @@ pub const Interpreter = struct {
     fn instantiateType(self: *Interpreter, type_var: types.Var, subst_map: *std.AutoHashMap(types.Var, types.Var)) Error!types.Var {
         self.instantiate_scratch.clearRetainingCapacity();
 
+        // IMPORTANT: Use runtime_layout_store.env's ident store, NOT self.env.
+        // Runtime types have their idents translated to runtime_layout_store.env's ident store
+        // (see translateTypeVar). self.env may be temporarily switched during evaluation
+        // (e.g., for from_numeral), but runtime_layout_store.env remains constant.
+        // Using the wrong ident store causes SmallStringInterner.getText crashes when
+        // sorting tag variants by name during instantiation.
         var instantiator = types.instantiate.Instantiator{
             .store = self.runtime_types,
-            .idents = self.env.getIdentStoreConst(),
+            .idents = self.runtime_layout_store.env.common.getIdentStore(),
             .var_map = &self.instantiate_scratch,
             .current_rank = types.Rank.top_level,
             .rigid_behavior = .fresh_flex,
