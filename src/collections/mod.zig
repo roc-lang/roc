@@ -85,7 +85,8 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 
             // Grow if necessary
             if (idx >= self.entries.len) {
-                const new_size = idx + 1;
+                // Grow with at least factor 1.5 to avoid frequent reallocs
+                const new_size = @max(self.entries.len * 3 / 2, idx + 1);
                 const new_entries = try allocator.realloc(self.entries, new_size);
                 @memset(new_entries[self.entries.len..], V.none);
                 self.entries = new_entries;
