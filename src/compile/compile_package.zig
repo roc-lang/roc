@@ -979,6 +979,10 @@ pub const PackageEnv = struct {
             // Extract module name without .roc extension
             const module_name = entry.name[0 .. entry.name.len - 4];
 
+            // Skip the current module to avoid TYPE REDECLARED errors when a type module
+            // defines a type with the same name as the module (e.g., Simple.roc with type Simple)
+            if (std.mem.eql(u8, module_name, env.module_name)) continue;
+
             // Add to module_envs with a placeholder env (just to pass the "contains" check)
             // We use builtin_module_env as a placeholder - the actual env will be loaded later
             const module_ident = try env.insertIdent(base.Ident.for_text(module_name));

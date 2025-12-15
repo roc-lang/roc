@@ -1198,10 +1198,15 @@ pub fn checkPlatformRequirements(
                 // Look up the app's type alias body (the underlying type, not the alias wrapper)
                 const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse continue;
 
-                // Redirect the rigid var to the app's type alias body.
-                // This substitutes the concrete app type for the platform's rigid type variable.
-                // We use redirect instead of unify because rigids can't be unified with concrete types.
-                try self.types.setVarRedirect(rigid_var, app_type_var);
+                // Convert the rigid to a flex so it can unify with the concrete app type.
+                // Rigids normally can't unify with structures (they return TypeMismatch),
+                // but for-clauses are designed to substitute rigid type variables with
+                // concrete types, so we convert to flex first.
+                try self.types.setVarContent(rigid_var, .{ .flex = Flex.init() });
+
+                // Now unify the (now-flex) var with the app's type alias body.
+                // This properly handles rank propagation (unlike dangerousSetVarRedirect).
+                _ = try self.unify(rigid_var, app_type_var, &env);
             }
 
             // Unify the platform's required type with the app's export type.
