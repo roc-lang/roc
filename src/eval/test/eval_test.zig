@@ -29,6 +29,7 @@ const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
+const runExpectListI64WithStrictLayout = helpers.runExpectListI64WithStrictLayout;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -1431,6 +1432,26 @@ test "List.get with polymorphic numeric index from for loop - regression" {
     , 10, .no_trace);
 }
 
+test "for loop element type extracted from list runtime type - regression #8664" {
+    // Regression test for InvalidMethodReceiver when calling methods on elements
+    // from a for loop over a list passed to an untyped function parameter.
+    // The fix: extract element type from list's runtime type (e.g., List(Dec))
+    // instead of using the pattern's compile-time flex variable.
+    // Note: unsuffixed number literals default to Dec in Roc.
+    try runExpectStr(
+        \\{
+        \\    calc = |list| {
+        \\        var $result = ""
+        \\        for elem in list {
+        \\            $result = elem.to_str()
+        \\        }
+        \\        $result
+        \\    }
+        \\    calc([1, 2, 3])
+        \\}
+    , "3.0", .no_trace);
+}
+
 test "List.get method dispatch on Try type - issue 8665" {
     // Regression test for issue #8665: InvalidMethodReceiver crash when calling
     // ok_or() method on the result of List.get() using dot notation.
@@ -1467,6 +1488,17 @@ test "record field access - regression 8647" {
     , "test", .no_trace);
 }
 
+test "record field access with multiple string fields - regression 8648" {
+    // Regression test for GitHub issue #8648
+    // Record field access with app module ident space
+    try runExpectStr(
+        \\{
+        \\    record = { x: "a", y: "b" }
+        \\    record.x
+        \\}
+    , "a", .no_trace);
+}
+
 test "method calls on numeric variables with flex types - regression" {
     // Regression test for InvalidMethodReceiver when calling methods on numeric
     // variables that have unconstrained (flex/rigid) types at compile time.
@@ -1489,4 +1521,14 @@ test "method calls on numeric variables with flex types - regression" {
         \\    x.to_str()
         \\}
     , "42.0", .no_trace);
+}
+
+test "issue 8667: List.with_capacity should be inferred as List(I64)" {
+    // When List.with_capacity is used with List.append(_, 1i64), the type checker should
+    // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
+    // If it's .list_of_zst, that indicates a type inference bug.
+    try runExpectListI64WithStrictLayout("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
+
+    // Also test the fold case which is where the bug was originally reported
+    try runExpectListI64WithStrictLayout("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
 }

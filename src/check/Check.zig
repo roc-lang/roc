@@ -905,7 +905,7 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
         // directly, saving a typeslot and unifcation run
         var desc = resolved_target.desc;
         desc.content = content;
-        try self.types.setVarDesc(target_var, desc);
+        try self.types.dangerousSetVarDesc(target_var, desc);
     } else {
         const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
         if (builtin.mode == .Debug) {
@@ -3518,7 +3518,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |expected_type| {
                     // Redirect expr_var to the annotation var so that lookups get the correct type
-                    try self.types.setVarRedirect(expr_var, expected_type.var_);
+                    _ = try self.unify(expr_var, expected_type.var_, env);
                 },
             }
         },
@@ -3551,7 +3551,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |expected_type| {
                     // Redirect expr_var to the annotation var so that lookups get the correct type
-                    try self.types.setVarRedirect(expr_var, expected_type.var_);
+                    _ = try self.unify(expr_var, expected_type.var_, env);
                 },
             }
         },
@@ -4294,7 +4294,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     _ = try self.unify(constrained_var, operand_var, env);
 
     // Set the expression to redirect to the return type
-    try self.types.setVarRedirect(expr_var, ret_var);
+    _ = try self.unify(expr_var, ret_var, env);
 
     return does_fx;
 }
@@ -4405,7 +4405,7 @@ fn checkBinopExpr(
                 _ = try self.unify(constrained_var, lhs_var, env);
 
                 // Set the expression to redirect to the return type
-                try self.types.setVarRedirect(expr_var, ret_var);
+                _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // Builtin numeric type: use standard numeric constraints
                 // This is the same as the other arithmetic operators
@@ -4439,7 +4439,7 @@ fn checkBinopExpr(
 
                 // Set root expr. If unifications succeeded this will the the
                 // num, otherwise the propgate error
-                try self.types.setVarRedirect(expr_var, lhs_var);
+                _ = try self.unify(expr_var, lhs_var, env);
             }
         },
         .sub, .mul, .div, .rem, .div_trunc => {
