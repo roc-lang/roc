@@ -1092,7 +1092,18 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addAnnotatedText(owned_feature, .emphasized);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            const region_info = self.calcRegionInfo(data.region);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
             try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
+            try report.document.addLineBreak();
             break :blk report;
         },
         .malformed_type_annotation => |data| blk: {

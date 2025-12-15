@@ -9,7 +9,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - binop_omnibus__single__no_spaces.md:1:1:1:13
 MISSING METHOD - binop_omnibus__single__no_spaces.md:1:32:1:34
 # PROBLEMS
 **UNDEFINED VARIABLE**
@@ -26,7 +26,14 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**binop_omnibus__single__no_spaces.md:1:1:1:13:**
+```roc
+Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
+```
+^^^^^^^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
