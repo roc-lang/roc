@@ -12904,9 +12904,29 @@ pub const Interpreter = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const other_env = self.import_envs.get(lookup.module_idx) orelse {
-            self.triggerCrash("e_lookup_external: import_envs missing entry for module", false, roc_ops);
-            return error.Crash;
+        // Resolve the import to find the target module environment.
+        //
+        // Import indices (lookup.module_idx) are module-local - they index into a specific module's
+        // import list. We need to map this to the actual ModuleEnv.
+        //
+        // There are two sources for this mapping:
+        // 1. import_envs: Populated during Interpreter.init for the primary module's imports.
+        //    This is used when evaluating code in the primary module context.
+        // 2. env.imports.resolved_modules: Each module has its own resolved import mappings.
+        //    This is used when evaluating code in secondary modules (e.g., Html calling Elem).
+        //
+        // We check import_envs first for efficiency (most calls are from the primary module),
+        // then fall back to the current module's resolved imports for cross-module calls.
+        const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
+            const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse {
+                self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
+                return error.Crash;
+            };
+            if (resolved_idx >= self.all_module_envs.len) {
+                self.triggerCrash("e_lookup_external: resolved module index out of bounds", false, roc_ops);
+                return error.Crash;
+            }
+            break :blk self.all_module_envs[resolved_idx];
         };
 
         // The target_node_idx is a Def.Idx in the other module
