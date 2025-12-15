@@ -9,6 +9,8 @@
 //! This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
 //! return pointer, args pointers".
 
+const tracy = @import("tracy");
+
 /// todo: describe RocCall
 pub const RocCall = fn (
     /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
@@ -70,6 +72,9 @@ pub const RocOps = extern struct {
 
     /// Helper function to crash the Roc program, returns control to the host.
     pub fn crash(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const roc_crashed_args = RocCrashed{
             .utf8_bytes = @constCast(msg.ptr),
             .len = msg.len,
@@ -79,6 +84,9 @@ pub const RocOps = extern struct {
 
     /// Helper function to send debug output to the host.
     pub fn dbg(self: *RocOps, msg: []const u8) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const roc_dbg_args = RocDbg{
             .utf8_bytes = @constCast(msg.ptr),
             .len = msg.len,
@@ -87,16 +95,31 @@ pub const RocOps = extern struct {
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var roc_alloc_args = RocAlloc{
             .alignment = alignment,
             .length = length,
             .answer = self.env,
         };
         self.roc_alloc(&roc_alloc_args, self.env);
+
+        if (tracy.enable_allocation) {
+            tracy.alloc(@ptrCast(roc_alloc_args.answer), length);
+        }
+
         return roc_alloc_args.answer;
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        if (tracy.enable_allocation) {
+            tracy.free(@ptrCast(ptr));
+        }
+
         var roc_dealloc_args = RocDealloc{
             .alignment = alignment,
             .ptr = ptr,

@@ -133,6 +133,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn allocFn(ptr: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            const zone = traceNamed(@src(), "alloc");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             const result = self.parent_allocator.rawAlloc(len, ptr_align, ret_addr);
             if (result) |data| {
@@ -150,6 +153,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn resizeFn(ptr: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+            const zone = traceNamed(@src(), "resize");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (self.parent_allocator.rawResize(buf, buf_align, new_len, ret_addr)) {
                 if (name) |n| {
@@ -169,6 +175,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn remapFn(ptr: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+            const zone = traceNamed(@src(), "remap");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (self.parent_allocator.rawRemap(buf, buf_align, new_len, ret_addr)) |remapped| {
                 if (name) |n| {
@@ -188,6 +197,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn freeFn(ptr: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
+            const zone = traceNamed(@src(), "free");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             self.parent_allocator.rawFree(buf, buf_align, ret_addr);
             // this condition is to handle free being called on an empty slice that was never even allocated
@@ -270,7 +282,9 @@ inline fn frameMarkEnd(comptime name: [:0]const u8) void {
 extern fn ___tracy_emit_frame_mark_start(name: [*:0]const u8) void;
 extern fn ___tracy_emit_frame_mark_end(name: [*:0]const u8) void;
 
-inline fn alloc(ptr: [*]u8, len: usize) void {
+/// Records a memory allocation with Tracy's memory profiler.
+/// Call this after allocating memory to track it in Tracy's memory view.
+pub inline fn alloc(ptr: [*]u8, len: usize) void {
     if (!enable) return;
 
     if (enable_callstack) {
@@ -290,7 +304,9 @@ inline fn allocNamed(ptr: [*]u8, len: usize, comptime name: [:0]const u8) void {
     }
 }
 
-inline fn free(ptr: [*]u8) void {
+/// Records a memory deallocation with Tracy's memory profiler.
+/// Call this before freeing memory to track it in Tracy's memory view.
+pub inline fn free(ptr: [*]u8) void {
     if (!enable) return;
 
     if (enable_callstack) {

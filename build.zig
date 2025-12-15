@@ -996,6 +996,8 @@ fn createTestPlatformHostLib(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
+    strip: bool,
+    omit_frame_pointer: ?bool,
 ) *Step.Compile {
     const lib = b.addLibrary(.{
         .name = name,
@@ -1004,7 +1006,8 @@ fn createTestPlatformHostLib(
             .root_source_file = b.path(host_path),
             .target = target,
             .optimize = optimize,
-            .strip = optimize != .Debug,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
@@ -1026,6 +1029,8 @@ fn buildAndCopyTestPlatformHostLib(
     target_name: []const u8,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
+    strip: bool,
+    omit_frame_pointer: ?bool,
 ) *Step.UpdateSourceFiles {
     const lib = createTestPlatformHostLib(
         b,
@@ -1034,6 +1039,8 @@ fn buildAndCopyTestPlatformHostLib(
         target,
         optimize,
         roc_modules,
+        strip,
+        omit_frame_pointer,
     );
 
     // Use correct filename for target platform
@@ -1162,6 +1169,8 @@ fn setupTestPlatforms(
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
     test_platforms_step: *Step,
+    strip: bool,
+    omit_frame_pointer: ?bool,
 ) void {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -1176,6 +1185,8 @@ fn setupTestPlatforms(
             native_target_name,
             optimize,
             roc_modules,
+            strip,
+            omit_frame_pointer,
         );
         clear_cache_step.dependOn(&copy_step.step);
     }
@@ -1192,6 +1203,8 @@ fn setupTestPlatforms(
                 cross_target.name,
                 optimize,
                 roc_modules,
+                strip,
+                omit_frame_pointer,
             );
             clear_cache_step.dependOn(&copy_step.step);
         }
@@ -1207,6 +1220,8 @@ fn setupTestPlatforms(
             "wasm32",
             optimize,
             roc_modules,
+            strip,
+            omit_frame_pointer,
         );
         clear_cache_step.dependOn(&copy_step.step);
     }
@@ -1247,7 +1262,7 @@ pub fn build(b: *std.Build) void {
         break :blk b.standardTargetOptions(.{ .default_target = default_target_query });
     };
     const optimize = b.standardOptimizeOption(.{});
-    const strip = b.option(bool, "strip", "Omit debug information");
+    const strip_flag = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
@@ -1284,14 +1299,35 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
-    if (target.result.os.tag == .macos and flag_tracy_callstack) {
-        std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
-        build_options.addOption(bool, "enable_tracy_callstack", false);
-    } else {
-        build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
-    }
+    build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", flag_tracy_callstack_depth);
+
+    // Calculate effective strip value
+    // - If strip is explicitly set by user, use that (warn if tracy_callstack is also set)
+    // - Otherwise, default to stripping if not debug, unless tracy_callstack is enabled
+    const strip: bool = blk: {
+        if (strip_flag) |strip_bool| {
+            // User explicitly set strip
+            if (strip_bool and flag_tracy_callstack) {
+                std.log.warn("Both -Dstrip and -Dtracy-callstack are enabled. " ++
+                    "Stripping will remove callstack information needed by Tracy.", .{});
+            }
+            break :blk strip_bool;
+        } else {
+            // User did not set strip - use defaults
+            if (flag_tracy_callstack) {
+                // Don't strip when tracy callstack is enabled (preserves debug info)
+                break :blk false;
+            } else {
+                // Default: strip in release modes
+                break :blk optimize != .Debug;
+            }
+        }
+    };
+
+    // Don't omit frame pointer when tracy callstack is enabled (needed for callstack capture)
+    const omit_frame_pointer: ?bool = if (flag_tracy_callstack) false else null;
 
     const target_is_native =
         // `query.isNative()` becomes false as soon as users override CPU features (e.g. -Dcpu=x86_64_v3),
@@ -1386,9 +1422,9 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step);
+    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -1797,6 +1833,8 @@ pub fn build(b: *std.Build) void {
             fx_host_target,
             optimize,
             roc_modules,
+            strip,
+            omit_frame_pointer,
         );
 
         // Copy the fx test platform host library to the source directory
@@ -1992,7 +2030,8 @@ fn addMainExe(
     roc_modules: modules.RocModules,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-    strip: ?bool,
+    strip: bool,
+    omit_frame_pointer: ?bool,
     enable_llvm: bool,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
@@ -2000,6 +2039,7 @@ fn addMainExe(
     zstd: *Dependency,
     compiled_builtins_module: *std.Build.Module,
     write_compiled_builtins: *Step.WriteFile,
+    flag_enable_tracy: ?[]const u8,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -2008,6 +2048,7 @@ fn addMainExe(
             .target = target,
             .optimize = optimize,
             .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
             .link_libc = true,
         }),
     });
@@ -2026,6 +2067,8 @@ fn addMainExe(
             native_target_name,
             optimize,
             roc_modules,
+            strip,
+            omit_frame_pointer,
         );
         b.getInstallStep().dependOn(&copy_step.step);
     }
@@ -2042,6 +2085,8 @@ fn addMainExe(
                 cross_target.name,
                 optimize,
                 roc_modules,
+                strip,
+                omit_frame_pointer,
             );
             b.getInstallStep().dependOn(&copy_step.step);
         }
@@ -2063,6 +2108,7 @@ fn addMainExe(
             .target = target,
             .optimize = optimize,
             .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
     });
@@ -2077,7 +2123,8 @@ fn addMainExe(
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = optimize != .Debug,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
         .linkage = .static,
@@ -2103,6 +2150,9 @@ fn addMainExe(
     copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
     exe.step.dependOn(&copy_shim.step);
 
+    // Add tracy support (required by parse/can/check modules)
+    add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
+
     // Cross-compile interpreter shim for all supported targets
     // This allows `roc build --target=X` to work for cross-compilation
     const cross_compile_shim_targets = [_]struct { name: []const u8, query: std.Target.Query }{
@@ -2123,7 +2173,8 @@ fn addMainExe(
                 .root_source_file = b.path("src/builtins/static_lib.zig"),
                 .target = cross_resolved_target,
                 .optimize = optimize,
-                .strip = optimize != .Debug,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
                 .pic = true,
             }),
         });
@@ -2136,7 +2187,8 @@ fn addMainExe(
                 .root_source_file = b.path("src/interpreter_shim/main.zig"),
                 .target = cross_resolved_target,
                 .optimize = optimize,
-                .strip = optimize != .Debug,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
                 .pic = true,
             }),
             .linkage = .static,

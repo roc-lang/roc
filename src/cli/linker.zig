@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const Allocators = base.Allocators;
@@ -164,6 +165,11 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
 
             // Link against system libraries on macOS
             try args.append("-lSystem");
+
+            // Link C++ standard library if Tracy is enabled
+            if (build_options.enable_tracy) {
+                try args.append("-lc++");
+            }
         },
         .linux => {
             // Add linker name for Linux
@@ -217,6 +223,11 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
                     }
                     // Otherwise, dynamic linker is set via extra_args from caller
                 },
+            }
+
+            // Link C++ standard library if Tracy is enabled
+            if (build_options.enable_tracy) {
+                try args.append("-lstdc++");
             }
         },
         .windows => {
@@ -275,6 +286,11 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
+
+            // Link C++ standard library if Tracy is enabled
+            if (build_options.enable_tracy) {
+                try args.append("/defaultlib:msvcprt");
+            }
         },
         .freestanding => {
             // WebAssembly linker (wasm-ld) for freestanding wasm32 target

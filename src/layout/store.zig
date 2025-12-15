@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const tracy = @import("tracy");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
@@ -260,6 +261,9 @@ pub const Store = struct {
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putRecord");
+        defer trace.end();
+
         var temp_fields = std.ArrayList(RecordField).empty;
         defer temp_fields.deinit(self.env.gpa);
 
@@ -338,6 +342,9 @@ pub const Store = struct {
 
     /// Insert a tuple layout from concrete element layouts
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putTuple");
+        defer trace.end();
+
         // Collect fields
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.env.gpa);
@@ -1765,6 +1772,9 @@ pub const Store = struct {
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
+        defer trace.end();
+
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
             const result = idxFromScalar(layout.data.scalar);

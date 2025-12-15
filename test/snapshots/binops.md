@@ -24,12 +24,19 @@ type=expr
 )
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - binops.md:16:5:16:14
 # PROBLEMS
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**binops.md:16:5:16:14:**
+```roc
+    None ?? 0,
+```
+    ^^^^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 # TOKENS
 ~~~zig

@@ -14,6 +14,7 @@ const types = @import("types");
 const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
+const tracy = @import("tracy");
 
 // Platform detection
 const is_wasm32 = builtin.cpu.arch == .wasm32;
@@ -33,8 +34,23 @@ const ipc = if (is_wasm32) struct {
     };
 } else @import("ipc");
 
-// Allocator: wasm32 uses a simple arena, native uses page_allocator
-const default_allocator = if (is_wasm32) wasm_allocator else std.heap.page_allocator;
+// Debug allocator for native platforms (not wasm32) - provides leak detection in Debug/ReleaseSafe builds
+var debug_allocator: if (is_wasm32) void else std.heap.DebugAllocator(.{}) =
+    if (is_wasm32) {} else .{ .backing_allocator = std.heap.c_allocator };
+
+// Get the base allocator based on platform and build mode
+fn getBaseAllocator() std.mem.Allocator {
+    if (is_wasm32) return wasm_allocator;
+    return switch (builtin.mode) {
+        .Debug, .ReleaseSafe => debug_allocator.allocator(),
+        .ReleaseFast, .ReleaseSmall => std.heap.c_allocator,
+    };
+}
+
+// TracyAllocator wrapping for allocation profiling
+var tracy_allocator: tracy.TracyAllocator(null) = undefined;
+var wrapped_allocator: std.mem.Allocator = undefined;
+var allocator_initialized: bool = false;
 
 // Wasm32 allocator - uses roc_alloc from host
 const wasm_allocator = if (is_wasm32) std.mem.Allocator{
@@ -73,7 +89,15 @@ extern fn roc_realloc(ptr: *anyopaque, new_size: usize, old_size: usize, alignme
 extern fn roc_dealloc(ptr: *anyopaque, alignment: u32) callconv(.c) void;
 
 // Static empty import mapping for shim (no type name resolution needed)
-var shim_import_mapping = import_mapping_mod.ImportMapping.init(default_allocator);
+// Lazy-initialized to use the properly wrapped allocator
+var shim_import_mapping: ?import_mapping_mod.ImportMapping = null;
+
+fn getShimImportMapping() *import_mapping_mod.ImportMapping {
+    if (shim_import_mapping == null) {
+        shim_import_mapping = import_mapping_mod.ImportMapping.init(wrapped_allocator);
+    }
+    return &shim_import_mapping.?;
+}
 
 const SharedMemoryAllocator = if (is_wasm32) struct {} else ipc.SharedMemoryAllocator;
 
@@ -195,6 +219,9 @@ const ShimError = error{
 /// Returns a RocStr to the caller
 /// Expected format in shared memory: [u64 parent_address][u32 entry_count][ModuleEnv data][u32[] def_indices]
 export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
         // Only show this generic error if we haven't already crashed with a more specific message
         // (errors like Crash and StackOverflow already triggered roc_crashed with details)
@@ -208,6 +235,9 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
 
 /// Initialize shared memory and ModuleEnv once per process
 fn initializeOnce(roc_ops: *RocOps) ShimError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Fast path: if already initialized, return immediately
     if (shared_memory_initialized.isSet()) return;
 
@@ -218,7 +248,19 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     // Check again in case another thread initialized while we were waiting
     if (shared_memory_initialized.isSet()) return;
 
-    const allocator = default_allocator;
+    // Set up allocator with optional TracyAllocator wrapping before any allocations
+    if (!allocator_initialized) {
+        const base_allocator = getBaseAllocator();
+        if (tracy.enable_allocation) {
+            tracy_allocator = tracy.tracyAllocator(base_allocator);
+            wrapped_allocator = tracy_allocator.allocator();
+        } else {
+            wrapped_allocator = base_allocator;
+        }
+        allocator_initialized = true;
+    }
+
+    const allocator = wrapped_allocator;
     var buf: [256]u8 = undefined;
 
     // IPC path only available on native platforms (not wasm32)
@@ -276,6 +318,9 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
 
 /// Cross-platform evaluation (works for both IPC and embedded modes)
 fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) ShimError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Initialize shared memory once per process
     try initializeOnce(roc_ops);
 
@@ -346,9 +391,12 @@ const SetupResult = struct {
 /// Works for both IPC mode (roc run) and embedded mode (roc build)
 /// Detects portable serialized format (cross-architecture) via magic number
 fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var buf: [256]u8 = undefined;
     const base_ptr = roc__serialized_base_ptr.?;
-    const allocator = default_allocator;
+    const allocator = wrapped_allocator;
 
     // Check for portable serialized format by looking at first 4 bytes
     // The magic number is at the very start of the buffer (no FIRST_ALLOC_OFFSET for portable format)
@@ -504,6 +552,9 @@ fn setupModuleEnv(roc_ops: *RocOps) ShimError!SetupResult {
 /// Set up ModuleEnv from portable serialized format (cross-architecture builds)
 /// This format uses ModuleEnv.Serialized with fixed-size types
 fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allocator: std.mem.Allocator) ShimError!SetupResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var buf: [256]u8 = undefined;
 
     // Read the serialized header (use unaligned reads since embedded data may not be aligned)
@@ -616,7 +667,10 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
 
 /// Create and initialize interpreter with heap-allocated stable objects
 fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
-    const allocator = default_allocator;
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const allocator = wrapped_allocator;
 
     // Use builtin types from the loaded builtin modules
     // This provides the actual definitions of plus, minus, times, etc.
@@ -688,7 +742,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         };
     }
 
-    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, &shim_import_mapping, app_env) catch {
+    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
