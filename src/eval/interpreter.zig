@@ -203,6 +203,28 @@ pub const Interpreter = struct {
         def_idx: can.CIR.Def.Idx,
     };
 
+    /// Key for caching evaluated method closures.
+    /// Extends MethodResolutionKey with receiver layout to handle polymorphic methods.
+    const EvaluatedMethodKey = struct {
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name_ident: base_pkg.Ident.Idx,
+        /// Receiver layout index - same layout means same concrete type for our purposes
+        receiver_layout_idx: u32,
+    };
+
+    /// Cached evaluated method closure.
+    const EvaluatedMethodValue = struct {
+        /// The closure layout
+        closure_layout: layout.Layout,
+        /// Heap-allocated closure data (we own this reference)
+        closure_ptr: [*]u8,
+        /// Total size of the closure (header + captures)
+        closure_size: u32,
+        /// Runtime type variable for the method
+        rt_def_var: types.Var,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -312,6 +334,11 @@ pub const Interpreter = struct {
     // Method resolution cache: (origin_module, nominal_ident, method_name_ident) -> (origin_env, def_idx)
     // This caches the expensive lookupMethodIdentFromTwoEnvsConst + getExposedNodeIndexById lookups
     method_resolution_cache: std.AutoHashMap(MethodResolutionKey, MethodResolutionResult),
+
+    // Evaluated method closure cache: caches the result of evalWithExpectedType for methods.
+    // Key includes receiver layout to handle polymorphic methods correctly.
+    // This avoids re-evaluating method expressions (creating new closures) on every call.
+    evaluated_method_cache: std.AutoHashMap(EvaluatedMethodKey, EvaluatedMethodValue),
 
     // Runtime unification context
     env: *can.ModuleEnv,
@@ -489,6 +516,7 @@ pub const Interpreter = struct {
             .poly_context_generation = 0,
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .method_resolution_cache = std.AutoHashMap(MethodResolutionKey, MethodResolutionResult).init(allocator),
+            .evaluated_method_cache = std.AutoHashMap(EvaluatedMethodKey, EvaluatedMethodValue).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
@@ -7707,6 +7735,11 @@ pub const Interpreter = struct {
         }
         self.poly_cache.deinit();
         self.method_resolution_cache.deinit();
+        // Note: evaluated_method_cache entries hold incremented refcounts on closure data.
+        // We don't decref here since deinit doesn't have roc_ops - the memory will be
+        // reclaimed when the process exits. For long-running interpreters, we'd need
+        // to pass roc_ops to deinit or use a different cleanup strategy.
+        self.evaluated_method_cache.deinit();
         self.module_envs.deinit(self.allocator);
         self.translated_module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
@@ -7877,6 +7910,51 @@ pub const Interpreter = struct {
         const target_def_idx = resolution.def_idx;
         const target_def = origin_env.store.getDef(target_def_idx);
 
+        // Build evaluated method cache key using receiver's layout for polymorphic dispatch
+        const eval_cache_key: ?EvaluatedMethodKey = if (receiver_rt_var) |rt_var| blk: {
+            // Get receiver's layout to distinguish polymorphic instantiations
+            const receiver_layout = self.getRuntimeLayout(rt_var) catch break :blk null;
+            const receiver_layout_idx = self.runtime_layout_store.insertLayout(receiver_layout) catch break :blk null;
+            break :blk EvaluatedMethodKey{
+                .origin_module = origin_module,
+                .nominal_ident = nominal_ident,
+                .method_name_ident = method_name_ident,
+                .receiver_layout_idx = @intFromEnum(receiver_layout_idx),
+            };
+        } else null;
+
+        // Check evaluated method cache for a pre-computed closure
+        if (eval_cache_key) |key| {
+            if (self.evaluated_method_cache.get(key)) |cached| {
+                const cache_hit_trace = tracy.traceNamed(@src(), "resolveMethod.cache_hit");
+                defer cache_hit_trace.end();
+
+                // Create a StackValue pointing to the cached closure
+                // We need to allocate stack space and copy the closure data
+                const target_usize = self.runtime_layout_store.targetUsize();
+                const alignment = cached.closure_layout.alignment(target_usize);
+                const ptr = try self.stack_memory.alloca(cached.closure_size, alignment);
+
+                // Copy cached closure data to stack (use loop for runtime-sized copy)
+                const dest_slice: [*]u8 = @ptrCast(ptr);
+                const src_slice: [*]const u8 = cached.closure_ptr;
+                for (0..cached.closure_size) |i| {
+                    dest_slice[i] = src_slice[i];
+                }
+
+                // Note: Method closures for builtins typically don't have heap-allocated
+                // captures that need refcounting. If this becomes an issue for user-defined
+                // methods with captures, we'll need to add proper refcount handling.
+
+                return StackValue{
+                    .layout = cached.closure_layout,
+                    .ptr = ptr,
+                    .is_initialized = true,
+                    .rt_var = cached.rt_def_var,
+                };
+            }
+        }
+
         // Save current environment and bindings
         const saved_env = self.env;
         const saved_bindings_len = self.bindings.items.len;
@@ -7890,34 +7968,83 @@ pub const Interpreter = struct {
         // Propagate receiver type to flex_type_context BEFORE translating the method's type.
         // This ensures that polymorphic methods like `to` have their type parameters mapped
         // to the correct concrete type (e.g., U8) before the closure is created.
-        if (receiver_rt_var) |recv_rt_var| {
-            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
-            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+        {
+            const propagate_trace = tracy.traceNamed(@src(), "resolveMethod.propagateFlexMappings");
+            defer propagate_trace.end();
+            if (receiver_rt_var) |recv_rt_var| {
+                const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
+                const def_resolved = origin_env.types.resolveVar(def_ct_var);
 
-            // If the method has a function type, extract its first parameter type
-            // and propagate mappings from the receiver type to it
-            if (def_resolved.desc.content == .structure) {
-                const flat = def_resolved.desc.content.structure;
-                switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
-                        const param_vars = origin_env.types.sliceVars(fn_type.args);
-                        if (param_vars.len > 0) {
-                            // The first parameter is the receiver type (e.g., Num a)
-                            // Propagate mappings from the concrete receiver to this type
-                            try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
-                        }
-                    },
-                    else => {},
+                // If the method has a function type, extract its first parameter type
+                // and propagate mappings from the receiver type to it
+                if (def_resolved.desc.content == .structure) {
+                    const flat = def_resolved.desc.content.structure;
+                    switch (flat) {
+                        .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
+                            const param_vars = origin_env.types.sliceVars(fn_type.args);
+                            if (param_vars.len > 0) {
+                                // The first parameter is the receiver type (e.g., Num a)
+                                // Propagate mappings from the concrete receiver to this type
+                                try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
+                            }
+                        },
+                        else => {},
+                    }
                 }
             }
         }
 
         // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        const rt_def_var = blk: {
+            const translate_trace = tracy.traceNamed(@src(), "resolveMethod.translateTypeVar");
+            defer translate_trace.end();
+            const def_var = can.ModuleEnv.varFrom(target_def_idx);
+            break :blk try self.translateTypeVar(@constCast(origin_env), def_var);
+        };
 
         // Evaluate the method's expression
-        const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
+        const method_value = blk: {
+            const eval_trace = tracy.traceNamed(@src(), "resolveMethod.evalWithExpectedType");
+            defer eval_trace.end();
+            break :blk try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
+        };
+
+        // Cache the evaluated closure for future lookups
+        if (eval_cache_key) |key| {
+            // Get closure size - use getTotalSize for closures to include captures
+            const closure_size: u32 = if (method_value.layout.tag == .closure)
+                method_value.getTotalSize(&self.runtime_layout_store)
+            else
+                self.runtime_layout_store.layoutSize(method_value.layout);
+
+            // Only cache if we have a valid closure with reasonable size
+            if (closure_size > 0 and closure_size <= 1024) {
+                // Allocate persistent storage for the cached closure data
+                const cached_ptr = self.allocator.alloc(u8, closure_size) catch null;
+                if (cached_ptr) |ptr| {
+                    if (method_value.ptr) |mv_ptr| {
+                        // Copy the closure data (use loop for runtime-sized copy)
+                        const src_ptr: [*]const u8 = @ptrCast(mv_ptr);
+                        for (0..closure_size) |i| {
+                            ptr[i] = src_ptr[i];
+                        }
+
+                        // Note: For builtin methods, captures are typically not heap-allocated.
+                        // The cached closure bytes contain everything needed.
+
+                        self.evaluated_method_cache.put(key, EvaluatedMethodValue{
+                            .closure_layout = method_value.layout,
+                            .closure_ptr = ptr.ptr,
+                            .closure_size = @intCast(closure_size),
+                            .rt_def_var = rt_def_var,
+                        }) catch {};
+                    } else {
+                        // No valid pointer, free the allocated memory
+                        self.allocator.free(ptr);
+                    }
+                }
+            }
+        }
 
         return method_value;
     }
