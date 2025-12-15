@@ -737,6 +737,34 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         };
     }
 
+    // Fix up module_name_idx for deserialized modules.
+    // Deserialized modules have module_name_idx set to NONE because the interner
+    // was read-only during deserialization. Now that enableRuntimeInserts has been
+    // called, we can insert the module names to enable runtime method lookups.
+    // This is critical for nominal type method dispatch (e.g., is_eq).
+    if (env_ptr.module_name_idx.isNone() and env_ptr.module_name.len > 0) {
+        env_ptr.module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for platform env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+    if (app_env) |a_env| {
+        if (a_env.module_name_idx.isNone() and a_env.module_name.len > 0) {
+            @constCast(a_env).module_name_idx = @constCast(a_env).insertIdent(base.Ident.for_text(a_env.module_name)) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for app env");
+                return error.InterpreterSetupFailed;
+            };
+        }
+    }
+    for (imported_envs) |imp_env| {
+        if (imp_env.module_name_idx.isNone() and imp_env.module_name.len > 0) {
+            @constCast(imp_env).module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for imported env");
+                return error.InterpreterSetupFailed;
+            };
+        }
+    }
+
     const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
