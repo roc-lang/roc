@@ -1464,10 +1464,37 @@ pub const Store = struct {
                     current = self.types_store.resolveVar(backing_var);
                     continue;
                 },
-                .recursion_var => |rec_var| {
-                    // Follow the recursion var structure
-                    current = self.types_store.resolveVar(rec_var.structure);
-                    continue;
+                .recursion_var => |rec_var| blk: {
+                    // A recursion_var represents a self-reference in a recursive type.
+                    // For example, in `Simple(state) := [Node({children: List(Simple(state))})]`,
+                    // the inner `Simple(state)` is a recursion_var pointing back to the outer type.
+                    //
+                    // We cannot simply follow the structure, as that would cause infinite recursion.
+                    // Instead, check if this recursion_var has already been cached (meaning the
+                    // recursive type's layout was already computed), or if we're inside a container
+                    // that provides indirection (List/Box).
+                    const resolved_structure = self.types_store.resolveVar(rec_var.structure);
+
+                    // First, check if we've already computed the layout for the structure
+                    if (self.layouts_by_var.get(resolved_structure.var_)) |cached_idx| {
+                        // The recursive type's layout was already computed, use it
+                        break :blk self.getLayout(cached_idx);
+                    }
+
+                    // If we're inside a List or Box, the recursive reference will be heap-allocated,
+                    // so we can use opaque_ptr as a placeholder. The actual layout will be computed
+                    // when we return to process the outer type.
+                    if (self.work.pending_containers.len > 0) {
+                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                        if (pending_item.container == .box or pending_item.container == .list) {
+                            break :blk Layout.opaquePtr();
+                        }
+                    }
+
+                    // For recursion_var outside of containers, we need to follow it.
+                    // This should only happen if the structure hasn't been processed yet.
+                    current = resolved_structure;
+                    continue :outer;
                 },
                 .err => return LayoutError.TypeContainedMismatch,
             };
