@@ -13,6 +13,7 @@ const can = @import("can");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const layout_mod = @import("layout");
+const tracy = @import("tracy");
 
 // Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
@@ -270,6 +271,9 @@ rt_var: types.Var,
 
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize

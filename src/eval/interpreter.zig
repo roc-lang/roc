@@ -891,6 +891,9 @@ pub const Interpreter = struct {
     }
 
     pub fn pushCopy(self: *Interpreter, src: StackValue) !StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
