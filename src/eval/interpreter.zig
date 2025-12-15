@@ -1126,6 +1126,49 @@ pub const Interpreter = struct {
         return result_value;
     }
 
+    /// Extract an integer index value from a StackValue, handling the case where
+    /// the value has a Dec layout due to polymorphic type inference (GitHub issue #8666).
+    ///
+    /// When a numeric literal like `0` is used in a polymorphic context (e.g., `[0]`),
+    /// its type may be a flex var that defaults to Dec during evaluation. Later, when
+    /// this value is used as an index to List.get (which expects U64), the type gets
+    /// unified to U64 but the value's layout is already Dec. This function handles
+    /// both int and frac layouts to extract the integer value correctly.
+    fn extractIndexAsI128(index_arg: StackValue) i128 {
+        std.debug.assert(index_arg.is_initialized);
+        std.debug.assert(index_arg.ptr != null);
+        std.debug.assert(index_arg.layout.tag == .scalar);
+
+        const scalar = index_arg.layout.data.scalar;
+        switch (scalar.tag) {
+            .int => {
+                // Normal case: integer layout
+                return index_arg.asI128();
+            },
+            .frac => {
+                // Handle Dec/frac layout by converting to integer
+                // This happens when polymorphic numerics default to Dec before type unification
+                const raw_ptr = @as([*]u8, @ptrCast(index_arg.ptr.?));
+                switch (scalar.data.frac) {
+                    .dec => {
+                        // Dec stores value * 10^18, so divide to get the integer
+                        const dec_ptr: *const RocDec = @ptrCast(@alignCast(raw_ptr));
+                        return @divTrunc(dec_ptr.num, RocDec.one_point_zero_i128);
+                    },
+                    .f32 => {
+                        const f32_ptr: *const f32 = @ptrCast(@alignCast(raw_ptr));
+                        return @intFromFloat(f32_ptr.*);
+                    },
+                    .f64 => {
+                        const f64_ptr: *const f64 = @ptrCast(@alignCast(raw_ptr));
+                        return @intFromFloat(f64_ptr.*);
+                    },
+                }
+            },
+            else => unreachable, // Indices should always be numeric
+        }
+    }
+
     /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
     pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
         // For num_from_numeral, we need to pass the target type through a different mechanism
@@ -2414,10 +2457,10 @@ pub const Interpreter = struct {
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                // Extract the index as an integer. Handle both integer and decimal types,
-                // as polymorphic numeric types may default to Dec at runtime even when
-                // used in an integer context (e.g., for loop iteration variable).
-                const index = self.extractIndexAsI128(index_arg);
+                // Extract index as integer. Handle the case where the index has a Dec layout
+                // due to type inference defaulting polymorphic numbers to Dec before the type
+                // was unified to U64 (GitHub issue #8666).
+                const index = extractIndexAsI128(index_arg);
 
                 // Get element layout
                 const elem_layout_idx = list_arg.layout.data.list;
@@ -6139,37 +6182,6 @@ pub const Interpreter = struct {
                 },
             },
             else => error.NotNumeric,
-        };
-    }
-
-    /// Extract an integer value from a numeric StackValue.
-    /// Handles both integer layouts (returns value directly) and fractional layouts
-    /// (converts Dec/F32/F64 to integer). This is needed when polymorphic numeric types
-    /// default to Dec at runtime but are used in integer contexts (e.g., list indices).
-    fn extractIndexAsI128(_: *Interpreter, value: StackValue) i128 {
-        std.debug.assert(value.layout.tag == .scalar);
-        const scalar = value.layout.data.scalar;
-        return switch (scalar.tag) {
-            .int => value.asI128(),
-            .frac => switch (scalar.data.frac) {
-                .dec => {
-                    const raw_ptr = value.ptr orelse unreachable;
-                    const ptr = @as(*const RocDec, @ptrCast(@alignCast(raw_ptr)));
-                    // Convert Dec to integer by dividing by the scale factor (10^18)
-                    return @divTrunc(ptr.num, RocDec.one_point_zero_i128);
-                },
-                .f32 => {
-                    const raw_ptr = value.ptr orelse unreachable;
-                    const ptr = @as(*const f32, @ptrCast(@alignCast(raw_ptr)));
-                    return @intFromFloat(ptr.*);
-                },
-                .f64 => {
-                    const raw_ptr = value.ptr orelse unreachable;
-                    const ptr = @as(*const f64, @ptrCast(@alignCast(raw_ptr)));
-                    return @intFromFloat(ptr.*);
-                },
-            },
-            else => unreachable,
         };
     }
 
