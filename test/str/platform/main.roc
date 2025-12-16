@@ -15,6 +15,8 @@ platform ""
             arm64musl: ["crt1.o", "libhost.a", app, "libc.a"],
             x64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
             arm64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
+            x64win: ["host.lib", app],
+            arm64win: ["host.lib", app],
         }
     }
 
