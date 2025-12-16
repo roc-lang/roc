@@ -31,6 +31,12 @@ const glibc_cross_targets = [_]CrossTarget{
     .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
 };
 
+/// Windows cross-compile targets
+const windows_cross_targets = [_]CrossTarget{
+    .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
+    .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
+};
+
 /// All Linux cross-compile targets (musl + glibc)
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
@@ -1151,8 +1157,9 @@ fn createTestPlatformHostLib(
     configureBackend(lib, target);
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
-    // Force bundle compiler-rt to resolve runtime symbols like __main
-    lib.bundle_compiler_rt = true;
+    // Don't bundle compiler-rt in host libraries - roc_shim provides it
+    // Bundling it here causes duplicate symbol errors on Windows
+    lib.bundle_compiler_rt = false;
 
     return lib;
 }
@@ -1330,6 +1337,25 @@ fn setupTestPlatforms(
 
     // Cross-compile for musl targets (glibc not needed for test-platforms step)
     for (musl_cross_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        for (all_test_platform_dirs) |platform_dir| {
+            const copy_step = buildAndCopyTestPlatformHostLib(
+                b,
+                platform_dir,
+                cross_resolved_target,
+                cross_target.name,
+                optimize,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+            );
+            clear_cache_step.dependOn(&copy_step.step);
+        }
+    }
+
+    // Cross-compile for Windows targets
+    for (windows_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
