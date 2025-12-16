@@ -9,8 +9,8 @@ type=repl
 » foo("test")
 ~~~
 # OUTPUT
-Crash: runtime error
+Crash: Compile-time error encountered at runtime
 ---
-Evaluation error: error.TypeMismatch
+Crash: Cannot call function: compile-time error in function definition
 # PROBLEMS
 NIL
