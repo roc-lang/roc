@@ -982,7 +982,10 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // First, parse the app file to get the platform reference
     const platform_spec = extractPlatformSpecFromApp(allocs, args.path) catch |err| {
-        std.log.err("Failed to extract platform spec from app file: {}", .{err});
+        // Don't print generic error for FileNotFound - it's already reported via the Report system
+        if (err != error.FileNotFound) {
+            std.log.err("Failed to extract platform spec from app file: {}", .{err});
+        }
         return err;
     };
 
@@ -2607,7 +2610,40 @@ fn compileModuleForSerialization(
     exposed_type_module_names: ?[]const []const u8,
 ) !CompiledModule {
     // Read file into arena (so it lives until serialization)
-    const file = try std.fs.cwd().openFile(file_path, .{});
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        var report = reporting.Report.init(allocs.gpa, "MODULE NOT FOUND", .fatal);
+        defer report.deinit();
+
+        switch (err) {
+            error.FileNotFound => {
+                try report.document.addText("I could not find the module ");
+                try report.document.addAnnotated(file_path, .path);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("This module is listed in the platform's ");
+                try report.document.addAnnotated("exposes", .keyword);
+                try report.document.addText(" clause, but the file does not exist.");
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Make sure the file exists and the name in ");
+                try report.document.addAnnotated("exposes", .keyword);
+                try report.document.addText(" matches the filename.");
+            },
+            else => {
+                try report.document.addText("I could not open the module ");
+                try report.document.addAnnotated(file_path, .path);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Error: ");
+                try report.document.addAnnotated(@errorName(err), .error_highlight);
+            },
+        }
+
+        const stderr = stderrWriter();
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+
+        return error.FileNotFound;
+    };
     defer file.close();
 
     const file_size = try file.getEndPos();
@@ -3281,7 +3317,33 @@ pub fn resolvePlatformPaths(allocs: *Allocators, roc_file_path: []const u8) (std
 /// Extract platform specification from app file header by parsing it properly.
 fn extractPlatformSpecFromApp(allocs: *Allocators, app_file_path: []const u8) ![]const u8 {
     // Read the app file
-    const source = std.fs.cwd().readFileAlloc(allocs.gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
+    const source = std.fs.cwd().readFileAlloc(allocs.gpa, app_file_path, std.math.maxInt(usize)) catch |err| {
+        var report = reporting.Report.init(allocs.gpa, "FILE NOT FOUND", .fatal);
+        defer report.deinit();
+
+        switch (err) {
+            error.FileNotFound => {
+                try report.document.addText("I could not find the file ");
+                try report.document.addAnnotated(app_file_path, .path);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Make sure the file exists and you do not have any typos in its name or path.");
+            },
+            else => {
+                try report.document.addText("I could not read the file ");
+                try report.document.addAnnotated(app_file_path, .path);
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addText("Error: ");
+                try report.document.addAnnotated(@errorName(err), .error_highlight);
+            },
+        }
+
+        const stderr = stderrWriter();
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+
+        return error.FileNotFound;
+    };
     defer allocs.gpa.free(source);
 
     // Extract module name from file path
@@ -3992,7 +4054,10 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     // Get platform directory and host library (do this first to get platform source)
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
     const platform_spec = extractPlatformSpecFromApp(allocs, args.path) catch |err| {
-        std.log.err("Failed to extract platform spec: {}", .{err});
+        // Don't print generic error for FileNotFound - it's already reported via the Report system
+        if (err != error.FileNotFound) {
+            std.log.err("Failed to extract platform spec: {}", .{err});
+        }
         return err;
     };
     std.log.debug("Platform spec: {s}", .{platform_spec});
@@ -4124,7 +4189,11 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     std.log.debug("Using portable serialization ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
 
     const compile_result = compileAndSerializeModulesForEmbedding(allocs, args.path, args.allow_errors) catch |err| {
-        std.log.err("Failed to compile Roc file: {}", .{err});
+        // Don't print generic error for errors that have already been reported via the Report system
+        switch (err) {
+            error.FileNotFound, error.CompilationErrors => {},
+            else => std.log.err("Failed to compile Roc file: {}", .{err}),
+        }
         return err;
     };
     std.log.debug("Portable serialization complete, {} bytes", .{compile_result.bytes.len});
