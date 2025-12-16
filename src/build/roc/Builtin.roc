@@ -229,6 +229,18 @@ Builtin :: [].{
 			Item : item
 			Item.join_with(list, joiner)
 		}
+
+		repeat : a, U64 -> List(a)
+		repeat = |item, n| {
+			var $list = List.with_capacity(n)
+			var $count = 0			
+			while $count < n {
+				$list = List.append($list, item)
+				$count = $count + 1
+			}			
+			$list
+		}
+
 	}
 
 	Bool := [False, True].{
