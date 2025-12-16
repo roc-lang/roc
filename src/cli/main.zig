@@ -827,12 +827,28 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     };
 
     // Generate paths for temporary files
-    const bitcode_path = std.fs.path.join(allocs.arena, &.{ cache_dir, "platform_shim.bc" }) catch |err| {
+    // Use a hash of the serialized module content to avoid race conditions when multiple
+    // builds run in parallel. Each unique module content gets its own shim files.
+    const content_hash = if (serialized_module) |module_bytes|
+        std.hash.Crc32.hash(module_bytes)
+    else
+        0; // For IPC mode (roc run), use a fixed name since there's no embedded data
+
+    const bitcode_filename = std.fmt.allocPrint(allocs.arena, "platform_shim_{x}.bc", .{content_hash}) catch |err| {
+        std.log.err("Failed to create bitcode filename: {}", .{err});
+        return err;
+    };
+    const object_filename = std.fmt.allocPrint(allocs.arena, "platform_shim_{x}.o", .{content_hash}) catch |err| {
+        std.log.err("Failed to create object filename: {}", .{err});
+        return err;
+    };
+
+    const bitcode_path = std.fs.path.join(allocs.arena, &.{ cache_dir, bitcode_filename }) catch |err| {
         std.log.err("Failed to create bitcode path: {}", .{err});
         return err;
     };
 
-    const object_path = std.fs.path.join(allocs.arena, &.{ cache_dir, "platform_shim.o" }) catch |err| {
+    const object_path = std.fs.path.join(allocs.arena, &.{ cache_dir, object_filename }) catch |err| {
         std.log.err("Failed to create object path: {}", .{err});
         return err;
     };
