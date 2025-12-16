@@ -455,6 +455,9 @@ test "roc build creates executable from test/int/app.roc" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ result.term, result.stdout, result.stderr });
+    }
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
 
     // 2. Output file was created
@@ -492,6 +495,9 @@ test "roc build executable runs correctly" {
     defer gpa.free(build_result.stdout);
     defer gpa.free(build_result.stderr);
 
+    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+        std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ build_result.term, build_result.stdout, build_result.stderr });
+    }
     try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
 
     // Run the built executable

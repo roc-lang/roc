@@ -1443,6 +1443,22 @@ fn setupTestPlatforms(
         clear_cache_step.dependOn(&copy_step.step);
     }
 
+    // Build the wasm-elem test platform host for wasm32-freestanding (tests parameterized opaque types with requires clause)
+    {
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+        const copy_step = buildAndCopyTestPlatformHostLib(
+            b,
+            "wasm-elem",
+            wasm_target,
+            "wasm32",
+            optimize,
+            roc_modules,
+            strip,
+            omit_frame_pointer,
+        );
+        clear_cache_step.dependOn(&copy_step.step);
+    }
+
     b.getInstallStep().dependOn(clear_cache_step);
     test_platforms_step.dependOn(clear_cache_step);
 }
@@ -1652,11 +1668,42 @@ pub fn build(b: *std.Build) void {
     roc_step.dependOn(clear_cache_step);
     b.getInstallStep().dependOn(clear_cache_step);
 
+    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
+    const test_runner_exe = b.addExecutable(.{
+        .name = "test_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/test/test_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(test_runner_exe);
+
     // CLI integration tests - run actual roc programs like CI does
+    // NOTE: These tests must run sequentially to avoid race conditions on the Roc cache
+    // Order: test_runner int -> test_runner str -> roc_subcommands_test
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
+        const install_runner = b.addInstallArtifact(test_runner_exe, .{});
 
-        // Roc subcommands integration test
+        // Test int platform (native mode only for now)
+        const run_int_tests = b.addRunArtifact(test_runner_exe);
+        run_int_tests.addArg("zig-out/bin/roc");
+        run_int_tests.addArg("int");
+        run_int_tests.addArg("--mode=native");
+        run_int_tests.step.dependOn(&install.step);
+        run_int_tests.step.dependOn(&install_runner.step);
+        run_int_tests.step.dependOn(test_platforms_step);
+
+        // Test str platform (native mode only for now)
+        // Run after int tests to avoid cache race conditions
+        const run_str_tests = b.addRunArtifact(test_runner_exe);
+        run_str_tests.addArg("zig-out/bin/roc");
+        run_str_tests.addArg("str");
+        run_str_tests.addArg("--mode=native");
+        run_str_tests.step.dependOn(&run_int_tests.step);
+
+        // Roc subcommands integration test - runs after test_runner tests
         const roc_subcommands_test = b.addTest(.{
             .name = "roc_subcommands_test",
             .root_module = b.createModule(.{
@@ -1671,10 +1718,7 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_roc_subcommands_test.addArgs(run_args);
         }
-        run_roc_subcommands_test.step.dependOn(&install.step);
-
-        // test-cli needs the test platforms to be built and copied first
-        run_roc_subcommands_test.step.dependOn(test_platforms_step);
+        run_roc_subcommands_test.step.dependOn(&run_str_tests.step); // Run after test_runner
 
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
     }
@@ -1724,17 +1768,6 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
-
-    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
-    const test_runner_exe = b.addExecutable(.{
-        .name = "test_runner",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/test/test_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(test_runner_exe);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",

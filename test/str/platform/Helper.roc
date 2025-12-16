@@ -4,6 +4,10 @@ import Core
 import Utils
 
 Helper := [].{
+    # Simple method that does NOT call other modules
+    simple : Str -> Str
+    simple = |s| "simple: ${s}"
+
     # This function calls Core.wrap internally (transitive call)
     wrap_fancy : Str -> Str
     wrap_fancy = |s| Core.wrap("fancy: ${s}")

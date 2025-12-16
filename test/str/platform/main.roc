@@ -18,9 +18,10 @@ platform ""
         }
     }
 
-import Core
-import Helper
-import Utils
+# Removed imports to test if they affect app's ability to use modules
+# import Core
+# import Helper
+# import Utils
 
 process_string_for_host : Str -> Str
 process_string_for_host = process_string

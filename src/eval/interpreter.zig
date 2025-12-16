@@ -11824,8 +11824,17 @@ pub const Interpreter = struct {
                                 const msg = std.fmt.bufPrint(&buf, "Cannot call '{s}': it is exposed but not implemented", .{ident_str}) catch "Cannot call: exposed but not implemented";
                                 self.triggerCrash(msg, false, roc_ops);
                             },
-                            else => {
-                                self.triggerCrash("Cannot call function: compile-time error in function definition", false, roc_ops);
+                            .nested_value_not_found => |nvnf| {
+                                const parent_str = self.env.getIdent(nvnf.parent_name);
+                                const nested_str = self.env.getIdent(nvnf.nested_name);
+                                var buf: [512]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Cannot call function: nested value not found: {s}.{s}", .{ parent_str, nested_str }) catch "Cannot call function: nested value not found";
+                                self.triggerCrash(msg, false, roc_ops);
+                            },
+                            else => |other_diag| {
+                                var buf: [512]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Cannot call function: compile-time error ({s})", .{@tagName(other_diag)}) catch "Cannot call function: compile-time error in function definition";
+                                self.triggerCrash(msg, false, roc_ops);
                             },
                         }
                     } else {

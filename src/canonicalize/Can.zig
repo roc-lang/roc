@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
@@ -12,6 +13,8 @@ const collections = @import("collections");
 const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
+
+const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CIR = @import("CIR.zig");
 const Scope = @import("Scope.zig");
@@ -4048,6 +4051,11 @@ pub fn canonicalizeExpr(
                                     },
                                     .not_found => {
                                         // Associated item not found - generate error
+                                        if (trace_modules) {
+                                            const parent_text = self.env.getIdent(module_alias);
+                                            const nested_text = self.env.getIdent(ident);
+                                            std.debug.print("[TRACE-MODULES] nested_value_not_found: {s}.{s} (scope lookup failed)\n", .{ parent_text, nested_text });
+                                        }
                                         const diagnostic = Diagnostic{ .nested_value_not_found = .{
                                             .parent_name = module_alias,
                                             .nested_name = ident,

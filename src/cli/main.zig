@@ -2865,13 +2865,14 @@ fn compileAndSerializeModulesForEmbedding(
 
         // Pass previously compiled sibling modules so this module can resolve imports to them.
         // This enables transitive module calls (e.g., Helper imports Core, then calls Core.wrap).
+        // Also pass sorted_modules[0..i] as type module names so opaque type methods can be resolved.
         const compiled = try compileModuleForSerialization(
             allocs,
             module_path,
             module_name,
             &builtin_modules,
             sibling_env_ptrs[0..i],
-            null, // No type modules when compiling sibling modules
+            sorted_modules[0..i], // Pass type module names for previously compiled siblings
         );
         total_error_count += compiled.error_count;
         compiled_modules.appendAssumeCapacity(compiled);
@@ -2898,7 +2899,7 @@ fn compileAndSerializeModulesForEmbedding(
             "main",
             &builtin_modules,
             platform_env_ptrs,
-            null, // No type modules when compiling platform main.roc
+            sorted_modules, // Pass type module names so platform main can resolve opaque type methods
         );
         compiled.is_platform_main = true;
         total_error_count += compiled.error_count;
@@ -2924,7 +2925,7 @@ fn compileAndSerializeModulesForEmbedding(
             "app",
             &builtin_modules,
             all_env_ptrs,
-            exposed_modules.items, // Pass type module names so statement_idx gets set
+            sorted_modules, // Pass type module names in same order as all_env_ptrs
         );
         compiled.is_app = true;
         total_error_count += compiled.error_count;
