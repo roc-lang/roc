@@ -1246,12 +1246,17 @@ pub const BuildEnv = struct {
     }
 
     fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
-        if (self.file_provider) |fp| {
-            if (try fp.read(fp.ctx, path, self.gpa)) |data| {
-                return data;
-            }
-        }
-        return std.fs.cwd().readFileAlloc(self.gpa, path, max_bytes);
+        const raw_data = if (self.file_provider) |fp|
+            if (try fp.read(fp.ctx, path, self.gpa)) |data| data else null
+        else
+            null;
+
+        const data = raw_data orelse try std.fs.cwd().readFileAlloc(self.gpa, path, max_bytes);
+
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        // This reallocates to the correct size if normalization occurs, ensuring
+        // proper memory management when the buffer is freed later.
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
     /// Check if a path is a URL (http:// or https://)
