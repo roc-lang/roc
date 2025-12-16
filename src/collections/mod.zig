@@ -80,12 +80,20 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             return value;
         }
 
+        const init_capacity = @as(comptime_int, @max(1, std.atomic.cache_line / @sizeOf(V)));
+
+        /// Called when memory growth is necessary. Returns a capacity larger than
+        /// minimum that grows super-linearly. Copied from std.ArrayList.
+        inline fn growCapacity(minimum: usize) usize {
+            return minimum +| (minimum / 2 + init_capacity);
+        }
+
         pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
             const idx = @intFromEnum(key);
 
             // Grow if necessary
             if (idx >= self.entries.len) {
-                const new_size = idx + 1;
+                const new_size = growCapacity(idx);
                 const new_entries = try allocator.realloc(self.entries, new_size);
                 @memset(new_entries[self.entries.len..], V.none);
                 self.entries = new_entries;
