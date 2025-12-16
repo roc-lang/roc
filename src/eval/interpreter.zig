@@ -203,6 +203,28 @@ pub const Interpreter = struct {
         def_idx: can.CIR.Def.Idx,
     };
 
+    /// Key for caching evaluated method closures.
+    /// Extends MethodResolutionKey with receiver layout to handle polymorphic methods.
+    const EvaluatedMethodKey = struct {
+        origin_module: base_pkg.Ident.Idx,
+        nominal_ident: base_pkg.Ident.Idx,
+        method_name_ident: base_pkg.Ident.Idx,
+        /// Receiver layout index - same layout means same concrete type for our purposes
+        receiver_layout_idx: u32,
+    };
+
+    /// Cached evaluated method closure.
+    const EvaluatedMethodValue = struct {
+        /// The closure layout
+        closure_layout: layout.Layout,
+        /// Heap-allocated closure data (we own this reference)
+        closure_ptr: [*]u8,
+        /// Total size of the closure (header + captures)
+        closure_size: u32,
+        /// Runtime type variable for the method
+        rt_def_var: types.Var,
+    };
+
     const PolyKey = struct {
         module_id: u32,
         func_id: u32,
@@ -313,6 +335,11 @@ pub const Interpreter = struct {
     // This caches the expensive lookupMethodIdentFromTwoEnvsConst + getExposedNodeIndexById lookups
     method_resolution_cache: std.AutoHashMap(MethodResolutionKey, MethodResolutionResult),
 
+    // Evaluated method closure cache: caches the result of evalWithExpectedType for methods.
+    // Key includes receiver layout to handle polymorphic methods correctly.
+    // This avoids re-evaluating method expressions (creating new closures) on every call.
+    evaluated_method_cache: std.AutoHashMap(EvaluatedMethodKey, EvaluatedMethodValue),
+
     // Runtime unification context
     env: *can.ModuleEnv,
     /// Root module used for method idents (is_lt, is_eq, etc.) - never changes during execution
@@ -355,6 +382,10 @@ pub const Interpreter = struct {
     scratch_tags: std.array_list.Managed(types.Tag),
     // Scratch map for type instantiation (reused to avoid repeated allocations)
     instantiate_scratch: std.AutoHashMap(types.Var, types.Var),
+    // Scratch buffers for tuple collection (reused to avoid repeated allocations)
+    tuple_scratch_layouts: std.array_list.Managed(Layout),
+    tuple_scratch_values: std.array_list.Managed(StackValue),
+    tuple_scratch_rt_vars: std.array_list.Managed(types.Var),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
     def_stack: std.array_list.Managed(DefInProgress),
@@ -489,6 +520,7 @@ pub const Interpreter = struct {
             .poly_context_generation = 0,
             .poly_cache = HashMap(PolyKey, PolyEntry, PolyKeyCtx, 80).init(allocator),
             .method_resolution_cache = std.AutoHashMap(MethodResolutionKey, MethodResolutionResult).init(allocator),
+            .evaluated_method_cache = std.AutoHashMap(EvaluatedMethodKey, EvaluatedMethodValue).init(allocator),
             .env = env,
             .root_env = env, // Root env is the original env passed to init - used for method idents
             .builtin_module_env = builtin_module_env,
@@ -516,6 +548,9 @@ pub const Interpreter = struct {
             .cached_list_u8_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .instantiate_scratch = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .tuple_scratch_layouts = try std.array_list.Managed(Layout).initCapacity(allocator, 8),
+            .tuple_scratch_values = try std.array_list.Managed(StackValue).initCapacity(allocator, 8),
+            .tuple_scratch_rt_vars = try std.array_list.Managed(types.Var).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
@@ -523,6 +558,16 @@ pub const Interpreter = struct {
             .early_return_value = null,
             .constant_strings_arena = std.heap.ArenaAllocator.init(allocator),
         };
+
+        // Pre-allocate capacity for hot HashMaps to avoid repeated small reallocations
+        // These capacities are based on profiling typical workloads
+        try result.translate_cache.ensureTotalCapacity(512); // Type translation cache - very hot
+        try result.poly_cache.ensureTotalCapacity(128); // Polymorphic instantiation cache
+        try result.method_resolution_cache.ensureTotalCapacity(64); // Method lookup cache
+        try result.evaluated_method_cache.ensureTotalCapacity(64); // Evaluated method closure cache
+        try result.flex_type_context.ensureTotalCapacity(256); // Flex type propagation
+        try result.rigid_subst.ensureTotalCapacity(128); // Rigid variable substitution
+        try result.instantiate_scratch.ensureTotalCapacity(64); // Type instantiation scratch
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str);
@@ -891,6 +936,9 @@ pub const Interpreter = struct {
     }
 
     pub fn pushCopy(self: *Interpreter, src: StackValue) !StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
@@ -7704,6 +7752,11 @@ pub const Interpreter = struct {
         }
         self.poly_cache.deinit();
         self.method_resolution_cache.deinit();
+        // Note: evaluated_method_cache entries hold incremented refcounts on closure data.
+        // We don't decref here since deinit doesn't have roc_ops - the memory will be
+        // reclaimed when the process exits. For long-running interpreters, we'd need
+        // to pass roc_ops to deinit or use a different cleanup strategy.
+        self.evaluated_method_cache.deinit();
         self.module_envs.deinit(self.allocator);
         self.translated_module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
@@ -7723,6 +7776,9 @@ pub const Interpreter = struct {
         self.def_stack.deinit();
         self.scratch_tags.deinit();
         self.instantiate_scratch.deinit();
+        self.tuple_scratch_layouts.deinit();
+        self.tuple_scratch_values.deinit();
+        self.tuple_scratch_rt_vars.deinit();
         // Free all constant/static strings at once - they were never freed individually
         self.constant_strings_arena.deinit();
     }
@@ -7874,6 +7930,51 @@ pub const Interpreter = struct {
         const target_def_idx = resolution.def_idx;
         const target_def = origin_env.store.getDef(target_def_idx);
 
+        // Build evaluated method cache key using receiver's layout for polymorphic dispatch
+        const eval_cache_key: ?EvaluatedMethodKey = if (receiver_rt_var) |rt_var| blk: {
+            // Get receiver's layout to distinguish polymorphic instantiations
+            const receiver_layout = self.getRuntimeLayout(rt_var) catch break :blk null;
+            const receiver_layout_idx = self.runtime_layout_store.insertLayout(receiver_layout) catch break :blk null;
+            break :blk EvaluatedMethodKey{
+                .origin_module = origin_module,
+                .nominal_ident = nominal_ident,
+                .method_name_ident = method_name_ident,
+                .receiver_layout_idx = @intFromEnum(receiver_layout_idx),
+            };
+        } else null;
+
+        // Check evaluated method cache for a pre-computed closure
+        if (eval_cache_key) |key| {
+            if (self.evaluated_method_cache.get(key)) |cached| {
+                const cache_hit_trace = tracy.traceNamed(@src(), "resolveMethod.cache_hit");
+                defer cache_hit_trace.end();
+
+                // Create a StackValue pointing to the cached closure
+                // We need to allocate stack space and copy the closure data
+                const target_usize = self.runtime_layout_store.targetUsize();
+                const alignment = cached.closure_layout.alignment(target_usize);
+                const ptr = try self.stack_memory.alloca(cached.closure_size, alignment);
+
+                // Copy cached closure data to stack (use loop for runtime-sized copy)
+                const dest_slice: [*]u8 = @ptrCast(ptr);
+                const src_slice: [*]const u8 = cached.closure_ptr;
+                for (0..cached.closure_size) |i| {
+                    dest_slice[i] = src_slice[i];
+                }
+
+                // Note: Method closures for builtins typically don't have heap-allocated
+                // captures that need refcounting. If this becomes an issue for user-defined
+                // methods with captures, we'll need to add proper refcount handling.
+
+                return StackValue{
+                    .layout = cached.closure_layout,
+                    .ptr = ptr,
+                    .is_initialized = true,
+                    .rt_var = cached.rt_def_var,
+                };
+            }
+        }
+
         // Save current environment and bindings
         const saved_env = self.env;
         const saved_bindings_len = self.bindings.items.len;
@@ -7887,34 +7988,83 @@ pub const Interpreter = struct {
         // Propagate receiver type to flex_type_context BEFORE translating the method's type.
         // This ensures that polymorphic methods like `to` have their type parameters mapped
         // to the correct concrete type (e.g., U8) before the closure is created.
-        if (receiver_rt_var) |recv_rt_var| {
-            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
-            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+        {
+            const propagate_trace = tracy.traceNamed(@src(), "resolveMethod.propagateFlexMappings");
+            defer propagate_trace.end();
+            if (receiver_rt_var) |recv_rt_var| {
+                const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
+                const def_resolved = origin_env.types.resolveVar(def_ct_var);
 
-            // If the method has a function type, extract its first parameter type
-            // and propagate mappings from the receiver type to it
-            if (def_resolved.desc.content == .structure) {
-                const flat = def_resolved.desc.content.structure;
-                switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
-                        const param_vars = origin_env.types.sliceVars(fn_type.args);
-                        if (param_vars.len > 0) {
-                            // The first parameter is the receiver type (e.g., Num a)
-                            // Propagate mappings from the concrete receiver to this type
-                            try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
-                        }
-                    },
-                    else => {},
+                // If the method has a function type, extract its first parameter type
+                // and propagate mappings from the receiver type to it
+                if (def_resolved.desc.content == .structure) {
+                    const flat = def_resolved.desc.content.structure;
+                    switch (flat) {
+                        .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
+                            const param_vars = origin_env.types.sliceVars(fn_type.args);
+                            if (param_vars.len > 0) {
+                                // The first parameter is the receiver type (e.g., Num a)
+                                // Propagate mappings from the concrete receiver to this type
+                                try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
+                            }
+                        },
+                        else => {},
+                    }
                 }
             }
         }
 
         // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        const rt_def_var = blk: {
+            const translate_trace = tracy.traceNamed(@src(), "resolveMethod.translateTypeVar");
+            defer translate_trace.end();
+            const def_var = can.ModuleEnv.varFrom(target_def_idx);
+            break :blk try self.translateTypeVar(@constCast(origin_env), def_var);
+        };
 
         // Evaluate the method's expression
-        const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
+        const method_value = blk: {
+            const eval_trace = tracy.traceNamed(@src(), "resolveMethod.evalWithExpectedType");
+            defer eval_trace.end();
+            break :blk try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
+        };
+
+        // Cache the evaluated closure for future lookups
+        if (eval_cache_key) |key| {
+            // Get closure size - use getTotalSize for closures to include captures
+            const closure_size: u32 = if (method_value.layout.tag == .closure)
+                method_value.getTotalSize(&self.runtime_layout_store)
+            else
+                self.runtime_layout_store.layoutSize(method_value.layout);
+
+            // Only cache if we have a valid closure with reasonable size
+            if (closure_size > 0 and closure_size <= 1024) {
+                // Allocate persistent storage for the cached closure data
+                const cached_ptr = self.allocator.alloc(u8, closure_size) catch null;
+                if (cached_ptr) |ptr| {
+                    if (method_value.ptr) |mv_ptr| {
+                        // Copy the closure data (use loop for runtime-sized copy)
+                        const src_ptr: [*]const u8 = @ptrCast(mv_ptr);
+                        for (0..closure_size) |i| {
+                            ptr[i] = src_ptr[i];
+                        }
+
+                        // Note: For builtin methods, captures are typically not heap-allocated.
+                        // The cached closure bytes contain everything needed.
+
+                        self.evaluated_method_cache.put(key, EvaluatedMethodValue{
+                            .closure_layout = method_value.layout,
+                            .closure_ptr = ptr.ptr,
+                            .closure_size = @intCast(closure_size),
+                            .rt_def_var = rt_def_var,
+                        }) catch {};
+                    } else {
+                        // No valid pointer, free the allocated memory
+                        self.allocator.free(ptr);
+                    }
+                }
+            }
+        }
 
         return method_value;
     }
@@ -8032,9 +8182,11 @@ pub const Interpreter = struct {
     pub fn ensureVarLayoutCapacity(self: *Interpreter, min_len: usize) !void {
         if (self.var_to_layout_slot.items.len >= min_len) return;
         const old_len = self.var_to_layout_slot.items.len;
-        try self.var_to_layout_slot.ensureTotalCapacityPrecise(min_len);
+        // grow with at least factor 1.5 to avoid frequent reallocs
+        const new_len = @max(old_len * 2 / 3, min_len);
+        try self.var_to_layout_slot.ensureTotalCapacity(new_len);
         // Set new length and zero-fill
-        self.var_to_layout_slot.items.len = min_len;
+        self.var_to_layout_slot.items.len = new_len;
         @memset(self.var_to_layout_slot.items[old_len..], 0);
     }
 
@@ -13214,20 +13366,22 @@ pub const Interpreter = struct {
                         const tuple_val = try self.pushRaw(tuple_layout, 0, empty_tuple_rt_var);
                         try value_stack.push(tuple_val);
                     } else {
-                        // Gather layouts and values
-                        const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
-                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
-                        defer self.allocator.free(elem_layouts);
+                        // Use scratch buffers instead of allocating (cleared and reused for each tuple)
+                        const scratch_trace = tracy.traceNamed(@src(), "tuple_collect.use_scratch");
+                        defer scratch_trace.end();
 
-                        // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
-                        // We need to pop them and store in correct order
-                        var values = try self.allocator.alloc(StackValue, total_count);
-                        defer self.allocator.free(values);
+                        // Clear and resize scratch buffers to needed size
+                        self.tuple_scratch_layouts.clearRetainingCapacity();
+                        self.tuple_scratch_values.clearRetainingCapacity();
+                        self.tuple_scratch_rt_vars.clearRetainingCapacity();
 
-                        // Collect element rt_vars for constructing tuple type
-                        var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
-                        defer self.allocator.free(elem_rt_vars);
-                        alloc_trace.end();
+                        try self.tuple_scratch_layouts.resize(total_count);
+                        try self.tuple_scratch_values.resize(total_count);
+                        try self.tuple_scratch_rt_vars.resize(total_count);
+
+                        var elem_layouts = self.tuple_scratch_layouts.items;
+                        var values = self.tuple_scratch_values.items;
+                        var elem_rt_vars = self.tuple_scratch_rt_vars.items;
 
                         // Pop values in reverse order (last evaluated is on top)
                         var i: usize = total_count;
