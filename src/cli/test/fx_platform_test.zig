@@ -211,7 +211,7 @@ test "fx platform expect with main" {
     try checkSuccess(run_result);
 
     // When all tests pass produce short output message
-    try testing.expectStringStartsWith(run_result.stdout, "Ran 1 test(s): 1 passed, 0 failed");
+    try testing.expectStringStartsWith(run_result.stdout, "All (1) tests passed in ");
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
@@ -227,7 +227,7 @@ test "fx platform expect with numeric literal" {
     try checkSuccess(run_result);
 
     // When all tests pass produce short output message
-    try testing.expectStringStartsWith(run_result.stdout, "Ran 1 test(s): 1 passed, 0 failed");
+    try testing.expectStringStartsWith(run_result.stdout, "All (1) tests passed in ");
     try testing.expectEqualStrings("", run_result.stderr);
 }
 

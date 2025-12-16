@@ -4020,7 +4020,7 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     // Report results
     if (failed == 0 and !has_comptime_crashes) {
         // Success case: print summary
-        try stdout.print("Ran {} test(s): {} passed, 0 failed in {d:.1}ms\n", .{ passed, passed, elapsed_ms });
+        try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ passed, elapsed_ms });
         if (args.verbose) {
             // Generate and render a detailed report if verbose is true
             for (test_runner.test_results.items) |test_result| {
