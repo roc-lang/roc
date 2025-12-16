@@ -279,7 +279,7 @@ pub const Interpreter = struct {
     runtime_types: *types.store.Store,
     runtime_layout_store: layout.Store,
     // O(1) Var -> Layout slot cache (0 = unset, else layout_idx + 1)
-    var_to_layout_slot: std.array_list.Managed(u32),
+    var_to_layout_slot: std.ArrayList(u32),
     // Empty scope used when converting runtime vars to layouts
     empty_scope: TypeScope,
     // Translation cache: (module, resolved_var) -> (runtime_var, generation)
@@ -470,7 +470,7 @@ pub const Interpreter = struct {
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
-        var slots = try std.array_list.Managed(u32).initCapacity(allocator, 1024);
+        var slots = try std.ArrayList(u32).initCapacity(allocator, 1024);
         slots.appendNTimesAssumeCapacity(0, 1024);
         const scope = TypeScope.init(allocator);
         var result = Interpreter{
@@ -7706,7 +7706,7 @@ pub const Interpreter = struct {
         self.translated_module_envs.deinit(self.allocator);
         self.module_ids.deinit(self.allocator);
         self.import_envs.deinit(self.allocator);
-        self.var_to_layout_slot.deinit();
+        self.var_to_layout_slot.deinit(self.allocator);
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
         self.allocator.destroy(self.runtime_types);
@@ -8029,13 +8029,10 @@ pub const Interpreter = struct {
     /// Ensure the slot array can index at least `min_len` entries; zero-fill new entries.
     pub fn ensureVarLayoutCapacity(self: *Interpreter, min_len: usize) !void {
         if (self.var_to_layout_slot.items.len >= min_len) return;
-        const old_len = self.var_to_layout_slot.items.len;
-        // grow with at least factor 1.5 to avoid frequent reallocs
-        const new_len = @max(old_len * 2 / 3, min_len);
-        try self.var_to_layout_slot.ensureTotalCapacity(new_len);
+        try self.var_to_layout_slot.ensureTotalCapacity(self.allocator, min_len);
         // Set new length and zero-fill
-        self.var_to_layout_slot.items.len = new_len;
-        @memset(self.var_to_layout_slot.items[old_len..], 0);
+        @memset(self.var_to_layout_slot.unusedCapacitySlice(), 0);
+        self.var_to_layout_slot.items.len = self.var_to_layout_slot.capacity;
     }
 
     /// Create List(Str) type for runtime type propagation
