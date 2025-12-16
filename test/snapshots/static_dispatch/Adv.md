@@ -330,51 +330,42 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "Adv.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "s"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.to_u64"))
-		(e-closure
-			(captures
-				(capture (ident "u")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "u")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "u"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.update_str"))
-		(e-closure
-			(captures
-				(capture (ident "u64")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "next_str")))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-lookup-local
-								(p-assign (ident "u64")))
-							(e-lookup-local
-								(p-assign (ident "next_str"))))))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag))
+				(p-assign (ident "next_str")))
+			(e-nominal (nominal "Adv")
+				(e-tag (name "Val")
+					(args
+						(e-lookup-local
+							(p-assign (ident "u64")))
+						(e-lookup-local
+							(p-assign (ident "next_str")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
@@ -382,21 +373,18 @@ main = {
 				(ty-lookup (name "Adv") (local)))))
 	(d-let
 		(p-assign (ident "Adv.update_u64"))
-		(e-closure
-			(captures
-				(capture (ident "str")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "next_u64")))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-lookup-local
-								(p-assign (ident "next_u64")))
-							(e-lookup-local
-								(p-assign (ident "str"))))))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag))
+				(p-assign (ident "next_u64")))
+			(e-nominal (nominal "Adv")
+				(e-tag (name "Val")
+					(args
+						(e-lookup-local
+							(p-assign (ident "next_u64")))
+						(e-lookup-local
+							(p-assign (ident "str")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))

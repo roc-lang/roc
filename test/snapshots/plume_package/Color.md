@@ -1089,93 +1089,82 @@ is_named_color = |str| {
 							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "to_str"))
-		(e-closure
-			(captures
-				(capture (ident "r"))
-				(capture (ident "g"))
-				(capture (ident "b"))
-				(capture (ident "r"))
-				(capture (ident "g"))
-				(capture (ident "b"))
-				(capture (ident "a"))
-				(capture (ident "inner"))
-				(capture (ident "inner")))
-			(e-lambda
-				(args
-					(p-assign (ident "color")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "color"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-string
-										(e-literal (string "rgb("))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "r"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "g"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "b"))))
-										(e-literal (string ")")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-string
-										(e-literal (string "rgba("))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "r"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "g"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "b"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "a"))))
-										(e-literal (string ")")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-lookup-local
-										(p-assign (ident "inner")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-lookup-local
-										(p-assign (ident "inner"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "color")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "color"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-string
+									(e-literal (string "rgb("))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "r"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "g"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "b"))))
+									(e-literal (string ")")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-string
+									(e-literal (string "rgba("))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "r"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "g"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "b"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "a"))))
+									(e-literal (string ")")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-lookup-local
+									(p-assign (ident "inner")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-lookup-local
+									(p-assign (ident "inner")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
