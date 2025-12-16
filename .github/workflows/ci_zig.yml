@@ -127,7 +127,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "EndOfStream"
+          error_string_contains: "EndOfStream|Timeout"
           retry_count: 3
 
       - name: Check Builtin.roc formatting (Unix)
