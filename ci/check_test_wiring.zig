@@ -134,6 +134,22 @@ pub fn main() !void {
     try stdout.flush();
 }
 
+/// Normalize path separators to forward slashes for consistent cross-platform comparison.
+/// This is important because:
+/// 1. Zig @import paths always use forward slashes
+/// 2. We need consistent path comparison between walked files and mod.zig imports
+fn normalizePath(allocator: Allocator, path: []u8) ![]u8 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        const normalized = try allocator.dupe(u8, path);
+        for (normalized) |*c| {
+            if (c.* == '\\') c.* = '/';
+        }
+        allocator.free(path);
+        return normalized;
+    }
+    return path;
+}
+
 fn walkTree(
     allocator: Allocator,
     dir_path: []const u8,
@@ -147,7 +163,8 @@ fn walkTree(
     while (try it.next()) |entry| {
         if (entry.kind == .sym_link) continue;
 
-        const next_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+        const joined_path = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+        const next_path = try normalizePath(allocator, joined_path);
 
         switch (entry.kind) {
             .directory => {
@@ -376,7 +393,8 @@ fn printSuggestion(
 fn findNearestMod(allocator: Allocator, file_path: []const u8) !?[]u8 {
     var current_dir_opt = std.fs.path.dirname(file_path);
     while (current_dir_opt) |current_dir| {
-        const candidate = try std.fs.path.join(allocator, &.{ current_dir, "mod.zig" });
+        const joined = try std.fs.path.join(allocator, &.{ current_dir, "mod.zig" });
+        const candidate = try normalizePath(allocator, joined);
         if (fileExists(candidate)) {
             return candidate;
         }
