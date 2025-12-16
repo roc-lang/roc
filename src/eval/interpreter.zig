@@ -792,21 +792,34 @@ pub const Interpreter = struct {
                     };
                 }
 
-                const tuple_idx = self.runtime_layout_store.putTuple(param_layouts) catch @panic("putTuple failed");
+                const tuple_idx = self.runtime_layout_store.putTuple(param_layouts) catch {
+                    self.triggerCrash("Internal error: failed to allocate tuple layout in evaluateExpression", false, roc_ops);
+                    return error.Crash;
+                };
                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_idx);
                 // Use first element's rt_var as placeholder - this tuple is internal-only,
                 // elements get their own rt_vars when extracted via getElement
                 args_tuple_value = StackValue{ .layout = tuple_layout, .ptr = args_ptr, .is_initialized = true, .rt_var = param_rt_vars[0] };
-                args_accessor = args_tuple_value.asTuple(&self.runtime_layout_store) catch @panic("asTuple failed");
+                args_accessor = args_tuple_value.asTuple(&self.runtime_layout_store) catch {
+                    self.triggerCrash("Internal error: failed to access tuple in evaluateExpression", false, roc_ops);
+                    return error.Crash;
+                };
 
                 var j: usize = 0;
                 while (j < params.len) : (j += 1) {
                     // getElement expects original index and converts to sorted internally
-                    const arg_value = args_accessor.getElement(j, param_rt_vars[j]) catch @panic("getElement failed");
+                    const arg_value = args_accessor.getElement(j, param_rt_vars[j]) catch {
+                        self.triggerCrash("Internal error: failed to get tuple element in evaluateExpression", false, roc_ops);
+                        return error.Crash;
+                    };
                     // expr_idx not used in this context - binding happens during function call setup
-                    const matched = self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, null) catch @panic("patternMatchesBind threw error");
+                    const matched = self.patternMatchesBind(params[j], arg_value, param_rt_vars[j], roc_ops, &temp_binds, null) catch {
+                        self.triggerCrash("Internal error: pattern match failed in evaluateExpression", false, roc_ops);
+                        return error.Crash;
+                    };
                     if (!matched) {
-                        @panic("TypeMismatch at patternMatchesBind line 664");
+                        self.triggerCrash("Internal error: TypeMismatch in pattern binding during evaluateExpression", false, roc_ops);
+                        return error.Crash;
                     }
                     // Decref refcounted argument values (lists, strings) after binding.
                     // patternMatchesBind made copies, so we need to decref the originals.
@@ -867,7 +880,7 @@ pub const Interpreter = struct {
     /// Check if the result should be copied to ret_ptr based on the result's layout.
     /// Returns false for zero-sized types (nothing to copy).
     /// Validates that ret_ptr is properly aligned for the result type.
-    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque, _: *RocOps) !bool {
+    fn shouldCopyResult(self: *Interpreter, result: StackValue, ret_ptr: *anyopaque, roc_ops: *RocOps) !bool {
         const result_size = self.runtime_layout_store.layoutSize(result.layout);
         if (result_size == 0) {
             // Zero-sized types don't need copying
@@ -883,7 +896,8 @@ pub const Interpreter = struct {
             const required_alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
             const ret_addr = @intFromPtr(ret_ptr);
             if (ret_addr % required_alignment.toByteUnits() != 0) {
-                @panic("TypeMismatch at shouldCopyResult alignment check line 733");
+                self.triggerCrash("Internal error: return pointer alignment mismatch - this indicates a type error between platform and app", false, roc_ops);
+                return error.TypeMismatch;
             }
         }
 
@@ -1134,7 +1148,8 @@ pub const Interpreter = struct {
         const cmp_params = self.env.store.slicePatterns(cmp_header.params);
         if (cmp_params.len != 2) {
             self.env = cmp_saved_env;
-            @panic("TypeMismatch at sort comparison param count line 981");
+            self.triggerCrash("Sort comparison function must take exactly 2 parameters", false, roc_ops);
+            return error.TypeMismatch;
         }
 
         try self.active_closures.append(compare_fn);
@@ -5960,7 +5975,10 @@ pub const Interpreter = struct {
                 if (rhs_dec.num == 0) return error.DivisionByZero;
                 break :blk RocDec.rem(lhs_dec, rhs_dec, roc_ops);
             },
-            else => @panic("evalDecBinop: unhandled decimal operation"),
+            else => {
+                self.triggerCrash("Decimal operation not yet implemented in interpreter", false, roc_ops);
+                return error.TypeMismatch;
+            },
         };
 
         // Use proper Dec layout to ensure 16-byte alignment for RocDec
@@ -6140,6 +6158,7 @@ pub const Interpreter = struct {
         result_layout: Layout,
         lhs: StackValue,
         rhs: StackValue,
+        roc_ops: *RocOps,
     ) !StackValue {
         const lhs_float = try self.stackValueToFloat(FloatT, lhs);
         const rhs_float = try self.stackValueToFloat(FloatT, rhs);
@@ -6161,7 +6180,10 @@ pub const Interpreter = struct {
                 if (rhs_float == 0) return error.DivisionByZero;
                 break :blk @rem(lhs_float, rhs_float);
             },
-            else => @panic("evalFloatBinop: unhandled float operation"),
+            else => {
+                self.triggerCrash("Float operation not yet implemented in interpreter", false, roc_ops);
+                return error.TypeMismatch;
+            },
         };
 
         var out = try self.pushRaw(result_layout, 0);
@@ -6415,7 +6437,10 @@ pub const Interpreter = struct {
                     const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
                     return lhs_str.eql(rhs_str.*);
                 },
-                else => @panic("valuesStructurallyEqual: unhandled scalar type"),
+                else => {
+                    self.triggerCrash("Internal error: unhandled scalar type in equality comparison", false, roc_ops);
+                    return error.TypeMismatch;
+                },
             }
         }
 
@@ -6433,7 +6458,10 @@ pub const Interpreter = struct {
         // Now use resolveBaseVar for non-nominal structural types
         const lhs_resolved = self.resolveBaseVar(lhs_var);
         const lhs_content = lhs_resolved.desc.content;
-        if (lhs_content != .structure) @panic("valuesStructurallyEqual: lhs is not a structure type");
+        if (lhs_content != .structure) {
+            self.triggerCrash("Internal error: expected structure type in equality comparison", false, roc_ops);
+            return error.TypeMismatch;
+        }
 
         return switch (lhs_content.structure) {
             .nominal_type => |nom| try self.dispatchNominalIsEq(lhs, rhs, nom, roc_ops),
@@ -6449,7 +6477,10 @@ pub const Interpreter = struct {
             },
             .empty_record => true,
             .empty_tag_union => true,
-            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => @panic("valuesStructurallyEqual: cannot compare functions or unbound records"),
+            .record_unbound, .fn_pure, .fn_effectful, .fn_unbound => {
+                self.triggerCrash("Cannot compare functions or unbound records for equality", false, roc_ops);
+                return error.TypeMismatch;
+            },
         };
     }
 
@@ -6501,7 +6532,8 @@ pub const Interpreter = struct {
         if (@intFromEnum(record.ext) != 0) {
             const ext_resolved = self.resolveBaseVar(record.ext);
             if (ext_resolved.desc.content != .structure or ext_resolved.desc.content.structure != .empty_record) {
-                @panic("structuralEqualRecord: record extension is not empty_record");
+                self.triggerCrash("Internal error: record extension is not empty_record in equality comparison", false, roc_ops);
+                return error.TypeMismatch;
             }
         }
 
@@ -6655,7 +6687,10 @@ pub const Interpreter = struct {
             }
             return switch (lhs_scalar.tag) {
                 .int, .frac => blk: {
-                    const order = self.compareNumericScalars(lhs, rhs) catch @panic("dispatchNominalIsEq: failed to compare scalars");
+                    const order = self.compareNumericScalars(lhs, rhs) catch {
+                        self.triggerCrash("Internal error: failed to compare scalar values in nominal type equality", false, roc_ops);
+                        return error.TypeMismatch;
+                    };
                     break :blk order == .eq;
                 },
                 .str => blk: {
@@ -6676,7 +6711,10 @@ pub const Interpreter = struct {
         // For scalar types, fall back to attempting scalar comparison
         // This handles cases like Bool which wraps a tag union but is represented as a scalar
         if (lhs.layout.tag == .scalar and rhs.layout.tag == .scalar) {
-            const order = self.compareNumericScalars(lhs, rhs) catch @panic("dispatchNominalIsEq: failed to compare scalars");
+            const order = self.compareNumericScalars(lhs, rhs) catch {
+                self.triggerCrash("Internal error: failed to compare scalar values in nominal type equality", false, roc_ops);
+                return error.TypeMismatch;
+            };
             return order == .eq;
         }
 
@@ -7225,6 +7263,7 @@ pub const Interpreter = struct {
         self: *Interpreter,
         boxed_value: StackValue,
         value_stack: *ValueStack,
+        roc_ops: *RocOps,
     ) !void {
         // Get the element rt_var from the Box type's type argument
         const elem_rt_var = blk: {
@@ -7282,7 +7321,8 @@ pub const Interpreter = struct {
             return;
         }
 
-        @panic("Box.unbox: layout is not box or box_of_zst");
+        self.triggerCrash("Box.unbox: expected box layout but got different type", false, roc_ops);
+        return error.TypeMismatch;
     }
 
     fn makeRenderCtx(self: *Interpreter) render_helpers.RenderCtx {
@@ -9563,7 +9603,7 @@ pub const Interpreter = struct {
             },
             else => &[_]types.Var{},
         };
-        if (params.len != args.len) @panic("TypeMismatch: params.len != args.len");
+        if (params.len != args.len) return error.TypeMismatch;
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
@@ -10362,39 +10402,9 @@ pub const Interpreter = struct {
                 .apply_continuation => |cont| {
                     const should_continue = self.applyContinuation(&work_stack, &value_stack, cont, roc_ops) catch |err| {
                         if (err == error.TypeMismatch) {
-                            switch (cont) {
-                                .return_result => @panic("TypeMismatch from cont: return_result"),
-                                .decref_value => @panic("TypeMismatch from cont: decref_value"),
-                                .trim_bindings => @panic("TypeMismatch from cont: trim_bindings"),
-                                .and_short_circuit => @panic("TypeMismatch from cont: and_short_circuit"),
-                                .or_short_circuit => @panic("TypeMismatch from cont: or_short_circuit"),
-                                .if_branch => @panic("TypeMismatch from cont: if_branch"),
-                                .block_continue => @panic("TypeMismatch from cont: block_continue"),
-                                .bind_decl => @panic("TypeMismatch from cont: bind_decl"),
-                                .tuple_collect => @panic("TypeMismatch from cont: tuple_collect"),
-                                .list_collect => @panic("TypeMismatch from cont: list_collect"),
-                                .record_collect => @panic("TypeMismatch from cont: record_collect"),
-                                .early_return => @panic("TypeMismatch from cont: early_return"),
-                                .tag_collect => @panic("TypeMismatch from cont: tag_collect"),
-                                .match_branches => @panic("TypeMismatch from cont: match_branches"),
-                                .match_guard => @panic("TypeMismatch from cont: match_guard"),
-                                .match_cleanup => @panic("TypeMismatch from cont: match_cleanup"),
-                                .expect_check => @panic("TypeMismatch from cont: expect_check"),
-                                .dbg_print => @panic("TypeMismatch from cont: dbg_print"),
-                                .str_collect => @panic("TypeMismatch from cont: str_collect"),
-                                .call_collect_args => @panic("TypeMismatch from cont: call_collect_args"),
-                                .call_invoke_closure => @panic("TypeMismatch from cont: call_invoke_closure"),
-                                .call_cleanup => @panic("TypeMismatch from cont: call_cleanup"),
-                                .unary_op_apply => @panic("TypeMismatch from cont: unary_op_apply"),
-                                .binop_eval_rhs => @panic("TypeMismatch from cont: binop_eval_rhs"),
-                                .binop_apply => @panic("TypeMismatch from cont: binop_apply"),
-                                .dot_access_await_receiver => @panic("TypeMismatch from cont: dot_access_await_receiver"),
-                                .dot_access_resolve => @panic("TypeMismatch from cont: dot_access_resolve"),
-                                .dot_access_collect_args => @panic("TypeMismatch from cont: dot_access_collect_args"),
-                                .for_iterate => @panic("TypeMismatch from cont: for_iterate"),
-                                .for_body_done => @panic("TypeMismatch from cont: for_body_done"),
-                                else => @panic("TypeMismatch from cont: unknown"),
-                            }
+                            var buf: [128]u8 = undefined;
+                            const msg = std.fmt.bufPrint(&buf, "Internal error: TypeMismatch in {s} continuation", .{@tagName(cont)}) catch "Internal error: TypeMismatch in continuation";
+                            self.triggerCrash(msg, false, roc_ops);
                         }
                         return err;
                     };
@@ -10734,11 +10744,13 @@ pub const Interpreter = struct {
                         const result = try self.evalWithExpectedType(app_expr_idx, roc_ops, expected_rt_var);
                         try value_stack.push(result);
                     } else {
-                        @panic("TypeMismatch: e_lookup_required - no found_expr");
+                        self.triggerCrash("Internal error: e_lookup_required - app expression not found", false, roc_ops);
+                        return error.TypeMismatch;
                     }
                 } else {
                     // No app_env - can't resolve required lookups
-                    @panic("TypeMismatch: e_lookup_required - no app_env");
+                    self.triggerCrash("Internal error: e_lookup_required - no app module available", false, roc_ops);
+                    return error.TypeMismatch;
                 }
             },
 
@@ -11754,7 +11766,7 @@ pub const Interpreter = struct {
                                 const boxed_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
                                 defer boxed_value.decref(&self.runtime_layout_store, roc_ops);
 
-                                try self.evalUnboxIntrinsic(boxed_value, value_stack);
+                                try self.evalUnboxIntrinsic(boxed_value, value_stack, roc_ops);
                                 return;
                             }
                         }
@@ -13386,7 +13398,8 @@ pub const Interpreter = struct {
                 }
             },
             else => {
-                @panic("statement type not yet implemented");
+                self.triggerCrash("Statement type not yet implemented in interpreter", false, roc_ops);
+                return error.NotImplemented;
             },
         }
     }
@@ -13564,7 +13577,8 @@ pub const Interpreter = struct {
                 if (!try self.patternMatchesBind(bd.pattern, val, expr_rt_var, roc_ops, &temp_binds, bd.expr_idx)) {
                     // Pattern match failed - decref any bindings that were created
                     self.trimBindingList(&temp_binds, 0, roc_ops);
-                    @panic("TypeMismatch in bind_def patternMatchesBind line 12636");
+                    self.triggerCrash("Internal error: pattern match failed in bind_def continuation", false, roc_ops);
+                    return error.TypeMismatch;
                 }
 
                 // Add bindings using upsertBinding to handle closure placeholders.
@@ -15138,7 +15152,8 @@ pub const Interpreter = struct {
 
                 // Call the method closure
                 if (method_func.layout.tag != .closure) {
-                    @panic("TypeMismatch: method_func not closure line 14105");
+                    self.triggerCrash("Internal error: method function is not a closure", false, roc_ops);
+                    return error.TypeMismatch;
                 }
 
                 const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
@@ -15168,7 +15183,8 @@ pub const Interpreter = struct {
                 const params = self.env.store.slicePatterns(closure_header.params);
                 if (params.len != 1) {
                     self.env = saved_env;
-                    @panic("TypeMismatch: method params.len != 1 line 14137");
+                    self.triggerCrash("Internal error: unary method must have exactly 1 parameter", false, roc_ops);
+                    return error.TypeMismatch;
                 }
 
                 // Provide closure context
@@ -15694,15 +15710,10 @@ pub const Interpreter = struct {
                     defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                     if (receiver_value.layout.tag != .record) {
-                        switch (receiver_value.layout.tag) {
-                            .box => @panic("dot_access_resolve field access: layout is box"),
-                            .box_of_zst => @panic("dot_access_resolve field access: layout is box_of_zst"),
-                            .tuple => @panic("dot_access_resolve field access: layout is tuple"),
-                            .list => @panic("dot_access_resolve field access: layout is list"),
-                            .closure => @panic("dot_access_resolve field access: layout is closure"),
-                            .scalar => @panic("dot_access_resolve field access: layout is scalar"),
-                            else => @panic("dot_access_resolve field access: layout is unknown"),
-                        }
+                        var buf: [128]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "Field access on non-record type: {s}", .{@tagName(receiver_value.layout.tag)}) catch "Field access on non-record type";
+                        self.triggerCrash(msg, false, roc_ops);
+                        return error.TypeMismatch;
                     }
 
                     const rec_data = self.runtime_layout_store.getRecordData(receiver_value.layout.data.record.idx);
@@ -15930,7 +15941,7 @@ pub const Interpreter = struct {
                 {
                     defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
-                    try self.evalUnboxIntrinsic(receiver_value, value_stack);
+                    try self.evalUnboxIntrinsic(receiver_value, value_stack, roc_ops);
                     return true;
                 }
 

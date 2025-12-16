@@ -616,6 +616,135 @@ const CheckUnusedSuppressionStep = struct {
     }
 };
 
+/// Build step that checks for @panic usage in the interpreter.
+///
+/// In Roc's design philosophy, compile-time errors become runtime errors with helpful messages.
+/// Users can run apps despite errors, and we provide actionable feedback. Using @panic unwinds
+/// the stack and prevents showing helpful error messages.
+const CheckInterpreterPanicStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckInterpreterPanicStep {
+        const self = b.allocator.create(CheckInterpreterPanicStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-interpreter-panic",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Only scan src/eval/interpreter.zig
+        const file = std.fs.cwd().openFile("src/eval/interpreter.zig", .{}) catch |err| {
+            return step.fail("Failed to open src/eval/interpreter.zig: {}", .{err});
+        };
+        defer file.close();
+
+        const content = file.readToEndAlloc(allocator, 50 * 1024 * 1024) catch |err| {
+            return step.fail("Failed to read interpreter.zig: {}", .{err});
+        };
+        defer allocator.free(content);
+
+        var line_number: usize = 1;
+        var line_start: usize = 0;
+
+        for (content, 0..) |char, i| {
+            if (char == '\n') {
+                const line = content[line_start..i];
+                const trimmed = std.mem.trim(u8, line, " \t");
+
+                // Skip comments
+                if (std.mem.startsWith(u8, trimmed, "//")) {
+                    line_number += 1;
+                    line_start = i + 1;
+                    continue;
+                }
+
+                // Check for @panic usage
+                if (std.mem.indexOf(u8, line, "@panic(") != null) {
+                    // Allowlist: lines containing "trace_modules" (for traceDbg helper)
+                    if (std.mem.indexOf(u8, line, "trace_modules") == null) {
+                        try violations.append(allocator, .{
+                            .file_path = "src/eval/interpreter.zig",
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
+                    }
+                }
+
+                line_number += 1;
+                line_start = i + 1;
+            }
+        }
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("FORBIDDEN PATTERN: @panic in interpreter.zig\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\Using @panic is forbidden in the interpreter.
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  Roc's design philosophy is that compile-time errors become runtime errors with
+                \\  helpful messages. Users can run apps despite errors, and we provide actionable
+                \\  feedback. @panic unwinds the stack and prevents us from showing helpful errors.
+                \\
+                \\WHAT TO DO INSTEAD:
+                \\  Use the triggerCrash() method which calls the RocOps crash handler:
+                \\
+                \\    self.triggerCrash("Description of the error", false, roc_ops);
+                \\
+                \\  For unimplemented features, be specific:
+                \\
+                \\    self.triggerCrash("Decimal multiplication not yet implemented", false, roc_ops);
+                \\
+                \\  For internal errors that indicate interpreter bugs:
+                \\
+                \\    self.triggerCrash("Internal error: unexpected layout type in dot_access", false, roc_ops);
+                \\
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} uses of @panic in interpreter.zig. " ++
+                    "Use self.triggerCrash() to report errors through the proper RocOps crash handler. " ++
+                    "See above for details.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+    };
+};
+
 fn checkFxPlatformTestCoverage(step: *Step) !void {
     const b = step.owner;
     std.debug.print("---- checking fx platform test coverage ----\n", .{});
@@ -1787,6 +1916,10 @@ pub fn build(b: *std.Build) void {
     // Add check for unused variable suppression patterns
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
+
+    // Add check for @panic in interpreter
+    const check_panic = CheckInterpreterPanicStep.create(b);
+    test_step.dependOn(&check_panic.step);
 
     test_step.dependOn(&tests_summary.step);
 
