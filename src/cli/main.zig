@@ -3109,8 +3109,10 @@ fn compileAndSerializeModulesForEmbedding(
     }
 
     // Get entry points from primary environment
+    // Use exports (not all_defs) to only include exported definitions as entry points.
+    // all_defs includes method definitions from associated blocks which should not be entry points.
     const primary_env = &compiled_modules.items[primary_env_index].env;
-    const entry_defs = primary_env.all_defs;
+    const entry_defs = primary_env.exports;
     const entry_count: u32 = entry_defs.span.len;
 
     // Build entry def indices - use sliceDefs to get actual Def.Idx values
