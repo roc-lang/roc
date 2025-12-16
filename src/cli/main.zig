@@ -30,6 +30,9 @@ pub const std_options: std.Options = .{
 };
 const build_options = @import("build_options");
 const builtin = @import("builtin");
+
+// Compile-time flag for module tracing - enabled via `zig build -Dtrace-modules`
+const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 const base = @import("base");
 const collections = @import("collections");
 const reporting = @import("reporting");
@@ -1684,21 +1687,41 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // This must happen before platform main.roc so that when main.roc is canonicalized,
     // we can pass the sibling modules to module_envs and validate imports correctly.
     //
-    // NOTE: Modules are compiled in the order they appear in the platform's `exposes` list.
-    // If module A imports module B, then B must appear before A in the exposes list.
-    // This is the platform author's responsibility to ensure correct ordering.
-    var platform_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, exposed_modules.items.len);
+    // Modules are automatically sorted by their import dependencies using topological sort.
+    // If module A imports module B, B will be compiled before A regardless of the order
+    // in the platform's exposes list.
+    // platform_dir is guaranteed to be non-null if exposed_modules is non-empty
+    // because we only populate exposed_modules when platform_main_path is non-null
+    const plat_dir = platform_dir orelse unreachable;
+    const sorted_modules = sortPlatformModulesByDependency(
+        allocs,
+        exposed_modules.items,
+        plat_dir,
+    ) catch |err| {
+        if (err == error.CyclicDependency) {
+            std.log.err("Circular dependency detected in platform modules", .{});
+        }
+        return err;
+    };
+    defer allocs.gpa.free(sorted_modules);
+
+    var platform_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, sorted_modules.len);
     defer allocs.gpa.free(platform_env_ptrs);
 
-    for (exposed_modules.items, 0..) |module_name, i| {
-        // platform_dir is guaranteed to be non-null if exposed_modules is non-empty
-        // because we only populate exposed_modules when platform_main_path is non-null
-        const plat_dir = platform_dir orelse unreachable;
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] === IPC Mode: Compiling Platform Modules ===\n", .{});
+    }
+
+    for (sorted_modules, 0..) |module_name, i| {
         const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
         defer allocs.gpa.free(module_filename);
 
         const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ plat_dir, module_filename });
         defer allocs.gpa.free(module_path);
+
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES] Compiling platform module {d}: \"{s}\" at {s}\n", .{ i, module_name, module_path });
+        }
 
         // Pass previously compiled sibling modules so this module can resolve imports to them.
         // This enables transitive module calls (e.g., a module `Helper` imports `Core`, then calls `Core.wrap`).
@@ -1721,6 +1744,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // This allows the canonicalizer to validate that imports of Stdout, Stderr, etc. are valid.
     var platform_main_env: ?*ModuleEnv = null;
     if (has_platform) {
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES] Compiling platform main: {s}\n", .{platform_main_path.?});
+        }
+
         // Cast []*ModuleEnv to []const *ModuleEnv for the function parameter
         const const_platform_env_ptrs: []const *ModuleEnv = platform_env_ptrs;
         // platform_main_path is guaranteed non-null when has_platform is true
@@ -1810,6 +1837,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     }
 
     // Now compile the app module
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] Compiling app: {s}\n", .{roc_file_path});
+    }
+
     const app_env_ptr = try shm_allocator.create(ModuleEnv);
 
     const app_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
@@ -1888,7 +1919,8 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
     // Also set statement_idx to the actual type node index, which is needed for
     // creating e_nominal_external and e_lookup_external expressions.
-    for (exposed_modules.items, 0..) |module_name, i| {
+    // Note: We iterate over sorted_modules to match the order in platform_env_ptrs
+    for (sorted_modules, 0..) |module_name, i| {
         const platform_env = platform_env_ptrs[i];
         // For platform modules (type modules), the qualified type name is just the type name.
         // Type modules like Stdout.roc store associated items as "Stdout.line!" (not "Stdout.roc.Stdout.line!")
@@ -2139,6 +2171,243 @@ fn validatePlatformHeader(allocs: *Allocators, parse_ast: *const parse.AST, plat
     }
 }
 
+/// Extract the names of local modules that a given module file imports.
+/// Only returns unqualified imports (e.g., "Core"), not qualified ones (e.g., "pf.Stdout").
+/// This is used to determine dependency ordering for platform modules.
+///
+/// Parameters:
+///   allocs: Allocator bundle for temporary allocations
+///   module_path: Absolute path to the .roc module file
+///   available_modules: Set of module names to filter against (only return imports that are in this set)
+///
+/// Returns: Slice of imported module names that are in the available_modules set
+/// Caller owns the returned memory (allocated with allocs.gpa).
+fn extractModuleImports(
+    allocs: *Allocators,
+    module_path: []const u8,
+    available_modules: []const []const u8,
+) ![][]const u8 {
+    // Read source file
+    const source = std.fs.cwd().readFileAlloc(allocs.gpa, module_path, std.math.maxInt(usize)) catch |err| {
+        std.log.warn("Failed to read module file {s}: {}", .{ module_path, err });
+        return &[_][]const u8{};
+    };
+    defer allocs.gpa.free(source);
+
+    // Extract module name from the file path
+    const basename = std.fs.path.basename(module_path);
+    const module_name = basename[0 .. basename.len - 4]; // Remove .roc
+
+    // Create ModuleEnv and parse
+    var env = ModuleEnv.init(allocs.gpa, source) catch {
+        return &[_][]const u8{};
+    };
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    try env.common.calcLineStarts(allocs.gpa);
+
+    // Parse the source
+    var parse_ast = parse.parse(&env.common, allocs.gpa) catch {
+        return &[_][]const u8{};
+    };
+    defer parse_ast.deinit(allocs.gpa);
+    parse_ast.store.emptyScratch();
+
+    // Initialize CIR fields (needed for canonicalization)
+    try env.initCIRFields(module_name);
+
+    // Create a minimal module_envs map (just builtins would go here, but for import extraction we don't need them)
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocs.gpa);
+    defer module_envs_map.deinit();
+
+    // Canonicalize to discover imports
+    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
+    defer canonicalizer.deinit();
+    canonicalizer.canonicalizeFile() catch {
+        // Even if canonicalization fails, we might have discovered some imports
+    };
+
+    // Extract imports from env.imports.imports
+    const import_count = env.imports.imports.items.items.len;
+    var result = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (result.items) |item| allocs.gpa.free(item);
+        result.deinit(allocs.gpa);
+    }
+
+    for (env.imports.imports.items.items[0..import_count]) |str_idx| {
+        const import_name = env.common.getString(str_idx);
+
+        // Skip qualified imports (e.g., "pf.Stdout") - we only care about local imports
+        if (std.mem.indexOfScalar(u8, import_name, '.') != null) {
+            continue;
+        }
+
+        // Skip "Builtin" - it's always available
+        if (std.mem.eql(u8, import_name, "Builtin")) {
+            continue;
+        }
+
+        // Only include imports that are in the available_modules set
+        var found = false;
+        for (available_modules) |avail| {
+            if (std.mem.eql(u8, import_name, avail)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) continue;
+
+        // Add to result (duplicate the string since env will be freed)
+        try result.append(allocs.gpa, try allocs.gpa.dupe(u8, import_name));
+    }
+
+    return result.toOwnedSlice(allocs.gpa);
+}
+
+/// Sort platform modules by their import dependencies using topological sort (Kahn's algorithm).
+/// Returns modules in compilation order (dependencies first, dependents last).
+/// Returns error.CyclicDependency if modules have circular imports.
+///
+/// Parameters:
+///   allocs: Allocator bundle
+///   module_names: List of module names from the platform's exposes list
+///   platform_dir: Directory containing the platform modules
+///
+/// Returns: Sorted list of module names
+/// Caller owns the returned memory (allocated with allocs.gpa).
+fn sortPlatformModulesByDependency(
+    allocs: *Allocators,
+    module_names: []const []const u8,
+    platform_dir: []const u8,
+) ![][]const u8 {
+    const n = module_names.len;
+
+    // Early return for trivial cases
+    if (n <= 1) {
+        var result = try allocs.gpa.alloc([]const u8, n);
+        for (module_names, 0..) |name, i| {
+            result[i] = name;
+        }
+        return result;
+    }
+
+    // Build a name -> index map for O(1) lookups
+    var name_to_idx = std.StringHashMap(usize).init(allocs.gpa);
+    defer name_to_idx.deinit();
+    for (module_names, 0..) |name, i| {
+        try name_to_idx.put(name, i);
+    }
+
+    // Build adjacency list: adj[i] = list of modules that module i depends on (imports)
+    // And compute in-degree: how many modules depend on each module
+    var adjacency = try allocs.gpa.alloc(std.ArrayList(usize), n);
+    defer {
+        for (adjacency) |*list| list.deinit(allocs.gpa);
+        allocs.gpa.free(adjacency);
+    }
+    for (adjacency) |*list| {
+        list.* = std.ArrayList(usize).empty;
+    }
+
+    var in_degree = try allocs.gpa.alloc(usize, n);
+    defer allocs.gpa.free(in_degree);
+    @memset(in_degree, 0);
+
+    // For each module, extract its imports and build the graph
+    for (module_names, 0..) |name, i| {
+        const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{name});
+        defer allocs.gpa.free(module_filename);
+
+        const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ platform_dir, module_filename });
+        defer allocs.gpa.free(module_path);
+
+        const imports = try extractModuleImports(allocs, module_path, module_names);
+        defer {
+            for (imports) |imp| allocs.gpa.free(imp);
+            allocs.gpa.free(imports);
+        }
+
+        // For each import, add an edge: this module depends on the imported module
+        for (imports) |imp| {
+            if (name_to_idx.get(imp)) |dep_idx| {
+                // Module i imports module dep_idx, so dep_idx must come before i
+                // Edge: dep_idx -> i (dep_idx is depended upon by i)
+                try adjacency[dep_idx].append(allocs.gpa, i);
+                in_degree[i] += 1;
+
+                if (comptime trace_modules) {
+                    std.debug.print("[TRACE-MODULES] Dependency: {s} imports {s}\n", .{ name, imp });
+                }
+            }
+        }
+    }
+
+    // Kahn's algorithm: start with modules that have no dependencies (in_degree == 0)
+    var queue = std.ArrayList(usize).empty;
+    defer queue.deinit(allocs.gpa);
+
+    for (0..n) |i| {
+        if (in_degree[i] == 0) {
+            try queue.append(allocs.gpa, i);
+        }
+    }
+
+    var result = try allocs.gpa.alloc([]const u8, n);
+    errdefer allocs.gpa.free(result);
+    var result_count: usize = 0;
+
+    while (queue.items.len > 0) {
+        const current = queue.orderedRemove(0);
+        result[result_count] = module_names[current];
+        result_count += 1;
+
+        // For each module that depends on current, decrement its in-degree
+        for (adjacency[current].items) |dependent| {
+            in_degree[dependent] -= 1;
+            if (in_degree[dependent] == 0) {
+                try queue.append(allocs.gpa, dependent);
+            }
+        }
+    }
+
+    // Log the sorted order
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] Sorted compilation order: ", .{});
+        for (result[0..result_count], 0..) |mod, idx| {
+            if (idx > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{mod});
+        }
+        std.debug.print("\n", .{});
+    }
+
+    // If we didn't process all modules, there's a cycle
+    if (result_count != n) {
+        // Find modules in the cycle (those with in_degree > 0)
+        var cycle_modules = std.ArrayList([]const u8).empty;
+        defer cycle_modules.deinit(allocs.gpa);
+
+        for (0..n) |i| {
+            if (in_degree[i] > 0) {
+                try cycle_modules.append(allocs.gpa, module_names[i]);
+            }
+        }
+
+        // Log the cycle for debugging
+        std.log.err("Circular dependency detected in platform modules:", .{});
+        for (cycle_modules.items) |mod| {
+            std.log.err("  - {s}", .{mod});
+        }
+
+        allocs.gpa.free(result);
+        return error.CyclicDependency;
+    }
+
+    return result;
+}
+
 /// Compile a single module to shared memory (for platform modules)
 fn compileModuleToSharedMemory(
     allocs: *Allocators,
@@ -2259,12 +2528,21 @@ fn compileModuleToSharedMemory(
         .builtin_indices = builtin_modules.builtin_indices,
     };
 
-    const imported_envs = [_]*const ModuleEnv{builtin_modules.builtin_module.env};
+    // Build imported_envs array: builtins + additional modules
+    // This is needed for resolveImports to properly map external lookups
+    // (e.g., when Helper imports Core, Core must be in imported_envs)
+    var imported_envs_list = try std.ArrayList(*const ModuleEnv).initCapacity(allocs.gpa, 1 + additional_modules.len);
+    defer imported_envs_list.deinit(allocs.gpa);
+    imported_envs_list.appendAssumeCapacity(builtin_modules.builtin_module.env);
+    for (additional_modules) |mod| {
+        imported_envs_list.appendAssumeCapacity(mod);
+    }
+    const imported_envs = imported_envs_list.items;
 
     // Resolve imports - map each import to its index in imported_envs
-    env.imports.resolveImports(&env, &imported_envs);
+    env.imports.resolveImports(&env, imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, &imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
+    var checker = try Check.init(shm_allocator, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -2546,23 +2824,44 @@ fn compileAndSerializeModulesForEmbedding(
     // Compile platform sibling modules first
     // We need to track pointers to already-compiled modules so later modules can import from earlier ones.
     //
-    // NOTE: Modules are compiled in the order they appear in the platform's `exposes` list.
-    // If module A imports module B, then B must appear before A in the exposes list.
-    // This is the platform author's responsibility to ensure correct ordering.
+    // Modules are automatically sorted by their import dependencies using topological sort.
+    // If module A imports module B, B will be compiled before A regardless of the order
+    // in the platform's exposes list.
     //
     // Pre-allocate compiled_modules to avoid reallocation invalidating pointers in sibling_env_ptrs.
-    try compiled_modules.ensureTotalCapacity(exposed_modules.items.len + 2); // +2 for platform main and app
+    // platform_dir is guaranteed to be non-null if exposed_modules is non-empty
+    const plat_dir = platform_dir orelse unreachable;
+    const sorted_modules = sortPlatformModulesByDependency(
+        allocs,
+        exposed_modules.items,
+        plat_dir,
+    ) catch |err| {
+        if (err == error.CyclicDependency) {
+            std.log.err("Circular dependency detected in platform modules", .{});
+        }
+        return err;
+    };
+    defer allocs.gpa.free(sorted_modules);
 
-    var sibling_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, exposed_modules.items.len);
+    try compiled_modules.ensureTotalCapacity(sorted_modules.len + 2); // +2 for platform main and app
+
+    var sibling_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, sorted_modules.len);
     defer allocs.gpa.free(sibling_env_ptrs);
 
-    for (exposed_modules.items, 0..) |module_name, i| {
-        const plat_dir = platform_dir orelse unreachable;
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] === Build Mode: Compiling Platform Modules ===\n", .{});
+    }
+
+    for (sorted_modules, 0..) |module_name, i| {
         const module_filename = try std.fmt.allocPrint(allocs.gpa, "{s}.roc", .{module_name});
         defer allocs.gpa.free(module_filename);
 
         const module_path = try std.fs.path.join(allocs.gpa, &[_][]const u8{ plat_dir, module_filename });
         defer allocs.gpa.free(module_path);
+
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES] Compiling platform module {d}: \"{s}\" at {s}\n", .{ i, module_name, module_path });
+        }
 
         // Pass previously compiled sibling modules so this module can resolve imports to them.
         // This enables transitive module calls (e.g., Helper imports Core, then calls Core.wrap).
@@ -2582,6 +2881,10 @@ fn compileAndSerializeModulesForEmbedding(
 
     // Compile platform main.roc if present
     if (has_platform) {
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES] Compiling platform main: {s}\n", .{platform_main_path.?});
+        }
+
         // Get pointers to already compiled platform modules
         var platform_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, compiled_modules.items.len);
         defer allocs.gpa.free(platform_env_ptrs);
@@ -2605,6 +2908,10 @@ fn compileAndSerializeModulesForEmbedding(
 
     // Compile app module
     {
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES] Compiling app: {s}\n", .{roc_file_path});
+        }
+
         var all_env_ptrs = try allocs.gpa.alloc(*ModuleEnv, compiled_modules.items.len);
         defer allocs.gpa.free(all_env_ptrs);
         for (compiled_modules.items, 0..) |*m, i| {

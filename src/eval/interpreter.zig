@@ -10,6 +10,8 @@ const tracy = @import("tracy");
 const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;
 const trace_eval = build_options.trace_eval;
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
+// Disabled on wasm32-freestanding since std.debug.print is not available
+const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 const base_pkg = @import("base");
 const types = @import("types");
 const import_mapping_mod = types.import_mapping;
@@ -12934,24 +12936,41 @@ pub const Interpreter = struct {
         // Import indices (lookup.module_idx) are module-local - they index into a specific
         // module's import list. We need to map this to the actual ModuleEnv.
         //
-        // There are two sources for this mapping:
-        // 1. import_envs: Populated during Interpreter.init for the primary module's imports.
-        //    Used in unit tests and single-module scenarios where resolveImports isn't called.
-        // 2. env.imports.resolved_modules: Each module has its own resolved import mappings.
-        //    This is the primary mechanism for cross-module calls when imports are resolved.
+        // IMPORTANT: Each module has its own import index space! An import_idx of 1 in module A
+        // means something completely different than import_idx of 1 in module B.
         //
-        // We check import_envs first for backwards compatibility with unit tests,
-        // then fall back to the current module's resolved imports for transitive calls.
-        const other_env = self.import_envs.get(lookup.module_idx) orelse blk: {
-            const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse {
-                self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
-                return error.Crash;
-            };
-            if (resolved_idx >= self.all_module_envs.len) {
-                self.triggerCrash("e_lookup_external: resolved module index out of bounds", false, roc_ops);
-                return error.Crash;
+        // We MUST use env.imports.resolved_modules because it contains the correct mapping
+        // for the *current* module we're executing in. The import_envs hashmap was populated
+        // from the primary module's imports and should only be used as a fallback for
+        // backwards compatibility with unit tests that don't call resolveImports.
+        //
+        // First try the current module's resolved imports (the correct path for multi-module scenarios):
+        const other_env = blk: {
+            if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
+                if (resolved_idx >= self.all_module_envs.len) {
+                    if (comptime trace_modules) {
+                        std.debug.print("[TRACE-MODULES] evalLookupExternal: OUT OF BOUNDS resolved_idx={d}, all_module_envs.len={d}\n", .{ resolved_idx, self.all_module_envs.len });
+                    }
+                    self.triggerCrash("e_lookup_external: resolved module index out of bounds", false, roc_ops);
+                    return error.Crash;
+                }
+                if (comptime trace_modules) {
+                    std.debug.print("[TRACE-MODULES] evalLookupExternal: in \"{s}\", import[{d}] -> all_module_envs[{d}] -> \"{s}\"\n", .{ self.env.module_name, @intFromEnum(lookup.module_idx), resolved_idx, self.all_module_envs[resolved_idx].module_name });
+                }
+                break :blk self.all_module_envs[resolved_idx];
             }
-            break :blk self.all_module_envs[resolved_idx];
+            // Fallback to import_envs for backwards compatibility with unit tests
+            if (self.import_envs.get(lookup.module_idx)) |env| {
+                if (comptime trace_modules) {
+                    std.debug.print("[TRACE-MODULES] evalLookupExternal: in \"{s}\", import[{d}] -> \"{s}\" (import_envs fallback)\n", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
+                }
+                break :blk env;
+            }
+            if (comptime trace_modules) {
+                std.debug.print("[TRACE-MODULES] evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"\n", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
+            }
+            self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
+            return error.Crash;
         };
 
         // The target_node_idx is a Def.Idx in the other module

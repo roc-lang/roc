@@ -255,6 +255,63 @@ test "integration - error handling for non-existent file" {
     }
 }
 
+test "integration - automatic module dependency ordering" {
+    // This test verifies that platform modules are automatically sorted by their
+    // import dependencies, regardless of the order they appear in the exposes list.
+    //
+    // The test platform at test/str/platform/main.roc has:
+    //   exposes [Helper, Core]  -- WRONG order! Helper imports Core
+    //
+    // Without automatic dependency ordering, this would fail because Helper would
+    // be compiled before Core, and Helper's import of Core would fail.
+    //
+    // With automatic ordering (topological sort), we detect that Helper imports Core
+    // and automatically compile Core first, making the compilation succeed.
+    if (builtin.os.tag == .windows) {
+        return;
+    }
+
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
+
+    // Get absolute path from current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    defer allocs.gpa.free(cwd_path);
+
+    // Test app_transitive.roc which uses the platform with wrong-order exposes
+    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_transitive.roc" }) catch return;
+    defer allocs.gpa.free(roc_path);
+
+    // This should compile successfully because modules are automatically sorted
+    const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true) catch |err| {
+        std.log.err("Failed to compile with automatic dependency ordering: {}\n", .{err});
+        return err;
+    };
+    const shm_handle = shm_result.handle;
+
+    // Clean up shared memory resources
+    defer {
+        if (comptime builtin.os.tag == .windows) {
+            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            const posix = struct {
+                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+                extern "c" fn close(fd: c_int) c_int;
+            };
+            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.close(shm_handle.fd);
+        }
+    }
+
+    // Verify shared memory was set up successfully
+    try testing.expect(shm_handle.size > 0);
+    std.log.debug("Successfully compiled with automatic dependency ordering (shared memory size: {} bytes)\n", .{shm_handle.size});
+}
+
 test "integration - transitive module imports (module A imports module B)" {
     // This test verifies that platform modules can import other platform modules.
     // For example, if Helper imports Core, and the app calls Helper.wrap_fancy which

@@ -1,6 +1,6 @@
 platform ""
     requires {} { process_string : Str -> Str }
-    exposes [Core, Helper]
+    exposes [Helper, Core]
     packages {}
     provides { process_string_for_host: "process_string" }
     targets: {

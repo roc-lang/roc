@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
@@ -15,6 +16,10 @@ const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const tracy = @import("tracy");
+
+// Compile-time flag for module tracing - enabled via `zig build -Dtrace-modules`
+// Disabled on wasm32-freestanding since std.debug.print is not available
+const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 // Platform detection
 const is_wasm32 = builtin.cpu.arch == .wasm32;
@@ -707,13 +712,33 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         return error.OutOfMemory;
     };
 
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] === Interpreter Shim Initialization ===\n", .{});
+        std.debug.print("[TRACE-MODULES] Building imported_envs: [", .{});
+        for (imported_envs, 0..) |imp_env, idx| {
+            if (idx > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{imp_env.module_name});
+        }
+        std.debug.print("]\n", .{});
+        std.debug.print("[TRACE-MODULES] Primary env: \"{s}\"\n", .{env_ptr.module_name});
+        if (app_env) |a_env| {
+            std.debug.print("[TRACE-MODULES] App env: \"{s}\"\n", .{a_env.module_name});
+        }
+    }
+
     // Resolve imports - map each import name to its index in imported_envs
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] Resolving imports for primary env \"{s}\"\n", .{env_ptr.module_name});
+    }
     env_ptr.imports.resolveImports(env_ptr, imported_envs);
 
     // Also resolve imports for the app env if it's different from the primary env
     // This is needed when the platform calls the app's main! via e_lookup_required
     if (app_env) |a_env| {
         if (a_env != env_ptr) {
+            if (comptime trace_modules) {
+                std.debug.print("[TRACE-MODULES] Resolving imports for app env \"{s}\"\n", .{a_env.module_name});
+            }
             a_env.imports.resolveImports(a_env, imported_envs);
         }
     }
@@ -723,7 +748,13 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
     // code in A that calls into B (transitive module calls).
     // Without this, A's import of B remains unresolved, causing "unresolved import"
     // or TypeMismatch errors when A's code tries to call B.
+    if (comptime trace_modules) {
+        std.debug.print("[TRACE-MODULES] Re-resolving imports for all imported modules:\n", .{});
+    }
     for (imported_envs) |imp_env| {
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES]   Re-resolving imports for \"{s}\"\n", .{imp_env.module_name});
+        }
         @constCast(imp_env).imports.resolveImports(imp_env, imported_envs);
     }
 

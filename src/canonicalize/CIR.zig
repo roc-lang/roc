@@ -2,11 +2,17 @@
 //! This module contains type definitions and utilities used across the canonicalization IR.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
+
+// Compile-time flag for module tracing - enabled via `zig build -Dtrace-modules`
+// Disabled on wasm32-freestanding since std.debug.print is not available
+const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
@@ -842,6 +848,10 @@ pub const Import = struct {
                         std.mem.eql(u8, module_env.module_name, base_name))
                     {
                         self.setResolvedModule(import_idx, @intCast(module_idx));
+
+                        if (comptime trace_modules) {
+                            std.debug.print("[TRACE-MODULES] resolveImports: \"{s}\" -> module_idx={d} (matched \"{s}\")\n", .{ import_name, module_idx, module_env.module_name });
+                        }
                         break;
                     }
                 }
