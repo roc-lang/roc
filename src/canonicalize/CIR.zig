@@ -10,8 +10,9 @@ const base = @import("base");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
 
-// Compile-time flag for module tracing - enabled via `zig build -Dtrace-modules`
-// Disabled on wasm32-freestanding since std.debug.print is not available
+// Module tracing flag - enabled via `zig build -Dtrace-modules`
+// On native platforms, uses std.debug.print. On WASM, tracing in CIR is disabled
+// since we don't have roc_ops here (tracing is enabled in the interpreter/shim instead).
 const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 
 const CompactWriter = collections.CompactWriter;

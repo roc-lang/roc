@@ -17,9 +17,24 @@ const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const tracy = @import("tracy");
 
-// Compile-time flag for module tracing - enabled via `zig build -Dtrace-modules`
-// Disabled on wasm32-freestanding since std.debug.print is not available
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
+// Module tracing flag - enabled via `zig build -Dtrace-modules`
+const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
+
+// Helper to emit trace messages when trace_modules is enabled.
+// On native platforms, uses std.debug.print. On WASM, uses roc_ops.dbg().
+fn traceDbg(roc_ops: *RocOps, comptime fmt: []const u8, args: anytype) void {
+    if (comptime trace_modules) {
+        if (comptime builtin.cpu.arch == .wasm32) {
+            // WASM: use roc_ops.dbg() since std.debug.print is unavailable
+            var buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[TRACE-MODULES] " ++ fmt ++ "\n", args) catch "[TRACE-MODULES] (message too long)\n";
+            roc_ops.dbg(msg);
+        } else {
+            // Native: use std.debug.print
+            std.debug.print("[TRACE-MODULES] " ++ fmt ++ "\n", args);
+        }
+    }
+}
 
 // Platform detection
 const is_wasm32 = builtin.cpu.arch == .wasm32;
@@ -377,6 +392,9 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
 
+    // WASM-compatible tracing for entry point evaluation
+    traceDbg(roc_ops, "Evaluating entry_idx={d}, def_idx={d}, expr_idx={d}", .{ entry_idx, def_idx_raw, @intFromEnum(expr_idx) });
+
     // Evaluate the expression (with optional arguments)
     interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
         if (err == error.TypeMismatch) {
@@ -712,33 +730,21 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         return error.OutOfMemory;
     };
 
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] === Interpreter Shim Initialization ===\n", .{});
-        std.debug.print("[TRACE-MODULES] Building imported_envs: [", .{});
-        for (imported_envs, 0..) |imp_env, idx| {
-            if (idx > 0) std.debug.print(", ", .{});
-            std.debug.print("{s}", .{imp_env.module_name});
-        }
-        std.debug.print("]\n", .{});
-        std.debug.print("[TRACE-MODULES] Primary env: \"{s}\"\n", .{env_ptr.module_name});
-        if (app_env) |a_env| {
-            std.debug.print("[TRACE-MODULES] App env: \"{s}\"\n", .{a_env.module_name});
-        }
+    traceDbg(roc_ops, "=== Interpreter Shim Initialization ===", .{});
+    traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
+    if (app_env) |a_env| {
+        traceDbg(roc_ops, "app_env=\"{s}\"", .{a_env.module_name});
     }
 
     // Resolve imports - map each import name to its index in imported_envs
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] Resolving imports for primary env \"{s}\"\n", .{env_ptr.module_name});
-    }
+    traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
     env_ptr.imports.resolveImports(env_ptr, imported_envs);
 
     // Also resolve imports for the app env if it's different from the primary env
     // This is needed when the platform calls the app's main! via e_lookup_required
     if (app_env) |a_env| {
         if (a_env != env_ptr) {
-            if (comptime trace_modules) {
-                std.debug.print("[TRACE-MODULES] Resolving imports for app env \"{s}\"\n", .{a_env.module_name});
-            }
+            traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{a_env.module_name});
             a_env.imports.resolveImports(a_env, imported_envs);
         }
     }
@@ -748,13 +754,9 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
     // code in A that calls into B (transitive module calls).
     // Without this, A's import of B remains unresolved, causing "unresolved import"
     // or TypeMismatch errors when A's code tries to call B.
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] Re-resolving imports for all imported modules:\n", .{});
-    }
+    traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
     for (imported_envs) |imp_env| {
-        if (comptime trace_modules) {
-            std.debug.print("[TRACE-MODULES]   Re-resolving imports for \"{s}\"\n", .{imp_env.module_name});
-        }
+        traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
         @constCast(imp_env).imports.resolveImports(imp_env, imported_envs);
     }
 

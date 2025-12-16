@@ -10,8 +10,8 @@ const tracy = @import("tracy");
 const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;
 const trace_eval = build_options.trace_eval;
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
-// Disabled on wasm32-freestanding since std.debug.print is not available
-const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
+// Module tracing flag - enabled via `zig build -Dtrace-modules`
+const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 const base_pkg = @import("base");
 const types = @import("types");
 const import_mapping_mod = types.import_mapping;
@@ -39,6 +39,22 @@ const helpers = @import("test/helpers.zig");
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
+
+/// Helper to emit trace messages when trace_modules is enabled.
+/// On native platforms, uses std.debug.print. On WASM, uses roc_ops.dbg().
+fn traceDbg(roc_ops: *RocOps, comptime fmt: []const u8, args: anytype) void {
+    if (comptime trace_modules) {
+        if (comptime builtin.cpu.arch == .wasm32) {
+            // WASM: use roc_ops.dbg() since std.debug.print is unavailable
+            var buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[TRACE-MODULES] " ++ fmt ++ "\n", args) catch "[TRACE-MODULES] (message too long)\n";
+            roc_ops.dbg(msg);
+        } else {
+            // Native: use std.debug.print
+            std.debug.print("[TRACE-MODULES] " ++ fmt ++ "\n", args);
+        }
+    }
+}
 
 /// Context structure for inc/dec callbacks in list operations
 const RefcountContext = struct {
@@ -825,7 +841,8 @@ pub const Interpreter = struct {
                     return;
                 }
                 if (err == error.TypeMismatch) {
-                    @panic("TypeMismatch in body evaluation");
+                    self.triggerCrash("Type mismatch error during evaluation - this may indicate a compile-time error that was deferred to runtime", false, roc_ops);
+                    return;
                 }
                 return err;
             };
@@ -10561,6 +10578,9 @@ pub const Interpreter = struct {
 
         const expr = self.env.store.getExpr(expr_idx);
 
+        // WASM-compatible tracing for expression evaluation
+        traceDbg(roc_ops, "scheduleExprEval: expr_idx={d} tag={s} module=\"{s}\"", .{ @intFromEnum(expr_idx), @tagName(expr), self.env.module_name });
+
         switch (expr) {
             // Immediate values - no sub-expressions to evaluate
 
@@ -10722,8 +10742,35 @@ pub const Interpreter = struct {
                 }
             },
 
-            .e_runtime_error => {
-                self.triggerCrash("runtime error", false, roc_ops);
+            .e_runtime_error => |runtime_err| {
+                // Try to get a meaningful error message from the diagnostic
+                const diag_idx = runtime_err.diagnostic;
+                const diag_int = @intFromEnum(diag_idx);
+                // Check if diagnostic index is valid (not undefined/max value from deserialization)
+                const node_count = self.env.store.nodes.len();
+                if (diag_int < node_count) {
+                    const diag = self.env.store.getDiagnostic(diag_idx);
+                    switch (diag) {
+                        .not_implemented => |ni| {
+                            const feature_str = self.env.getString(ni.feature);
+                            var buf: [512]u8 = undefined;
+                            const msg = std.fmt.bufPrint(&buf, "Not implemented: {s}", .{feature_str}) catch "Not implemented (message too long)";
+                            self.triggerCrash(msg, false, roc_ops);
+                        },
+                        .exposed_but_not_implemented => |e| {
+                            const ident_str = self.env.getIdent(e.ident);
+                            var buf: [512]u8 = undefined;
+                            const msg = std.fmt.bufPrint(&buf, "'{s}' is exposed but not implemented", .{ident_str}) catch "Exposed but not implemented";
+                            self.triggerCrash(msg, false, roc_ops);
+                        },
+                        else => {
+                            self.triggerCrash("Compile-time error encountered at runtime", false, roc_ops);
+                        },
+                    }
+                } else {
+                    // Diagnostic not available (deserialized module) - provide generic message
+                    self.triggerCrash("This code contains a compile-time error that was deferred to runtime", false, roc_ops);
+                }
                 return error.Crash;
             },
 
@@ -11646,10 +11693,13 @@ pub const Interpreter = struct {
                 const sched_trace = tracy.traceNamed(@src(), "sched.call");
                 defer sched_trace.end();
                 const func_idx = call.func;
+                traceDbg(roc_ops, "e_call: func_idx={d}", .{@intFromEnum(func_idx)});
                 const arg_indices = self.env.store.sliceExpr(call.args);
+                traceDbg(roc_ops, "e_call: arg_count={d}", .{arg_indices.len});
 
                 // Check if the function is an anno-only lookup that will crash
                 const func_expr_check = self.env.store.getExpr(func_idx);
+                traceDbg(roc_ops, "e_call: func_tag={s}", .{@tagName(func_expr_check)});
                 if (func_expr_check == .e_lookup_local) {
                     const anno_trace = tracy.traceNamed(@src(), "sched.call.anno_check");
                     defer anno_trace.end();
@@ -11712,8 +11762,40 @@ pub const Interpreter = struct {
                 }
 
                 // Check if this is an error expression that shouldn't be called
-                if (func_expr_check == .e_runtime_error or func_expr_check == .e_anno_only or func_expr_check == .e_crash) {
-                    return error.TypeMismatch;
+                if (func_expr_check == .e_runtime_error) {
+                    const runtime_err = func_expr_check.e_runtime_error;
+                    const diag_idx = runtime_err.diagnostic;
+                    const diag_int = @intFromEnum(diag_idx);
+                    // Check if diagnostic index is valid (not undefined/max value from deserialization)
+                    const node_count = self.env.store.nodes.len();
+                    if (diag_int < node_count) {
+                        const diag = self.env.store.getDiagnostic(diag_idx);
+                        switch (diag) {
+                            .not_implemented => |ni| {
+                                const feature_str = self.env.getString(ni.feature);
+                                var buf: [512]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Cannot call function: {s}", .{feature_str}) catch "Cannot call function (not implemented)";
+                                self.triggerCrash(msg, false, roc_ops);
+                            },
+                            .exposed_but_not_implemented => |e| {
+                                const ident_str = self.env.getIdent(e.ident);
+                                var buf: [512]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Cannot call '{s}': it is exposed but not implemented", .{ident_str}) catch "Cannot call: exposed but not implemented";
+                                self.triggerCrash(msg, false, roc_ops);
+                            },
+                            else => {
+                                self.triggerCrash("Cannot call function: compile-time error in function definition", false, roc_ops);
+                            },
+                        }
+                    } else {
+                        // Diagnostic not available - provide generic message
+                        self.triggerCrash("Cannot call function: this function contains a compile-time error", false, roc_ops);
+                    }
+                    return error.Crash;
+                }
+                if (func_expr_check == .e_anno_only or func_expr_check == .e_crash) {
+                    self.triggerCrash("Cannot call function: this function has only a type annotation with no implementation", false, roc_ops);
+                    return error.Crash;
                 }
 
                 // Get function type and potentially instantiate
@@ -12948,27 +13030,19 @@ pub const Interpreter = struct {
         const other_env = blk: {
             if (self.env.imports.getResolvedModule(lookup.module_idx)) |resolved_idx| {
                 if (resolved_idx >= self.all_module_envs.len) {
-                    if (comptime trace_modules) {
-                        std.debug.print("[TRACE-MODULES] evalLookupExternal: OUT OF BOUNDS resolved_idx={d}, all_module_envs.len={d}\n", .{ resolved_idx, self.all_module_envs.len });
-                    }
+                    traceDbg(roc_ops, "evalLookupExternal: OUT OF BOUNDS resolved_idx={d}, all_module_envs.len={d}", .{ resolved_idx, self.all_module_envs.len });
                     self.triggerCrash("e_lookup_external: resolved module index out of bounds", false, roc_ops);
                     return error.Crash;
                 }
-                if (comptime trace_modules) {
-                    std.debug.print("[TRACE-MODULES] evalLookupExternal: in \"{s}\", import[{d}] -> all_module_envs[{d}] -> \"{s}\"\n", .{ self.env.module_name, @intFromEnum(lookup.module_idx), resolved_idx, self.all_module_envs[resolved_idx].module_name });
-                }
+                traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\"", .{ self.env.module_name, @intFromEnum(lookup.module_idx), self.all_module_envs[resolved_idx].module_name });
                 break :blk self.all_module_envs[resolved_idx];
             }
             // Fallback to import_envs for backwards compatibility with unit tests
             if (self.import_envs.get(lookup.module_idx)) |env| {
-                if (comptime trace_modules) {
-                    std.debug.print("[TRACE-MODULES] evalLookupExternal: in \"{s}\", import[{d}] -> \"{s}\" (import_envs fallback)\n", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
-                }
+                traceDbg(roc_ops, "evalLookupExternal: \"{s}\" import[{d}] -> \"{s}\" (fallback)", .{ self.env.module_name, @intFromEnum(lookup.module_idx), env.module_name });
                 break :blk env;
             }
-            if (comptime trace_modules) {
-                std.debug.print("[TRACE-MODULES] evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"\n", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
-            }
+            traceDbg(roc_ops, "evalLookupExternal: UNRESOLVED import[{d}] in \"{s}\"", .{ @intFromEnum(lookup.module_idx), self.env.module_name });
             self.triggerCrash("e_lookup_external: unresolved import", false, roc_ops);
             return error.Crash;
         };
@@ -14650,6 +14724,7 @@ pub const Interpreter = struct {
                 defer cont_trace.end();
                 // All arguments collected - pop them and the function, then invoke
                 // Stack state: [func_val, arg0, arg1, ...] (func at bottom, args on top)
+                traceDbg(roc_ops, "call_invoke_closure: arg_count={d}", .{ci.arg_count});
                 var saved_rigid_subst = ci.saved_rigid_subst;
                 defer {
                     if (saved_rigid_subst) |saved| {
@@ -14681,6 +14756,7 @@ pub const Interpreter = struct {
                 // Handle closure invocation
                 if (func_val.layout.tag == .closure) {
                     const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+                    traceDbg(roc_ops, "invoking closure, body_idx={d}, source_env=\"{s}\"", .{ @intFromEnum(header.body_idx), header.source_env.module_name });
 
                     // Switch to the closure's source module
                     const saved_env = self.env;
