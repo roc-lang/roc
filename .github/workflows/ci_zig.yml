@@ -287,7 +287,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503"
+          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout"
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:
