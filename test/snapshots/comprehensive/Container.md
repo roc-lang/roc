@@ -762,36 +762,33 @@ main = {
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "Container.get_or"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "default")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "val")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "default"))))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "default")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal
+											(p-applied-tag))))
+								(value
+									(e-lookup-local
+										(p-assign (ident "val")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal
+											(p-applied-tag))))
+								(value
+									(e-lookup-local
+										(p-assign (ident "default")))))))))))
 	(d-let
 		(p-assign (ident "Container.flat_map"))
 		(e-lambda

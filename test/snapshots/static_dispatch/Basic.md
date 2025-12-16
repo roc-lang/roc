@@ -170,15 +170,12 @@ main = (helper1(val), helper2(val))
 (can-ir
 	(d-let
 		(p-assign (ident "Basic.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "s"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Basic") (local))

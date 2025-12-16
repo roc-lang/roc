@@ -129,23 +129,20 @@ pub const Work = struct {
         self.in_progress_nominals.deinit();
     }
 
-    pub fn clearRetainingCapacity(self: *Work) void {
-        // NOTE: We intentionally do NOT clear pending_containers, in_progress_vars,
-        // or in_progress_nominals here. They need to persist across recursive addTypeVar
-        // calls (e.g., when processing tag union variants) to:
-        // 1. pending_containers: track container context for recursive type detection
-        // 2. in_progress_vars: detect cycles in recursive types
-        // 3. in_progress_nominals: detect cycles in recursive nominal types from other modules
-        //
-        // These are cleaned up individually via swapRemove when types finish processing,
-        // and should be empty at the start of a fresh top-level addTypeVar call.
-        //
-        // The other fields are local to a single manual-stack iteration and can be cleared.
-        self.pending_record_fields.clearRetainingCapacity();
-        self.resolved_record_fields.clearRetainingCapacity();
-        self.pending_tags.clearRetainingCapacity();
-        self.resolved_tags.clearRetainingCapacity();
-        self.pending_tuple_fields.clearRetainingCapacity();
-        self.resolved_tuple_fields.clearRetainingCapacity();
-    }
+    // NOTE: We do NOT have a clearRetainingCapacity function because all work fields
+    // must persist across recursive addTypeVar calls (e.g., when processing tag union
+    // variant payloads). Fields are cleaned up individually when types finish processing:
+    // - pending_containers: pop() when container layout is finalized
+    // - in_progress_vars: swapRemove() when type is cached
+    // - in_progress_nominals: swapRemove() when nominal type is updated
+    // - pending_record_fields, pending_tuple_fields: pop() when field is resolved
+    // - resolved_record_fields, resolved_tuple_fields: used then left for next call
+    // - pending_tags, resolved_tags: shrinkRetainingCapacity() via defer
+    //
+    // Example problem case that would occur if we cleared fields:
+    //   { tag: Str, attrs: List([StringAttr(Str, Str), BoolAttr(Str, Bool)]) }
+    // When processing this record, we push record fields. Then when processing
+    // the tag union element of the List, we make recursive addTypeVar calls for
+    // variant payloads. If we cleared pending_record_fields, the outer record's
+    // field tracking would be destroyed, causing unreachable panics.
 };

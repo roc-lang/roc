@@ -952,7 +952,9 @@ pub const Store = struct {
 
         // To make this function stack-safe, we use a manual stack instead of recursing.
         // We reuse that stack from call to call to avoid reallocating it.
-        self.work.clearRetainingCapacity();
+        // NOTE: We do NOT clear work fields here because addTypeVar can be called
+        // recursively (e.g., when processing tag union variant payloads), and nested
+        // calls must not destroy the work state from outer calls.
 
         var layout_idx: Idx = undefined;
 
@@ -1763,10 +1765,10 @@ pub const Store = struct {
             std.debug.assert(self.work.pending_tuple_fields.len == 0);
 
             // No more pending containers; we're done!
-            // Note: We don't clear in_progress_vars and in_progress_nominals here because
-            // addTypeVar may be called recursively (e.g., from tag union variant processing).
-            // Individual entries are removed via swapRemove when types finish processing.
-            // The sets will be cleared on the next top-level addTypeVar call via clearRetainingCapacity.
+            // Note: Work fields (in_progress_vars, in_progress_nominals, pending_record_fields, etc.)
+            // are not cleared here because addTypeVar may be called recursively (e.g., from tag union
+            // variant processing). Individual entries are removed via swapRemove/pop when types
+            // finish processing, so these should be empty when the top-level call returns.
             return layout_idx;
         }
     }
