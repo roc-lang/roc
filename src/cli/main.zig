@@ -2755,14 +2755,77 @@ fn compileModuleForSerialization(
 
     try checker.checkFile();
 
-    // Count errors from parsing, canonicalization, and type checking
+    // Count and render errors from parsing, canonicalization, and type checking
     var error_count: usize = 0;
+    var warning_count: usize = 0;
 
-    // Count parse errors
-    error_count += parse_ast.parse_diagnostics.items.len;
+    const stderr = stderrWriter();
 
-    // Count type checker problems
-    error_count += checker.problems.len();
+    // Render parse errors (tokenize and parse diagnostics)
+    if (parse_ast.hasErrors()) {
+        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
+            error_count += 1;
+            var report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocs.gpa, file_path) catch continue;
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+        for (parse_ast.parse_diagnostics.items) |diagnostic| {
+            error_count += 1;
+            var report = parse_ast.parseDiagnosticToReport(&env.common, diagnostic, allocs.gpa, file_path) catch continue;
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        }
+    }
+
+    // Render canonicalization diagnostics (unused variables, etc.)
+    const diags = env.getDiagnostics() catch &.{};
+    defer env.gpa.free(diags);
+    for (diags) |d| {
+        var report = env.diagnosticToReport(d, env.gpa, file_path) catch continue;
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Render type checking problems
+    var rb = ReportBuilder.init(
+        allocs.gpa,
+        &env,
+        &env,
+        &checker.snapshots,
+        file_path,
+        &.{},
+        &checker.import_mapping,
+    );
+    defer rb.deinit();
+
+    for (checker.problems.problems.items) |prob| {
+        var report = rb.build(prob) catch continue;
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
+        if (report.severity == .fatal or report.severity == .runtime_error) {
+            error_count += 1;
+        } else if (report.severity == .warning) {
+            warning_count += 1;
+        }
+    }
+
+    // Print summary if there were any problems
+    if (error_count > 0 or warning_count > 0) {
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            error_count,
+            warning_count,
+            file_path,
+        }) catch {};
+    }
+
+    // Flush stderr to ensure all error output is visible
+    stderr_writer.interface.flush() catch {};
 
     return CompiledModule{
         .env = env,
