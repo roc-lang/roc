@@ -552,6 +552,16 @@ pub const Interpreter = struct {
             .constant_strings_arena = std.heap.ArenaAllocator.init(allocator),
         };
 
+        // Pre-allocate capacity for hot HashMaps to avoid repeated small reallocations
+        // These capacities are based on profiling typical workloads
+        try result.translate_cache.ensureTotalCapacity(512); // Type translation cache - very hot
+        try result.poly_cache.ensureTotalCapacity(128); // Polymorphic instantiation cache
+        try result.method_resolution_cache.ensureTotalCapacity(64); // Method lookup cache
+        try result.evaluated_method_cache.ensureTotalCapacity(64); // Evaluated method closure cache
+        try result.flex_type_context.ensureTotalCapacity(256); // Flex type propagation
+        try result.rigid_subst.ensureTotalCapacity(128); // Rigid variable substitution
+        try result.instantiate_scratch.ensureTotalCapacity(64); // Type instantiation scratch
+
         // Use the pre-interned "Builtin.Str" identifier from the module env
         result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str);
 
