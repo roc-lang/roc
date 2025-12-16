@@ -15865,7 +15865,134 @@ pub const Interpreter = struct {
                             .origin = nom.origin_module,
                             .ident = nom.ident.ident_idx,
                         },
-                        .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
+                        .record, .record_unbound => blk: {
+                            // For records, check if this is field access + function call
+                            // (e.g., main.render(model) where main is { render: closure, ... })
+                            if (receiver_value.layout.tag == .record) {
+                                // Translate field name from compile-time to runtime ident store
+                                const ct_field_name_str = self.env.getIdent(da.field_name);
+                                const rt_field_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_field_name_str));
+
+                                var accessor = try receiver_value.asRecord(&self.runtime_layout_store);
+                                if (accessor.findFieldIndex(rt_field_name)) |field_idx| {
+                                    // Get the field's rt_var from the receiver's record type
+                                    const fields_range = switch (s) {
+                                        .record => |rec| rec.fields,
+                                        .record_unbound => |fields| fields,
+                                        else => unreachable,
+                                    };
+                                    const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
+                                    var field_rt_var: types.Var = try self.runtime_types.fresh();
+                                    var i: usize = 0;
+                                    while (i < fields.len) : (i += 1) {
+                                        const f = fields.get(i);
+                                        if (f.name == rt_field_name) {
+                                            field_rt_var = f.var_;
+                                            break;
+                                        }
+                                    }
+
+                                    const field_value = try accessor.getFieldByIndex(field_idx, field_rt_var);
+
+                                    // Check if the field is a closure - if so, invoke it with the args
+                                    if (field_value.layout.tag == .closure) {
+                                        const copied_field = try self.pushCopy(field_value, roc_ops);
+                                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                        // Push the closure to value stack and set up call continuation
+                                        try value_stack.push(copied_field);
+
+                                        if (arg_exprs.len == 0) {
+                                            // No args - invoke directly
+                                            const closure_header: *const layout.Closure = @ptrCast(@alignCast(copied_field.ptr.?));
+                                            const saved_env = self.env;
+                                            const saved_bindings_len = self.bindings.items.len;
+                                            self.env = @constCast(closure_header.source_env);
+
+                                            // Provide closure context
+                                            try self.active_closures.append(copied_field);
+
+                                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                                            const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                                            // Push cleanup and evaluate body
+                                            try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
+                                                .saved_env = saved_env,
+                                                .saved_bindings_len = saved_bindings_len,
+                                                .param_count = 0,
+                                                .has_active_closure = true,
+                                                .did_instantiate = false,
+                                                .call_ret_rt_var = return_rt_var,
+                                                .saved_rigid_subst = null,
+                                                .saved_flex_type_context = null,
+                                                .arg_rt_vars_to_free = null,
+                                            } } });
+
+                                            const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                                            if (lambda_expr == .e_lambda) {
+                                                try work_stack.push(.{ .eval_expr = .{
+                                                    .expr_idx = lambda_expr.e_lambda.body,
+                                                    .expected_rt_var = return_rt_var,
+                                                } });
+                                            } else {
+                                                self.triggerCrash("Record field callable is not a lambda", false, roc_ops);
+                                                return error.TypeMismatch;
+                                            }
+                                            return true;
+                                        } else {
+                                            // Has args - set up call_collect_args continuation
+                                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                                            const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+
+                                            try work_stack.push(.{ .apply_continuation = .{ .call_invoke_closure = .{
+                                                .arg_count = arg_exprs.len,
+                                                .call_ret_rt_var = return_rt_var,
+                                                .did_instantiate = false,
+                                                .saved_rigid_subst = null,
+                                                .arg_rt_vars_to_free = null,
+                                            } } });
+
+                                            // Push argument evaluations in reverse order
+                                            var arg_idx: usize = arg_exprs.len;
+                                            while (arg_idx > 0) {
+                                                arg_idx -= 1;
+                                                try work_stack.push(.{ .eval_expr = .{
+                                                    .expr_idx = arg_exprs[arg_idx],
+                                                    .expected_rt_var = null,
+                                                } });
+                                            }
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Fall through: Structural types have implicit is_eq - handle directly
+                            if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
+                                // Evaluate the RHS argument
+                                const rhs_expr_idx = arg_exprs[0];
+                                const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
+                                defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
+
+                                // Use structural equality
+                                const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
+                                const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
+                                const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
+                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                    if (err == error.NotImplemented) {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    }
+                                    return err;
+                                };
+                                receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                const result_val = try self.makeBoolValue(result);
+                                try value_stack.push(result_val);
+                                return true;
+                            }
+                            break :blk null;
+                        },
+                        .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Structural types have implicit is_eq - handle directly
                             if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
                                 // Evaluate the RHS argument
