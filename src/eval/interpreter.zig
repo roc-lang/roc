@@ -56,6 +56,26 @@ fn traceDbg(roc_ops: *RocOps, comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+/// Helper for reporting internal interpreter errors.
+/// In debug builds, crashes with a descriptive message via roc_ops.
+/// In release builds, uses unreachable for optimization.
+/// Use this instead of bare `unreachable` to get better error messages during development.
+fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builtin.SourceLocation) noreturn {
+    if (comptime builtin.mode == .Debug) {
+        var buf: [512]u8 = undefined;
+        const full_msg = std.fmt.bufPrint(&buf, "Internal error: {s} at {s}:{d}:{d}", .{
+            msg,
+            src.file,
+            src.line,
+            src.column,
+        }) catch msg;
+        if (roc_ops) |ops| {
+            ops.crash(full_msg);
+        }
+    }
+    unreachable;
+}
+
 /// Context structure for inc/dec callbacks in list operations
 const RefcountContext = struct {
     layout_store: *layout.Store,
@@ -1640,7 +1660,7 @@ pub const Interpreter = struct {
                 const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
                 const byte_count = builtins.str.countUtf8Bytes(string.*);
 
-                const result_rt_var = return_rt_var orelse unreachable;
+                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for str_count_utf8_bytes", @src());
                 const result_layout = layout.Layout.int(.u64);
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
@@ -2486,7 +2506,7 @@ pub const Interpreter = struct {
                 const capacity: u64 = @intCast(capacity_arg.asI128());
 
                 // Get the return type to determine element layout
-                const result_rt_var = return_rt_var orelse unreachable;
+                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for list_with_capacity", @src());
                 const result_layout = try self.getRuntimeLayout(result_rt_var);
 
                 // Handle ZST lists specially - they don't actually allocate
@@ -3082,12 +3102,12 @@ pub const Interpreter = struct {
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
 
                 // Access second argument as a record and extract its specific fields
-                const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch unreachable;
+                const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "sublist config argument should be a valid record", @src());
                 // When fields are alphabetically sorted, 0 will be `len` and 1 will be `start`
                 const field_rt = try self.runtime_types.fresh();
-                const sublist_start_stack = sublist_config.getFieldByIndex(1, field_rt) catch unreachable;
+                const sublist_start_stack = sublist_config.getFieldByIndex(1, field_rt) catch debugUnreachable(roc_ops, "sublist config should have start field at index 1", @src());
                 const field_rt2 = try self.runtime_types.fresh();
-                const sublist_len_stack = sublist_config.getFieldByIndex(0, field_rt2) catch unreachable;
+                const sublist_len_stack = sublist_config.getFieldByIndex(0, field_rt2) catch debugUnreachable(roc_ops, "sublist config should have len field at index 0", @src());
                 const sublist_start: u64 = @intCast(sublist_start_stack.asI128());
                 const sublist_len: u64 = @intCast(sublist_len_stack.asI128());
 
@@ -3679,7 +3699,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // expects 1 argument: List(U8)
 
                 // Return type info is required - missing it is a compiler bug
-                const result_rt_var = return_rt_var orelse unreachable;
+                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_int_digits", @src());
 
                 // Get the result layout (Try tag union)
                 const result_layout = try self.getRuntimeLayout(result_rt_var);
@@ -3774,8 +3794,8 @@ pub const Interpreter = struct {
                     var dest = try self.pushRaw(result_layout, 0, result_rt_var);
                     var acc = try dest.asRecord(&self.runtime_layout_store);
                     // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-                    const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
-                    const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                    const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse debugUnreachable(roc_ops, "tag field not found in Try result record", @src());
+                    const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse debugUnreachable(roc_ops, "payload field not found in Try result record", @src());
 
                     // Write tag discriminant
                     const field_rt = try self.runtime_types.fresh();
@@ -3827,7 +3847,7 @@ pub const Interpreter = struct {
                 }
 
                 // Unsupported result layout is a compiler bug
-                unreachable;
+                debugUnreachable(roc_ops, "unsupported result layout for num_from_int_digits", @src());
             },
             .num_from_dec_digits => {
                 // num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])
@@ -3840,7 +3860,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // expects 1 argument: Numeral record
 
                 // Return type info is required - missing it is a compiler bug
-                const result_rt_var = return_rt_var orelse unreachable;
+                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_numeral", @src());
 
                 // Get the result layout (Try tag union)
                 const result_layout = try self.getRuntimeLayout(result_rt_var);
@@ -3851,26 +3871,26 @@ pub const Interpreter = struct {
                 std.debug.assert(num_literal_arg.ptr != null);
 
                 // Argument should be a record - if not, it's a compiler bug
-                var acc = num_literal_arg.asRecord(&self.runtime_layout_store) catch unreachable;
+                var acc = num_literal_arg.asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "Numeral argument must be a record", @src());
 
                 // Get is_negative field
                 // Use runtime_layout_store.env for field lookups since the record was built with that env's idents
                 const layout_env = self.runtime_layout_store.env;
                 // Field lookups should succeed - missing fields is a compiler bug
-                const is_neg_idx = acc.findFieldIndex(layout_env.idents.is_negative) orelse unreachable;
+                const is_neg_idx = acc.findFieldIndex(layout_env.idents.is_negative) orelse debugUnreachable(roc_ops, "is_negative field not found in Numeral record", @src());
                 const field_rt = try self.runtime_types.fresh();
-                const is_neg_field = acc.getFieldByIndex(is_neg_idx, field_rt) catch unreachable;
+                const is_neg_field = acc.getFieldByIndex(is_neg_idx, field_rt) catch debugUnreachable(roc_ops, "failed to get is_negative field from Numeral record", @src());
                 const is_negative = getRuntimeU8(is_neg_field) != 0;
 
                 // Get digits_before_pt field (List(U8))
-                const before_idx = acc.findFieldIndex(layout_env.idents.digits_before_pt) orelse unreachable;
+                const before_idx = acc.findFieldIndex(layout_env.idents.digits_before_pt) orelse debugUnreachable(roc_ops, "digits_before_pt field not found in Numeral record", @src());
                 const field_rt2 = try self.runtime_types.fresh();
-                const before_field = acc.getFieldByIndex(before_idx, field_rt2) catch unreachable;
+                const before_field = acc.getFieldByIndex(before_idx, field_rt2) catch debugUnreachable(roc_ops, "failed to get digits_before_pt field from Numeral record", @src());
 
                 // Get digits_after_pt field (List(U8))
-                const after_idx = acc.findFieldIndex(layout_env.idents.digits_after_pt) orelse unreachable;
+                const after_idx = acc.findFieldIndex(layout_env.idents.digits_after_pt) orelse debugUnreachable(roc_ops, "digits_after_pt field not found in Numeral record", @src());
                 const field_rt3 = try self.runtime_types.fresh();
-                const after_field = acc.getFieldByIndex(after_idx, field_rt3) catch unreachable;
+                const after_field = acc.getFieldByIndex(after_idx, field_rt3) catch debugUnreachable(roc_ops, "failed to get digits_after_pt field from Numeral record", @src());
 
                 // Extract list data from digits_before_pt
                 const before_list: *const builtins.list.RocList = @ptrCast(@alignCast(before_field.ptr.?));
@@ -4083,8 +4103,8 @@ pub const Interpreter = struct {
                     var result_acc = try dest.asRecord(&self.runtime_layout_store);
                     // Use layout_env for field lookups since record fields use layout store's env idents
                     // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-                    const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse unreachable;
-                    const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse unreachable;
+                    const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse debugUnreachable(roc_ops, "tag field not found in Try result record for num_from_numeral", @src());
+                    const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse debugUnreachable(roc_ops, "payload field not found in Try result record for num_from_numeral", @src());
 
                     // Write tag discriminant
                     const tag_rt = try self.runtime_types.fresh();
@@ -4559,7 +4579,7 @@ pub const Interpreter = struct {
                 }
 
                 // Unsupported result layout is a compiler bug
-                unreachable;
+                debugUnreachable(roc_ops, "unsupported result layout for num_from_numeral", @src());
             },
             .num_from_str => {
                 // num.from_str : Str -> Try(num, [BadNumStr])
@@ -4569,7 +4589,7 @@ pub const Interpreter = struct {
                 std.debug.assert(str_arg.ptr != null);
                 const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
 
-                const result_rt_var = return_rt_var orelse unreachable;
+                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_str", @src());
                 const ok_payload_var = try self.getTryOkPayloadVar(result_rt_var);
 
                 if (ok_payload_var) |payload_var| {
@@ -4597,7 +4617,7 @@ pub const Interpreter = struct {
                         }
                     }
                 }
-                unreachable;
+                debugUnreachable(roc_ops, "unsupported numeric type for num_from_str", @src());
             },
             .dec_to_str => {
                 // Dec.to_str : Dec -> Str
@@ -4928,7 +4948,7 @@ pub const Interpreter = struct {
 
         // Use std.fmt to format the integer
         var buf: [40]u8 = undefined; // 40 is enough for i128
-        const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch unreachable;
+        const result = std.fmt.bufPrint(&buf, "{}", .{int_value}) catch debugUnreachable(roc_ops, "buffer too small for integer formatting", @src());
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
@@ -4948,7 +4968,7 @@ pub const Interpreter = struct {
 
         // Use std.fmt to format the float
         var buf: [400]u8 = undefined;
-        const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch unreachable;
+        const result = std.fmt.bufPrint(&buf, "{d}", .{float_value}) catch debugUnreachable(roc_ops, "buffer too small for float formatting", @src());
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
@@ -5019,7 +5039,7 @@ pub const Interpreter = struct {
         std.debug.assert(int_arg.ptr != null);
 
         // Return type info is required - missing it is a compiler bug
-        const result_rt_var = return_rt_var orelse unreachable;
+        const result_rt_var = return_rt_var orelse debugUnreachable(null, "return type required for intConvertTry", @src());
 
         const result_layout = try self.getRuntimeLayout(result_rt_var);
 
@@ -5066,8 +5086,8 @@ pub const Interpreter = struct {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
             var acc = try dest.asRecord(&self.runtime_layout_store);
             // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
-            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+            const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse debugUnreachable(null, "tag field not found in intConvertTry result record", @src());
+            const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse debugUnreachable(null, "payload field not found in intConvertTry result record", @src());
 
             // Write tag discriminant
             const field_rt = try self.runtime_types.fresh();
@@ -5173,7 +5193,7 @@ pub const Interpreter = struct {
         }
 
         // Unsupported result layout is a compiler bug
-        unreachable;
+        debugUnreachable(null, "unsupported result layout for intConvertTry", @src());
     }
 
     /// Helper for integer to float conversions
@@ -5697,8 +5717,8 @@ pub const Interpreter = struct {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
             var result_acc = try dest.asRecord(&self.runtime_layout_store);
             const layout_env = self.runtime_layout_store.env;
-            const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse unreachable;
-            const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse unreachable;
+            const tag_field_idx = result_acc.findFieldIndex(layout_env.idents.tag) orelse debugUnreachable(null, "tag field not found in buildTryResultWithValue record", @src());
+            const payload_field_idx = result_acc.findFieldIndex(layout_env.idents.payload) orelse debugUnreachable(null, "payload field not found in buildTryResultWithValue record", @src());
 
             // Write tag discriminant
             const field_rt = try self.runtime_types.fresh();
@@ -5773,7 +5793,7 @@ pub const Interpreter = struct {
             return dest;
         }
 
-        unreachable;
+        debugUnreachable(null, "unsupported result layout for buildTryResultWithValue", @src());
     }
 
     fn triggerCrash(self: *Interpreter, message: []const u8, owned: bool, roc_ops: *RocOps) void {
@@ -5844,14 +5864,14 @@ pub const Interpreter = struct {
         std.debug.assert(value.layout.data.scalar.tag == .int);
         std.debug.assert(value.layout.data.scalar.data.int == .u8);
 
-        const ptr = value.ptr orelse unreachable;
+        const ptr = value.ptr orelse debugUnreachable(null, "null pointer in getRuntimeU8", @src());
         const b: *const u8 = @ptrCast(@alignCast(ptr));
 
         return b.*;
     }
 
     fn boolValueEquals(self: *Interpreter, equals: bool, value: StackValue, roc_ops: *RocOps) bool {
-        const ptr = value.ptr orelse unreachable;
+        const ptr = value.ptr orelse debugUnreachable(roc_ops, "null pointer in boolValueEquals", @src());
 
         // Bool can be either a scalar (u8) or a tag_union layout
         // For tag_union: False=0, True=1 (alphabetically sorted)
@@ -9491,8 +9511,7 @@ pub const Interpreter = struct {
                             current_ext = module.types.getNominalBackingVar(nom);
                         },
                         else => {
-                            // TODO: Don't use unreachable here
-                            unreachable;
+                            debugUnreachable(null, "unexpected structure type in tag union extension", @src());
                         },
                     }
                 },
@@ -9502,8 +9521,7 @@ pub const Interpreter = struct {
                 .flex => break,
                 .rigid => break,
                 else => {
-                    // TODO: Don't use unreachable here
-                    unreachable;
+                    debugUnreachable(null, "unexpected content type in tag union extension", @src());
                 },
             }
         }
@@ -11040,7 +11058,7 @@ pub const Interpreter = struct {
                             .gt => self.root_env.idents.is_gt,
                             .ge => self.root_env.idents.is_gte,
                             .eq, .ne => self.root_env.idents.is_eq,
-                            .@"and", .@"or" => unreachable, // handled above
+                            .@"and", .@"or" => debugUnreachable(roc_ops, "and/or should be handled before reaching binop method dispatch", @src()),
                         };
 
                         // Get LHS and RHS type info
@@ -12403,9 +12421,9 @@ pub const Interpreter = struct {
                                     &args,
                                     list_nom.origin_module,
                                     list_nom.is_opaque,
-                                ) catch unreachable;
+                                ) catch debugUnreachable(null, "mkNominal should not fail when creating List type", @src());
                                 // Create a new Var from that content
-                                final_rt_var = self.runtime_types.freshFromContent(new_list_content) catch unreachable;
+                                final_rt_var = self.runtime_types.freshFromContent(new_list_content) catch debugUnreachable(null, "freshFromContent should not fail", @src());
                             }
                         }
                     }

@@ -11,6 +11,6 @@ type=repl
 # OUTPUT
 Crash: Compile-time error encountered at runtime
 ---
-Crash: Cannot call function: compile-time error in function definition
+Crash: Cannot call function: compile-time error (ident_not_in_scope)
 # PROBLEMS
 NIL

@@ -36,6 +36,23 @@ const StackValue = @This();
 
 // Internal helper functions for memory operations that don't need rt_var
 
+/// Helper for unreachable code paths that provides better error messages in debug mode
+fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builtin.SourceLocation) noreturn {
+    if (comptime builtin.mode == .Debug) {
+        var buf: [512]u8 = undefined;
+        const full_msg = std.fmt.bufPrint(&buf, "Internal error: {s} at {s}:{d}:{d}", .{
+            msg,
+            src.file,
+            src.line,
+            src.column,
+        }) catch msg;
+        if (roc_ops) |ops| {
+            ops.crash(full_msg);
+        }
+    }
+    unreachable;
+}
+
 /// Increment reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
@@ -542,7 +559,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
             2 => builtins.utils.alignedPtrCast(*const u16, disc_ptr, @src()).*,
             4 => builtins.utils.alignedPtrCast(*const u32, disc_ptr, @src()).*,
-            else => unreachable,
+            else => debugUnreachable(roc_ops, "invalid discriminant size in tag_union copyToPtr", @src()),
         };
 
         // Get the active variant's payload layout
@@ -1591,7 +1608,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
                 }
                 break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
             },
-            else => unreachable,
+            else => debugUnreachable(roc_ops, "invalid discriminant size in tag_union incref", @src()),
         };
 
         // Get the active variant's payload layout
@@ -1833,7 +1850,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 1 => @as(*const u8, @ptrCast(disc_ptr)).*,
                 2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
                 4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                else => unreachable,
+                else => debugUnreachable(ops, "invalid discriminant size in tag_union decref", @src()),
             };
 
             // Get the active variant's payload layout
