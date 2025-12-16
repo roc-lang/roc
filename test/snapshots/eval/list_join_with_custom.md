@@ -287,95 +287,90 @@ expect output == "div | span | p"
 (can-ir
 	(d-let
 		(p-assign (ident "list_join_with_custom.Html.join_with"))
-		(e-closure
-			(captures
-				(capture (ident "s"))
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-assign (ident "list_items"))
-					(p-assign (ident "separator")))
-				(e-block
-					(s-let
-						(p-assign (ident "sep_str"))
-						(e-match
-							(match
-								(cond
-									(e-lookup-local
-										(p-assign (ident "separator"))))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-nominal
-													(p-applied-tag))))
-										(value
-											(e-lookup-local
-												(p-assign (ident "s")))))))))
-					(s-let
-						(p-assign (ident "joined"))
-						(e-call
-							(e-lookup-external
-								(builtin))
-							(e-lookup-local
-								(p-assign (ident "list_items")))
-							(e-string
-								(e-literal (string "")))
-							(e-closure
-								(captures
-									(capture (ident "s"))
-									(capture (ident "sep_str")))
-								(e-lambda
-									(args
-										(p-assign (ident "acc"))
-										(p-assign (ident "item")))
-									(e-block
-										(s-let
-											(p-assign (ident "item_str"))
-											(e-match
-												(match
-													(cond
-														(e-lookup-local
-															(p-assign (ident "item"))))
-													(branches
-														(branch
-															(patterns
-																(pattern (degenerate false)
-																	(p-nominal
-																		(p-applied-tag))))
-															(value
-																(e-lookup-local
-																	(p-assign (ident "s")))))))))
-										(e-if
-											(if-branches
-												(if-branch
-													(e-binop (op "eq")
-														(e-lookup-local
-															(p-assign (ident "acc")))
-														(e-string
-															(e-literal (string ""))))
-													(e-block
-														(e-lookup-local
-															(p-assign (ident "item_str"))))))
-											(if-else
+		(e-lambda
+			(args
+				(p-assign (ident "list_items"))
+				(p-assign (ident "separator")))
+			(e-block
+				(s-let
+					(p-assign (ident "sep_str"))
+					(e-match
+						(match
+							(cond
+								(e-lookup-local
+									(p-assign (ident "separator"))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "s")))))))))
+				(s-let
+					(p-assign (ident "joined"))
+					(e-call
+						(e-lookup-external
+							(builtin))
+						(e-lookup-local
+							(p-assign (ident "list_items")))
+						(e-string
+							(e-literal (string "")))
+						(e-closure
+							(captures
+								(capture (ident "sep_str")))
+							(e-lambda
+								(args
+									(p-assign (ident "acc"))
+									(p-assign (ident "item")))
+								(e-block
+									(s-let
+										(p-assign (ident "item_str"))
+										(e-match
+											(match
+												(cond
+													(e-lookup-local
+														(p-assign (ident "item"))))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-nominal
+																	(p-applied-tag))))
+														(value
+															(e-lookup-local
+																(p-assign (ident "s")))))))))
+									(e-if
+										(if-branches
+											(if-branch
+												(e-binop (op "eq")
+													(e-lookup-local
+														(p-assign (ident "acc")))
+													(e-string
+														(e-literal (string ""))))
 												(e-block
+													(e-lookup-local
+														(p-assign (ident "item_str"))))))
+										(if-else
+											(e-block
+												(e-call
+													(e-lookup-external
+														(builtin))
 													(e-call
 														(e-lookup-external
 															(builtin))
-														(e-call
-															(e-lookup-external
-																(builtin))
-															(e-lookup-local
-																(p-assign (ident "acc")))
-															(e-lookup-local
-																(p-assign (ident "sep_str"))))
 														(e-lookup-local
-															(p-assign (ident "item_str"))))))))))))
-					(e-nominal (nominal "Html")
-						(e-tag (name "Raw")
-							(args
-								(e-lookup-local
-									(p-assign (ident "joined")))))))))
+															(p-assign (ident "acc")))
+														(e-lookup-local
+															(p-assign (ident "sep_str"))))
+													(e-lookup-local
+														(p-assign (ident "item_str"))))))))))))
+				(e-nominal (nominal "Html")
+					(e-tag (name "Raw")
+						(args
+							(e-lookup-local
+								(p-assign (ident "joined"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -384,26 +379,23 @@ expect output == "div | span | p"
 				(ty-lookup (name "Html") (local)))))
 	(d-let
 		(p-assign (ident "list_join_with_custom.Html.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-assign (ident "h")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "h"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-lookup-local
-										(p-assign (ident "s"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "h")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "h"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-lookup-local
+									(p-assign (ident "s")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Html") (local))
