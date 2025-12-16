@@ -363,3 +363,110 @@ test "integration - transitive module imports (module A imports module B)" {
     try testing.expect(shm_handle.size > 0);
     std.log.debug("Successfully compiled transitive import test (shared memory size: {} bytes)\n", .{shm_handle.size});
 }
+
+test "integration - diamond dependency pattern (A imports B and C, both import D)" {
+    // This test verifies that diamond dependencies are handled correctly.
+    // Diamond pattern:
+    //   Helper imports Core AND Utils
+    //   Core imports Utils
+    //   So: Helper→Core→Utils AND Helper→Utils (diamond with Utils at bottom)
+    //
+    // The platform exposes [Helper, Core, Utils] (WRONG order)
+    // Correct compilation order should be: Utils, Core, Helper
+    //
+    // This tests that:
+    // 1. Multiple modules can import the same dependency (Utils)
+    // 2. Topological sort produces valid order for diamond graphs
+    // 3. Runtime module resolution works for shared dependencies
+    if (builtin.os.tag == .windows) {
+        return;
+    }
+
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
+
+    // Get absolute path from current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    defer allocs.gpa.free(cwd_path);
+
+    // Test app_diamond.roc which uses Helper.wrap_quoted (calls both Core and Utils)
+    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_diamond.roc" }) catch return;
+    defer allocs.gpa.free(roc_path);
+
+    // This should compile successfully with correct dependency ordering
+    const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true) catch |err| {
+        std.log.err("Failed to compile diamond dependency test: {}\n", .{err});
+        return err;
+    };
+    const shm_handle = shm_result.handle;
+
+    // Clean up shared memory resources
+    defer {
+        if (comptime builtin.os.tag == .windows) {
+            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            const posix = struct {
+                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+                extern "c" fn close(fd: c_int) c_int;
+            };
+            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.close(shm_handle.fd);
+        }
+    }
+
+    // Verify shared memory was set up successfully
+    try testing.expect(shm_handle.size > 0);
+    std.log.debug("Successfully compiled diamond dependency test (shared memory size: {} bytes)\n", .{shm_handle.size});
+}
+
+test "integration - direct Core and Utils calls from app" {
+    // This test verifies that an app can directly call platform modules
+    // that have their own inter-module dependencies.
+    // Core.wrap_tagged internally calls Utils.tag (Core→Utils dependency)
+    if (builtin.os.tag == .windows) {
+        return;
+    }
+
+    var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_impl.deinit();
+    var allocs: Allocators = undefined;
+    allocs.initInPlace(gpa_impl.allocator());
+    defer allocs.deinit();
+
+    // Get absolute path from current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocs.gpa, ".") catch return;
+    defer allocs.gpa.free(cwd_path);
+
+    // Test app_direct_core.roc which calls Core.wrap directly
+    const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_direct_core.roc" }) catch return;
+    defer allocs.gpa.free(roc_path);
+
+    const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true) catch |err| {
+        std.log.err("Failed to compile direct Core call test: {}\n", .{err});
+        return err;
+    };
+    const shm_handle = shm_result.handle;
+
+    // Clean up shared memory resources
+    defer {
+        if (comptime builtin.os.tag == .windows) {
+            _ = @import("ipc").platform.windows.UnmapViewOfFile(shm_handle.ptr);
+            _ = @import("ipc").platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
+        } else {
+            const posix = struct {
+                extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
+                extern "c" fn close(fd: c_int) c_int;
+            };
+            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.close(shm_handle.fd);
+        }
+    }
+
+    // Verify shared memory was set up successfully
+    try testing.expect(shm_handle.size > 0);
+    std.log.debug("Successfully compiled direct Core call test (shared memory size: {} bytes)\n", .{shm_handle.size});
+}

@@ -1,6 +1,9 @@
 platform ""
     requires {} { process_string : Str -> Str }
-    exposes [Helper, Core]
+    # INTENTIONALLY WRONG ORDER to test automatic dependency sorting!
+    # Correct order would be: Utils, Core, Helper
+    # Helper imports Core and Utils; Core imports Utils
+    exposes [Helper, Core, Utils]
     packages {}
     provides { process_string_for_host: "process_string" }
     targets: {
@@ -17,6 +20,7 @@ platform ""
 
 import Core
 import Helper
+import Utils
 
 process_string_for_host : Str -> Str
 process_string_for_host = process_string
