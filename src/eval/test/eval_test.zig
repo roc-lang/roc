@@ -1312,6 +1312,26 @@ test "List.map - adding" {
     );
 }
 
+// Test for List.repeat
+
+test "List.repeat - basic case" {
+    // Repeat a value multiple times
+    try runExpectListI64(
+        "List.repeat(7i64, 4)",
+        &[_]i64{ 7, 7, 7, 7 },
+        .no_trace,
+    );
+}
+
+test "List.repeat - empty case" {
+    // Repeat a value multiple times
+    try runExpectListI64(
+        "List.repeat(7i64, 0)",
+        &[_]i64{},
+        .no_trace,
+    );
+}
+
 // Bug regression tests - interpreter crash issues
 
 test "match with tag containing pattern-bound variable - regression" {

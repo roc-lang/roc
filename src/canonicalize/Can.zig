@@ -2543,9 +2543,11 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
             }
         },
         .nominal => |nom| {
+            // Recurse into the backing pattern to collect bound variables
             try self.collectBoundVarsToScratch(nom.backing_pattern);
         },
         .nominal_external => |nom| {
+            // Recurse into the backing pattern to collect bound variables
             try self.collectBoundVarsToScratch(nom.backing_pattern);
         },
         .num_literal,
