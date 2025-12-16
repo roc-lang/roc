@@ -382,6 +382,10 @@ pub const Interpreter = struct {
     scratch_tags: std.array_list.Managed(types.Tag),
     // Scratch map for type instantiation (reused to avoid repeated allocations)
     instantiate_scratch: std.AutoHashMap(types.Var, types.Var),
+    // Scratch buffers for tuple collection (reused to avoid repeated allocations)
+    tuple_scratch_layouts: std.array_list.Managed(Layout),
+    tuple_scratch_values: std.array_list.Managed(StackValue),
+    tuple_scratch_rt_vars: std.array_list.Managed(types.Var),
     /// Builtin types required by the interpreter (Bool, Try, etc.)
     builtins: BuiltinTypes,
     def_stack: std.array_list.Managed(DefInProgress),
@@ -544,6 +548,9 @@ pub const Interpreter = struct {
             .cached_list_u8_rt_var = null,
             .scratch_tags = try std.array_list.Managed(types.Tag).initCapacity(allocator, 8),
             .instantiate_scratch = std.AutoHashMap(types.Var, types.Var).init(allocator),
+            .tuple_scratch_layouts = try std.array_list.Managed(Layout).initCapacity(allocator, 8),
+            .tuple_scratch_values = try std.array_list.Managed(StackValue).initCapacity(allocator, 8),
+            .tuple_scratch_rt_vars = try std.array_list.Managed(types.Var).initCapacity(allocator, 8),
             .builtins = builtin_types,
             .def_stack = try std.array_list.Managed(DefInProgress).initCapacity(allocator, 4),
             .num_literal_target_type = null,
@@ -7769,6 +7776,9 @@ pub const Interpreter = struct {
         self.def_stack.deinit();
         self.scratch_tags.deinit();
         self.instantiate_scratch.deinit();
+        self.tuple_scratch_layouts.deinit();
+        self.tuple_scratch_values.deinit();
+        self.tuple_scratch_rt_vars.deinit();
         // Free all constant/static strings at once - they were never freed individually
         self.constant_strings_arena.deinit();
     }
@@ -13356,20 +13366,22 @@ pub const Interpreter = struct {
                         const tuple_val = try self.pushRaw(tuple_layout, 0, empty_tuple_rt_var);
                         try value_stack.push(tuple_val);
                     } else {
-                        // Gather layouts and values
-                        const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
-                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
-                        defer self.allocator.free(elem_layouts);
+                        // Use scratch buffers instead of allocating (cleared and reused for each tuple)
+                        const scratch_trace = tracy.traceNamed(@src(), "tuple_collect.use_scratch");
+                        defer scratch_trace.end();
 
-                        // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
-                        // We need to pop them and store in correct order
-                        var values = try self.allocator.alloc(StackValue, total_count);
-                        defer self.allocator.free(values);
+                        // Clear and resize scratch buffers to needed size
+                        self.tuple_scratch_layouts.clearRetainingCapacity();
+                        self.tuple_scratch_values.clearRetainingCapacity();
+                        self.tuple_scratch_rt_vars.clearRetainingCapacity();
 
-                        // Collect element rt_vars for constructing tuple type
-                        var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
-                        defer self.allocator.free(elem_rt_vars);
-                        alloc_trace.end();
+                        try self.tuple_scratch_layouts.resize(total_count);
+                        try self.tuple_scratch_values.resize(total_count);
+                        try self.tuple_scratch_rt_vars.resize(total_count);
+
+                        var elem_layouts = self.tuple_scratch_layouts.items;
+                        var values = self.tuple_scratch_values.items;
+                        var elem_rt_vars = self.tuple_scratch_rt_vars.items;
 
                         // Pop values in reverse order (last evaluated is on top)
                         var i: usize = total_count;
