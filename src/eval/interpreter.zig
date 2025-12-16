@@ -128,7 +128,7 @@ fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
         .is_initialized = true,
         .rt_var = context.elem_rt_var,
     };
-    elem_value.incref(context.layout_store);
+    elem_value.incref(context.layout_store, context.roc_ops);
 }
 
 /// Decrement callback for list operations - decrements refcount of element via StackValue
@@ -849,7 +849,7 @@ pub const Interpreter = struct {
                     self.early_return_value = null;
                     defer return_val.decref(&self.runtime_layout_store, roc_ops);
                     if (try self.shouldCopyResult(return_val, ret_ptr, roc_ops)) {
-                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr);
+                        try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
                     }
                     return;
                 }
@@ -863,7 +863,7 @@ pub const Interpreter = struct {
 
             // Only copy result if the result type is compatible with ret_ptr
             if (try self.shouldCopyResult(result_value, ret_ptr, roc_ops)) {
-                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr);
+                try result_value.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
             }
             return;
         }
@@ -873,7 +873,7 @@ pub const Interpreter = struct {
 
         // Only copy result if the result type is compatible with ret_ptr
         if (try self.shouldCopyResult(result, ret_ptr, roc_ops)) {
-            try result.copyToPtr(&self.runtime_layout_store, ret_ptr);
+            try result.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
         }
     }
 
@@ -960,7 +960,7 @@ pub const Interpreter = struct {
             if (value.ptr) |ptr| {
                 const existing: *const RocStr = @ptrCast(@alignCast(ptr));
                 var copy = existing.*;
-                copy.incref(1);
+                copy.incref(1, roc_ops);
                 return copy;
             } else {
                 return RocStr.empty();
@@ -1011,8 +1011,8 @@ pub const Interpreter = struct {
         return StackValue{ .layout = .{ .tag = .zst, .data = undefined }, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
     }
 
-    pub fn pushCopy(self: *Interpreter, src: StackValue) !StackValue {
-        const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store) else self.runtime_layout_store.layoutSize(src.layout);
+    pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
+        const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store, roc_ops) else self.runtime_layout_store.layoutSize(src.layout);
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
         if (src.layout.tag == .closure) {
@@ -1023,7 +1023,7 @@ pub const Interpreter = struct {
         // Preserve rt_var for constant folding
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
         if (size > 0 and src.ptr != null and ptr != null) {
-            try src.copyToPtr(&self.runtime_layout_store, ptr.?);
+            try src.copyToPtr(&self.runtime_layout_store, ptr.?, roc_ops);
         }
         return dest;
     }
@@ -1122,8 +1122,8 @@ pub const Interpreter = struct {
         };
 
         // Copy elements for comparison (compare_fn will consume them)
-        const arg0 = try self.pushCopy(elem1_value); // element being inserted
-        const arg1 = try self.pushCopy(elem0_value); // element to compare against
+        const arg0 = try self.pushCopy(elem1_value, roc_ops); // element being inserted
+        const arg1 = try self.pushCopy(elem0_value, roc_ops); // element to compare against
 
         // Push continuation to handle comparison result
         try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
@@ -2674,7 +2674,7 @@ pub const Interpreter = struct {
                 };
 
                 // Copy to new location and increment refcount
-                return try self.pushCopy(elem_value);
+                return try self.pushCopy(elem_value, roc_ops);
             },
             .list_sort_with => {
                 // list_sort_with is handled specially in call_invoke_closure continuation
@@ -2734,14 +2734,14 @@ pub const Interpreter = struct {
                 if (list_a.len() == 0) {
                     list_a_arg.decref(&self.runtime_layout_store, roc_ops);
                     // list_b ownership is transferred to the result (pushCopy increfs)
-                    const result = try self.pushCopy(list_b_arg);
+                    const result = try self.pushCopy(list_b_arg, roc_ops);
                     list_b_arg.decref(&self.runtime_layout_store, roc_ops);
                     return result;
                 }
                 if (list_b.len() == 0) {
                     list_b_arg.decref(&self.runtime_layout_store, roc_ops);
                     // list_a ownership is transferred to the result (pushCopy increfs)
-                    const result = try self.pushCopy(list_a_arg);
+                    const result = try self.pushCopy(list_a_arg, roc_ops);
                     list_a_arg.decref(&self.runtime_layout_store, roc_ops);
                     return result;
                 }
@@ -2905,7 +2905,7 @@ pub const Interpreter = struct {
 
                     // Increment refcount of the element being appended
                     if (elements_refcounted) {
-                        elt_arg.incref(&self.runtime_layout_store);
+                        elt_arg.incref(&self.runtime_layout_store, roc_ops);
                     }
 
                     // Append to an empty list (ignoring the old list_of_zst content)
@@ -2953,7 +2953,7 @@ pub const Interpreter = struct {
                 const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
 
                 // Determine if list can be mutated in place
-                const update_mode = if (roc_list.isUnique()) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+                const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -2998,7 +2998,7 @@ pub const Interpreter = struct {
                 // Without this, when the original element is freed, the list would
                 // hold a dangling reference (use-after-free bug).
                 if (elements_refcounted) {
-                    elt_arg.incref(&self.runtime_layout_store);
+                    elt_arg.incref(&self.runtime_layout_store, roc_ops);
                 }
 
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
@@ -3336,7 +3336,7 @@ pub const Interpreter = struct {
                     .int => |i| try out.setInt(-i),
                     .f32 => |f| out.setF32(-f),
                     .f64 => |f| out.setF64(-f),
-                    .dec => |d| out.setDec(RocDec{ .num = -d.num }),
+                    .dec => |d| out.setDec(RocDec{ .num = -d.num }, roc_ops),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3354,7 +3354,7 @@ pub const Interpreter = struct {
                     .int => |i| try out.setInt(if (i < 0) -i else i),
                     .f32 => |f| out.setF32(@abs(f)),
                     .f64 => |f| out.setF64(@abs(f)),
-                    .dec => |d| out.setDec(RocDec{ .num = if (d.num < 0) -d.num else d.num }),
+                    .dec => |d| out.setDec(RocDec{ .num = if (d.num < 0) -d.num else d.num }, roc_ops),
                 }
                 out.is_initialized = true;
                 return out;
@@ -3389,7 +3389,7 @@ pub const Interpreter = struct {
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
                             const diff = l.num - r.num;
-                            out.setDec(RocDec{ .num = if (diff < 0) -diff else diff });
+                            out.setDec(RocDec{ .num = if (diff < 0) -diff else diff }, roc_ops);
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3421,8 +3421,8 @@ pub const Interpreter = struct {
                         else => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
-                        .dec => |r| out.setDec(RocDec.add(l, r, roc_ops)),
-                        .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                        .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3453,8 +3453,8 @@ pub const Interpreter = struct {
                         else => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
-                        .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops)),
-                        .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                        .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3485,8 +3485,8 @@ pub const Interpreter = struct {
                         else => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
-                        .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops)),
-                        .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                        .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3532,12 +3532,12 @@ pub const Interpreter = struct {
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
                             if (r.num == 0) return error.DivisionByZero;
-                            out.setDec(RocDec.div(l, r, roc_ops));
+                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
                             const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
-                            out.setDec(RocDec.div(l, r_dec, roc_ops));
+                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3585,12 +3585,12 @@ pub const Interpreter = struct {
                         .dec => |r| {
                             // For Dec, div and div_trunc are the same since it's already integer-like
                             if (r.num == 0) return error.DivisionByZero;
-                            out.setDec(RocDec.div(l, r, roc_ops));
+                            out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
                             const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
-                            out.setDec(RocDec.div(l, r_dec, roc_ops));
+                            out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
                     },
@@ -3637,12 +3637,12 @@ pub const Interpreter = struct {
                     .dec => |l| switch (rhs) {
                         .dec => |r| {
                             if (r.num == 0) return error.DivisionByZero;
-                            out.setDec(RocDec.rem(l, r, roc_ops));
+                            out.setDec(RocDec.rem(l, r, roc_ops), roc_ops);
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
                             const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
-                            out.setDec(RocDec.rem(l, r_dec, roc_ops));
+                            out.setDec(RocDec.rem(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
                     },
@@ -5850,7 +5850,7 @@ pub const Interpreter = struct {
         return b.*;
     }
 
-    fn boolValueEquals(self: *Interpreter, equals: bool, value: StackValue) bool {
+    fn boolValueEquals(self: *Interpreter, equals: bool, value: StackValue, roc_ops: *RocOps) bool {
         const ptr = value.ptr orelse unreachable;
 
         // Bool can be either a scalar (u8) or a tag_union layout
@@ -5871,7 +5871,10 @@ pub const Interpreter = struct {
             // discriminant 1 = True, discriminant 0 = False
             return (bool_byte == 1) == equals;
         } else {
-            std.debug.panic("boolValueEquals: unexpected layout tag {s}", .{@tagName(value.layout.tag)});
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "boolValueEquals: unexpected layout tag {s}", .{@tagName(value.layout.tag)}) catch "boolValueEquals: unexpected layout tag";
+            self.triggerCrash(msg, false, roc_ops);
+            return false;
         }
     }
 
@@ -6024,8 +6027,8 @@ pub const Interpreter = struct {
                     else => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
-                    .dec => |r| out.setDec(RocDec.add(l, r, roc_ops)),
-                    .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                    .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
@@ -6044,8 +6047,8 @@ pub const Interpreter = struct {
                     else => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
-                    .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops)),
-                    .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                    .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
@@ -6064,8 +6067,8 @@ pub const Interpreter = struct {
                     else => return error.TypeMismatch,
                 },
                 .dec => |l| switch (rhs_val) {
-                    .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops)),
-                    .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops)),
+                    .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
@@ -6102,11 +6105,11 @@ pub const Interpreter = struct {
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| {
                         if (r.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, r, roc_ops));
+                        out.setDec(RocDec.div(l, r, roc_ops), roc_ops);
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops));
+                        out.setDec(RocDec.div(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops);
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6136,11 +6139,11 @@ pub const Interpreter = struct {
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| {
                         if (r.num == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, r, roc_ops));
+                        out.setDec(RocDec.rem(l, r, roc_ops), roc_ops);
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops));
+                        out.setDec(RocDec.rem(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops);
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6598,8 +6601,8 @@ pub const Interpreter = struct {
             return true;
         }
 
-        var lhs_acc = try lhs.asList(&self.runtime_layout_store, elem_layout);
-        var rhs_acc = try rhs.asList(&self.runtime_layout_store, elem_layout);
+        var lhs_acc = try lhs.asList(&self.runtime_layout_store, elem_layout, roc_ops);
+        var rhs_acc = try rhs.asList(&self.runtime_layout_store, elem_layout, roc_ops);
 
         var index: usize = 0;
         while (index < lhs_header.len()) : (index += 1) {
@@ -6625,8 +6628,8 @@ pub const Interpreter = struct {
         defer tag_list.deinit();
         try self.appendUnionTags(union_var, &tag_list);
 
-        const lhs_data = try self.extractTagValue(lhs, union_var);
-        const rhs_data = try self.extractTagValue(rhs, union_var);
+        const lhs_data = try self.extractTagValue(lhs, union_var, roc_ops);
+        const rhs_data = try self.extractTagValue(rhs, union_var, roc_ops);
 
         if (lhs_data.index >= tag_list.items.len or rhs_data.index >= tag_list.items.len) {
             return error.TypeMismatch;
@@ -6750,7 +6753,7 @@ pub const Interpreter = struct {
                 return error.NotImplemented;
             };
             defer result.decref(&self.runtime_layout_store, roc_ops);
-            return self.boolValueEquals(true, result);
+            return self.boolValueEquals(true, result, roc_ops);
         }
 
         // Regular Roc closure (e.g., List.is_eq which is defined in Roc, not as a low-level builtin)
@@ -6769,8 +6772,8 @@ pub const Interpreter = struct {
         }
 
         // Bind parameters - create copies for proper ownership
-        const lhs_copy = self.pushCopy(lhs) catch return error.OutOfMemory;
-        const rhs_copy = self.pushCopy(rhs) catch {
+        const lhs_copy = self.pushCopy(lhs, roc_ops) catch return error.OutOfMemory;
+        const rhs_copy = self.pushCopy(rhs, roc_ops) catch {
             lhs_copy.decref(&self.runtime_layout_store, roc_ops);
             return error.OutOfMemory;
         };
@@ -6803,7 +6806,7 @@ pub const Interpreter = struct {
             return error.NotImplemented;
         };
         defer result.decref(&self.runtime_layout_store, roc_ops);
-        return self.boolValueEquals(true, result);
+        return self.boolValueEquals(true, result, roc_ops);
     }
 
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
@@ -6995,7 +6998,7 @@ pub const Interpreter = struct {
         payload: ?StackValue,
     };
 
-    fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
+    fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var, roc_ops: *RocOps) !TagValue {
         switch (value.layout.tag) {
             .scalar => switch (value.layout.data.scalar.tag) {
                 .int => {
@@ -7143,7 +7146,7 @@ pub const Interpreter = struct {
             .tag_union => {
                 // New proper tag_union layout: payload at offset 0, discriminant at discriminant_offset
                 var acc = try value.asTagUnion(&self.runtime_layout_store);
-                const tag_index = acc.getDiscriminant();
+                const tag_index = acc.getDiscriminant(roc_ops);
 
                 var payload_value: ?StackValue = null;
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -7193,11 +7196,13 @@ pub const Interpreter = struct {
     }
 
     fn makeBoxValueFromLayout(self: *Interpreter, result_layout: Layout, payload: StackValue, roc_ops: *RocOps, rt_var: types.Var) !StackValue {
+        traceDbg(roc_ops, "makeBoxValueFromLayout: result_layout.tag={s} payload.layout.tag={s}", .{ @tagName(result_layout.tag), @tagName(payload.layout.tag) });
         var out = try self.pushRaw(result_layout, 0, rt_var);
         out.is_initialized = true;
 
         switch (result_layout.tag) {
             .box_of_zst => {
+                traceDbg(roc_ops, "makeBoxValueFromLayout: handling box_of_zst", .{});
                 if (out.ptr) |ptr| {
                     const slot: *usize = @ptrCast(@alignCast(ptr));
                     slot.* = 0;
@@ -7205,9 +7210,11 @@ pub const Interpreter = struct {
                 return out;
             },
             .box => {
+                traceDbg(roc_ops, "makeBoxValueFromLayout: handling .box", .{});
                 // Get the expected element layout from the box type
                 const expected_elem_layout = self.runtime_layout_store.getLayout(result_layout.data.box);
                 const target_usize = self.runtime_layout_store.targetUsize();
+                traceDbg(roc_ops, "makeBoxValueFromLayout: expected_elem_layout.tag={s}", .{@tagName(expected_elem_layout.tag)});
 
                 // Use the payload's layout if it matches semantically.
                 // The type system guarantees type compatibility, but layouts might be stored
@@ -7227,16 +7234,21 @@ pub const Interpreter = struct {
                 const elem_alignment = elem_layout.alignment(target_usize).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
                 const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                traceDbg(roc_ops, "makeBoxValueFromLayout: allocating elem_size={d} elem_alignment={d}", .{ elem_size, elem_alignment });
                 const data_ptr = utils.allocateWithRefcount(elem_size, elem_alignment_u32, false, roc_ops);
+                traceDbg(roc_ops, "makeBoxValueFromLayout: allocation returned ptr={x}", .{@intFromPtr(data_ptr)});
 
                 if (elem_size > 0 and payload.ptr != null) {
-                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr);
+                    traceDbg(roc_ops, "makeBoxValueFromLayout: copying payload to data_ptr", .{});
+                    try payload.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                    traceDbg(roc_ops, "makeBoxValueFromLayout: copy complete", .{});
                 }
 
                 if (out.ptr) |ptr| {
                     const slot: *usize = @ptrCast(@alignCast(ptr));
                     slot.* = @intFromPtr(data_ptr);
                 }
+                traceDbg(roc_ops, "makeBoxValueFromLayout: returning boxed value", .{});
                 return out;
             },
             else => return error.TypeMismatch,
@@ -7251,9 +7263,13 @@ pub const Interpreter = struct {
         return_expr_idx: can.CIR.Expr.Idx,
         roc_ops: *RocOps,
     ) !StackValue {
+        traceDbg(roc_ops, "evalBoxIntrinsic: entering with arg_value.layout.tag={s}", .{@tagName(arg_value.layout.tag)});
         const return_ct_var = can.ModuleEnv.varFrom(return_expr_idx);
+        traceDbg(roc_ops, "evalBoxIntrinsic: return_ct_var obtained", .{});
         const return_rt_var = try self.translateTypeVar(self.env, return_ct_var);
+        traceDbg(roc_ops, "evalBoxIntrinsic: return_rt_var translated", .{});
         const box_layout = try self.getRuntimeLayout(return_rt_var);
+        traceDbg(roc_ops, "evalBoxIntrinsic: box_layout.tag={s}", .{@tagName(box_layout.tag)});
         return try self.makeBoxValueFromLayout(box_layout, arg_value, roc_ops, return_rt_var);
     }
 
@@ -7314,7 +7330,7 @@ pub const Interpreter = struct {
             // If the element is refcounted, increment its refcount since we're
             // creating a new reference (the box still holds its own reference)
             if (elem_layout.isRefcounted()) {
-                result.incref(&self.runtime_layout_store);
+                result.incref(&self.runtime_layout_store, roc_ops);
             }
 
             try value_stack.push(result);
@@ -7405,7 +7421,7 @@ pub const Interpreter = struct {
         // Copy the value to pass to the method
         // Important: use the correct rt_var (from the type system) not value.rt_var
         // (which may be a fresh variable from record field access)
-        var copied_value = self.pushCopy(value) catch return null;
+        var copied_value = self.pushCopy(value, roc_ops) catch return null;
         copied_value.rt_var = rt_var;
 
         // Bind the parameter
@@ -7455,6 +7471,7 @@ pub const Interpreter = struct {
         start: usize,
         count: usize,
         rt_var: types.Var,
+        roc_ops: *RocOps,
     ) !StackValue {
         // Apply layout correction if needed.
         // This handles cases where the type system's layout doesn't match the actual
@@ -7484,9 +7501,9 @@ pub const Interpreter = struct {
         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
         const elements_refcounted = elem_layout.isRefcounted();
 
-        if (elements_refcounted and source.isUnique()) {
+        if (elements_refcounted and source.isUnique(roc_ops)) {
             var source_copy = source;
-            markListElementCount(&source_copy, true);
+            markListElementCount(&source_copy, true, roc_ops);
         }
 
         const src_bytes = source.bytes orelse return error.NullStackPointer;
@@ -7502,15 +7519,15 @@ pub const Interpreter = struct {
             },
         };
 
-        source.incref(1, elements_refcounted);
-        markListElementCount(&slice, elements_refcounted);
+        source.incref(1, elements_refcounted, roc_ops);
+        markListElementCount(&slice, elements_refcounted, roc_ops);
         header.* = slice;
         return dest;
     }
 
-    fn markListElementCount(list: *RocList, elements_refcounted: bool) void {
+    fn markListElementCount(list: *RocList, elements_refcounted: bool, roc_ops: *RocOps) void {
         if (elements_refcounted and !list.isSeamlessSlice()) {
-            if (list.getAllocationDataPtr()) |source| {
+            if (list.getAllocationDataPtr(roc_ops)) |source| {
                 const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
                 ptr[0] = list.length;
             }
@@ -7545,6 +7562,7 @@ pub const Interpreter = struct {
         var idx = list.items.len;
         while (idx > new_len) {
             idx -= 1;
+            traceDbg(roc_ops, "trimBindingList: decref idx={d} layout.tag={s}", .{ idx, @tagName(list.items[idx].value.layout.tag) });
             if (comptime trace_refcount and builtin.os.tag != .freestanding) {
                 const stderr_file: std.fs.File = .stderr();
                 var buf: [256]u8 = undefined;
@@ -7555,6 +7573,7 @@ pub const Interpreter = struct {
                 stderr_file.writeAll(msg) catch {};
             }
             list.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
+            traceDbg(roc_ops, "trimBindingList: decref complete", .{});
         }
         list.items.len = new_len;
     }
@@ -7574,7 +7593,7 @@ pub const Interpreter = struct {
         switch (pat) {
             .assign => |_| {
                 // Bind entire value to this pattern
-                const copied = try self.pushCopy(value);
+                const copied = try self.pushCopy(value, roc_ops);
                 // pushCopy preserves rt_var from value
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
@@ -7586,7 +7605,7 @@ pub const Interpreter = struct {
                     return false;
                 }
 
-                const alias_value = try self.pushCopy(value);
+                const alias_value = try self.pushCopy(value, roc_ops);
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -7601,7 +7620,7 @@ pub const Interpreter = struct {
                     .frac => blk: {
                         // For Dec type, extract the value and compare
                         if (value.layout.data.scalar.data.frac != .dec) break :blk false;
-                        const dec_value = value.asDec();
+                        const dec_value = value.asDec(roc_ops);
                         // Dec stores values scaled by 10^18, so we need to compare scaled values
                         // For integer literals, we scale the literal value
                         const scaled_lit = lit * RocDec.one_point_zero_i128;
@@ -7708,7 +7727,7 @@ pub const Interpreter = struct {
                 else
                     Layout.zst(); // list_of_zst has zero-sized elements
 
-                var accessor = try value.asList(&self.runtime_layout_store, elem_layout);
+                var accessor = try value.asList(&self.runtime_layout_store, elem_layout, roc_ops);
                 const total_len = accessor.len();
                 const non_rest_patterns = self.env.store.slicePatterns(list_pat.patterns);
 
@@ -7744,7 +7763,7 @@ pub const Interpreter = struct {
 
                     if (rest_info.pattern) |rest_pat_idx| {
                         const rest_len = total_len - prefix_len - suffix_len;
-                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len, value_rt_var);
+                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
                         if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
@@ -7830,7 +7849,7 @@ pub const Interpreter = struct {
                 defer value_tag_list.deinit();
                 try self.appendUnionTags(value.rt_var, &value_tag_list);
 
-                const tag_data = try self.extractTagValue(value, value_rt_var);
+                const tag_data = try self.extractTagValue(value, value_rt_var, roc_ops);
 
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
@@ -10625,9 +10644,12 @@ pub const Interpreter = struct {
             },
 
             .e_str => |str_expr| {
+                traceDbg(roc_ops, "e_str: entering", .{});
                 const segments = self.env.store.sliceExpr(str_expr.span);
+                traceDbg(roc_ops, "e_str: segments.len={d}", .{segments.len});
                 if (segments.len == 0) {
                     // Empty string - return immediately
+                    traceDbg(roc_ops, "e_str: empty string", .{});
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const value = try self.pushStr(str_rt_var);
                     const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
@@ -10636,6 +10658,7 @@ pub const Interpreter = struct {
                 } else {
                     // Schedule collection of segments
                     // Push continuation to handle all segments, starting with none collected
+                    traceDbg(roc_ops, "e_str: scheduling segment collection", .{});
                     try work_stack.push(.{
                         .apply_continuation = .{
                             .str_collect = .{
@@ -10647,6 +10670,7 @@ pub const Interpreter = struct {
                         },
                     });
                 }
+                traceDbg(roc_ops, "e_str: done", .{});
             },
 
             .e_empty_record => {
@@ -11736,20 +11760,25 @@ pub const Interpreter = struct {
                     const lookup = func_expr_check.e_lookup_external;
                     // Use the current module's resolved imports (not import_envs which only has primary/app imports)
                     const resolved_idx = self.env.imports.getResolvedModule(lookup.module_idx) orelse null;
+                    traceDbg(roc_ops, "e_call e_lookup_external: module_idx={d} resolved_idx={any} all_module_envs.len={d}", .{ @intFromEnum(lookup.module_idx), resolved_idx, self.all_module_envs.len });
                     const other_env: ?*const can.ModuleEnv = if (resolved_idx != null and resolved_idx.? < self.all_module_envs.len)
                         self.all_module_envs[resolved_idx.?]
                     else
                         null;
                     if (other_env) |builtin_env| {
+                        traceDbg(roc_ops, "e_call: resolved to env \"{s}\"", .{builtin_env.module_name});
                         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
                         const target_def = builtin_env.store.getDef(target_def_idx);
                         const target_pattern = builtin_env.store.getPattern(target_def.pattern);
+                        traceDbg(roc_ops, "e_call: target_pattern tag={s}", .{@tagName(target_pattern)});
                         if (target_pattern == .assign) {
                             const method_ident = target_pattern.assign.ident;
+                            traceDbg(roc_ops, "e_call: method_ident={d} builtin_box_box={d} builtin_box_unbox={d}", .{ method_ident.idx, builtin_env.idents.builtin_box_box.idx, builtin_env.idents.builtin_box_unbox.idx });
                             // Compare ident indices directly - both method_ident and builtin_env.idents
                             // are in the same ident space (the builtin_env's common ident store)
                             const is_box_method = method_ident == builtin_env.idents.builtin_box_box;
                             const is_unbox_method = method_ident == builtin_env.idents.builtin_box_unbox;
+                            traceDbg(roc_ops, "e_call: is_box_method={} is_unbox_method={}", .{ is_box_method, is_unbox_method });
                             // Check if this is Box.box
                             if (is_box_method and arg_indices.len == 1) {
                                 const arg_expr = arg_indices[0];
@@ -12790,7 +12819,7 @@ pub const Interpreter = struct {
                     self.triggerCrash("e_closure: capture field not found in record", false, roc_ops);
                     return error.Crash;
                 };
-                try accessor.setFieldByIndex(idx_opt, cap_val);
+                try accessor.setFieldByIndex(idx_opt, cap_val, roc_ops);
             }
         }
         return value;
@@ -12948,7 +12977,7 @@ pub const Interpreter = struct {
                         }
                     }
                 }
-                const copy_result = try self.pushCopy(b.value);
+                const copy_result = try self.pushCopy(b.value, roc_ops);
                 return copy_result;
             }
         }
@@ -12979,7 +13008,7 @@ pub const Interpreter = struct {
                             if (accessor.findFieldIndex(var_ident)) |fidx| {
                                 const field_rt = try self.runtime_types.fresh();
                                 const field_val = try accessor.getFieldByIndex(fidx, field_rt);
-                                return try self.pushCopy(field_val);
+                                return try self.pushCopy(field_val, roc_ops);
                             }
                         }
                     }
@@ -13006,7 +13035,7 @@ pub const Interpreter = struct {
                 });
                 // Return a copy to give the caller ownership while the binding retains ownership too.
                 // This is consistent with the pushCopy call above for already-bound values.
-                return try self.pushCopy(result);
+                return try self.pushCopy(result, roc_ops);
             }
         }
 
@@ -13433,10 +13462,12 @@ pub const Interpreter = struct {
                 return true;
             },
             .trim_bindings => |tb| {
+                traceDbg(roc_ops, "trim_bindings: target_len={d} current_len={d}", .{ tb.target_len, self.bindings.items.len });
                 const cont_trace = tracy.traceNamed(@src(), "cont.trim_bindings");
                 defer cont_trace.end();
                 // Restore bindings to a previous length
                 self.trimBindingList(&self.bindings, tb.target_len, roc_ops);
+                traceDbg(roc_ops, "trim_bindings: done", .{});
                 return true;
             },
             .and_short_circuit => |sc| {
@@ -13446,7 +13477,7 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-                if (self.boolValueEquals(false, lhs)) {
+                if (self.boolValueEquals(false, lhs, roc_ops)) {
                     // Short-circuit: LHS is false, so result is false
                     const result = try self.makeBoolValue(false);
                     try value_stack.push(result);
@@ -13466,7 +13497,7 @@ pub const Interpreter = struct {
                 const lhs = value_stack.pop() orelse return error.Crash;
                 defer lhs.decref(&self.runtime_layout_store, roc_ops);
 
-                if (self.boolValueEquals(true, lhs)) {
+                if (self.boolValueEquals(true, lhs, roc_ops)) {
                     // Short-circuit: LHS is true, so result is true
                     const result = try self.makeBoolValue(true);
                     try value_stack.push(result);
@@ -13486,7 +13517,7 @@ pub const Interpreter = struct {
                 const cond = value_stack.pop() orelse return error.Crash;
                 defer cond.decref(&self.runtime_layout_store, roc_ops);
 
-                const is_true = self.boolValueEquals(true, cond);
+                const is_true = self.boolValueEquals(true, cond, roc_ops);
 
                 if (is_true) {
                     // Condition is true, evaluate the body
@@ -13521,11 +13552,14 @@ pub const Interpreter = struct {
             .block_continue => |bc| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.block_continue");
                 defer cont_trace.end();
+                traceDbg(roc_ops, "block_continue: should_discard_value={}", .{bc.should_discard_value});
                 // For s_expr statements, we need to pop and discard the value
                 // Only pop if should_discard_value is set (meaning this was scheduled after an s_expr)
                 if (bc.should_discard_value) {
                     const val = value_stack.pop() orelse return error.Crash;
+                    traceDbg(roc_ops, "block_continue: discarding value with layout.tag={s}", .{@tagName(val.layout.tag)});
                     val.decref(&self.runtime_layout_store, roc_ops);
+                    traceDbg(roc_ops, "block_continue: decref complete", .{});
                 }
 
                 if (bc.remaining_stmts.len == 0) {
@@ -13682,7 +13716,7 @@ pub const Interpreter = struct {
 
                         // Set all elements
                         for (0..total_count) |idx| {
-                            try accessor.setElement(idx, values[idx]);
+                            try accessor.setElement(idx, values[idx], roc_ops);
                         }
 
                         // Decref temporary values after they've been copied into the tuple
@@ -13790,12 +13824,12 @@ pub const Interpreter = struct {
                             if (runtime_list.bytes) |buffer| {
                                 for (values, 0..) |val, idx| {
                                     const dest_ptr = buffer + idx * elem_size;
-                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr);
+                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
                                 }
                             }
                         }
 
-                        markListElementCount(&runtime_list, elements_refcounted);
+                        markListElementCount(&runtime_list, elements_refcounted, roc_ops);
                         header.* = runtime_list;
 
                         // Decref temporary values after they've been copied into the list
@@ -13949,7 +13983,7 @@ pub const Interpreter = struct {
                             const dest_field_idx = accessor.findFieldIndex(info.name) orelse return error.TypeMismatch;
                             const field_rt = try self.runtime_types.fresh();
                             const base_field_value = try base_accessor.getFieldByIndex(idx, field_rt);
-                            try accessor.setFieldByIndex(dest_field_idx, base_field_value);
+                            try accessor.setFieldByIndex(dest_field_idx, base_field_value, roc_ops);
                         }
                     }
 
@@ -13972,7 +14006,7 @@ pub const Interpreter = struct {
                             }
                         }
 
-                        try accessor.setFieldByIndex(dest_field_idx, val);
+                        try accessor.setFieldByIndex(dest_field_idx, val, roc_ops);
                     }
 
                     // Decref base value and field values after they've been copied
@@ -14170,7 +14204,7 @@ pub const Interpreter = struct {
                         const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
-                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             } else {
                                 // Multiple args - create tuple payload
                                 var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -14190,7 +14224,7 @@ pub const Interpreter = struct {
                                 var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
                                 var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                                 for (values, 0..) |val, idx| {
-                                    try tup_acc.setElement(idx, val);
+                                    try tup_acc.setElement(idx, val, roc_ops);
                                 }
                             }
                         }
@@ -14251,7 +14285,7 @@ pub const Interpreter = struct {
                                     // Write payload
                                     const proper_payload_field = try proper_acc.getElement(0, values[0].rt_var);
                                     if (proper_payload_field.ptr) |proper_ptr| {
-                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr);
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
                                     }
 
                                     for (values) |val| {
@@ -14262,7 +14296,7 @@ pub const Interpreter = struct {
                                     return true;
                                 }
 
-                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             } else {
                                 // Multiple args - create tuple payload
                                 var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -14282,7 +14316,7 @@ pub const Interpreter = struct {
                                 var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
                                 var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                                 for (values, 0..) |val, idx| {
-                                    try tup_acc.setElement(idx, val);
+                                    try tup_acc.setElement(idx, val, roc_ops);
                                 }
                             }
                         }
@@ -14338,7 +14372,7 @@ pub const Interpreter = struct {
                                 // Write payload (element 0)
                                 const proper_payload_field = try proper_acc.getElement(0, values[0].rt_var);
                                 if (proper_payload_field.ptr) |proper_ptr| {
-                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr);
+                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
                                 }
 
                                 for (values) |val| {
@@ -14365,7 +14399,7 @@ pub const Interpreter = struct {
                         // Write payload at offset 0
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr);
+                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                         } else {
                             // Multiple args - create tuple payload at offset 0
                             var elem_layouts = try self.allocator.alloc(Layout, total_count);
@@ -14385,7 +14419,7 @@ pub const Interpreter = struct {
                             var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
                             for (values, 0..) |val, idx| {
-                                try tup_acc.setElement(idx, val);
+                                try tup_acc.setElement(idx, val, roc_ops);
                             }
                         }
 
@@ -14405,7 +14439,7 @@ pub const Interpreter = struct {
                 // Scrutinee is on value stack - get it but keep it there for potential later use
                 const scrutinee_temp = value_stack.pop() orelse return error.Crash;
                 // Make a copy to protect from corruption
-                const scrutinee = try self.pushCopy(scrutinee_temp);
+                const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
                 scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
 
                 // Use the scrutinee's own rt_var (preserves type through polymorphic calls)
@@ -14490,7 +14524,7 @@ pub const Interpreter = struct {
                 const guard_val = value_stack.pop() orelse return error.Crash;
                 defer guard_val.decref(&self.runtime_layout_store, roc_ops);
 
-                const guard_pass = self.boolValueEquals(true, guard_val);
+                const guard_pass = self.boolValueEquals(true, guard_val, roc_ops);
 
                 if (guard_pass) {
                     // Guard passed - evaluate body
@@ -14540,7 +14574,7 @@ pub const Interpreter = struct {
                 defer cont_trace.end();
                 // Pop condition value from stack
                 const cond_val = value_stack.pop() orelse return error.Crash;
-                const succeeded = self.boolValueEquals(true, cond_val);
+                const succeeded = self.boolValueEquals(true, cond_val, roc_ops);
                 if (succeeded) {
                     // Return {} (empty record)
                     const ct_var = can.ModuleEnv.varFrom(ec.expr_idx);
@@ -14572,6 +14606,7 @@ pub const Interpreter = struct {
                 return true;
             },
             .str_collect => |sc| {
+                traceDbg(roc_ops, "str_collect: entering collected_count={d} remaining={d}", .{ sc.collected_count, sc.remaining_segments.len });
                 const cont_trace = tracy.traceNamed(@src(), "cont.str_collect");
                 defer cont_trace.end();
                 // State machine for string interpolation:
@@ -14602,13 +14637,17 @@ pub const Interpreter = struct {
 
                 // Step 2: Process remaining segments
                 if (remaining.len == 0) {
+                    traceDbg(roc_ops, "str_collect: all segments collected, total_count={d}", .{sc.total_count});
                     // Step 3: All segments collected - concatenate them
                     // Fast path for single-segment strings: return directly without copying
                     if (sc.total_count == 1) {
+                        traceDbg(roc_ops, "str_collect: fast path for single segment", .{});
                         // Single segment - just return it directly, transferring ownership
                         // No incref/decref needed since we're not copying, just passing through
                         const str_val = value_stack.pop() orelse return error.Crash;
+                        traceDbg(roc_ops, "str_collect: popped value, pushing back", .{});
                         try value_stack.push(str_val);
+                        traceDbg(roc_ops, "str_collect: done, returning", .{});
                         return true;
                     }
 
@@ -15546,7 +15585,7 @@ pub const Interpreter = struct {
 
                     // For != operator, negate boolean result
                     if (ba.negate_result) {
-                        const is_eq_result = self.boolValueEquals(true, result);
+                        const is_eq_result = self.boolValueEquals(true, result, roc_ops);
                         result.decref(&self.runtime_layout_store, roc_ops);
                         result = try self.makeBoolValue(!is_eq_result);
                     }
@@ -15670,7 +15709,7 @@ pub const Interpreter = struct {
                 const receiver_value = value_stack.pop() orelse return error.Crash;
 
                 // Copy receiver to persistent memory (the value from eval may be on temporary stack)
-                const copied_receiver = try self.pushCopy(receiver_value);
+                const copied_receiver = try self.pushCopy(receiver_value, roc_ops);
 
                 // Decref the original receiver_value since we made a copy.
                 // This is necessary for records/tuples containing refcounted values like lists.
@@ -15756,7 +15795,7 @@ pub const Interpreter = struct {
                     };
 
                     const field_value = try accessor.getFieldByIndex(field_idx, field_rt_var);
-                    const result = try self.pushCopy(field_value);
+                    const result = try self.pushCopy(field_value, roc_ops);
                     try value_stack.push(result);
                     return true;
                 }
@@ -16678,7 +16717,7 @@ pub const Interpreter = struct {
                     .is_initialized = true,
                     .rt_var = fl.patt_rt_var,
                 };
-                elem_value.incref(&self.runtime_layout_store);
+                elem_value.incref(&self.runtime_layout_store, roc_ops);
 
                 // Bind the pattern
                 const loop_bindings_start = self.bindings.items.len;
@@ -16749,7 +16788,7 @@ pub const Interpreter = struct {
                     .is_initialized = true,
                     .rt_var = fl.patt_rt_var,
                 };
-                elem_value.incref(&self.runtime_layout_store);
+                elem_value.incref(&self.runtime_layout_store, roc_ops);
 
                 // Bind the pattern
                 const new_loop_bindings_start = self.bindings.items.len;
@@ -16788,7 +16827,7 @@ pub const Interpreter = struct {
                 defer cont_trace.end();
                 // While loop: condition has been evaluated
                 const cond_value = value_stack.pop() orelse return error.Crash;
-                const cond_is_true = self.boolValueEquals(true, cond_value);
+                const cond_is_true = self.boolValueEquals(true, cond_value, roc_ops);
 
                 if (!cond_is_true) {
                     // Loop complete, continue with remaining statements
@@ -16850,7 +16889,7 @@ pub const Interpreter = struct {
                 defer cont_trace.end();
                 // Expect statement: check condition result
                 const cond_val = value_stack.pop() orelse return error.Crash;
-                const is_true = self.boolValueEquals(true, cond_val);
+                const is_true = self.boolValueEquals(true, cond_val, roc_ops);
                 if (!is_true) {
                     self.handleExpectFailure(ec.body_expr, roc_ops);
                     return error.Crash;
@@ -16955,7 +16994,10 @@ pub const Interpreter = struct {
                         break :blk false;
                     } else {
                         // Comparison result should always be .scalar or .tag_union
-                        std.debug.panic("sort_compare_result: unexpected layout tag {s} for comparison result", .{@tagName(cmp_result.layout.tag)});
+                        var buf: [128]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "sort_compare_result: unexpected layout tag {s}", .{@tagName(cmp_result.layout.tag)}) catch "sort_compare_result: unexpected layout tag";
+                        self.triggerCrash(msg, false, roc_ops);
+                        break :blk false;
                     }
                 };
 
@@ -17001,8 +17043,8 @@ pub const Interpreter = struct {
                         };
 
                         // Copy elements for comparison
-                        const arg0 = try self.pushCopy(elem_current_value);
-                        const arg1 = try self.pushCopy(elem_inner_value);
+                        const arg0 = try self.pushCopy(elem_current_value, roc_ops);
+                        const arg1 = try self.pushCopy(elem_inner_value, roc_ops);
 
                         // Push continuation for next comparison
                         // After swap, the element we're inserting is now at sc.inner_index
@@ -17085,8 +17127,8 @@ pub const Interpreter = struct {
                     };
 
                     // Copy elements for comparison
-                    const arg0 = try self.pushCopy(elem_outer_value);
-                    const arg1 = try self.pushCopy(elem_prev_value);
+                    const arg0 = try self.pushCopy(elem_outer_value, roc_ops);
+                    const arg1 = try self.pushCopy(elem_prev_value, roc_ops);
 
                     // Push continuation for next comparison
                     try work_stack.push(.{ .apply_continuation = .{ .sort_compare_result = .{
@@ -17166,7 +17208,7 @@ pub const Interpreter = struct {
                     self.triggerCrash("negate_bool: expected value on stack", false, roc_ops);
                     return error.Crash;
                 };
-                const is_true = self.boolValueEquals(true, result);
+                const is_true = self.boolValueEquals(true, result, roc_ops);
                 result.decref(&self.runtime_layout_store, roc_ops);
                 const negated = try self.makeBoolValue(!is_true);
                 try value_stack.push(negated);

@@ -780,7 +780,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
             break :blk result.asI128();
         } else blk: {
-            const dec_value = result.asDec();
+            const dec_value = result.asDec(ops);
             const RocDec = builtins.dec.RocDec;
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
@@ -856,7 +856,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
                 break :blk result.asI128();
             } else blk: {
-                const dec_value = result.asDec();
+                const dec_value = result.asDec(ops);
                 const RocDec = builtins.dec.RocDec;
                 break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
             };

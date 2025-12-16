@@ -616,20 +616,53 @@ const CheckUnusedSuppressionStep = struct {
     }
 };
 
-/// Build step that checks for @panic usage in the interpreter.
+/// Build step that checks for @panic and std.debug.panic usage in interpreter and builtins.
 ///
 /// In Roc's design philosophy, compile-time errors become runtime errors with helpful messages.
 /// Users can run apps despite errors, and we provide actionable feedback. Using @panic unwinds
 /// the stack and prevents showing helpful error messages.
-const CheckInterpreterPanicStep = struct {
+///
+/// Additionally, in WASM builds, @panic compiles to the `unreachable` instruction with no
+/// message output, making debugging impossible. All runtime code must use roc_ops.crash()
+/// to ensure error messages are properly displayed.
+const CheckPanicStep = struct {
     step: Step,
 
-    fn create(b: *std.Build) *CheckInterpreterPanicStep {
-        const self = b.allocator.create(CheckInterpreterPanicStep) catch @panic("OOM");
+    // Files to scan individually
+    const scan_files = [_][]const u8{
+        "src/eval/interpreter.zig",
+        "src/eval/StackValue.zig",
+    };
+
+    // Directories to scan (all .zig files within)
+    const scan_dirs = [_][]const u8{
+        "src/builtins",
+    };
+
+    // Files to exclude from scanning (test-only files)
+    const excluded_files = [_][]const u8{
+        "fuzz_sort.zig",
+    };
+
+    // Line-level allowlist patterns - if any of these appear on the line, allow the @panic
+    const allowlist_patterns = [_][]const u8{
+        "trace_modules", // traceDbg helper in interpreter
+    };
+
+    // File-specific line ranges to exclude (test-only code)
+    // Format: { file_suffix, start_line, end_line }
+    const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
+    const excluded_ranges = [_]ExcludedRange{
+        // TestEnv struct in utils.zig is test-only (lines 60-214)
+        .{ .file = "utils.zig", .start = 60, .end = 214 },
+    };
+
+    fn create(b: *std.Build) *CheckPanicStep {
+        const self = b.allocator.create(CheckPanicStep) catch @panic("OOM");
         self.* = .{
             .step = Step.init(.{
                 .id = Step.Id.custom,
-                .name = "check-interpreter-panic",
+                .name = "check-panic-usage",
                 .owner = b,
                 .makeFn = make,
             }),
@@ -637,21 +670,41 @@ const CheckInterpreterPanicStep = struct {
         return self;
     }
 
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-        const allocator = b.allocator;
+    fn isExcludedFile(file_name: []const u8) bool {
+        for (excluded_files) |excluded| {
+            if (std.mem.eql(u8, file_name, excluded)) return true;
+        }
+        return false;
+    }
 
-        var violations = std.ArrayList(Violation).empty;
-        defer violations.deinit(allocator);
+    fn isAllowlisted(line: []const u8) bool {
+        for (allowlist_patterns) |pattern| {
+            if (std.mem.indexOf(u8, line, pattern) != null) return true;
+        }
+        return false;
+    }
 
-        // Only scan src/eval/interpreter.zig
-        const file = std.fs.cwd().openFile("src/eval/interpreter.zig", .{}) catch |err| {
-            return step.fail("Failed to open src/eval/interpreter.zig: {}", .{err});
+    fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
+        for (excluded_ranges) |range| {
+            if (std.mem.endsWith(u8, file_path, range.file)) {
+                if (line_number >= range.start and line_number <= range.end) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn scanFile(allocator: std.mem.Allocator, file_path: []const u8, violations: *std.ArrayList(Violation)) !void {
+        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+            std.debug.print("Warning: Failed to open {s}: {}\n", .{ file_path, err });
+            return;
         };
         defer file.close();
 
         const content = file.readToEndAlloc(allocator, 50 * 1024 * 1024) catch |err| {
-            return step.fail("Failed to read interpreter.zig: {}", .{err});
+            std.debug.print("Warning: Failed to read {s}: {}\n", .{ file_path, err });
+            return;
         };
         defer allocator.free(content);
 
@@ -664,21 +717,20 @@ const CheckInterpreterPanicStep = struct {
                 const trimmed = std.mem.trim(u8, line, " \t");
 
                 // Skip comments
-                if (std.mem.startsWith(u8, trimmed, "//")) {
-                    line_number += 1;
-                    line_start = i + 1;
-                    continue;
-                }
+                if (!std.mem.startsWith(u8, trimmed, "//")) {
+                    // Check for @panic usage
+                    const has_panic = std.mem.indexOf(u8, line, "@panic(") != null;
+                    // Check for std.debug.panic usage
+                    const has_debug_panic = std.mem.indexOf(u8, line, "std.debug.panic") != null;
 
-                // Check for @panic usage
-                if (std.mem.indexOf(u8, line, "@panic(") != null) {
-                    // Allowlist: lines containing "trace_modules" (for traceDbg helper)
-                    if (std.mem.indexOf(u8, line, "trace_modules") == null) {
-                        try violations.append(allocator, .{
-                            .file_path = "src/eval/interpreter.zig",
-                            .line_number = line_number,
-                            .line_content = try allocator.dupe(u8, trimmed),
-                        });
+                    if (has_panic or has_debug_panic) {
+                        if (!isAllowlisted(line) and !isInExcludedRange(file_path, line_number)) {
+                            try violations.append(allocator, .{
+                                .file_path = try allocator.dupe(u8, file_path),
+                                .line_number = line_number,
+                                .line_content = try allocator.dupe(u8, trimmed),
+                            });
+                        }
                     }
                 }
 
@@ -686,33 +738,69 @@ const CheckInterpreterPanicStep = struct {
                 line_start = i + 1;
             }
         }
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Scan individual files
+        for (scan_files) |file_path| {
+            try scanFile(allocator, file_path, &violations);
+        }
+
+        // Scan directories
+        for (scan_dirs) |dir_path| {
+            var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Failed to open directory {s}: {}\n", .{ dir_path, err });
+                continue;
+            };
+            defer dir.close();
+
+            var iter = dir.iterate();
+            while (try iter.next()) |entry| {
+                if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
+                    if (!isExcludedFile(entry.name)) {
+                        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+                        defer allocator.free(full_path);
+                        try scanFile(allocator, full_path, &violations);
+                    }
+                }
+            }
+        }
 
         if (violations.items.len > 0) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 80 ++ "\n", .{});
-            std.debug.print("FORBIDDEN PATTERN: @panic in interpreter.zig\n", .{});
+            std.debug.print("FORBIDDEN PATTERN: @panic / std.debug.panic in runtime code\n", .{});
             std.debug.print("=" ** 80 ++ "\n\n", .{});
 
             std.debug.print(
-                \\Using @panic is forbidden in the interpreter.
+                \\Using @panic or std.debug.panic is forbidden in interpreter and builtins.
                 \\
                 \\WHY THIS RULE EXISTS:
-                \\  Roc's design philosophy is that compile-time errors become runtime errors with
-                \\  helpful messages. Users can run apps despite errors, and we provide actionable
-                \\  feedback. @panic unwinds the stack and prevents us from showing helpful errors.
+                \\  1. Roc's design philosophy is that compile-time errors become runtime errors with
+                \\     helpful messages. Users can run apps despite errors, and we provide actionable
+                \\     feedback. @panic unwinds the stack and prevents us from showing helpful errors.
+                \\
+                \\  2. In WASM builds, @panic compiles to the `unreachable` instruction with NO
+                \\     message output, making debugging impossible.
                 \\
                 \\WHAT TO DO INSTEAD:
-                \\  Use the triggerCrash() method which calls the RocOps crash handler:
+                \\  In interpreter.zig, use the triggerCrash() method:
                 \\
                 \\    self.triggerCrash("Description of the error", false, roc_ops);
                 \\
-                \\  For unimplemented features, be specific:
+                \\  In StackValue.zig and builtins, use roc_ops.crash():
                 \\
-                \\    self.triggerCrash("Decimal multiplication not yet implemented", false, roc_ops);
+                \\    roc_ops.crash("Description of the error");
                 \\
-                \\  For internal errors that indicate interpreter bugs:
+                \\  For debug output, use roc_ops.dbg():
                 \\
-                \\    self.triggerCrash("Internal error: unexpected layout type in dot_access", false, roc_ops);
+                \\    roc_ops.dbg("Debug message");
                 \\
                 \\
                 \\VIOLATIONS FOUND:
@@ -730,8 +818,8 @@ const CheckInterpreterPanicStep = struct {
             std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
 
             return step.fail(
-                "Found {d} uses of @panic in interpreter.zig. " ++
-                    "Use self.triggerCrash() to report errors through the proper RocOps crash handler. " ++
+                "Found {d} uses of @panic or std.debug.panic in runtime code. " ++
+                    "Use roc_ops.crash() to report errors through the proper RocOps crash handler. " ++
                     "See above for details.",
                 .{violations.items.len},
             );
@@ -1917,8 +2005,8 @@ pub fn build(b: *std.Build) void {
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
 
-    // Add check for @panic in interpreter
-    const check_panic = CheckInterpreterPanicStep.create(b);
+    // Check for @panic and std.debug.panic in interpreter and builtins
+    const check_panic = CheckPanicStep.create(b);
     test_step.dependOn(&check_panic.step);
 
     test_step.dependOn(&tests_summary.step);
