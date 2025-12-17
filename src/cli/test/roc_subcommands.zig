@@ -528,6 +528,7 @@ test "roc build fails with file not found error" {
     // 2. Stderr contains file not found error
     const has_error = std.mem.indexOf(u8, result.stderr, "FileNotFound") != null or
         std.mem.indexOf(u8, result.stderr, "not found") != null or
+        std.mem.indexOf(u8, result.stderr, "NOT FOUND") != null or
         std.mem.indexOf(u8, result.stderr, "Failed") != null;
     try testing.expect(has_error);
 }
