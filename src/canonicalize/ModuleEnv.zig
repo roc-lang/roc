@@ -637,7 +637,6 @@ pub const castIdx = CIR.castIdx;
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
-    // Get all diagnostics from the store, not just the ones in self.diagnostics span
     const all_diagnostics = try self.store.diagnosticSpanFrom(0);
     const diagnostic_indices = self.store.sliceDiagnostics(all_diagnostics);
     const diagnostics = try self.gpa.alloc(CIR.Diagnostic, diagnostic_indices.len);
