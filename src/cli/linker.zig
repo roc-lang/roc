@@ -10,7 +10,7 @@ const base = @import("base");
 const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
 const RocTarget = @import("roc_target").RocTarget;
-const cli_ctx = @import("cli_error/context.zig");
+const cli_ctx = @import("CliContext.zig");
 const CliContext = cli_ctx.CliContext;
 const Io = cli_ctx.Io;
 

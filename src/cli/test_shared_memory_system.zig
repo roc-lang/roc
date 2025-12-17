@@ -6,9 +6,9 @@ const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
 const Allocators = base.Allocators;
-const cli_error = @import("cli_error.zig");
-const CliContext = cli_error.CliContext;
-const Io = cli_error.Io;
+const cli_context = @import("CliContext.zig");
+const CliContext = cli_context.CliContext;
+const Io = cli_context.Io;
 
 test "platform resolution - basic cli platform" {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};

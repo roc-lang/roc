@@ -37,7 +37,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const reporting = @import("reporting");
-const problem_mod = @import("problem.zig");
+const problem_mod = @import("CliProblem.zig");
 
 const CliProblem = problem_mod.CliProblem;
 const Report = reporting.Report;

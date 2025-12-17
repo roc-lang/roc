@@ -54,18 +54,23 @@ const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
 const platform_validation = @import("platform_validation.zig");
-const cli_error = @import("cli_error.zig");
+const cli_context = @import("CliContext.zig");
+const cli_problem = @import("CliProblem.zig");
 
-const CliProblem = cli_error.CliProblem;
-const CliContext = cli_error.CliContext;
-const Io = cli_error.Io;
+const CliProblem = cli_problem.CliProblem;
+const CliContext = cli_context.CliContext;
+const Io = cli_context.Io;
+const Command = cli_context.Command;
+const CliError = cli_context.CliError;
+const renderProblem = cli_context.renderProblem;
 
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
         std.testing.refAllDecls(targets_validator);
         std.testing.refAllDecls(platform_validation);
-        std.testing.refAllDecls(cli_error);
+        std.testing.refAllDecls(cli_context);
+        std.testing.refAllDecls(cli_problem);
     }
 }
 const bench = @import("bench.zig");
@@ -679,7 +684,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     const parsed_args = try cli_args.parse(allocs.arena, args[1..]);
 
     // Determine command for context
-    const command: cli_error.Command = switch (parsed_args) {
+    const command: Command = switch (parsed_args) {
         .run => .run,
         .build => .build,
         .check => .check,
@@ -1261,7 +1266,7 @@ fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const
 }
 
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
-fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (cli_error.CliError || error{OutOfMemory})!void {
+fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (CliError || error{OutOfMemory})!void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
         return ctx.fail(.{ .shared_memory_failed = .{
@@ -1377,7 +1382,7 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
 /// The exe_path should already be in a unique temp directory created by createUniqueTempDir.
-fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (cli_error.CliError || error{OutOfMemory})!void {
+fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (CliError || error{OutOfMemory})!void {
     // Write the coordination file (.txt) next to the executable
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
@@ -1793,7 +1798,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                 .err = err,
             } },
         };
-        cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), problem);
+        renderProblem(ctx.gpa, ctx.io.stderr(), problem);
         return error.FileNotFound;
     };
     defer app_file.close();
@@ -2808,7 +2813,7 @@ pub const PlatformPaths = struct {
 
 /// Resolve platform specification from a Roc file to find both host library and platform source.
 /// Returns PlatformPaths with arena-allocated paths (no need to free).
-pub fn resolvePlatformPaths(ctx: *CliContext, roc_file_path: []const u8) cli_error.CliError!PlatformPaths {
+pub fn resolvePlatformPaths(ctx: *CliContext, roc_file_path: []const u8) CliError!PlatformPaths {
     // Use the parser to extract the platform spec
     const platform_spec = extractPlatformSpecFromApp(ctx, roc_file_path) catch {
         return ctx.fail(.{ .file_not_found = .{
@@ -2918,7 +2923,7 @@ fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
 
 /// Check if platform spec is an absolute path and reject it.
 /// Uses CliContext for error reporting.
-fn validatePlatformSpec(ctx: *CliContext, platform_spec: []const u8) cli_error.CliError!void {
+fn validatePlatformSpec(ctx: *CliContext, platform_spec: []const u8) CliError!void {
     if (std.fs.path.isAbsolute(platform_spec)) {
         return ctx.fail(.{ .absolute_platform_path = .{ .platform_spec = platform_spec } });
     }
@@ -2926,7 +2931,7 @@ fn validatePlatformSpec(ctx: *CliContext, platform_spec: []const u8) cli_error.C
 
 /// Resolve a platform specification to a platform source path.
 /// Uses CliContext for error reporting.
-fn resolvePlatformSpecToPaths(ctx: *CliContext, platform_spec: []const u8, base_dir: []const u8) cli_error.CliError!PlatformPaths {
+fn resolvePlatformSpecToPaths(ctx: *CliContext, platform_spec: []const u8, base_dir: []const u8) CliError!PlatformPaths {
     // Handle URL-based platforms
     if (std.mem.startsWith(u8, platform_spec, "http")) {
         return resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
@@ -3009,7 +3014,7 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
 
 /// Resolve a URL platform specification by downloading and caching the bundle.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
-fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (cli_error.CliError || error{OutOfMemory})!PlatformPaths {
+fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
@@ -3622,7 +3627,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                     return error.MissingTargetsSection;
                 },
                 else => {
-                    cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), .{
+                    renderProblem(ctx.gpa, ctx.io.stderr(), .{
                         .platform_validation_failed = .{
                             .message = "Failed to validate platform header",
                         },
@@ -3632,7 +3637,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             }
         }
     else {
-        cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), .{
+        renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3674,7 +3679,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     } else blk: {
         // No --target provided: find the first compatible target across all link types
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), .{
+            renderProblem(ctx.gpa, ctx.io.stderr(), .{
                 .platform_validation_failed = .{
                     .message = "No compatible target found. The platform does not support any target compatible with this system.",
                 },
