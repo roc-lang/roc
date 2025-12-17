@@ -3935,12 +3935,16 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     try linker_mod.link(ctx, link_config);
 
-    const output_type = switch (link_type) {
-        .exe => "executable",
-        .static_lib => "static library",
-        .shared_lib => "shared library",
-    };
-    std.log.info("Successfully built {s}: {s}", .{ output_type, final_output_path });
+    // Print success message to stdout
+    // Add "./" prefix for relative paths to make it clear it's in the current directory
+    const display_path = if (std.fs.path.isAbsolute(final_output_path) or
+        std.mem.startsWith(u8, final_output_path, "./") or
+        std.mem.startsWith(u8, final_output_path, "../"))
+        final_output_path
+    else
+        try std.fmt.allocPrint(ctx.arena, "./{s}", .{final_output_path});
+
+    try ctx.io.stdout().print("Successfully built {s}\n", .{display_path});
 }
 
 /// Information about a test (expect statement) to be evaluated
