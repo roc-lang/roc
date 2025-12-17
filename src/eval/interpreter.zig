@@ -5,6 +5,8 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const tracy = @import("tracy");
 
+const is_freestanding = builtin.os.tag == .freestanding;
+
 /// Stack size for the interpreter. WASM targets use a smaller stack to avoid
 /// memory pressure from repeated allocations that can't be efficiently coalesced.
 const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;

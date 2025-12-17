@@ -1783,14 +1783,10 @@ pub fn canonicalizeFile(
             // These need to be in the exposed scope so they become exports
             // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
             try self.addPlatformProvidesItems(h.provides);
-            // Track start of for-clause alias statements
-            const for_clause_stmts_start = self.env.store.scratch.?.statements.top();
             // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
             // Also introduces type aliases (like Model) into the platform's top-level scope
             try self.processRequiresEntries(h.requires_entries);
-            // Capture all statements added during processRequiresEntries as for_clause_alias_statements
-            self.env.for_clause_alias_statements = try self.env.store.statementSpanFrom(for_clause_stmts_start);
         },
         .hosted => |h| {
             self.env.module_kind = .hosted;
@@ -2745,13 +2741,12 @@ fn addPlatformProvidesItems(
 ///
 /// For each requires entry, this function:
 /// 1. Introduces the rigid type variables (e.g., `model`) into a temporary scope
-/// 2. Creates aliases (e.g., `Model`) that refer to the SAME type annotation as the rigid
+/// 2. Creates aliases (e.g., `Model`) that refer to the SAME type as the rigid
 /// 3. Canonicalizes the entrypoint type annotation with rigids in scope
 /// 4. Stores the required type for type checking
 ///
-/// IMPORTANT: Both the rigid (`model`) and the alias (`Model`) point to the SAME
-/// type annotation. This ensures that when the type is unified, both names resolve
-/// to the same concrete type.
+/// IMPORTANT: Both the rigid (`model`) and the alias (`Model`) reference the
+/// same rigid variable
 fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span) std.mem.Allocator.Error!void {
     for (self.parse_ir.store.requiresEntrySlice(requires_entries)) |entry_idx| {
         const entry = self.parse_ir.store.getRequiresEntry(entry_idx);
@@ -2766,10 +2761,11 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 
         // Process type aliases: [Model : model, Foo : foo]
         // For each alias:
-        // 1. Create a SINGLE type annotation for the rigid
-        // 2. Introduce BOTH the rigid name (model) AND the alias name (Model)
-        //    pointing to the SAME type annotation
-        // 3. Store the alias mapping for later use during type checking
+        // 1. Create a type annotation for the rigid and introduce it to the
+        //    type var scope
+        // 2. Create a type alias, pointing to the rigid and introduce at the
+        //    root scope
+        // 3. Store the alias for later use during type checking
         for (self.parse_ir.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
             const alias = self.parse_ir.store.getForClauseTypeAlias(alias_idx);
             const alias_region = self.parse_ir.tokenizedRegionToRegion(alias.region);
@@ -2789,17 +2785,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 
             // Introduce the rigid (model) into the type variable scope
             _ = try self.scopeIntroduceTypeVar(rigid_name, rigid_anno_idx);
-
-            // Introduce the alias (Model) pointing to the SAME type annotation
-            // This means both "model" and "Model" will resolve to the same type!
-            _ = try self.scopeIntroduceTypeVar(alias_name, rigid_anno_idx);
-
-            // Store the alias mapping for use during type checking
-            _ = try self.env.for_clause_aliases.append(self.env.gpa, .{
-                .alias_name = alias_name,
-                .rigid_name = rigid_name,
-                .rigid_anno_idx = rigid_anno_idx,
-            });
 
             // IMPORTANT: Also introduce Model as a type alias in the module-level scope.
             // This allows platform functions to use `Box(Model)` in their type signatures.
@@ -2822,14 +2807,19 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
                 },
             };
             const alias_stmt_idx = try self.env.addStatement(alias_stmt, alias_region);
-            // Add to scratch statements so it can be captured in for_clause_alias_statements span
-            try self.env.store.addScratchStatement(alias_stmt_idx);
 
             // Add to the module-level scope (index 0) as a local_alias binding
             // This makes Model available for use in type annotations throughout the platform module
             const module_scope = &self.scopes.items[0];
             try module_scope.type_bindings.put(self.env.gpa, alias_name, Scope.TypeBinding{
                 .local_alias = alias_stmt_idx,
+            });
+
+            // Store the alias mapping for use during type checking
+            _ = try self.env.for_clause_aliases.append(self.env.gpa, .{
+                .alias_name = alias_name,
+                .rigid_name = rigid_name,
+                .alias_stmt_idx = alias_stmt_idx,
             });
         }
 
@@ -2844,7 +2834,11 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
         const entrypoint_name = self.parse_ir.tokens.resolveIdentifier(entry.entrypoint_name) orelse continue;
 
         // Canonicalize the type annotation for this entrypoint
-        var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
+        //
+        // IMPORTANT: We set the context here to be type_decl_anno so we
+        // correctly get errors if the annotation tries to introduce a rigid var
+        // that's not  in scope
+        var type_anno_ctx = TypeAnnoCtx.init(.type_decl_anno);
         const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
         // Store the required type in the module env

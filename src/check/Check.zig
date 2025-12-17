@@ -41,6 +41,8 @@ const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = @import("snapshot.zig").Store;
 const ProblemStore = @import("problem.zig").Store;
 
+const is_freestanding = builtin.os.tag == .freestanding;
+
 /// Deferred numeric literal for compile-time validation
 /// These are collected during type checking and validated during comptime evaluation
 pub const DeferredNumericLiteral = struct {
@@ -72,7 +74,6 @@ imported_modules: []const *const ModuleEnv,
 auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 /// Builtin type context for the module being type-checked
 builtin_ctx: BuiltinContext,
-
 /// type snapshots used in error messages
 snapshots: SnapshotStore,
 /// type problems
@@ -553,31 +554,15 @@ fn instantiateVarHelp(
     if (instantiator.var_map.count() > 0) {
         var iterator = instantiator.var_map.iterator();
         while (iterator.next()) |x| {
-            // Get the original and mapped vars
-            const old_var = x.key_ptr.*;
+            // Get the newly created var
             const fresh_var = x.value_ptr.*;
 
             const fresh_resolved = self.types.resolveVar(fresh_var);
 
-            // When using substitute_rigids, the var_map contains both:
-            // 1. Rigid vars mapped to their substitution vars (existing, already in var_pool)
-            // 2. Other vars mapped to fresh copies (new, need to be added to var_pool)
-            //
-            // We must NOT add substitution vars to var_pool because:
-            // - They were already added when the annotation was processed
-            // - Their rank may have changed due to unification with nested-rank vars
-            // - Re-adding them would cause rank inconsistencies during generalization
-            //
-            // We detect substitution vars by checking if the original var was a rigid.
-            const old_resolved = self.types.resolveVar(old_var);
-            const is_substitution = old_resolved.desc.content == .rigid;
+            // Add to pool
+            try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
 
-            if (!is_substitution) {
-                // Only add fresh vars (non-substitutions) to var_pool
-                try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
-            }
-
-            // Set the region for all vars (both fresh and substitution vars may need regions)
+            // Set the region
             try self.fillInRegionsThrough(fresh_var);
             switch (region_behavior) {
                 .explicit => |region| {
@@ -587,6 +572,7 @@ fn instantiateVarHelp(
                     self.setRegionAt(fresh_var, root_instantiated_region);
                 },
                 .use_last_var => {
+                    const old_var = x.key_ptr.*;
                     const old_region = self.regions.get(@enumFromInt(@intFromEnum(old_var))).*;
                     self.setRegionAt(fresh_var, old_region);
                 },
@@ -1000,24 +986,9 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
-    // Process for-clause alias statements (like Model : model) from platform headers.
-    // These are created during header processing and need to be type-checked so that
-    // when platform functions use Box(Model), the type resolves correctly.
-    const for_clause_stmts_slice = self.cir.store.sliceStatements(self.cir.for_clause_alias_statements);
-    for (for_clause_stmts_slice) |stmt_idx| {
-        const stmt = self.cir.store.getStatement(stmt_idx);
-        const stmt_var = ModuleEnv.varFrom(stmt_idx);
-        try self.setVarRank(stmt_var, &env);
-
-        switch (stmt) {
-            .s_alias_decl => |alias| {
-                try self.generateAliasDecl(stmt_idx, stmt_var, alias, &env);
-            },
-            else => {
-                // For-clause alias statements should only contain alias declarations
-            },
-        }
-    }
+    // Process requires_types annotations for platforms
+    // This ensures the type store has the actual types for platform requirements
+    try self.processRequiresTypes(&env);
 
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
 
@@ -1101,28 +1072,91 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // because anonymous static dispatch makes function order not knowable
     // before type inference
 
-    // Process requires_types annotations for platforms
-    // This ensures the type store has the actual types for platform requirements
-    try self.processRequiresTypes(&env);
 }
 
-/// Process the requires_types annotations for platform modules.
-/// This generates the actual types from the type annotations stored in requires_types.
+/// Process the requires_types annotations for platform modules, like:
+///
+///   { [Model : model] for main : { init : model, ... } }
+///
+/// For each required type, we first process the introduced alias variables:
+///   { [Model : model] for main : { init : model, ... } }
+///     ^^^^^^^^^^^^^^
+/// Here, we create `model` as a *rigid* var, and a type alias `Model` pointing to
+/// that exact rigid var.
+///
+/// We create this variable at the `.generalized` rank, but we have special
+/// logic in `generateAnnoTypeInPlace` so places that reference `Model`
+/// directly reference the underlying *uninstantiated* rigid var
+///
+/// Then, we generate the type for the actual required type
+///   { [Model : model] for main : { init : model, ... } }
+///                                ^^^^^^^^^^^^^^^^^^^^^^
+///
+/// Note on scoping: Type scopes are defined in czer. So in the example above,
+///   { [Model : model] for main : { init : model, ... } }
+///             a^^^^^                     b^^^^^
+/// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
+/// So `b` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
+/// Then, any reference to `b` replaced with `a` in `generateAnnoTypeInPlace`.
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    // Ensure we are generalized
+    // This is because we do not want the type checking we do here to be let-polymorphic
+    std.debug.assert(env.rank() == .generalized);
+
     const requires_types_slice = self.cir.requires_types.items.items;
     for (requires_types_slice) |required_type| {
-        // Note: for-clause rigid annotations (like `model` in `[Model : model]`) are already
-        // processed when the for-clause alias statements are generated earlier in checkFile().
-        // We don't need to process them again here.
 
-        // Generate the type from the main annotation (e.g., `R1 -> R2` in `for main : R1 -> R2`)
+        // First, processes the required type aliases
+        //   { [Model : model] for main : { init : model, ... } }
+        //     ^^^^^^^^^^^^^^
+        const required_type_aliases_slice = self.cir.for_clause_aliases.sliceRange(required_type.type_aliases);
+        for (required_type_aliases_slice) |type_alias| {
+            const stmt = self.cir.store.getStatement(type_alias.alias_stmt_idx);
+            const stmt_var = ModuleEnv.varFrom(type_alias.alias_stmt_idx);
+
+            // We should only ever have alias decls here
+            std.debug.assert(stmt == .s_alias_decl);
+            const alias = stmt.s_alias_decl;
+
+            // Assert that this alias header is well formed
+            const alias_lhs = self.cir.store.getTypeHeader(alias.header);
+            std.debug.assert(alias_lhs.name == alias_lhs.relative_name);
+            std.debug.assert(alias_lhs.args.span.len == 0);
+
+            // Assert that this alias body is well formed
+            const alias_rhs_var = ModuleEnv.varFrom(alias.anno);
+            const alias_rhs = self.cir.store.getTypeAnno(alias.anno);
+            std.debug.assert(alias_rhs == .rigid_var);
+
+            // Set ranks to generalized
+            try self.setVarRank(stmt_var, env);
+            try self.setVarRank(alias_rhs_var, env);
+
+            // Set the rhs of the expr to be a rigid var
+            try self.unifyWith(alias_rhs_var, .{
+                .rigid = Rigid.init(type_alias.rigid_name),
+            }, env);
+
+            // IMPORTANT!
+            // We *do not* create a real alias here. Instead, we unify the alias
+            // stmt directly with the backing variable not the alias wrapper,
+            // so that it can be substituted with the app's concrete type during
+            // checkPlatformRequirements.
+            _ = try self.unify(stmt_var, alias_rhs_var, env);
+        }
+
+        // Then, generate the type for the actual required type
+        //   { [Model : model] for main : { init : model, ... } }
+        //                                ^^^^^^^^^^^^^^^^^^^^^^
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
     }
 }
 
 /// Check that the app's exported values match the platform's required types.
+///
 /// This should be called after checkFile() to verify that app exports conform
 /// to the platform's requirements.
+///
 /// The `platform_to_app_idents` map translates platform ident indices to app ident indices,
 /// built by the caller to avoid string lookups during type checking.
 pub fn checkPlatformRequirements(
@@ -1173,22 +1207,48 @@ pub fn checkPlatformRequirements(
             const copied_required_var = try self.copyVar(required_type_var, platform_env, required_type.region);
 
             // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
-            // Use instantiateVarPreserveRigids so that rigid type variables from the for-clause
-            // remain as rigids and can be looked up by name during interpretation.
-            const instantiated_required_var = try self.instantiateVarPreserveRigids(copied_required_var, &env, .{ .explicit = required_type.region });
+            // IMPORTANT: When we instantiate this rigid here, it is instantiated as a flex
+            const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
 
-            // Extract rigid name -> instantiated var mappings from the var_map.
-            // At this point, fresh vars still have rigid content with their names.
-            // After unification, these vars will redirect to concrete types.
-            // This allows the interpreter to substitute platform rigid type vars with app concrete types.
+            // Get the type aliases (eg [Model : model]) for this required type
+            const type_aliases_range = required_type.type_aliases;
+            const all_aliases = platform_env.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
+
+            // Extract flex name -> instantiated var mappings from the var_map.
             var var_map_iter = self.var_map.iterator();
             while (var_map_iter.next()) |entry| {
                 const fresh_var = entry.value_ptr.*;
                 const resolved = self.types.resolveVar(fresh_var);
                 switch (resolved.desc.content) {
-                    .rigid => |rigid| {
-                        // Store the rigid name -> instantiated var mapping in the app's module env
-                        try self.cir.rigid_vars.put(self.gpa, rigid.name, fresh_var);
+                    // Note that here we match on a flex var. Because the
+                    // type is instantiated any rigid in the platform
+                    // required type become flex
+                    .flex => |flex| {
+                        // Assert flex has name (flex var should come from platform rigid vars)
+                        std.debug.assert(flex.name != null);
+                        const flex_name = flex.name.?;
+
+                        // Assert that this flex var ident is in the list of
+                        // rigid vars declared by the platform.
+                        if (builtin.mode == .Debug) {
+                            var found_in_required_aliases = false;
+                            for (type_aliases_slice) |alias| {
+                                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
+                                if (app_rigid_name == flex_name) {
+                                    found_in_required_aliases = true;
+                                    break;
+                                }
+                            }
+                            if (!found_in_required_aliases) {
+                                std.debug.panic("Expected type var with name {s} to be declared in platform required type aliases", .{
+                                    self.cir.getIdentText(flex_name),
+                                });
+                            }
+                        }
+
+                        // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
+                        try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
                     },
                     else => {},
                 }
@@ -1197,9 +1257,6 @@ pub fn checkPlatformRequirements(
             // For each for-clause type alias (e.g., [Model : model]), look up the app's
             // corresponding type alias and unify it with the rigid type variable.
             // This substitutes concrete app types for platform rigid type variables.
-            const type_aliases_range = required_type.type_aliases;
-            const all_aliases = platform_env.for_clause_aliases.items.items;
-            const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
             for (type_aliases_slice) |alias| {
                 // Translate the platform's alias name to the app's namespace
                 const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse continue;
@@ -1210,14 +1267,8 @@ pub fn checkPlatformRequirements(
                 const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
                 const rigid_var = self.cir.rigid_vars.get(app_rigid_name) orelse continue;
 
-                // Look up the app's type alias body (the underlying type, not the alias wrapper)
+                // Look up the app's type alias's (eg Model) body (the underlying type, not the alias wrapper)
                 const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse continue;
-
-                // Convert the rigid to a flex so it can unify with the concrete app type.
-                // Rigids normally can't unify with structures (they return TypeMismatch),
-                // but for-clauses are designed to substitute rigid type variables with
-                // concrete types, so we convert to flex first.
-                try self.types.setVarContent(rigid_var, .{ .flex = Flex.init() });
 
                 // Now unify the (now-flex) var with the app's type alias body.
                 // This properly handles rank propagation (unlike dangerousSetVarRedirect).
@@ -1259,13 +1310,13 @@ fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
 /// Check if a statement index is a for-clause alias statement.
 /// For-clause alias statements are created during platform header processing
 /// for type aliases like [Model : model] in the requires clause.
-/// When these are looked up, we need to preserve rigids so they can be
-/// substituted with concrete types from the app.
+///
+/// When these are looked up, we need to *not* instantiate the alias, so all
+/// references in the module Point to the same var.
 fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
     // Slice the for-clause alias statements and check if stmt_idx is in the list
-    const for_clause_stmts = self.cir.store.sliceStatements(self.cir.for_clause_alias_statements);
-    for (for_clause_stmts) |for_clause_stmt_idx| {
-        if (stmt_idx == for_clause_stmt_idx) {
+    for (self.cir.for_clause_aliases.items.items) |for_clause| {
+        if (stmt_idx == for_clause.alias_stmt_idx) {
             return true;
         }
     }
@@ -1685,6 +1736,14 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
 /// This is used both for generation annotation types and type declaration types
 ///
 /// This function will write the type into the type var node at `anno_idx`
+///
+/// Note on scoping for type decls: Type scopes are defined in czer
+///   Point(x) : [Point(x, x)]
+///        a^          b^  ^c
+///
+/// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
+/// And `b` & `c` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
+/// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
 fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1793,31 +1852,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         },
                     }
 
-                    // Check if this is a for-clause alias (like Model in [Model : model]).
-                    // For for-clause aliases, we want to use the backing rigid directly,
-                    // not the alias wrapper, so that it can be substituted with the app's
-                    // concrete type during checkPlatformRequirements.
+                    const local_decl_var = ModuleEnv.varFrom(local.decl_idx);
+
+                    // Check if this is a for-clause alias (eg Model [Model : model]).
+                    // For for-clause aliases, we do not want to instantiate the
+                    // variable - each place that references it should reference
+                    // the same var.
                     const is_for_clause_alias = self.isForClauseAliasStatement(local.decl_idx);
                     if (is_for_clause_alias) {
-                        // Get the alias statement and return the backing var (rigid) directly
-                        const stmt = self.cir.store.getStatement(local.decl_idx);
-                        if (stmt == .s_alias_decl) {
-                            // Get the rigid var directly from the annotation without instantiation.
-                            // For for-clause aliases, we want to use the SAME rigid var everywhere,
-                            // not create fresh copies. This allows it to be unified with the app's
-                            // concrete type during checkPlatformRequirements.
-                            const alias_anno_var = ModuleEnv.varFrom(stmt.s_alias_decl.anno);
-                            _ = try self.unify(anno_var, alias_anno_var, env);
-                            return;
-                        }
+                        _ = try self.unify(anno_var, local_decl_var, env);
+                    } else {
+                        const instantiated_var = try self.instantiateVar(local_decl_var, env, .{ .explicit = anno_region });
+                        _ = try self.unify(anno_var, instantiated_var, env);
                     }
-
-                    const instantiated_var = try self.instantiateVar(
-                        ModuleEnv.varFrom(local.decl_idx),
-                        env,
-                        .{ .explicit = anno_region },
-                    );
-                    _ = try self.unify(anno_var, instantiated_var, env);
                 },
                 .external => |ext| {
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
