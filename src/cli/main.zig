@@ -814,7 +814,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 /// If serialized_module is provided, it will be embedded in the binary (for roc build).
 /// If serialized_module is null, the binary will use IPC to get module data (for roc run).
 /// If debug is true, include debug information in the generated object file.
-fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
+fn generatePlatformHostShim(ctx: *CliContext, allocs: *Allocators, cache_dir: []const u8, entrypoint_names: []const []const u8, target: builder.RocTarget, serialized_module: ?[]const u8, debug: bool) !?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
     if (!llvm_available) {
         std.log.debug("LLVM not available, skipping platform host shim generation", .{});
@@ -831,8 +831,7 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
         .os_tag = target.toOsTag(),
     };
     const std_target = std.zig.system.resolveTargetQuery(query) catch |err| {
-        std.log.err("Failed to resolve target query for {}: {}", .{ target, err });
-        return err;
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     // Create LLVM Builder with the correct target
@@ -842,8 +841,7 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
         .target = &std_target,
         .triple = target.toTriple(),
     }) catch |err| {
-        std.log.err("Failed to initialize LLVM Builder: {}", .{err});
-        return err;
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
     defer llvm_builder.deinit();
 
@@ -858,19 +856,16 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     // Note: Symbol names include platform-specific prefixes (underscore for macOS)
     // serialized_module is null for roc run (IPC mode) or contains data for roc build (embedded mode)
     platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target, serialized_module) catch |err| {
-        std.log.err("Failed to create interpreter shim: {}", .{err});
-        return err;
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     // Generate paths for temporary files
     const bitcode_path = std.fs.path.join(allocs.arena, &.{ cache_dir, "platform_shim.bc" }) catch |err| {
-        std.log.err("Failed to create bitcode path: {}", .{err});
-        return err;
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     const object_path = std.fs.path.join(allocs.arena, &.{ cache_dir, "platform_shim.o" }) catch |err| {
-        std.log.err("Failed to create object path: {}", .{err});
-        return err;
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     // Generate bitcode first
@@ -880,23 +875,20 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     };
 
     const bitcode = llvm_builder.toBitcode(allocs.gpa, producer) catch |err| {
-        std.log.err("Failed to generate bitcode: {}", .{err});
-        return err;
+        return ctx.fail(.{ .object_compilation_failed = .{ .path = bitcode_path, .err = err } });
     };
     defer allocs.gpa.free(bitcode);
 
     // Write bitcode to file
     const bc_file = std.fs.cwd().createFile(bitcode_path, .{}) catch |err| {
-        std.log.err("Failed to create bitcode file: {}", .{err});
-        return err;
+        return ctx.fail(.{ .file_write_failed = .{ .path = bitcode_path, .err = err } });
     };
     defer bc_file.close();
 
     // Convert u32 array to bytes for writing
     const bytes = std.mem.sliceAsBytes(bitcode);
     bc_file.writeAll(bytes) catch |err| {
-        std.log.err("Failed to write bitcode: {}", .{err});
-        return err;
+        return ctx.fail(.{ .file_write_failed = .{ .path = bitcode_path, .err = err } });
     };
 
     const compile_config = builder.CompileConfig{
@@ -935,19 +927,16 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Create cache directory for linked interpreter executables
     const cache_dir = cache_manager.config.getCacheEntriesDir(allocs.arena) catch |err| {
-        std.log.err("Failed to get cache directory: {}", .{err});
-        return err;
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
     const exe_cache_dir = std.fs.path.join(allocs.arena, &.{ cache_dir, "executables" }) catch |err| {
-        std.log.err("Failed to create executable cache path: {}", .{err});
-        return err;
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
     std.fs.cwd().makePath(exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => {
-            std.log.err("Failed to create cache directory: {}", .{err});
-            return err;
+            return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
         },
     };
 
@@ -957,47 +946,39 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
     // Display name for temp directory (what shows in ps)
     const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
         std.fmt.allocPrint(allocs.arena, "{s}.exe", .{exe_display_name}) catch |err| {
-            std.log.err("Failed to generate display name with extension: {}", .{err});
-            return err;
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
         }
     else
         allocs.arena.dupe(u8, exe_display_name) catch |err| {
-            std.log.err("Failed to duplicate display name: {}", .{err});
-            return err;
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
         };
 
     // Cache executable name uses hash of path (no PID - collision is fine since same content)
     const exe_cache_name = std.fmt.allocPrint(allocs.arena, "roc_{x}", .{std.hash.crc.Crc32.hash(args.path)}) catch |err| {
-        std.log.err("Failed to generate cache executable name: {}", .{err});
-        return err;
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
     const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
         std.fmt.allocPrint(allocs.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
-            std.log.err("Failed to generate cache name with extension: {}", .{err});
-            return err;
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
         }
     else
         allocs.arena.dupe(u8, exe_cache_name) catch |err| {
-            std.log.err("Failed to duplicate cache name: {}", .{err});
-            return err;
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
         };
 
     const exe_cache_path = std.fs.path.join(allocs.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
-        std.log.err("Failed to create cache executable path: {}", .{err});
-        return err;
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
     // Create unique temp directory for this build (uses PID for uniqueness)
     const temp_dir_path = createUniqueTempDir(allocs) catch |err| {
-        std.log.err("Failed to create temp directory: {}", .{err});
-        return err;
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
 
     // The executable is built directly in the temp dir with the display name
     const exe_path = std.fs.path.join(allocs.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
-        std.log.err("Failed to create executable path: {}", .{err});
-        return err;
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
     // First, parse the app file to get the platform reference
@@ -1073,19 +1054,22 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
     };
 
     // Extract entrypoints from platform source file
-    var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch |err| {
-        std.log.err("Failed to allocate entrypoints list: {}", .{err});
-        return err;
+    var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch {
+        return error.OutOfMemory;
     };
 
     if (platform_paths.platform_source_path) |platform_source| {
         extractEntrypointsFromPlatform(allocs, platform_source, &entrypoints) catch |err| {
-            std.log.err("Failed to extract entrypoints from platform header: {}", .{err});
-            return err;
+            return ctx.fail(.{ .entrypoint_extraction_failed = .{
+                .path = platform_source,
+                .reason = @errorName(err),
+            } });
         };
     } else {
-        std.log.err("No platform source file found for entrypoint extraction", .{});
-        return error.NoPlatformSource;
+        return ctx.fail(.{ .entrypoint_extraction_failed = .{
+            .path = platform_paths.platform_source_path orelse "<unknown>",
+            .reason = "No platform source file found for entrypoint extraction",
+        } });
     }
 
     // Check if the interpreter executable already exists in cache
@@ -1103,55 +1087,49 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
             // If hardlinking fails, fall back to copying
             std.log.debug("Hardlink from cache failed, copying: {}", .{err});
             std.fs.cwd().copyFile(exe_cache_path, std.fs.cwd(), exe_path, .{}) catch |copy_err| {
-                std.log.err("Failed to copy cached executable: {}", .{copy_err});
-                return copy_err;
+                return ctx.fail(.{ .file_write_failed = .{
+                    .path = exe_path,
+                    .err = copy_err,
+                } });
             };
         };
     } else {
 
         // Extract shim library to temp dir to avoid race conditions
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_shim.lib" else "libroc_shim.a";
-        const shim_path = std.fs.path.join(allocs.arena, &.{ temp_dir_path, shim_filename }) catch |err| {
-            std.log.err("Failed to create shim library path: {}", .{err});
-            return err;
+        const shim_path = std.fs.path.join(allocs.arena, &.{ temp_dir_path, shim_filename }) catch {
+            return error.OutOfMemory;
         };
 
         // Always extract to temp dir (unique per process, no race condition)
         // For roc run, we always use the native shim (null target)
         extractReadRocFilePathShimLibrary(allocs, shim_path, null) catch |err| {
-            std.log.err("Failed to extract read roc file path shim library: {}", .{err});
-            return err;
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
         // Generate platform host shim using the detected entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Pass null for serialized_module since roc run uses IPC mode
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = generatePlatformHostShim(allocs, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug) catch |err| {
-            std.log.err("Failed to generate platform host shim: {}", .{err});
-            return err;
-        };
+        const platform_shim_path = try generatePlatformHostShim(ctx, allocs, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
-        var extra_args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch |err| {
-            std.log.err("Failed to allocate extra args list: {}", .{err});
-            return err;
+        var extra_args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 32) catch {
+            return error.OutOfMemory;
         };
 
         // Add system libraries for macOS
         if (builtin.target.os.tag == .macos) {
-            extra_args.append("-lSystem") catch |err| {
-                std.log.err("Failed to allocate memory for linker args", .{});
-                return err;
+            extra_args.append("-lSystem") catch {
+                return error.OutOfMemory;
             };
         }
 
         // Build object files list from the link spec items
         // Items are linked in the order specified in the targets section
-        var object_files = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch |err| {
-            std.log.err("Failed to allocate object files list: {}", .{err});
-            return err;
+        var object_files = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch {
+            return error.OutOfMemory;
         };
 
         // Get the platform directory for resolving relative paths
@@ -1173,28 +1151,24 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
                     // Resolve path: platform_dir / files_dir / target_name / file_name
                     const full_path = std.fs.path.join(allocs.arena, &.{
                         platform_dir, files_dir, target_name, file_name,
-                    }) catch |err| {
-                        std.log.err("Failed to allocate path for {s}", .{file_name});
-                        return err;
+                    }) catch {
+                        return error.OutOfMemory;
                     };
                     std.log.debug("Adding link item: {s}", .{full_path});
-                    object_files.append(full_path) catch |err| {
-                        std.log.err("Failed to add {s} to object files", .{file_name});
-                        return err;
+                    object_files.append(full_path) catch {
+                        return error.OutOfMemory;
                     };
                 },
                 .app => {
                     // Add the compiled Roc application (shim)
                     std.log.debug("Adding app (shim): {s}", .{shim_path});
-                    object_files.append(shim_path) catch |err| {
-                        std.log.err("Failed to add shim path to object files", .{});
-                        return err;
+                    object_files.append(shim_path) catch {
+                        return error.OutOfMemory;
                     };
                     // Also add platform shim if available
                     if (platform_shim_path) |path| {
-                        object_files.append(path) catch |err| {
-                            std.log.err("Failed to add platform shim path to object files", .{});
-                            return err;
+                        object_files.append(path) catch {
+                            return error.OutOfMemory;
                         };
                     }
                 },
@@ -1223,26 +1197,11 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
             .disable_output = false,
         };
 
-        linker.link(allocs, link_config) catch |err| switch (err) {
-            linker.LinkError.LLVMNotAvailable => {
-                const result = platform_validation.targets_validator.ValidationResult{ .linker_not_available = {} };
-                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
-                return err;
-            },
-            linker.LinkError.LinkFailed => {
-                const result = platform_validation.targets_validator.ValidationResult{
-                    .linker_failed = .{ .reason = "LLD linker failed" },
-                };
-                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
-                return err;
-            },
-            else => {
-                const result = platform_validation.targets_validator.ValidationResult{
-                    .linker_failed = .{ .reason = @errorName(err) },
-                };
-                _ = platform_validation.renderValidationError(allocs.gpa, result, stderrWriter());
-                return err;
-            },
+        linker.link(allocs, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = @tagName(validated_link_spec.target),
+            } });
         };
 
         // After building, hardlink to cache for future runs
@@ -1289,15 +1248,11 @@ fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
     if (comptime is_windows) {
         // Windows: Use handle inheritance approach
         std.log.debug("Using Windows handle inheritance approach", .{});
-        runWithWindowsHandleInheritance(allocs, exe_path, shm_handle, args.app_args) catch |err| {
-            return err;
-        };
+        try runWithWindowsHandleInheritance(ctx, allocs, exe_path, shm_handle, args.app_args);
     } else {
         // POSIX: Use existing file descriptor inheritance approach
         std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        runWithPosixFdInheritance(allocs, exe_path, shm_handle, args.app_args) catch |err| {
-            return err;
-        };
+        try runWithPosixFdInheritance(ctx, allocs, exe_path, shm_handle, args.app_args);
     }
     std.log.debug("Interpreter execution completed", .{});
 }
@@ -1339,11 +1294,13 @@ fn appendWindowsQuotedArg(cmd_builder: *std.array_list.Managed(u8), arg: []const
 }
 
 /// Run child process using Windows handle inheritance (idiomatic Windows approach)
-fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) !void {
+fn runWithWindowsHandleInheritance(ctx: *CliContext, allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (cli_error.CliError || error{OutOfMemory})!void {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
-        std.log.err("Failed to set handle as inheritable", .{});
-        return error.HandleInheritanceFailed;
+        return ctx.fail(.{ .shared_memory_failed = .{
+            .operation = "set handle inheritable",
+            .err = error.HandleInheritanceFailed,
+        } });
     }
 
     // Convert paths to Windows wide strings
@@ -1356,9 +1313,8 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     const handle_uint = @intFromPtr(shm_handle.fd);
 
     // Build command line string with proper quoting for Windows
-    var cmd_builder = std.array_list.Managed(u8).initCapacity(allocs.gpa, 256) catch |err| {
-        std.log.err("Failed to allocate command line builder: {}", .{err});
-        return err;
+    var cmd_builder = std.array_list.Managed(u8).initCapacity(allocs.gpa, 256) catch {
+        return error.OutOfMemory;
     };
     defer cmd_builder.deinit();
     try cmd_builder.writer().print("\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
@@ -1394,8 +1350,10 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     );
 
     if (success == 0) {
-        std.log.err("CreateProcessW failed", .{});
-        return error.ProcessCreationFailed;
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = error.ProcessCreationFailed,
+        } });
     }
 
     // Child process spawned successfully
@@ -1404,21 +1362,25 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
     std.log.debug("Waiting for child process to complete: {s}", .{exe_path});
     const wait_result = windows.WaitForSingleObject(process_info.hProcess, windows.INFINITE);
     if (wait_result != 0) { // WAIT_OBJECT_0 = 0
-        std.log.err("WaitForSingleObject failed or timed out (result: {})", .{wait_result});
         // Clean up handles before returning
         _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
         _ = ipc.platform.windows.CloseHandle(process_info.hThread);
-        return error.ProcessWaitFailed;
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessWaitFailed,
+        } });
     }
 
     // Get the exit code
     var exit_code: windows.DWORD = undefined;
     if (windows.GetExitCodeProcess(process_info.hProcess, &exit_code) == 0) {
-        std.log.err("Failed to get exit code for child process", .{});
         // Clean up handles before returning
         _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
         _ = ipc.platform.windows.CloseHandle(process_info.hThread);
-        return error.ProcessExitCodeFailed;
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = error.ProcessExitCodeFailed,
+        } });
     }
 
     // Clean up process handles
@@ -1448,47 +1410,56 @@ fn runWithWindowsHandleInheritance(allocs: *Allocators, exe_path: []const u8, sh
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
 /// The exe_path should already be in a unique temp directory created by createUniqueTempDir.
-fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) !void {
+fn runWithPosixFdInheritance(ctx: *CliContext, allocs: *Allocators, exe_path: []const u8, shm_handle: SharedMemoryHandle, app_args: []const []const u8) (cli_error.CliError || error{OutOfMemory})!void {
     // Write the coordination file (.txt) next to the executable
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
     writeFdCoordinationFile(allocs, exe_path, shm_handle) catch |err| {
-        std.log.err("Failed to write fd coordination file: {}", .{err});
-        return err;
+        return ctx.fail(.{ .file_write_failed = .{
+            .path = exe_path,
+            .err = err,
+        } });
     };
     std.log.debug("Coordination file written successfully", .{});
 
     // Configure fd inheritance - clear FD_CLOEXEC so child process inherits the fd
     // Use std.posix.fcntl which properly handles the variadic C function.
     const current_flags = std.posix.fcntl(shm_handle.fd, std.posix.F.GETFD, 0) catch |err| {
-        std.log.err("Failed to get fd flags: {}", .{err});
-        return error.FdConfigFailed;
+        return ctx.fail(.{ .shared_memory_failed = .{
+            .operation = "get fd flags",
+            .err = err,
+        } });
     };
 
     // Clear FD_CLOEXEC - the flag value is 1
     const new_flags = current_flags & ~@as(usize, 1);
     _ = std.posix.fcntl(shm_handle.fd, std.posix.F.SETFD, new_flags) catch |err| {
-        std.log.err("Failed to set fd flags: {}", .{err});
-        return error.FdConfigFailed;
+        return ctx.fail(.{ .shared_memory_failed = .{
+            .operation = "set fd flags",
+            .err = err,
+        } });
     };
 
     // Debug-only verification that fd flags were actually cleared
     if (comptime builtin.mode == .Debug) {
         const verify_flags = std.posix.fcntl(shm_handle.fd, std.posix.F.GETFD, 0) catch |err| {
-            std.log.err("Failed to verify fd flags: {}", .{err});
-            return error.FdConfigFailed;
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "verify fd flags",
+                .err = err,
+            } });
         };
         if ((verify_flags & 1) != 0) {
-            std.log.err("FD_CLOEXEC still set after clearing! fd={} flags={}", .{ shm_handle.fd, verify_flags });
-            return error.FdConfigFailed;
+            return ctx.fail(.{ .shared_memory_failed = .{
+                .operation = "clear FD_CLOEXEC",
+                .err = error.FdConfigFailed,
+            } });
         }
         std.log.debug("fd={} FD_CLOEXEC cleared successfully", .{shm_handle.fd});
     }
 
     // Build argv slice using arena allocator (memory lives until arena is freed)
-    const argv = allocs.arena.alloc([]const u8, 1 + app_args.len) catch |err| {
-        std.log.err("Failed to allocate argv: {}", .{err});
-        return err;
+    const argv = allocs.arena.alloc([]const u8, 1 + app_args.len) catch {
+        return error.OutOfMemory;
     };
     argv[0] = exe_path;
     for (app_args, 0..) |arg, i| {
@@ -1497,9 +1468,10 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
 
     // Run the interpreter as a child process from the temp directory
     var child = std.process.Child.init(argv, allocs.gpa);
-    child.cwd = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |err| {
-        std.log.err("Failed to get current directory: {}", .{err});
-        return err;
+    child.cwd = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch {
+        return ctx.fail(.{ .directory_not_found = .{
+            .path = ".",
+        } });
     };
 
     // Forward stdout and stderr
@@ -1510,15 +1482,19 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
     std.log.debug("Spawning child process: {s} with {} app args", .{ exe_path, app_args.len });
     std.log.debug("Child process working directory: {s}", .{child.cwd.?});
     child.spawn() catch |err| {
-        std.log.err("Failed to spawn {s}: {}", .{ exe_path, err });
-        return err;
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
     };
     std.log.debug("Child process spawned successfully (PID: {})", .{child.id});
 
     // Wait for child to complete
     const term = child.wait() catch |err| {
-        std.log.err("Failed waiting for child process: {}", .{err});
-        return err;
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
     };
 
     // Check the termination status
@@ -1542,12 +1518,16 @@ fn runWithPosixFdInheritance(allocs: *Allocators, exe_path: []const u8, shm_hand
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
         .Stopped => |signal| {
-            std.log.err("Child process {s} stopped by signal: {}", .{ exe_path, signal });
-            return error.ProcessStopped;
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = exe_path,
+                .signal = signal,
+            } });
         },
         .Unknown => |status| {
-            std.log.err("Child process {s} terminated with unknown status: {}", .{ exe_path, status });
-            return error.ProcessUnknownTermination;
+            return ctx.fail(.{ .child_process_failed = .{
+                .command = exe_path,
+                .exit_code = status,
+            } });
         },
     }
 }
@@ -3889,10 +3869,7 @@ fn rocBuildEmbedded(ctx: *CliContext, allocs: *Allocators, args: cli_args.BuildA
     // The shim provides roc__<entrypoint> functions and embeds serialized bytecode
     const enable_debug = args.debug or (builtin.mode == .Debug);
     std.log.debug("Generating platform host shim with {} bytes of embedded data (debug={})...", .{ serialized_module.len, enable_debug });
-    const platform_shim_path = generatePlatformHostShim(allocs, build_cache_dir, entrypoints.items, target, serialized_module, enable_debug) catch |err| {
-        std.log.err("Failed to generate platform host shim: {}", .{err});
-        return err;
-    };
+    const platform_shim_path = try generatePlatformHostShim(ctx, allocs, build_cache_dir, entrypoints.items, target, serialized_module, enable_debug);
     std.log.debug("Platform shim generated: {?s}", .{platform_shim_path});
 
     try object_files.append(shim_path);

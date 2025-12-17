@@ -168,6 +168,12 @@ pub const CliProblem = union(enum) {
         signal: u32,
     },
 
+    /// Child process wait failed
+    child_process_wait_failed: struct {
+        command: []const u8,
+        err: anyerror,
+    },
+
     /// Shared memory operation failed
     shared_memory_failed: struct {
         operation: []const u8,
@@ -232,6 +238,7 @@ pub const CliProblem = union(enum) {
             .child_process_spawn_failed,
             .child_process_failed,
             .child_process_signaled,
+            .child_process_wait_failed,
             .shared_memory_failed,
             .expected_app_header,
             .expected_platform_string,
@@ -269,6 +276,7 @@ pub const CliProblem = union(enum) {
             .child_process_spawn_failed => |info| try createChildProcessSpawnFailedReport(allocator, info),
             .child_process_failed => |info| try createChildProcessFailedReport(allocator, info),
             .child_process_signaled => |info| try createChildProcessSignaledReport(allocator, info),
+            .child_process_wait_failed => |info| try createChildProcessWaitFailedReport(allocator, info),
             .shared_memory_failed => |info| try createSharedMemoryFailedReport(allocator, info),
             .expected_app_header => |info| try createExpectedAppHeaderReport(allocator, info),
             .expected_platform_string => |info| try createExpectedPlatformStringReport(allocator, info),
@@ -641,6 +649,19 @@ fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) !Report
     var buf: [16]u8 = undefined;
     const sig_str = std.fmt.bufPrint(&buf, "{}", .{info.signal}) catch "?";
     try report.document.addAnnotated(sig_str, .error_highlight);
+
+    return report;
+}
+
+fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "PROCESS WAIT FAILED", .runtime_error);
+
+    try report.document.addText("Failed to wait for process ");
+    try report.document.addAnnotated(info.command, .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Error: ");
+    try report.document.addText(@errorName(info.err));
 
     return report;
 }
