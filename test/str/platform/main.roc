@@ -16,4 +16,12 @@ platform ""
     }
 
 process_string_for_host : Str -> Str
-process_string_for_host = process_string
+process_string_for_host = |input| {
+    result = process_string(input)
+    result
+}
+
+Simple := [A].{
+    make : {} -> Simple
+    make = |{}| A
+}

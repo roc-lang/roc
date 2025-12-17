@@ -6,6 +6,8 @@ const testing = std.testing;
 const main = @import("main.zig");
 const base = @import("base");
 const Allocators = base.Allocators;
+const cli_error = @import("cli_error.zig");
+const CliContext = cli_error.CliContext;
 
 test "platform resolution - basic cli platform" {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
@@ -13,6 +15,10 @@ test "platform resolution - basic cli platform" {
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
+
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
 
     // Create a temporary Roc file with cli platform
     var temp_dir = testing.tmpDir(.{});
@@ -34,9 +40,9 @@ test "platform resolution - basic cli platform" {
     const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
     defer allocs.gpa.free(roc_path);
 
-    // This should return NoPlatformFound since we don't have the actual CLI platform installed
-    const result = main.resolvePlatformPaths(&allocs, roc_path);
-    try testing.expectError(error.NoPlatformFound, result);
+    // This should return CliError since we don't have the actual CLI platform installed
+    const result = main.resolvePlatformPaths(&ctx, &allocs, roc_path);
+    try testing.expectError(error.CliError, result);
 }
 
 test "platform resolution - no platform in file" {
@@ -45,6 +51,10 @@ test "platform resolution - no platform in file" {
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
+
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
 
     // Create a temporary Roc file without platform specification
     var temp_dir = testing.tmpDir(.{});
@@ -62,8 +72,8 @@ test "platform resolution - no platform in file" {
     const roc_path = try temp_dir.dir.realpathAlloc(allocs.gpa, "test.roc");
     defer allocs.gpa.free(roc_path);
 
-    const result = main.resolvePlatformPaths(&allocs, roc_path);
-    try testing.expectError(error.NoPlatformFound, result);
+    const result = main.resolvePlatformPaths(&ctx, &allocs, roc_path);
+    try testing.expectError(error.CliError, result);
 }
 
 test "platform resolution - file not found" {
@@ -73,8 +83,12 @@ test "platform resolution - file not found" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
-    const result = main.resolvePlatformPaths(&allocs, "nonexistent.roc");
-    try testing.expectError(error.NoPlatformFound, result);
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
+
+    const result = main.resolvePlatformPaths(&ctx, &allocs, "nonexistent.roc");
+    try testing.expectError(error.CliError, result);
 }
 
 test "platform resolution - insecure HTTP URL rejected" {
@@ -83,6 +97,10 @@ test "platform resolution - insecure HTTP URL rejected" {
     var allocs: Allocators = undefined;
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
+
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
 
     // Create a temporary Roc file with insecure HTTP URL (not localhost)
     // This should be rejected for security - only HTTPS or localhost HTTP allowed
@@ -103,8 +121,8 @@ test "platform resolution - insecure HTTP URL rejected" {
     defer allocs.gpa.free(roc_path);
 
     // Insecure HTTP URLs (not localhost) should fail validation
-    const result = main.resolvePlatformPaths(&allocs, roc_path);
-    try testing.expectError(error.PlatformNotSupported, result);
+    const result = main.resolvePlatformPaths(&ctx, &allocs, roc_path);
+    try testing.expectError(error.CliError, result);
 }
 
 // Integration tests that test the full shared memory pipeline
@@ -121,11 +139,15 @@ test "integration - shared memory setup and parsing" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
+
     // Use the real int test platform
     const roc_path = "test/int/app.roc";
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_result = try main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true);
+    const shm_result = try main.setupSharedMemoryWithModuleEnv(&ctx, &allocs, roc_path, true);
     const shm_handle = shm_result.handle;
 
     // Clean up shared memory resources
@@ -161,6 +183,10 @@ test "integration - compilation pipeline for different platforms" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
+
     // Test with our real test platforms
     const test_apps = [_][]const u8{
         "test/int/app.roc",
@@ -170,7 +196,7 @@ test "integration - compilation pipeline for different platforms" {
 
     for (test_apps) |roc_path| {
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true) catch |err| {
+        const shm_result = main.setupSharedMemoryWithModuleEnv(&ctx, &allocs, roc_path, true) catch |err| {
             std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
             continue;
         };
@@ -208,11 +234,15 @@ test "integration - error handling for non-existent file" {
     allocs.initInPlace(gpa_impl.allocator());
     defer allocs.deinit();
 
+    // Create a CLI context for error reporting
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, .run);
+    defer ctx.deinit();
+
     // Test with a non-existent file path
     const roc_path = "test/nonexistent/app.roc";
 
     // This should fail because the file doesn't exist
-    const result = main.setupSharedMemoryWithModuleEnv(&allocs, roc_path, true);
+    const result = main.setupSharedMemoryWithModuleEnv(&ctx, &allocs, roc_path, true);
 
     // We expect this to fail - the important thing is that it doesn't crash
     if (result) |shm_result| {

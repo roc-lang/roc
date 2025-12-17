@@ -54,12 +54,17 @@ const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
 const platform_validation = @import("platform_validation.zig");
+const cli_error = @import("cli_error.zig");
+
+const CliProblem = cli_error.CliProblem;
+const CliContext = cli_error.CliContext;
 
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
         std.testing.refAllDecls(targets_validator);
         std.testing.refAllDecls(platform_validation);
+        std.testing.refAllDecls(cli_error);
     }
 }
 const bench = @import("bench.zig");
@@ -704,6 +709,22 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
     const parsed_args = try cli_args.parse(allocs.arena, args[1..]);
 
+    // Determine command for context
+    const command: cli_error.Command = switch (parsed_args) {
+        .run => .run,
+        .build => .build,
+        .check => .check,
+        .test_cmd => .test_cmd,
+        .fmt => .fmt,
+        .bundle => .bundle,
+        .unbundle => .unbundle,
+        else => .unknown,
+    };
+
+    // Create CLI context at the top level - this is passed to all command handlers
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, command);
+    defer ctx.deinit();
+
     try switch (parsed_args) {
         .run => |run_args| {
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
@@ -736,14 +757,24 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
                 };
             }
 
-            try rocRun(allocs, run_args);
+            rocRun(&ctx, allocs, run_args) catch |err| switch (err) {
+                error.CliError => {
+                    // Problems already recorded in context, render them below
+                },
+                else => return err,
+            };
         },
-        .check => |check_args| rocCheck(allocs, check_args),
-        .build => |build_args| try rocBuild(allocs, build_args),
+        .check => |check_args| rocCheck(&ctx, allocs, check_args),
+        .build => |build_args| rocBuild(&ctx, allocs, build_args) catch |err| switch (err) {
+            error.CliError => {
+                // Problems already recorded in context, render them below
+            },
+            else => return err,
+        },
         .bundle => |bundle_args| rocBundle(allocs, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(allocs, unbundle_args),
         .fmt => |format_args| rocFormat(allocs, format_args),
-        .test_cmd => |test_args| rocTest(allocs, test_args),
+        .test_cmd => |test_args| try rocTest(&ctx, allocs, test_args),
         .repl => rocRepl(allocs),
         .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(allocs, docs_args),
@@ -768,6 +799,14 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
             return error.InvalidArguments;
         },
     };
+
+    // Render any problems accumulated during command execution
+    if (ctx.hasProblems()) {
+        try ctx.renderProblemsTo(stderr);
+        if (ctx.hasErrors()) {
+            return error.CliError;
+        }
+    }
 }
 
 /// Generate platform host shim object file using LLVM.
@@ -883,7 +922,7 @@ fn generatePlatformHostShim(allocs: *Allocators, cache_dir: []const u8, entrypoi
     return object_path;
 }
 
-fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
+fn rocRun(ctx: *CliContext, allocs: *Allocators, args: cli_args.RunArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -962,17 +1001,11 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
     };
 
     // First, parse the app file to get the platform reference
-    const platform_spec = extractPlatformSpecFromApp(allocs, args.path) catch |err| {
-        std.log.err("Failed to extract platform spec from app file: {}", .{err});
-        return err;
-    };
+    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
 
     // Resolve platform paths from the platform spec (relative to app file directory)
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
-    const platform_paths = resolvePlatformSpecToPaths(allocs, platform_spec, app_dir) catch |err| {
-        std.log.err("Failed to resolve platform spec '{s}': {}", .{ platform_spec, err });
-        return err;
-    };
+    const platform_paths = try resolvePlatformSpecToPaths(ctx, allocs, platform_spec, app_dir);
 
     // Use native detection for shim generation to match embedded shim library
     const shim_target = builder.RocTarget.detectNative();
@@ -1231,10 +1264,7 @@ fn rocRun(allocs: *Allocators, args: cli_args.RunArgs) !void {
 
     // Set up shared memory with ModuleEnv
     std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_result = setupSharedMemoryWithModuleEnv(allocs, args.path, args.allow_errors) catch |err| {
-        std.log.err("Failed to set up shared memory with ModuleEnv: {}", .{err});
-        return err;
-    };
+    const shm_result = try setupSharedMemoryWithModuleEnv(ctx, allocs, args.path, args.allow_errors);
     std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_result.handle.size});
 
     // Check for errors - abort unless --allow-errors flag is set
@@ -1597,7 +1627,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
-pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
+pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, allocs: *Allocators, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
@@ -1612,10 +1642,10 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     // If the roc file path has no directory component (e.g., "app.roc"), use current directory
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
 
-    const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
+    const platform_spec = try extractPlatformSpecFromApp(ctx, roc_file_path);
 
     // Check for absolute paths and reject them early
-    try validatePlatformSpec(platform_spec);
+    try validatePlatformSpec(ctx, platform_spec);
 
     // Resolve platform path based on type:
     // - Relative paths (./...) -> join with app directory
@@ -1806,7 +1836,17 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     const app_env_ptr = try shm_allocator.create(ModuleEnv);
 
     const app_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
-        std.log.err("Failed to open Roc file '{s}': {}", .{ roc_file_path, err });
+        const problem: CliProblem = switch (err) {
+            error.FileNotFound => .{ .file_not_found = .{
+                .path = roc_file_path,
+                .context = .source_file,
+            } },
+            else => .{ .file_read_failed = .{
+                .path = roc_file_path,
+                .err = err,
+            } },
+        };
+        cli_error.renderProblem(allocs.gpa, stderrWriter(), problem);
         return error.FileNotFound;
     };
     defer app_file.close();
@@ -2424,6 +2464,7 @@ fn compileModuleForSerialization(
 /// Compile all modules and serialize them to a single buffer for embedding.
 /// Returns the serialized bytes and entry point def indices.
 fn compileAndSerializeModulesForEmbedding(
+    ctx: *CliContext,
     allocs: *Allocators,
     roc_file_path: []const u8,
     allow_errors: bool,
@@ -2436,8 +2477,8 @@ fn compileAndSerializeModulesForEmbedding(
     defer builtin_modules.deinit();
 
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    const platform_spec = try extractPlatformSpecFromApp(allocs, roc_file_path);
-    try validatePlatformSpec(platform_spec);
+    const platform_spec = try extractPlatformSpecFromApp(ctx, roc_file_path);
+    try validatePlatformSpec(ctx, platform_spec);
 
     // Resolve platform path
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
@@ -2809,34 +2850,66 @@ pub const PlatformPaths = struct {
 
 /// Resolve platform specification from a Roc file to find both host library and platform source.
 /// Returns PlatformPaths with arena-allocated paths (no need to free).
-pub fn resolvePlatformPaths(allocs: *Allocators, roc_file_path: []const u8) (std.mem.Allocator.Error || error{ NoPlatformFound, PlatformNotSupported })!PlatformPaths {
+pub fn resolvePlatformPaths(ctx: *CliContext, allocs: *Allocators, roc_file_path: []const u8) cli_error.CliError!PlatformPaths {
     // Use the parser to extract the platform spec
-    const platform_spec = extractPlatformSpecFromApp(allocs, roc_file_path) catch return error.NoPlatformFound;
+    const platform_spec = extractPlatformSpecFromApp(ctx, roc_file_path) catch {
+        return ctx.fail(.{ .file_not_found = .{
+            .path = roc_file_path,
+            .context = .source_file,
+        } });
+    };
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    return resolvePlatformSpecToPaths(allocs, platform_spec, app_dir);
+    return resolvePlatformSpecToPaths(ctx, allocs, platform_spec, app_dir);
 }
 
 /// Extract platform specification from app file header by parsing it properly.
-fn extractPlatformSpecFromApp(allocs: *Allocators, app_file_path: []const u8) ![]const u8 {
+/// Takes a CliContext which provides allocators and error reporting.
+fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]const u8 {
     // Read the app file
-    const source = std.fs.cwd().readFileAlloc(allocs.gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
-    defer allocs.gpa.free(source);
+    const source = std.fs.cwd().readFileAlloc(ctx.gpa, app_file_path, std.math.maxInt(usize)) catch |err| {
+        return ctx.fail(switch (err) {
+            error.FileNotFound => .{ .file_not_found = .{
+                .path = app_file_path,
+                .context = .source_file,
+            } },
+            else => .{ .file_read_failed = .{
+                .path = app_file_path,
+                .err = err,
+            } },
+        });
+    };
+    defer ctx.gpa.free(source);
 
     // Extract module name from file path
     const basename = std.fs.path.basename(app_file_path);
-    const module_name = try allocs.arena.dupe(u8, basename);
+    const module_name = try ctx.arena.dupe(u8, basename);
 
     // Create ModuleEnv for parsing
-    var env = ModuleEnv.init(allocs.gpa, source) catch return error.ParseFailed;
+    var env = ModuleEnv.init(ctx.gpa, source) catch {
+        return ctx.fail(.{ .module_init_failed = .{
+            .path = app_file_path,
+            .err = error.OutOfMemory,
+        } });
+    };
     defer env.deinit();
 
     env.common.source = source;
     env.module_name = module_name;
-    env.common.calcLineStarts(allocs.gpa) catch return error.ParseFailed;
+    env.common.calcLineStarts(ctx.gpa) catch {
+        return ctx.fail(.{ .module_init_failed = .{
+            .path = app_file_path,
+            .err = error.OutOfMemory,
+        } });
+    };
 
     // Parse the source
-    var ast = parse.parse(&env.common, allocs.gpa) catch return error.ParseFailed;
-    defer ast.deinit(allocs.gpa);
+    var ast = parse.parse(&env.common, ctx.gpa) catch {
+        return ctx.fail(.{ .module_init_failed = .{
+            .path = app_file_path,
+            .err = error.OutOfMemory,
+        } });
+    };
+    defer ast.deinit(ctx.gpa);
 
     // Get the file header
     const file = ast.store.getFile();
@@ -2847,13 +2920,22 @@ fn extractPlatformSpecFromApp(allocs: *Allocators, app_file_path: []const u8) ![
         .app => |a| {
             // Get the platform field
             const pf = ast.store.getRecordField(a.platform_idx);
-            const value_expr = pf.value orelse return error.NotAppFile;
+            const value_expr = pf.value orelse {
+                return ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } });
+            };
 
             // Extract the string value from the expression
-            const platform_spec = stringFromExpr(&ast, value_expr) catch return error.NotAppFile;
-            return try allocs.arena.dupe(u8, platform_spec);
+            const platform_spec = stringFromExpr(&ast, value_expr) catch {
+                return ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } });
+            };
+            return try ctx.arena.dupe(u8, platform_spec);
         },
-        else => return error.NotAppFile,
+        else => {
+            return ctx.fail(.{ .expected_app_header = .{
+                .path = app_file_path,
+                .found = @tagName(header),
+            } });
+        },
     }
 }
 
@@ -2876,40 +2958,61 @@ fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) ![]const u8 {
     };
 }
 
-/// Check if platform spec is an absolute path and reject it with a helpful error message.
-/// Returns error.PlatformNotSupported if absolute, otherwise returns void.
-fn validatePlatformSpec(platform_spec: []const u8) error{PlatformNotSupported}!void {
+/// Check if platform spec is an absolute path and reject it.
+/// Uses CliContext for error reporting.
+fn validatePlatformSpec(ctx: *CliContext, platform_spec: []const u8) cli_error.CliError!void {
     if (std.fs.path.isAbsolute(platform_spec)) {
-        std.log.err("Absolute paths are not allowed for platform specification: \"{s}\".\nTip: use a relative path like `../path/to/platform` or a URL.\n", .{platform_spec});
-        return error.PlatformNotSupported;
+        return ctx.fail(.{ .absolute_platform_path = .{ .platform_spec = platform_spec } });
     }
 }
 
-/// Resolve a platform specification to a platform source path
-fn resolvePlatformSpecToPaths(allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
-    // Handle URL-based platforms
+/// Resolve a platform specification to a platform source path.
+/// Uses CliContext for error reporting. Takes allocs for URL platform handling.
+fn resolvePlatformSpecToPaths(ctx: *CliContext, allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) cli_error.CliError!PlatformPaths {
+    // Handle URL-based platforms - delegate to legacy function for now
     if (std.mem.startsWith(u8, platform_spec, "http")) {
-        return resolveUrlPlatform(allocs, platform_spec);
+        // TODO: Create resolveUrlPlatformWithContext
+        return resolveUrlPlatform(allocs, platform_spec) catch {
+            return ctx.fail(.{ .platform_not_found = .{
+                .app_path = base_dir,
+                .platform_path = platform_spec,
+            } });
+        };
     }
 
     // Check for absolute paths and reject them
-    try validatePlatformSpec(platform_spec);
+    try validatePlatformSpec(ctx, platform_spec);
 
     // Try to interpret as a file path (must be relative, resolve relative to base_dir)
-    const resolved_path = try std.fs.path.join(allocs.arena, &.{ base_dir, platform_spec });
+    const resolved_path = std.fs.path.join(ctx.arena, &.{ base_dir, platform_spec }) catch {
+        return ctx.fail(.{ .file_read_failed = .{
+            .path = platform_spec,
+            .err = error.OutOfMemory,
+        } });
+    };
 
     std.fs.cwd().access(resolved_path, .{}) catch {
-        return error.PlatformNotSupported;
+        return ctx.fail(.{ .platform_not_found = .{
+            .app_path = base_dir,
+            .platform_path = resolved_path,
+        } });
     };
 
     // Platform spec should point to a .roc file
     if (std.mem.endsWith(u8, resolved_path, ".roc")) {
         return PlatformPaths{
-            .platform_source_path = try allocs.arena.dupe(u8, resolved_path),
+            .platform_source_path = ctx.arena.dupe(u8, resolved_path) catch {
+                return ctx.fail(.{ .file_read_failed = .{
+                    .path = resolved_path,
+                    .err = error.OutOfMemory,
+                } });
+            },
         };
     } else {
         // Non-.roc file path - not supported
-        return error.PlatformNotSupported;
+        return ctx.fail(.{ .platform_validation_failed = .{
+            .message = "Platform path must end with .roc",
+        } });
     }
 }
 
@@ -3476,7 +3579,7 @@ fn rocUnbundle(allocs: *Allocators, args: cli_args.UnbundleArgs) !void {
     }
 }
 
-fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
+fn rocBuild(ctx: *CliContext, allocs: *Allocators, args: cli_args.BuildArgs) !void {
     // Handle the --z-bench-tokenize flag
     if (args.z_bench_tokenize) |file_path| {
         try benchTokenizer(allocs.gpa, file_path);
@@ -3491,12 +3594,12 @@ fn rocBuild(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     // Use embedded interpreter build approach
     // This compiles the Roc app, serializes the ModuleEnv, and embeds it in the binary
-    try rocBuildEmbedded(allocs, args);
+    try rocBuildEmbedded(ctx, allocs, args);
 }
 
 /// Build a standalone binary with the interpreter and embedded module data.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
-fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
+fn rocBuildEmbedded(ctx: *CliContext, allocs: *Allocators, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
 
     std.log.info("Building {s} with embedded interpreter", .{args.path});
@@ -3529,20 +3632,15 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     // Get platform directory and host library (do this first to get platform source)
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
-    const platform_spec = extractPlatformSpecFromApp(allocs, args.path) catch |err| {
-        std.log.err("Failed to extract platform spec: {}", .{err});
-        return err;
-    };
+    // Extract platform spec - errors are recorded in context and propagate up
+    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
     std.log.debug("Platform spec: {s}", .{platform_spec});
 
-    // Resolve platform path
+    // Resolve platform path - errors are recorded in context and propagate up
     const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        resolvePlatformSpecToPaths(allocs, platform_spec, app_dir) catch |err| blk: {
-            std.log.err("Failed to resolve platform paths: {}", .{err});
-            break :blk null;
-        }
+        try resolvePlatformSpecToPaths(ctx, allocs, platform_spec, app_dir)
     else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://"))
-        resolveUrlPlatform(allocs, platform_spec) catch null
+        try resolvePlatformSpecToPaths(ctx, allocs, platform_spec, app_dir)
     else
         null;
 
@@ -3560,13 +3658,19 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
                     return error.MissingTargetsSection;
                 },
                 else => {
-                    std.log.err("Failed to validate platform header: {}", .{err});
+                    cli_error.renderProblem(allocs.gpa, stderrWriter(), .{
+                        .platform_validation_failed = .{
+                            .message = "Failed to validate platform header",
+                        },
+                    });
                     return err;
                 },
             }
         }
     else {
-        std.log.err("Platform source not found - cannot determine link configuration", .{});
+        cli_error.renderProblem(allocs.gpa, stderrWriter(), .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
         return error.NoPlatformSource;
     };
 
@@ -3606,9 +3710,11 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
     } else blk: {
         // No --target provided: find the first compatible target across all link types
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            const stderr = stderrWriter();
-            stderr.print("Error: No compatible target found for this platform.\n\n", .{}) catch {};
-            stderr.print("The platform does not support any target compatible with this system.\n", .{}) catch {};
+            cli_error.renderProblem(allocs.gpa, stderrWriter(), .{
+                .platform_validation_failed = .{
+                    .message = "No compatible target found. The platform does not support any target compatible with this system.",
+                },
+            });
             return error.UnsupportedTarget;
         };
         break :blk .{ compatible.target, compatible.link_type };
@@ -3661,10 +3767,8 @@ fn rocBuildEmbedded(allocs: *Allocators, args: cli_args.BuildArgs) !void {
 
     std.log.debug("Using portable serialization ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
 
-    const compile_result = compileAndSerializeModulesForEmbedding(allocs, args.path, args.allow_errors) catch |err| {
-        std.log.err("Failed to compile Roc file: {}", .{err});
-        return err;
-    };
+    // Compile - errors are already reported by the compilation functions
+    const compile_result = try compileAndSerializeModulesForEmbedding(ctx, allocs, args.path, args.allow_errors);
     std.log.debug("Portable serialization complete, {} bytes", .{compile_result.bytes.len});
 
     const serialized_data: SerializedData = .{
@@ -3835,7 +3939,8 @@ const ExpectTest = struct {
     region: base.Region,
 };
 
-fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
+fn rocTest(ctx: *CliContext, allocs: *Allocators, args: cli_args.TestArgs) !void {
+    _ = ctx; // TODO: Use context for error reporting
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4491,7 +4596,8 @@ fn checkFileWithBuildEnv(
     };
 }
 
-fn rocCheck(allocs: *Allocators, args: cli_args.CheckArgs) !void {
+fn rocCheck(ctx: *CliContext, allocs: *Allocators, args: cli_args.CheckArgs) !void {
+    _ = ctx; // TODO: Use context for error reporting
     const trace = tracy.trace(@src());
     defer trace.end();
 
