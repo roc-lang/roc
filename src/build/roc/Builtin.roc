@@ -361,6 +361,10 @@ Builtin :: [].{
 			mod_by : U8, U8 -> U8
 			abs_diff : U8, U8 -> U8
 
+			shift_left_by : U8, U8 -> U8
+			shift_right_by : U8, U8 -> U8
+			shift_right_zf_by : U8, U8 -> U8
+
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(U8, [BadNumStr, ..others])
@@ -419,6 +423,10 @@ Builtin :: [].{
 			mod_by : I8, I8 -> I8
 			abs_diff : I8, I8 -> U8
 
+			shift_left_by : I8, U8 -> I8
+			shift_right_by : I8, U8 -> I8
+			shift_right_zf_by : I8, U8 -> I8
+
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I8, [BadNumStr, ..others])
@@ -464,6 +472,10 @@ Builtin :: [].{
 			rem_by : U16, U16 -> U16
 			mod_by : U16, U16 -> U16
 			abs_diff : U16, U16 -> U16
+
+			shift_left_by : U16, U8 -> U16
+			shift_right_by : U16, U8 -> U16
+			shift_right_zf_by : U16, U8 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..others])
@@ -513,6 +525,10 @@ Builtin :: [].{
 			mod_by : I16, I16 -> I16
 			abs_diff : I16, I16 -> U16
 
+			shift_left_by : I16, U8 -> I16
+			shift_right_by : I16, U8 -> I16
+			shift_right_zf_by : I16, U8 -> I16
+
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I16, [BadNumStr, ..others])
@@ -559,6 +575,10 @@ Builtin :: [].{
 			rem_by : U32, U32 -> U32
 			mod_by : U32, U32 -> U32
 			abs_diff : U32, U32 -> U32
+
+			shift_left_by : U32, U8 -> U32
+			shift_right_by : U32, U8 -> U32
+			shift_right_zf_by : U32, U8 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..others])
@@ -610,6 +630,10 @@ Builtin :: [].{
 			mod_by : I32, I32 -> I32
 			abs_diff : I32, I32 -> U32
 
+			shift_left_by : I32, U8 -> I32
+			shift_right_by : I32, U8 -> I32
+			shift_right_zf_by : I32, U8 -> I32
+
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I32, [BadNumStr, ..others])
@@ -657,6 +681,10 @@ Builtin :: [].{
 			rem_by : U64, U64 -> U64
 			mod_by : U64, U64 -> U64
 			abs_diff : U64, U64 -> U64
+
+			shift_left_by : U64, U8 -> U64
+			shift_right_by : U64, U8 -> U64
+			shift_right_zf_by : U64, U8 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..others])
@@ -710,6 +738,10 @@ Builtin :: [].{
 			mod_by : I64, I64 -> I64
 			abs_diff : I64, I64 -> U64
 
+			shift_left_by : I64, U8 -> I64
+			shift_right_by : I64, U8 -> I64
+			shift_right_zf_by : I64, U8 -> I64
+
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I64, [BadNumStr, ..others])
@@ -758,6 +790,10 @@ Builtin :: [].{
 			rem_by : U128, U128 -> U128
 			mod_by : U128, U128 -> U128
 			abs_diff : U128, U128 -> U128
+
+			shift_left_by : U128, U8 -> U128
+			shift_right_by : U128, U8 -> U128
+			shift_right_zf_by : U128, U8 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..others])
@@ -814,6 +850,10 @@ Builtin :: [].{
 			rem_by : I128, I128 -> I128
 			mod_by : I128, I128 -> I128
 			abs_diff : I128, I128 -> U128
+
+			shift_left_by : I128, U8 -> I128
+			shift_right_by : I128, U8 -> I128
+			shift_right_zf_by : I128, U8 -> I128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..others])

@@ -3551,6 +3551,127 @@ pub const Interpreter = struct {
                 return out;
             },
 
+            // Bitwise shift operations
+            .num_shift_left_by => {
+                std.debug.assert(args.len == 2); // low-level .num_shift_left_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0, args[0].rt_var);
+                out.is_initialized = false;
+
+                // rhs must be an integer (U8)
+                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
+
+                switch (lhs) {
+                    .int => |l| {
+                        // Perform shift and truncate to target type width
+                        const precision = result_layout.data.scalar.data.int;
+                        const shifted: i128 = l << shift_amount;
+                        const result: i128 = switch (precision) {
+                            .u8 => @as(i128, @as(u8, @truncate(@as(u128, @bitCast(shifted))))),
+                            .i8 => @as(i128, @as(i8, @truncate(shifted))),
+                            .u16 => @as(i128, @as(u16, @truncate(@as(u128, @bitCast(shifted))))),
+                            .i16 => @as(i128, @as(i16, @truncate(shifted))),
+                            .u32 => @as(i128, @as(u32, @truncate(@as(u128, @bitCast(shifted))))),
+                            .i32 => @as(i128, @as(i32, @truncate(shifted))),
+                            .u64 => @as(i128, @as(u64, @truncate(@as(u128, @bitCast(shifted))))),
+                            .i64 => @as(i128, @as(i64, @truncate(shifted))),
+                            .u128 => @as(i128, @bitCast(@as(u128, @bitCast(shifted)))),
+                            .i128 => shifted,
+                        };
+                        try out.setInt(result);
+                    },
+                    else => unreachable, // shift operations are only for integer types
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_shift_right_by => {
+                std.debug.assert(args.len == 2); // low-level .num_shift_right_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0, args[0].rt_var);
+                out.is_initialized = false;
+
+                // rhs must be an integer (U8)
+                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
+
+                switch (lhs) {
+                    .int => |l| {
+                        const result: i128 = l >> shift_amount;
+                        try out.setInt(result);
+                    },
+                    else => unreachable, // shift operations are only for integer types
+                }
+                out.is_initialized = true;
+                return out;
+            },
+            .num_shift_right_zf_by => {
+                std.debug.assert(args.len == 2); // low-level .num_shift_right_zf_by expects 2 arguments
+                const lhs = try self.extractNumericValue(args[0]);
+                const rhs = try self.extractNumericValue(args[1]);
+                const result_layout = args[0].layout;
+
+                var out = try self.pushRaw(result_layout, 0, args[0].rt_var);
+                out.is_initialized = false;
+
+                // rhs must be an integer (U8)
+                const shift_amount_u8 = @as(u8, @intCast(@mod(rhs.int, 256)));
+                const shift_amount = @as(u7, @intCast(@min(shift_amount_u8, 127)));
+
+                // Helper function to perform zero-fill shift for a given type
+                const shiftRightZeroFill = struct {
+                    inline fn apply(comptime UnsignedT: type, comptime SignedT: type, value: i128, shift: u7) i128 {
+                        const masked = @as(UnsignedT, @truncate(@as(u128, @bitCast(value))));
+                        const ShiftT = std.math.Log2Int(UnsignedT);
+                        const max_shift = @bitSizeOf(UnsignedT) - 1;
+                        const shift_clamped = @as(ShiftT, @intCast(@min(shift, max_shift)));
+                        const shifted = masked >> shift_clamped;
+
+                        if (UnsignedT == SignedT) {
+                            // Unsigned case (e.g., u8 == u8)
+                            // For smaller types we can use direct cast, but u128 needs bitCast
+                            if (UnsignedT == u128) {
+                                return @as(i128, @bitCast(shifted));
+                            } else {
+                                return @as(i128, shifted);
+                            }
+                        } else {
+                            // Signed case (e.g., u8 != i8)
+                            return @as(i128, @as(SignedT, @bitCast(shifted)));
+                        }
+                    }
+                }.apply;
+
+                switch (lhs) {
+                    .int => |l| {
+                        const precision = result_layout.data.scalar.data.int;
+                        const result: i128 = switch (precision) {
+                            .u8 => shiftRightZeroFill(u8, u8, l, shift_amount),
+                            .i8 => shiftRightZeroFill(u8, i8, l, shift_amount),
+                            .u16 => shiftRightZeroFill(u16, u16, l, shift_amount),
+                            .i16 => shiftRightZeroFill(u16, i16, l, shift_amount),
+                            .u32 => shiftRightZeroFill(u32, u32, l, shift_amount),
+                            .i32 => shiftRightZeroFill(u32, i32, l, shift_amount),
+                            .u64 => shiftRightZeroFill(u64, u64, l, shift_amount),
+                            .i64 => shiftRightZeroFill(u64, i64, l, shift_amount),
+                            .u128 => shiftRightZeroFill(u128, u128, l, shift_amount),
+                            .i128 => shiftRightZeroFill(u128, i128, l, shift_amount),
+                        };
+                        try out.setInt(result);
+                    },
+                    else => unreachable, // shift operations are only for integer types
+                }
+                out.is_initialized = true;
+                return out;
+            },
+
             // Numeric parsing operations
             .num_from_int_digits => {
                 // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])

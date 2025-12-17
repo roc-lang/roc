@@ -1,3 +1,5 @@
+//! LSP module entry point, providing protocol types, transport layer, and server implementation.
+
 pub const std = @import("std");
 pub const protocol = @import("protocol.zig");
 pub const transport = @import("transport.zig");

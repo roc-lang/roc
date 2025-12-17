@@ -115,7 +115,7 @@ pub fn main() !void {
             try stdout.print("    {s}\n", .{path});
         }
         try stdout.print("\n", .{});
-        try stdout.print("Add a //! comment BEFORE any other code that explains the purpose of the file.\n", .{});
+        try stdout.print("Add a //! comment that explains the purpose of the file BEFORE any other code.\n", .{});
         try stdout.flush();
         std.process.exit(1);
     }

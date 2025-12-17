@@ -1,3 +1,5 @@
+//! Build system utilities for configuring Zig modules with test filtering and dependency management.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const Build = std.Build;

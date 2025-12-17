@@ -1,3 +1,5 @@
+//! JSON-RPC transport layer for encoding and decoding LSP messages over streams.
+
 const std = @import("std");
 
 /// Builds a JSON-RPC transport to decode requests and encode response for the LSP.

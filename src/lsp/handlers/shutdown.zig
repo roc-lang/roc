@@ -1,3 +1,5 @@
+//! Handler for the LSP `shutdown` request that gracefully terminates the server.
+
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 
