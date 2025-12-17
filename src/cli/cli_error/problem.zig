@@ -82,6 +82,12 @@ pub const CliProblem = union(enum) {
         platform_path: []const u8,
     },
 
+    /// Type not exposed by module
+    missing_type_in_module: struct {
+        module_name: []const u8,
+        type_name: []const u8,
+    },
+
     /// Circular dependency in platform modules
     circular_platform_dependency: struct {
         module_chain: []const []const u8,
@@ -226,6 +232,7 @@ pub const CliProblem = union(enum) {
             .cache_dir_unavailable,
             .platform_source_not_found,
             .missing_platform_module,
+            .missing_type_in_module,
             .circular_platform_dependency,
             .platform_validation_failed,
             .absolute_platform_path,
@@ -262,6 +269,7 @@ pub const CliProblem = union(enum) {
             .platform_not_found => |info| try createPlatformNotFoundReport(allocator, info),
             .platform_source_not_found => |info| try createPlatformSourceNotFoundReport(allocator, info),
             .missing_platform_module => |info| try createMissingPlatformModuleReport(allocator, info),
+            .missing_type_in_module => |info| try createMissingTypeInModuleReport(allocator, info),
             .circular_platform_dependency => |info| try createCircularPlatformDependencyReport(allocator, info),
             .platform_validation_failed => |info| try createPlatformValidationFailedReport(allocator, info),
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
@@ -459,6 +467,20 @@ fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) !Repor
     try report.document.addLineBreak();
     try report.document.addText("is missing the required module: ");
     try report.document.addAnnotated(info.module_name, .emphasized);
+
+    return report;
+}
+
+fn createMissingTypeInModuleReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "MISSING TYPE IN MODULE", .runtime_error);
+
+    try report.document.addText("Module ");
+    try report.document.addAnnotated(info.module_name, .emphasized);
+    try report.document.addText(" does not expose a type named ");
+    try report.document.addAnnotated(info.type_name, .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Platform modules must expose a type with the same name as the module.");
 
     return report;
 }

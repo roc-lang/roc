@@ -527,13 +527,9 @@ pub fn writeFdCoordinationFile(allocs: *Allocators, temp_exe_path: []const u8, s
     const fd_file_path = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{dir_path});
 
     // Create the file (exclusive - fail if exists to detect collisions)
-    const fd_file = std.fs.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| switch (err) {
-        error.PathAlreadyExists => {
-            // File already exists - this is unexpected since we have unique temp dirs
-            std.log.err("Coordination file already exists at '{s}'", .{fd_file_path});
-            return err;
-        },
-        else => return err,
+    const fd_file = std.fs.cwd().createFile(fd_file_path, .{ .exclusive = true }) catch |err| {
+        // Error is handled by caller with ctx.fail()
+        return err;
     };
     defer fd_file.close();
 
@@ -1572,7 +1568,6 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
         @intCast(total_size),
         null, // Anonymous - no name needed for handle inheritance
     ) orelse {
-        std.log.err("Failed to create shared memory mapping", .{});
         return error.SharedMemoryCreateFailed;
     };
 
@@ -1912,12 +1907,16 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, allocs: *Allocators, roc
 
         // Look up the type in the platform module's exposed_items to get the actual node index
         const type_ident_in_platform = platform_env.common.findIdent(module_name) orelse {
-            std.log.err("Platform module '{s}' does not expose a type named '{s}'", .{ module_name, module_name });
-            return error.MissingTypeInPlatformModule;
+            return ctx.fail(.{ .missing_type_in_module = .{
+                .module_name = module_name,
+                .type_name = module_name,
+            } });
         };
         const type_node_idx = platform_env.getExposedNodeIndexById(type_ident_in_platform) orelse {
-            std.log.err("Platform module type '{s}' has no node index in exposed_items", .{module_name});
-            return error.MissingNodeIndexForPlatformType;
+            return ctx.fail(.{ .missing_type_in_module = .{
+                .module_name = module_name,
+                .type_name = module_name,
+            } });
         };
 
         const auto_type = Can.AutoImportedType{
@@ -1952,8 +1951,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, allocs: *Allocators, roc
     try app_canonicalizer.validateForExecution();
 
     if (app_env.exports.span.len == 0) {
-        std.log.err("No exported definitions found after canonicalization", .{});
-        return error.NoMainFunction;
+        return ctx.fail(.{ .no_exports_found = .{ .path = roc_file_path } });
     }
 
     // Store app env at the last index (N-1, after platform modules at 0..N-2)
@@ -1974,8 +1972,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, allocs: *Allocators, roc
     };
     const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
     if (exports_slice.len == 0) {
-        std.log.err("Platform has no exports in `provides` clause.", .{});
-        return error.NoEntrypointFound;
+        return ctx.fail(.{ .no_exports_found = .{ .path = platform_env.module_name } });
     }
 
     // Store platform env offset for entry point lookups
@@ -2267,6 +2264,7 @@ const SerializedModulesResult = struct {
 ///     statement_idx set correctly, enabling proper function lookup (e.g., Stdout.line!).
 ///     The order must match: exposed_type_module_names[i] corresponds to additional_modules[i].
 fn compileModuleForSerialization(
+    ctx: *CliContext,
     allocs: *Allocators,
     file_path: []const u8,
     module_name_arg: []const u8,
@@ -2275,12 +2273,19 @@ fn compileModuleForSerialization(
     exposed_type_module_names: ?[]const []const u8,
 ) !CompiledModule {
     // Read file into arena (so it lives until serialization)
-    const file = try std.fs.cwd().openFile(file_path, .{});
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return ctx.fail(.{ .file_not_found = .{ .path = file_path } }),
+        else => return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } }),
+    };
     defer file.close();
 
-    const file_size = try file.getEndPos();
+    const file_size = file.getEndPos() catch |err| {
+        return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } });
+    };
     const source = try allocs.arena.alloc(u8, @intCast(file_size));
-    _ = try file.read(source);
+    _ = file.read(source) catch |err| {
+        return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } });
+    };
 
     const module_name_copy = try allocs.arena.dupe(u8, module_name_arg);
 
@@ -2341,12 +2346,16 @@ fn compileModuleForSerialization(
             // For type modules, look up the type's node index
             const type_qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
             const type_ident_in_module = mod_env.common.findIdent(base_module_name) orelse {
-                std.log.err("Type module '{s}' does not expose a type named '{s}'", .{ mod_env.module_name, base_module_name });
-                return error.MissingTypeInPlatformModule;
+                return ctx.fail(.{ .missing_type_in_module = .{
+                    .module_name = mod_env.module_name,
+                    .type_name = base_module_name,
+                } });
             };
             const type_node_idx = mod_env.getExposedNodeIndexById(type_ident_in_module) orelse {
-                std.log.err("Type module '{s}' has no node index for type '{s}'", .{ mod_env.module_name, base_module_name });
-                return error.MissingNodeIndexForPlatformType;
+                return ctx.fail(.{ .missing_type_in_module = .{
+                    .module_name = mod_env.module_name,
+                    .type_name = base_module_name,
+                } });
             };
             break :blk .{
                 .env = mod_env,
@@ -2517,6 +2526,7 @@ fn compileAndSerializeModulesForEmbedding(
         defer allocs.gpa.free(module_path);
 
         const compiled = try compileModuleForSerialization(
+            ctx,
             allocs,
             module_path,
             module_name,
@@ -2538,6 +2548,7 @@ fn compileAndSerializeModulesForEmbedding(
         }
 
         var compiled = try compileModuleForSerialization(
+            ctx,
             allocs,
             platform_main_path.?,
             "main",
@@ -2560,6 +2571,7 @@ fn compileAndSerializeModulesForEmbedding(
         }
 
         var compiled = try compileModuleForSerialization(
+            ctx,
             allocs,
             roc_file_path,
             "app",
@@ -3171,18 +3183,14 @@ fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8
                                     else => {},
                                 }
                             }
-                            std.log.err("Invalid provides entry: string value is empty", .{});
                             return error.InvalidProvidesEntry;
                         },
                         .string_part => |str_part| break :blk parse_ast.resolve(str_part.token),
                         else => {
-                            std.log.err("Invalid provides entry: expected string value for symbol name", .{});
                             return error.InvalidProvidesEntry;
                         },
                     }
                 } else {
-                    const field_name = parse_ast.resolve(field.name);
-                    std.log.err("Provides entry '{s}' missing symbol name. Use format: {{ {s}: \"symbol_name\" }}", .{ field_name, field_name });
                     return error.InvalidProvidesEntry;
                 };
                 try entrypoints.append(try allocs.arena.dupe(u8, symbol_name));
