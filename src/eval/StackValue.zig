@@ -417,7 +417,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .list_of_zst) {
-        // Copy the list header for ZST lists - no refcounting needed for ZSTs
+        // Copy the list header for ZST lists
         std.debug.assert(self.ptr != null);
         const src_list: *const builtins.list.RocList = builtins.utils.alignedPtrCast(*const builtins.list.RocList, @as([*]u8, @ptrCast(self.ptr.?)), @src());
         const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
@@ -1677,6 +1677,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             if (self.ptr == null) return;
             const list_header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
             const list_value = list_header.*;
+
             const alignment_u32: u32 = @intCast(layout_cache.targetUsize().size());
             list_value.decref(alignment_u32, 0, false, null, &builtins.list.rcNone, ops);
             return;
