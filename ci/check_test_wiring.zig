@@ -57,6 +57,9 @@ pub fn main() !void {
     if (fileExists("src/cli/test/test_runner.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/test/test_runner.zig"));
     }
+    if (fileExists("src/cli/cli_error.zig")) {
+        try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/cli_error.zig"));
+    }
 
     if (test_files.items.len == 0) {
         try stdout.print("{s}[OK]{s} No test files found to check\n", .{ TermColor.green, TermColor.reset });

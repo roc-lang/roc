@@ -10,6 +10,9 @@ const base = @import("base");
 const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
 const RocTarget = @import("roc_target").RocTarget;
+const cli_ctx = @import("CliContext.zig");
+const CliContext = cli_ctx.CliContext;
+const Io = cli_ctx.Io;
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -123,10 +126,10 @@ pub const LinkError = error{
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
 /// This is used both by link() and formatLinkCommand().
-fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
+fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
-    var args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 64) catch return LinkError.OutOfMemory;
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 64) catch return LinkError.OutOfMemory;
 
     // Add platform-specific linker name and arguments
     // Use target OS if provided, otherwise fall back to host OS
@@ -204,7 +207,7 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
                     // for cross-compilation. Only detect locally for native builds
                     if (config.extra_args.len == 0) {
                         // Native build - try to detect dynamic linker
-                        if (libc_finder.findLibc(allocs)) |libc_info| {
+                        if (libc_finder.findLibc(ctx)) |libc_info| {
                             // We need to copy the path since args holds references
                             try args.append("-dynamic-linker");
                             try args.append(libc_info.dynamic_linker);
@@ -244,27 +247,27 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
             const target = try std.zig.system.resolveTargetQuery(query);
 
             const native_libc = std.zig.LibCInstallation.findNative(.{
-                .allocator = allocs.arena,
+                .allocator = ctx.arena,
                 .target = &target,
             }) catch return error.WindowsSDKNotFound;
 
             if (native_libc.crt_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
                 try args.append(lib_arg);
             } else return error.WindowsSDKNotFound;
 
             if (native_libc.msvc_lib_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
                 try args.append(lib_arg);
             } else return error.WindowsSDKNotFound;
 
             if (native_libc.kernel32_lib_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
                 try args.append(lib_arg);
             } else return error.WindowsSDKNotFound;
 
             // Add output argument using Windows style
-            const out_arg = try std.fmt.allocPrint(allocs.arena, "/out:{s}", .{config.output_path});
+            const out_arg = try std.fmt.allocPrint(ctx.arena, "/out:{s}", .{config.output_path});
             try args.append(out_arg);
 
             // Add subsystem flag (console by default)
@@ -315,12 +318,12 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
 
             // Set initial memory size (configurable, default 64MB)
             // Must be a multiple of 64KB (WASM page size)
-            const initial_memory_str = std.fmt.allocPrint(allocs.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
+            const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
             try args.append(initial_memory_str);
 
             // Set stack size (configurable, default 8MB)
             // Must be a multiple of 16 (stack alignment)
-            const stack_size_str = std.fmt.allocPrint(allocs.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
+            const stack_size_str = std.fmt.allocPrint(ctx.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
             try args.append("-z");
             try args.append(stack_size_str);
         },
@@ -395,13 +398,13 @@ fn buildLinkArgs(allocs: *Allocators, config: LinkConfig) LinkError!std.array_li
 }
 
 /// Link object files into an executable using LLD
-pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
+pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
     // Check if LLVM is available at compile time
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
 
-    const args = try buildLinkArgs(allocs, config);
+    const args = try buildLinkArgs(ctx, config);
 
     // Debug: Print the linker command
     std.log.debug("Linker command:", .{});
@@ -411,10 +414,10 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
     // Convert to null-terminated strings for C API
     // Arena allocator will clean up all these temporary allocations
-    var c_args = allocs.arena.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
+    var c_args = ctx.arena.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
 
     for (args.items, 0..) |arg, i| {
-        c_args[i] = (allocs.arena.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
+        c_args[i] = (ctx.arena.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
     }
 
     // Call appropriate LLD function based on target format
@@ -452,11 +455,11 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
 /// Format link configuration as a shell command string for manual reproduction.
 /// Useful for debugging linking issues by allowing users to run the linker manually.
-pub fn formatLinkCommand(allocs: *Allocators, config: LinkConfig) LinkError![]const u8 {
-    const args = try buildLinkArgs(allocs, config);
+pub fn formatLinkCommand(ctx: *CliContext, config: LinkConfig) LinkError![]const u8 {
+    const args = try buildLinkArgs(ctx, config);
 
     // Join args with spaces, quoting paths that contain spaces or special chars
-    var result = std.array_list.Managed(u8).init(allocs.arena);
+    var result = std.array_list.Managed(u8).init(ctx.arena);
 
     for (args.items, 0..) |arg, i| {
         if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
@@ -483,7 +486,7 @@ pub fn formatLinkCommand(allocs: *Allocators, config: LinkConfig) LinkError![]co
 }
 
 /// Convenience function to link two object files into an executable
-pub fn linkTwoObjects(allocs: *Allocators, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
+pub fn linkTwoObjects(ctx: *CliContext, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -493,11 +496,11 @@ pub fn linkTwoObjects(allocs: *Allocators, obj1: []const u8, obj2: []const u8, o
         .object_files = &.{ obj1, obj2 },
     };
 
-    return link(allocs, config);
+    return link(ctx, config);
 }
 
 /// Convenience function to link multiple object files into an executable
-pub fn linkObjects(allocs: *Allocators, object_files: []const []const u8, output: []const u8) LinkError!void {
+pub fn linkObjects(ctx: *CliContext, object_files: []const []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -507,7 +510,7 @@ pub fn linkObjects(allocs: *Allocators, object_files: []const []const u8, output
         .object_files = object_files,
     };
 
-    return link(allocs, config);
+    return link(ctx, config);
 }
 
 test "link config creation" {
@@ -534,16 +537,17 @@ test "target format detection" {
 
 test "link error when LLVM not available" {
     if (comptime !llvm_available) {
-        var allocs: Allocators = undefined;
-        allocs.initInPlace(std.testing.allocator);
-        defer allocs.deinit();
+        var io = Io.init();
+        var ctx = CliContext.init(std.testing.allocator, std.testing.allocator, &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
 
         const config = LinkConfig{
             .output_path = "test_output",
             .object_files = &.{ "file1.o", "file2.o" },
         };
 
-        const result = link(&allocs, config);
+        const result = link(&ctx, config);
         try std.testing.expectError(LinkError.LLVMNotAvailable, result);
     }
 }
