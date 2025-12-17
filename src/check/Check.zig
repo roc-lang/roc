@@ -1258,7 +1258,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             _ = try self.checkExpr(def.expr, env, .no_expectation);
         }
 
-        // Now that we are existing the scope, we must generalize then pop this rank
+        // Now that we are exiting the scope, we must generalize then pop this rank
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
 
         // Check any accumulated static dispatch constraints
@@ -2898,9 +2898,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
-            const resolved_pat = self.types.resolveVar(pat_var).desc;
+            const resolved_pat = self.types.resolveVar(pat_var);
 
-            if (resolved_pat.rank == Rank.generalized) {
+            // Check if this is a generalized var that should NOT be instantiated.
+            // Numeric literals with from_numeral constraints should unify directly
+            // so that the concrete type propagates back to the definition site.
+            // This fixes GitHub issue #8666 where polymorphic numerics defaulted to Dec.
+            const should_instantiate = blk: {
+                if (resolved_pat.desc.rank != Rank.generalized) break :blk false;
+                // Don't instantiate if this has a from_numeral constraint
+                if (resolved_pat.desc.content == .flex) {
+                    const flex = resolved_pat.desc.content.flex;
+                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                    for (constraints) |constraint| {
+                        if (constraint.origin == .from_numeral) {
+                            break :blk false;
+                        }
+                    }
+                }
+                break :blk true;
+            };
+
+            if (should_instantiate) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
