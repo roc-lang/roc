@@ -204,8 +204,8 @@ const GlobalQueue = struct {
                                 // Get module state to check path
                                 const module_state = sched.getModuleState(task.module_name).?;
 
-                                // Read the source file
-                                const source = std.fs.cwd().readFileAlloc(be.gpa, module_state.path, 10 * 1024 * 1024) catch {
+                                // Read the source file (normalize line endings for consistent behavior on Windows).
+                                const source = be.readFile(module_state.path, 10 * 1024 * 1024) catch {
                                     // If we can't read the file, continue with normal processing
                                     sched.processModuleByName(task.module_name) catch {
                                         // Continue processing other modules despite this error

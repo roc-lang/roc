@@ -1825,8 +1825,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     defer app_file.close();
 
     const app_file_size = try app_file.getEndPos();
-    const app_source = try shm_allocator.alloc(u8, @intCast(app_file_size));
+    var app_source = try shm_allocator.alloc(u8, @intCast(app_file_size));
     _ = try app_file.read(app_source);
+    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
+    // SharedMemoryAllocator is a bump allocator, so normalize in-place and keep any trailing bytes unused.
+    app_source = base.source_utils.normalizeLineEndings(app_source);
 
     const app_basename = std.fs.path.basename(roc_file_path);
     const app_module_name = try shm_allocator.dupe(u8, app_basename);
@@ -2050,7 +2053,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
 /// Extract exposed modules from a platform's main.roc file
 fn extractExposedModulesFromPlatform(ctx: *CliContext, roc_file_path: []const u8, exposed_modules: *std.ArrayList([]const u8)) !void {
     // Read the Roc file
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
+    };
     defer ctx.gpa.free(source);
 
     // Extract module name from the file path
@@ -2142,8 +2149,11 @@ fn compileModuleToSharedMemory(
     defer file.close();
 
     const file_size = try file.getEndPos();
-    const source = try shm_allocator.alloc(u8, @intCast(file_size));
+    var source = try shm_allocator.alloc(u8, @intCast(file_size));
     _ = try file.read(source);
+    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
+    // SharedMemoryAllocator is a bump allocator, so normalize in-place and keep any trailing bytes unused.
+    source = base.source_utils.normalizeLineEndings(source);
 
     const module_name_copy = try shm_allocator.dupe(u8, module_name_arg);
 
@@ -2276,10 +2286,13 @@ fn compileModuleForSerialization(
     const file_size = file.getEndPos() catch |err| {
         return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } });
     };
-    const source = try ctx.arena.alloc(u8, @intCast(file_size));
+    var source = try ctx.arena.alloc(u8, @intCast(file_size));
     _ = file.read(source) catch |err| {
         return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } });
     };
+    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
+    // The arena keeps the original allocation; trailing bytes (if any) are harmless.
+    source = base.source_utils.normalizeLineEndings(source);
 
     const module_name_copy = try ctx.arena.dupe(u8, module_name_arg);
 
@@ -2850,7 +2863,7 @@ pub fn resolvePlatformPaths(ctx: *CliContext, roc_file_path: []const u8) CliErro
 /// Takes a CliContext which provides allocators and error reporting.
 fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]const u8 {
     // Read the app file
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, app_file_path, std.math.maxInt(usize)) catch |err| {
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, app_file_path, std.math.maxInt(usize)) catch |err| {
         return ctx.fail(switch (err) {
             error.FileNotFound => .{ .file_not_found = .{
                 .path = app_file_path,
@@ -2861,6 +2874,10 @@ fn extractPlatformSpecFromApp(ctx: *CliContext, app_file_path: []const u8) ![]co
                 .err = err,
             } },
         });
+    };
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
     };
     defer ctx.gpa.free(source);
 
@@ -3124,7 +3141,11 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
 /// TODO: Replace this with proper BuildEnv solution in the future
 fn extractEntrypointsFromPlatform(ctx: *CliContext, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
     // Read the Roc file
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
+    };
     defer ctx.gpa.free(source);
 
     // Extract module name from the file path
@@ -3939,8 +3960,12 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     const stderr = ctx.io.stderr();
 
     // Read the Roc file
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch |err| {
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch |err| {
         try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
+        return err;
+    };
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
         return err;
     };
     defer ctx.gpa.free(source);
