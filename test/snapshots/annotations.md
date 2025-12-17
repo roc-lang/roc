@@ -61,7 +61,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -89,7 +89,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -100,10 +100,10 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
                        ^^^^^^^^^^^^^^^
 
 The tag is:
-    _Pair(a, b)_
+    _Pair a b_
 
 But the nominal type needs it to be:
-    _Pair(a, a)_
+    _Pair a a_
 
 # TOKENS
 ~~~zig

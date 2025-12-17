@@ -32,20 +32,31 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 const Var = types_mod.Var;
 const Content = types_mod.Content;
 
+/// Returns singular form if count is 1, plural form otherwise.
+/// Usage: pluralize(count, "argument", "arguments")
+fn pluralize(count: anytype, singular: []const u8, plural: []const u8) []const u8 {
+    return if (count == 1) singular else plural;
+}
+
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
+    fn_call_arity_mismatch: FnCallArityMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
     static_dispach: StaticDispatch,
+    cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
+    nominal_type_resolution_failed: NominalTypeResolutionFailed,
     number_does_not_fit: NumberDoesNotFit,
     negative_unsigned_int: NegativeUnsignedInt,
     invalid_numeric_literal: InvalidNumericLiteral,
     unused_value: UnusedValue,
-    infinite_recursion: struct { var_: Var },
-    anonymous_recursion: struct { var_: Var },
-    invalid_number_type: VarProblem1,
-    invalid_record_ext: VarProblem1,
-    invalid_tag_union_ext: VarProblem1,
+    recursive_alias: RecursiveAlias,
+    unsupported_alias_where_clause: UnsupportedAliasWhereClause,
+    infinite_recursion: VarWithSnapshot,
+    anonymous_recursion: VarWithSnapshot,
+    invalid_number_type: VarWithSnapshot,
+    invalid_record_ext: VarWithSnapshot,
+    invalid_tag_union_ext: VarWithSnapshot,
     bug: Bug,
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
@@ -73,8 +84,9 @@ pub const ComptimeEvalError = struct {
     region: base.Region,
 };
 
-/// A single var problem
-pub const VarProblem1 = struct {
+/// A problem involving a single type variable, with a snapshot for error reporting.
+/// Used for recursion errors, invalid extension types, etc.
+pub const VarWithSnapshot = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
 };
@@ -139,6 +151,9 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_branches: IncompatibleMatchBranches,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
+    invalid_nominal_record,
+    invalid_nominal_tuple,
+    invalid_nominal_value,
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
@@ -155,6 +170,16 @@ pub const IncompatibleListElements = struct {
 pub const CrossModuleImport = struct {
     import_region: CIR.Expr.Idx,
     module_idx: CIR.Import.Idx,
+};
+
+/// Problem data when function is called with wrong number of arguments
+pub const FnCallArityMismatch = struct {
+    fn_name: ?Ident.Idx,
+    fn_var: Var,
+    fn_snapshot: SnapshotContentIdx,
+    call_region: base.Region,
+    expected_args: u32,
+    actual_args: u32,
 };
 
 /// Problem data when function argument types don't match
@@ -251,6 +276,24 @@ pub const TypeDoesNotSupportEquality = struct {
 
 // bug //
 
+/// Error when you try to use an opaque nominal type constructor
+pub const CannotAccessOpaqueNominal = struct {
+    var_: Var,
+    nominal_type_name: Ident.Idx,
+};
+
+/// Compiler bug: a nominal type variable doesn't resolve to a nominal_type structure.
+/// This should never happen because:
+/// 1. The canonicalizer only creates nominal patterns/expressions for s_nominal_decl statements
+/// 2. generateNominalDecl always sets the decl_var to a nominal_type structure
+/// 3. instantiateVar and copyVar preserve the nominal_type structure
+pub const NominalTypeResolutionFailed = struct {
+    var_: Var,
+    nominal_type_decl_var: Var,
+};
+
+// bug //
+
 /// Error when you try to apply the wrong number of arguments to a type in
 /// an annotation
 pub const TypeApplyArityMismatch = struct {
@@ -258,6 +301,20 @@ pub const TypeApplyArityMismatch = struct {
     region: base.Region,
     num_expected_args: u32,
     num_actual_args: u32,
+};
+
+/// Error when a type alias references itself (aliases cannot be recursive)
+/// Use nominal types (:=) for recursive types instead
+pub const RecursiveAlias = struct {
+    type_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when using alias syntax in where clause (e.g., `where [a.SomeAlias]`)
+/// This syntax was used for abilities which have been removed from the language
+pub const UnsupportedAliasWhereClause = struct {
+    alias_name: base.Ident.Idx,
+    region: base.Region,
 };
 
 // bug //
@@ -277,7 +334,6 @@ pub const ReportBuilder = struct {
     const Self = @This();
 
     gpa: Allocator,
-    snapshot_writer: snapshot.SnapshotWriter,
     bytes_buf: std.array_list.Managed(u8),
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
@@ -300,7 +356,6 @@ pub const ReportBuilder = struct {
     ) Self {
         return .{
             .gpa = gpa,
-            .snapshot_writer = snapshot.SnapshotWriter.init(gpa, snapshots, module_env.getIdentStore(), import_mapping),
             .bytes_buf = std.array_list.Managed(u8).init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
@@ -315,18 +370,34 @@ pub const ReportBuilder = struct {
     /// Deinit report builder
     /// Only owned field is `buf`
     pub fn deinit(self: *Self) void {
-        self.snapshot_writer.deinit();
         self.bytes_buf.deinit();
     }
 
-    /// Check if any static dispatch constraint involves the is_eq method
-    fn hasEqualityConstraint(self: *Self) bool {
-        for (self.snapshot_writer.static_dispatch_constraints.items) |constraint| {
-            if (constraint.fn_name == self.can_ir.idents.is_eq) {
-                return true;
-            }
-        }
-        return false;
+    /// Get the formatted string for a snapshot.
+    /// Returns a placeholder if the formatted string is missing, allowing error reporting
+    /// to continue gracefully even if snapshots are incomplete.
+    fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) []const u8 {
+        return self.snapshots.getFormattedString(idx) orelse "<unknown type>";
+    }
+
+    /// Returns the operator symbol for a given method ident, or null if not an operator method.
+    /// Maps method idents like plus, minus, times, div_by to their corresponding operator symbols.
+    fn getOperatorForMethod(self: *const Self, method_ident: Ident.Idx) ?[]const u8 {
+        const idents = self.can_ir.idents;
+        if (method_ident == idents.plus) return "+";
+        if (method_ident == idents.minus) return "-";
+        if (method_ident == idents.times) return "*";
+        if (method_ident == idents.div_by) return "/";
+        if (method_ident == idents.div_trunc_by) return "//";
+        if (method_ident == idents.rem_by) return "%";
+        if (method_ident == idents.negate) return "-";
+        if (method_ident == idents.is_eq) return "==";
+        if (method_ident == idents.is_lt) return "<";
+        if (method_ident == idents.is_lte) return "<=";
+        if (method_ident == idents.is_gt) return ">";
+        if (method_ident == idents.is_gte) return ">=";
+        if (method_ident == idents.not) return "not";
+        return null;
     }
 
     /// Build a report for a problem
@@ -365,6 +436,15 @@ pub const ReportBuilder = struct {
                         .invalid_nominal_tag => {
                             return self.buildInvalidNominalTag(mismatch.types);
                         },
+                        .invalid_nominal_record => {
+                            return self.buildInvalidNominalRecord(mismatch.types);
+                        },
+                        .invalid_nominal_tuple => {
+                            return self.buildInvalidNominalTuple(mismatch.types);
+                        },
+                        .invalid_nominal_value => {
+                            return self.buildInvalidNominalValue(mismatch.types);
+                        },
                         .cross_module_import => |data| {
                             return self.buildCrossModuleImportError(mismatch.types, data);
                         },
@@ -379,8 +459,17 @@ pub const ReportBuilder = struct {
                     return self.buildGenericTypeMismatchReport(mismatch.types);
                 }
             },
+            .fn_call_arity_mismatch => |data| {
+                return self.buildFnCallArityMismatchReport(data);
+            },
             .type_apply_mismatch_arities => |data| {
                 return self.buildTypeApplyArityMismatchReport(data);
+            },
+            .cannot_access_opaque_nominal => |data| {
+                return self.buildCannotAccessOpaqueNominal(data);
+            },
+            .nominal_type_resolution_failed => |data| {
+                return self.buildNominalTypeResolutionFailed(data);
             },
             .static_dispach => |detail| {
                 switch (detail) {
@@ -400,6 +489,12 @@ pub const ReportBuilder = struct {
             },
             .unused_value => |data| {
                 return self.buildUnusedValueReport(data);
+            },
+            .recursive_alias => |data| {
+                return self.buildRecursiveAliasReport(data);
+            },
+            .unsupported_alias_where_clause => |data| {
+                return self.buildUnsupportedAliasWhereClauseReport(data);
             },
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
@@ -423,13 +518,8 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const owned_actual = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+        const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         // For annotation mismatches, we want to highlight the expression that doesn't match,
         // not the annotation itself. When from_annotation is true and we're showing
@@ -446,7 +536,7 @@ pub const ReportBuilder = struct {
         const expected_content = self.snapshots.getContent(types.expected_snapshot);
         const actual_content = self.snapshots.getContent(types.actual_snapshot);
 
-        if (types.from_annotation and self.areBothFunctionSnapshots(expected_content, actual_content)) {
+        if (types.from_annotation and areBothFunctionSnapshots(expected_content, actual_content)) {
             // When we have constraint_origin_var, it indicates this error originated from
             // a specific constraint like a dot access (e.g., str.to_utf8()).
             // In this case, show a specialized argument type mismatch error.
@@ -464,16 +554,7 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is a method type mismatch (both types are functions with equality constraints)
-        const is_method_type_mismatch = self.areBothFunctionSnapshots(expected_content, actual_content) and
-            self.snapshot_writer.static_dispatch_constraints.items.len > 0 and
-            self.hasEqualityConstraint();
-
-        if (is_method_type_mismatch) {
-            try report.document.addReflowingText("This method has an unexpected type:");
-        } else {
-            try report.document.addReflowingText("This expression is used in an unexpected way:");
-        }
+        try report.document.addReflowingText("This expression is used in an unexpected way:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -514,13 +595,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.incompatible_elem_index);
@@ -648,9 +724,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         // Add description
         try report.document.addText("This ");
@@ -733,13 +807,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
@@ -872,15 +941,9 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
         try report.document.addText("The first pattern in this ");
         try report.document.addAnnotated("match", .keyword);
         try report.document.addText(" is incompatible:");
@@ -930,7 +993,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
-        self.snapshot_writer.resetContext();
         try report.document.addText("The first pattern has the type:");
         try report.document.addLineBreak();
         try report.document.addText("    ");
@@ -948,7 +1010,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        try report.document.addText("These two types can't never match!");
+        try report.document.addText("These two types can never match!");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -965,13 +1027,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
@@ -983,7 +1040,6 @@ pub const ReportBuilder = struct {
 
         // Add description
         if (data.num_patterns > 1) {
-            self.snapshot_writer.resetContext();
             try report.document.addText("The pattern ");
             try report.document.addText(pattern_ord);
             try report.document.addText(" pattern in this ");
@@ -992,7 +1048,6 @@ pub const ReportBuilder = struct {
             try report.document.addText(" differs from previous ones:");
             try report.document.addLineBreak();
         } else {
-            self.snapshot_writer.resetContext();
             try report.document.addText("The pattern in the ");
             try report.document.addText(branch_ord);
             try report.document.addText(" branch of this ");
@@ -1045,7 +1100,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Show the type of the invalid branch
-        self.snapshot_writer.resetContext();
         try report.document.addText("The ");
         try report.document.addText(branch_ord);
         try report.document.addText(" pattern has this type:");
@@ -1090,13 +1144,8 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
         self.bytes_buf.clearRetainingCapacity();
         try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
@@ -1104,12 +1153,10 @@ pub const ReportBuilder = struct {
 
         // Add description
         if (data.num_branches == 2) {
-            self.snapshot_writer.resetContext();
             try report.document.addText("The second branch's type in this ");
             try report.document.addAnnotated("match", .keyword);
             try report.document.addText(" is different from the first branch:");
         } else {
-            self.snapshot_writer.resetContext();
             try report.document.addText("The ");
             try report.document.addText(branch_ord);
             try report.document.addText(" branch's type in this ");
@@ -1212,9 +1259,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create owned strings
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         // Add description
         try report.document.addText("I'm having trouble with this bool operation:");
@@ -1307,9 +1352,9 @@ pub const ReportBuilder = struct {
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.writeTag(actual_tag, types.actual_snapshot);
-        const actual_tag_str = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_tag_formatted = try self.snapshots.formatTagString(self.gpa, actual_tag, self.module_env.getIdentStore());
+        defer self.gpa.free(actual_tag_formatted);
+        const actual_tag_str = try report.addOwnedString(actual_tag_formatted);
 
         // Create expected tag str
         const expected_content = self.snapshots.getContent(types.expected_snapshot);
@@ -1343,18 +1388,16 @@ pub const ReportBuilder = struct {
         // Show the expected tags
         if (expected_num_tags_str == 1) {
             const expected_tag = self.snapshots.tags.get(expected_content.structure.tag_union.tags.start);
-            self.snapshot_writer.resetContext();
-            try self.snapshot_writer.writeTag(expected_tag, types.expected_snapshot);
-            const expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());
+            const expected_tag_formatted = try self.snapshots.formatTagString(self.gpa, expected_tag, self.module_env.getIdentStore());
+            defer self.gpa.free(expected_tag_formatted);
+            const expected_tag_str = try report.addOwnedString(expected_tag_formatted);
 
             try report.document.addText("But the nominal type needs it to be:");
             try report.document.addLineBreak();
             try report.document.addText("    ");
             try report.document.addAnnotated(expected_tag_str, .type_variable);
         } else {
-            self.snapshot_writer.resetContext();
-            try self.snapshot_writer.write(types.expected_snapshot);
-            const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+            const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
             try report.document.addLineBreak();
@@ -1368,9 +1411,9 @@ pub const ReportBuilder = struct {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
                 if (actual_tag.name == cur_expected_tag.name) {
-                    self.snapshot_writer.resetContext();
-                    try self.snapshot_writer.writeTag(cur_expected_tag, types.expected_snapshot);
-                    const cur_expected_tag_str = try report.addOwnedString(self.snapshot_writer.get());
+                    const cur_expected_tag_formatted = try self.snapshots.formatTagString(self.gpa, cur_expected_tag, self.module_env.getIdentStore());
+                    defer self.gpa.free(cur_expected_tag_formatted);
+                    const cur_expected_tag_str = try report.addOwnedString(cur_expected_tag_formatted);
 
                     try report.document.addLineBreak();
                     try report.document.addLineBreak();
@@ -1385,6 +1428,126 @@ pub const ReportBuilder = struct {
                 }
             }
         }
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal record (record fields don't match)
+    fn buildInvalidNominalRecord(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL RECORD", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type that wraps a record:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The record I found is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal tuple (tuple elements don't match)
+    fn buildInvalidNominalTuple(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TUPLE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The tuple I found is:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for invalid nominal value (value type doesn't match)
+    fn buildInvalidNominalValue(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "INVALID NOMINAL TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("I'm having trouble with this nominal type:");
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+
+        try report.document.addText("The value I found has type:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the nominal type expects:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(expected_type, .type_variable);
 
         return report;
     }
@@ -1406,13 +1569,8 @@ pub const ReportBuilder = struct {
         const actual_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.actual_snapshot) orelse types.actual_snapshot;
         const expected_arg_type = self.extractFirstArgTypeFromFunctionSnapshot(types.expected_snapshot) orelse types.expected_snapshot;
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(actual_arg_type);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(expected_arg_type);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(actual_arg_type));
+        const expected_type = try report.addOwnedString(self.getFormattedString(expected_arg_type));
 
         try report.document.addText("The ");
         try report.document.addText(arg_index);
@@ -1439,7 +1597,6 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("But ");
         if (data.fn_name) |fn_name_ident| {
-            self.snapshot_writer.resetContext();
             const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
             try report.document.addAnnotated(fn_name, .inline_code);
         } else {
@@ -1473,13 +1630,8 @@ pub const ReportBuilder = struct {
 
         // The types from unification already have the correct snapshots
         // expected = first argument, actual = second argument
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const first_type = try report.addOwnedString(self.snapshot_writer.get());
-
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const second_type = try report.addOwnedString(self.snapshot_writer.get());
+        const first_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const second_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
 
         try report.document.addText("The ");
         try report.document.addText(first_arg_index);
@@ -1566,7 +1718,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         if (data.fn_name) |fn_name_ident| {
-            self.snapshot_writer.resetContext();
             const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
             try report.document.addAnnotated(fn_name, .inline_code);
         } else {
@@ -1607,11 +1758,11 @@ pub const ReportBuilder = struct {
 
         self.bytes_buf.clearRetainingCapacity();
         try self.bytes_buf.writer().print("{d}", .{data.num_expected_args});
-        const num_expected_args = try report.addOwnedString(self.snapshot_writer.get());
+        const num_expected_args = try report.addOwnedString(self.bytes_buf.items);
 
         self.bytes_buf.clearRetainingCapacity();
         try self.bytes_buf.writer().print("{d}", .{data.num_actual_args});
-        const num_actual_args = try report.addOwnedString(self.snapshot_writer.get());
+        const num_actual_args = try report.addOwnedString(self.bytes_buf.items);
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -1620,7 +1771,7 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated(type_name, .type_variable);
         try report.document.addReflowingText(" expects ");
         try report.document.addReflowingText(num_expected_args);
-        try report.document.addReflowingText(" argument, but got ");
+        try report.document.addReflowingText(pluralize(data.num_expected_args, " argument, but got ", " arguments, but got "));
         try report.document.addReflowingText(num_actual_args);
         try report.document.addReflowingText(" instead.");
         try report.document.addLineBreak();
@@ -1637,6 +1788,141 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for function call arity mismatch
+    fn buildFnCallArityMismatchReport(
+        self: *Self,
+        data: FnCallArityMismatch,
+    ) !Report {
+        const title = blk: {
+            if (data.expected_args > data.actual_args) {
+                break :blk "TOO FEW ARGUMENTS";
+            } else if (data.expected_args < data.actual_args) {
+                break :blk "TOO MANY ARGUMENTS";
+            } else {
+                break :blk "WRONG NUMBER OF ARGUMENTS";
+            }
+        };
+        var report = Report.init(self.gpa, title, .runtime_error);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print("{d}", .{data.expected_args});
+        const num_expected = try report.addOwnedString(self.bytes_buf.items);
+
+        self.bytes_buf.clearRetainingCapacity();
+        try self.bytes_buf.writer().print("{d}", .{data.actual_args});
+        const num_actual = try report.addOwnedString(self.bytes_buf.items);
+
+        // Build the function type string from the snapshot
+        const fn_type = try report.addOwnedString(self.getFormattedString(data.fn_snapshot));
+
+        // Start the error message
+        if (data.fn_name) |fn_name_ident| {
+            const fn_name = try report.addOwnedString(self.can_ir.getIdent(fn_name_ident));
+            try report.document.addReflowingText("The function ");
+            try report.document.addAnnotated(fn_name, .inline_code);
+        } else {
+            try report.document.addReflowingText("This function");
+        }
+        try report.document.addReflowingText(" expects ");
+        try report.document.addReflowingText(num_expected);
+        try report.document.addReflowingText(pluralize(data.expected_args, " argument, but ", " arguments, but "));
+        try report.document.addReflowingText(num_actual);
+        try report.document.addReflowingText(pluralize(data.actual_args, " was provided:", " were provided:"));
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.call_region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // Show the function signature
+        try report.document.addReflowingText("The function has the signature:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(fn_type, .type_variable);
+
+        return report;
+    }
+
+    /// Build a report for when a type alias references itself recursively
+    fn buildRecursiveAliasReport(
+        self: *Self,
+        data: RecursiveAlias,
+    ) !Report {
+        var report = Report.init(self.gpa, "RECURSIVE ALIAS", .runtime_error);
+        errdefer report.deinit();
+
+        // Look up display name in import mapping (handles auto-imported builtin types)
+        const type_name_ident = if (self.import_mapping.get(data.type_name)) |display_ident|
+            self.can_ir.getIdent(display_ident)
+        else
+            self.can_ir.getIdent(data.type_name);
+        const type_name = try report.addOwnedString(type_name_ident);
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+
+        try report.document.addReflowingText("The type alias ");
+        try report.document.addAnnotated(type_name, .type_variable);
+        try report.document.addReflowingText(" references itself, which is not allowed:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("Type aliases cannot be recursive. If you need a recursive type, use a nominal type (:=) instead of an alias (:).");
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when alias syntax is used in a where clause
+    /// This syntax was used for abilities which have been removed
+    fn buildUnsupportedAliasWhereClauseReport(
+        self: *Self,
+        data: UnsupportedAliasWhereClause,
+    ) !Report {
+        var report = Report.init(self.gpa, "UNSUPPORTED WHERE CLAUSE", .runtime_error);
+        errdefer report.deinit();
+
+        const alias_name = try report.addOwnedString(self.can_ir.getIdent(data.alias_name));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+
+        try report.document.addReflowingText("The where clause syntax ");
+        try report.document.addAnnotated(alias_name, .type_variable);
+        try report.document.addReflowingText(" is not supported:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.");
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
     // static dispatch //
 
     /// Build a report for when a type is not nominal, but you're trying to
@@ -1648,9 +1934,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.dispatcher_snapshot);
-        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
 
@@ -1694,9 +1978,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.dispatcher_snapshot);
-        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const method_name_str = try report.addOwnedString(self.can_ir.getIdentText(data.method_name));
 
@@ -1705,15 +1987,22 @@ pub const ReportBuilder = struct {
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        // Check if this is the "plus" method (from the + operator)
-        const is_plus_operator = data.origin == .desugared_binop;
+        // Check if this method corresponds to an operator (using ident index comparison, not strings)
+        const is_from_binop = data.origin == .desugared_binop;
+        const mb_operator = self.getOperatorForMethod(data.method_name);
 
-        if (is_plus_operator) {
-            try report.document.addReflowingText("The value before this ");
-            try report.document.addAnnotated("+", .emphasized);
-            try report.document.addReflowingText(" operator has a type that doesn't have a ");
-            try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(" method:");
+        if (is_from_binop) {
+            if (mb_operator) |operator| {
+                try report.document.addReflowingText("The value before this ");
+                try report.document.addAnnotated(operator, .emphasized);
+                try report.document.addReflowingText(" operator has a type that doesn't have a ");
+                try report.document.addAnnotated(method_name_str, .emphasized);
+                try report.document.addReflowingText(" method:");
+            } else {
+                try report.document.addReflowingText("This ");
+                try report.document.addAnnotated(method_name_str, .emphasized);
+                try report.document.addReflowingText(" method is being called on a value whose type doesn't have that method:");
+            }
             try report.document.addLineBreak();
         } else {
             try report.document.addReflowingText("This ");
@@ -1731,47 +2020,50 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        if (is_plus_operator) {
-            try report.document.addReflowingText("The value's type, which does not have a method named ");
-            try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(", is:");
-        } else {
-            try report.document.addReflowingText("The value's type, which does not have a method named ");
-            try report.document.addAnnotated(method_name_str, .emphasized);
-            try report.document.addReflowingText(", is:");
-        }
+        try report.document.addReflowingText("The value's type, which does not have a method named ");
+        try report.document.addAnnotated(method_name_str, .emphasized);
+        try report.document.addReflowingText(", is:");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(snapshot_str, .type_variable);
 
-        // TODO: Find similar method names and show a more helpful error message
-        // here
-
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addAnnotated("Hint: ", .emphasized);
+        try report.document.addAnnotated("Hint:", .emphasized);
         switch (data.dispatcher_type) {
             .nominal => {
-                if (is_plus_operator) {
-                    try report.document.addReflowingText("The ");
-                    try report.document.addAnnotated("+", .emphasized);
-                    try report.document.addReflowingText(" operator calls a method named ");
-                    try report.document.addAnnotated("plus", .emphasized);
-                    try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
+                if (is_from_binop) {
+                    if (mb_operator) |operator| {
+                        try report.document.addReflowingText("The ");
+                        try report.document.addAnnotated(operator, .emphasized);
+                        try report.document.addReflowingText(" operator calls a method named ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" on the value preceding it, passing the value after the operator as the one argument.");
+                    } else {
+                        try report.document.addReflowingText(" For this to work, the type would need to have a method named ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" associated with it in the type's declaration.");
+                    }
                 } else {
-                    try report.document.addReflowingText("For this to work, the type would need to have a method named ");
+                    try report.document.addReflowingText(" For this to work, the type would need to have a method named ");
                     try report.document.addAnnotated(method_name_str, .emphasized);
                     try report.document.addReflowingText(" associated with it in the type's declaration.");
                 }
             },
             .rigid => {
-                if (is_plus_operator) {
-                    try report.document.addReflowingText(" The ");
-                    try report.document.addAnnotated("+", .emphasized);
-                    try report.document.addReflowingText(" operator requires the type to have a ");
-                    try report.document.addAnnotated("plus", .emphasized);
-                    try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
+                if (is_from_binop) {
+                    if (mb_operator) |operator| {
+                        try report.document.addReflowingText(" The ");
+                        try report.document.addAnnotated(operator, .emphasized);
+                        try report.document.addReflowingText(" operator requires the type to have a ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" method. Did you forget to specify it in the type annotation?");
+                    } else {
+                        try report.document.addReflowingText(" Did you forget to specify ");
+                        try report.document.addAnnotated(method_name_str, .emphasized);
+                        try report.document.addReflowingText(" in the type annotation?");
+                    }
                 } else {
                     try report.document.addReflowingText(" Did you forget to specify ");
                     try report.document.addAnnotated(method_name_str, .emphasized);
@@ -1791,9 +2083,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "TYPE DOES NOT SUPPORT EQUALITY", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.dispatcher_snapshot);
-        const snapshot_str = try report.addOwnedString(self.snapshot_writer.get());
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1845,6 +2135,72 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for when an anonymous type doesn't support equality
+    fn buildCannotAccessOpaqueNominal(
+        self: *Self,
+        data: CannotAccessOpaqueNominal,
+    ) !Report {
+        var report = Report.init(self.gpa, "CANNOT USE OPAQUE NOMINAL TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("You're attempting to create an instance of ");
+        try report.document.addAnnotated(self.can_ir.getIdentText(data.nominal_type_name), .inline_code);
+        try report.document.addReflowingText(", but it's an ");
+        try report.document.addAnnotated("opaque", .emphasized);
+        try report.document.addReflowingText(" type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" To create an instance of this type outside the module it's defined it, you have to define it with ");
+        try report.document.addAnnotated(":=", .emphasized);
+        try report.document.addReflowingText(" instead of ");
+        try report.document.addAnnotated("::", .emphasized);
+        try report.document.addReflowingText(".");
+
+        return report;
+    }
+
+    /// Build a report for when a nominal type variable doesn't resolve properly.
+    /// This is a compiler bug - it should never happen in correctly compiled code.
+    fn buildNominalTypeResolutionFailed(
+        self: *Self,
+        data: NominalTypeResolutionFailed,
+    ) !Report {
+        var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
+        errdefer report.deinit();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("An internal compiler error occurred while checking this nominal type usage:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The nominal type declaration variable did not resolve to a nominal type structure. This indicates a bug in the Roc compiler. Please report this issue at https://github.com/roc-lang/roc/issues");
+
+        return report;
+    }
+
     /// Explain which record fields don't support equality
     fn explainRecordEqualityFailure(
         self: *Self,
@@ -1874,9 +2230,7 @@ pub const ReportBuilder = struct {
                 if (!self.snapshotSupportsEquality(field_content_idx)) {
                     const field_name = self.can_ir.getIdentText(name);
 
-                    self.snapshot_writer.resetContext();
-                    try self.snapshot_writer.write(field_content_idx);
-                    const field_type_str = try report.addOwnedString(self.snapshot_writer.get());
+                    const field_type_str = try report.addOwnedString(self.getFormattedString(field_content_idx));
 
                     try report.document.addText("    ");
                     try report.document.addAnnotated(field_name, .emphasized);
@@ -1886,8 +2240,8 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint: ", .emphasized);
-            try report.document.addReflowingText("Anonymous records only have an ");
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Anonymous records only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(" method if all of their fields have ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -1921,9 +2275,7 @@ pub const ReportBuilder = struct {
 
             for (elems, 0..) |elem_content_idx, i| {
                 if (!self.snapshotSupportsEquality(elem_content_idx)) {
-                    self.snapshot_writer.resetContext();
-                    try self.snapshot_writer.write(elem_content_idx);
-                    const elem_type_str = try report.addOwnedString(self.snapshot_writer.get());
+                    const elem_type_str = try report.addOwnedString(self.getFormattedString(elem_content_idx));
 
                     try report.document.addText("    element ");
                     var buf: [20]u8 = undefined;
@@ -1935,8 +2287,8 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint: ", .emphasized);
-            try report.document.addReflowingText("Tuples only have an ");
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Tuples only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(" method if all of their elements have ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -1996,9 +2348,7 @@ pub const ReportBuilder = struct {
                             if (!first) try report.document.addText(", ");
                             first = false;
 
-                            self.snapshot_writer.resetContext();
-                            try self.snapshot_writer.write(arg_content_idx);
-                            const arg_type_str = try report.addOwnedString(self.snapshot_writer.get());
+                            const arg_type_str = try report.addOwnedString(self.getFormattedString(arg_content_idx));
                             try report.document.addAnnotated(arg_type_str, .type_variable);
                         }
                         try report.document.addText(")");
@@ -2007,8 +2357,8 @@ pub const ReportBuilder = struct {
                 }
             }
             try report.document.addLineBreak();
-            try report.document.addAnnotated("Hint: ", .emphasized);
-            try report.document.addReflowingText("Tag unions only have an ");
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" Tag unions only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(" method if all of their payload types have ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2075,9 +2425,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.expected_type);
-        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
@@ -2115,9 +2463,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.expected_type);
-        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
 
@@ -2159,9 +2505,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "INVALID NUMERIC LITERAL", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.expected_type);
-        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
         // Add source region highlighting
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -2229,9 +2573,7 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
         errdefer report.deinit();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(data.snapshot);
-        const owned_expected = try report.addOwnedString(self.snapshot_writer.get());
+        const owned_expected = try report.addOwnedString(self.getFormattedString(data.snapshot));
 
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
         const region_info = self.module_env.calcRegionInfo(region.*);
@@ -2320,9 +2662,7 @@ pub const ReportBuilder = struct {
         try report.document.addText("It has the type:");
         try report.document.addLineBreak();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.expected_snapshot);
-        const expected_type = try report.addOwnedString(self.snapshot_writer.get());
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addText("    ");
         try report.document.addAnnotated(expected_type, .type_variable);
         try report.document.addLineBreak();
@@ -2338,9 +2678,7 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
 
-        self.snapshot_writer.resetContext();
-        try self.snapshot_writer.write(types.actual_snapshot);
-        const actual_type = try report.addOwnedString(self.snapshot_writer.get());
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         try report.document.addText("    ");
         try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();
@@ -2474,13 +2812,12 @@ pub const ReportBuilder = struct {
     }
 
     /// Check if both snapshot contents represent function types
-    fn areBothFunctionSnapshots(self: *Self, expected_content: snapshot.SnapshotContent, actual_content: snapshot.SnapshotContent) bool {
-        return self.isSnapshotFunction(expected_content) and self.isSnapshotFunction(actual_content);
+    fn areBothFunctionSnapshots(expected_content: snapshot.SnapshotContent, actual_content: snapshot.SnapshotContent) bool {
+        return isSnapshotFunction(expected_content) and isSnapshotFunction(actual_content);
     }
 
     /// Check if a snapshot content represents a function type
-    fn isSnapshotFunction(self: *Self, content: snapshot.SnapshotContent) bool {
-        _ = self;
+    fn isSnapshotFunction(content: snapshot.SnapshotContent) bool {
         return switch (content) {
             .structure => |structure| switch (structure) {
                 .fn_pure, .fn_effectful, .fn_unbound => true,
@@ -2519,7 +2856,7 @@ pub const ReportBuilder = struct {
 /// looses essential error information. So before doing this, we create a fully
 /// resolved snapshot of the type that we can use in reporting
 ///
-/// Entry points are `appendProblem` and `deepCopyVar`
+/// Entry point is `appendProblem`
 pub const Store = struct {
     const Self = @This();
     const ALIGNMENT = std.mem.Alignment.@"16";

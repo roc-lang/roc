@@ -21,7 +21,6 @@ const CompactWriter = collections.CompactWriter;
 const CommonEnv = @This();
 
 idents: Ident.Store,
-// ident_ids_for_slicing: SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 /// The items (a combination of types and values) that this module exposes
 exposed_items: ExposedItems,
@@ -57,7 +56,15 @@ pub fn relocate(self: *CommonEnv, offset: isize) void {
     self.strings.relocate(offset);
     self.exposed_items.relocate(offset);
     self.line_starts.relocate(offset);
-    // Note: source is not relocated - it should be set manually
+    // Relocate source slice pointer if it is non-empty.
+    // The underlying bytes live in the same allocation as the rest of the
+    // module data (e.g. shared memory used by the interpreter), so we can
+    // adjust the pointer by the same offset.
+    if (self.source.len > 0) {
+        const old_ptr = @intFromPtr(self.source.ptr);
+        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
+        self.source.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
+    }
 }
 
 /// Serialize this CommonEnv to the given CompactWriter.
@@ -123,12 +130,17 @@ pub const Serialized = extern struct {
         // We deserialize by overwriting the Serialized memory with the runtime struct.
         const env = @as(*CommonEnv, @ptrFromInt(@intFromPtr(self)));
 
+        // Read values BEFORE any writes to avoid corruption from in-place deserialization
+        const idents_val = self.idents.deserialize(offset).*;
+        const strings_val = self.strings.deserialize(offset).*;
+        const exposed_items_val = self.exposed_items.deserialize(offset).*;
+        const line_starts_val = self.line_starts.deserialize(offset).*;
+
         env.* = CommonEnv{
-            .idents = self.idents.deserialize(offset).*,
-            // .ident_ids_for_slicing = self.ident_ids_for_slicing.deserialize(offset).*,
-            .strings = self.strings.deserialize(offset).*,
-            .exposed_items = self.exposed_items.deserialize(offset).*,
-            .line_starts = self.line_starts.deserialize(offset).*,
+            .idents = idents_val,
+            .strings = strings_val,
+            .exposed_items = exposed_items_val,
+            .line_starts = line_starts_val,
             .source = source,
         };
 

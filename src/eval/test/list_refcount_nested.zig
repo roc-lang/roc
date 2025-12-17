@@ -1,6 +1,6 @@
 //! List refcounting tests - Phase 9: Nested Lists
 //!
-//! CRITICAL PHASE: Lists within lists create recursive refcounting!
+//! Lists within lists create recursive refcounting.
 //!
 //! This tests the most complex refcounting scenario:
 //! - Outer list container refcount

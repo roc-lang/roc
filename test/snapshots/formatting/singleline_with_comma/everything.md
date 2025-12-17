@@ -40,7 +40,6 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:6:1:6:63
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - everything.md:7:1:7:63
 MODULE NOT FOUND - everything.md:2:1:2:31
 MODULE NOT FOUND - everything.md:3:1:3:47
-EXPECTED NOMINAL TYPE - everything.md:19:7:19:15
 UNUSED VARIABLE - everything.md:24:10:24:11
 UNUSED VARIABLE - everything.md:25:9:25:10
 UNUSED VARIABLE - everything.md:26:11:26:12
@@ -50,6 +49,8 @@ UNUSED VARIABLE - everything.md:18:2:18:4
 UNUSED VARIABLE - everything.md:19:2:19:4
 UNUSED VARIABLE - everything.md:20:2:20:4
 UNUSED VARIABLE - everything.md:21:2:21:4
+UNSUPPORTED WHERE CLAUSE - everything.md:14:19:14:22
+UNSUPPORTED WHERE CLAUSE - everything.md:14:24:14:27
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -94,19 +95,6 @@ import I2 exposing [I21 as Ias1, I22 as Ias2,]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-
-**EXPECTED NOMINAL TYPE**
-You are using the type _A_ like a nominal type, but it is an alias.
-
-This type is referenced here:
-**everything.md:19:7:19:15:**
-```roc
-	h3 = A(x, y,)
-```
-	     ^^^^^^^^
-
-
-**Hint:** You can declare this type with `:=` to make it nominal.
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -214,6 +202,28 @@ The unused variable is declared here:
 	h5 = (x, y,)
 ```
 	^^
+
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _A_ is not supported:
+**everything.md:14:19:14:22:**
+```roc
+g : e -> e where [e.A, e.B,]
+```
+                  ^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _B_ is not supported:
+**everything.md:14:24:14:27:**
+```roc
+g : e -> e where [e.A, e.B,]
+```
+                       ^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
 
 # TOKENS
@@ -388,25 +398,27 @@ import I2 exposing [
 
 # Where constraint
 A(a) : a
-	where
-		[a.a1 : (
+	where [
+		a.a1 : (
 			a,
 			a,
 		) -> Str,
 		a.a2 : (
 			a,
 			a,
-		) -> Str]
+		) -> Str,
+	]
 B(b) : b
-	where
-		[b.b1 : (
+	where [
+		b.b1 : (
 			b,
 			b,
 		) -> Str,
 		b.b2 : (
 			b,
 			b,
-		) -> Str]
+		) -> Str,
+	]
 
 C(
 	a,
@@ -432,9 +444,10 @@ F : [
 ]
 
 g : e -> e
-	where
-		[e.A,
-		e.B]
+	where [
+		e.A,
+		e.B,
+	]
 
 h = |x, y| {
 	h1 = {
@@ -541,7 +554,12 @@ h = |x, y| {
 								(p-assign (ident "y")))))
 					(s-let
 						(p-assign (ident "h3"))
-						(e-runtime-error (tag "type_alias_but_needed_nominal")))
+						(e-tag (name "A")
+							(args
+								(e-lookup-local
+									(p-assign (ident "x")))
+								(e-lookup-local
+									(p-assign (ident "y"))))))
 					(s-let
 						(p-assign (ident "h4"))
 						(e-list
@@ -644,7 +662,7 @@ h = |x, y| {
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -670,5 +688,5 @@ h = |x, y| {
 			(ty-header (name "F"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c"))))
 ~~~

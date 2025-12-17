@@ -39,6 +39,7 @@ pub const Tag = enum {
     statement_alias_decl,
     statement_nominal_decl,
     statement_type_anno,
+    statement_type_var_alias,
     // Expressions
     expr_var,
     expr_tuple,
@@ -84,8 +85,10 @@ pub const Tag = enum {
     expr_hosted_lambda,
     expr_low_level,
     expr_expect,
+    expr_for,
     expr_record_builder,
     expr_return,
+    expr_type_var_dispatch,
     match_branch,
     match_branch_pattern,
     type_header,

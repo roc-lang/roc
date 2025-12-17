@@ -69,6 +69,7 @@ const TestEnv = struct {
     module_env: *ModuleEnv,
     snapshots: snapshot_mod.Store,
     problems: problem_mod.Store,
+    type_writer: types_mod.TypeWriter,
     scratch: Scratch,
     occurs_scratch: occurs.Scratch,
 
@@ -81,11 +82,12 @@ const TestEnv = struct {
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
-        try module_env.initCIRFields(gpa, "Test");
+        try module_env.initCIRFields("Test");
         return .{
             .module_env = module_env,
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),
             .problems = try problem_mod.Store.initCapacity(gpa, 16),
+            .type_writer = try types_mod.TypeWriter.initFromParts(gpa, &module_env.types, module_env.getIdentStore(), null),
             .scratch = try Scratch.init(module_env.gpa),
             .occurs_scratch = try occurs.Scratch.init(module_env.gpa),
         };
@@ -97,6 +99,7 @@ const TestEnv = struct {
         self.module_env.gpa.destroy(self.module_env);
         self.snapshots.deinit();
         self.problems.deinit(self.module_env.gpa);
+        self.type_writer.deinit();
         self.scratch.deinit();
         self.occurs_scratch.deinit();
     }
@@ -108,9 +111,9 @@ const TestEnv = struct {
             &self.module_env.types,
             &self.problems,
             &self.snapshots,
+            &self.type_writer,
             &self.scratch,
             &self.occurs_scratch,
-            unify_mod.ModuleEnvLookup{},
             a,
             b,
         );
@@ -173,6 +176,7 @@ const TestEnv = struct {
             backing_var,
             args,
             Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+            false, // Use nominal for tests
         );
     }
 
@@ -786,8 +790,10 @@ test "partitionFields - same record" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const field_x = try env.mkRecordField("field_x", @enumFromInt(0));
-    const field_y = try env.mkRecordField("field_y", @enumFromInt(1));
+    const var_x = try env.module_env.types.fresh();
+    const var_y = try env.module_env.types.fresh();
+    const field_x = try env.mkRecordField("field_x", var_x);
+    const field_y = try env.mkRecordField("field_y", var_y);
 
     const range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
@@ -809,9 +815,12 @@ test "partitionFields - disjoint fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkRecordField("a1", @enumFromInt(0));
-    const a2 = try env.mkRecordField("a2", @enumFromInt(1));
-    const b1 = try env.mkRecordField("b1", @enumFromInt(2));
+    const var_a1 = try env.module_env.types.fresh();
+    const var_a2 = try env.module_env.types.fresh();
+    const var_b1 = try env.module_env.types.fresh();
+    const a1 = try env.mkRecordField("a1", var_a1);
+    const a2 = try env.mkRecordField("a2", var_a2);
+    const b1 = try env.mkRecordField("b1", var_b1);
 
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
@@ -835,9 +844,12 @@ test "partitionFields - overlapping fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkRecordField("a1", @enumFromInt(0));
-    const both = try env.mkRecordField("both", @enumFromInt(1));
-    const b1 = try env.mkRecordField("b1", @enumFromInt(2));
+    const var_a1 = try env.module_env.types.fresh();
+    const var_both = try env.module_env.types.fresh();
+    const var_b1 = try env.module_env.types.fresh();
+    const a1 = try env.mkRecordField("a1", var_a1);
+    const both = try env.mkRecordField("both", var_both);
+    const b1 = try env.mkRecordField("b1", var_b1);
 
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
@@ -864,9 +876,12 @@ test "partitionFields - reordering is normalized" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = try env.mkRecordField("f1", @enumFromInt(0));
-    const f2 = try env.mkRecordField("f2", @enumFromInt(1));
-    const f3 = try env.mkRecordField("f3", @enumFromInt(2));
+    const var_f1 = try env.module_env.types.fresh();
+    const var_f2 = try env.module_env.types.fresh();
+    const var_f3 = try env.module_env.types.fresh();
+    const f1 = try env.mkRecordField("f1", var_f1);
+    const f2 = try env.mkRecordField("f2", var_f2);
+    const f3 = try env.mkRecordField("f3", var_f3);
 
     const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
@@ -1023,8 +1038,10 @@ test "partitionTags - same tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const tag_x = try env.mkTag("X", &[_]Var{@enumFromInt(0)});
-    const tag_y = try env.mkTag("Y", &[_]Var{@enumFromInt(1)});
+    const var_x = try env.module_env.types.fresh();
+    const var_y = try env.module_env.types.fresh();
+    const tag_x = try env.mkTag("X", &[_]Var{var_x});
+    const tag_y = try env.mkTag("Y", &[_]Var{var_y});
 
     const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
@@ -1046,9 +1063,12 @@ test "partitionTags - disjoint fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkTag("A1", &[_]Var{@enumFromInt(0)});
-    const a2 = try env.mkTag("A2", &[_]Var{@enumFromInt(1)});
-    const b1 = try env.mkTag("B1", &[_]Var{@enumFromInt(2)});
+    const var_a1 = try env.module_env.types.fresh();
+    const var_a2 = try env.module_env.types.fresh();
+    const var_b1 = try env.module_env.types.fresh();
+    const a1 = try env.mkTag("A1", &[_]Var{var_a1});
+    const a2 = try env.mkTag("A2", &[_]Var{var_a2});
+    const b1 = try env.mkTag("B1", &[_]Var{var_b1});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
@@ -1072,9 +1092,12 @@ test "partitionTags - overlapping tags" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = try env.mkTag("A", &[_]Var{@enumFromInt(0)});
-    const both = try env.mkTag("Both", &[_]Var{@enumFromInt(1)});
-    const b1 = try env.mkTag("B", &[_]Var{@enumFromInt(2)});
+    const var_a = try env.module_env.types.fresh();
+    const var_both = try env.module_env.types.fresh();
+    const var_b = try env.module_env.types.fresh();
+    const a1 = try env.mkTag("A", &[_]Var{var_a});
+    const both = try env.mkTag("Both", &[_]Var{var_both});
+    const b1 = try env.mkTag("B", &[_]Var{var_b});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
@@ -1101,9 +1124,12 @@ test "partitionTags - reordering is normalized" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = try env.mkTag("F1", &[_]Var{@enumFromInt(0)});
-    const f2 = try env.mkTag("F2", &[_]Var{@enumFromInt(1)});
-    const f3 = try env.mkTag("F3", &[_]Var{@enumFromInt(2)});
+    const var_f1 = try env.module_env.types.fresh();
+    const var_f2 = try env.module_env.types.fresh();
+    const var_f3 = try env.module_env.types.fresh();
+    const f1 = try env.mkTag("F1", &[_]Var{var_f1});
+    const f2 = try env.mkTag("F2", &[_]Var{var_f2});
+    const f3 = try env.mkTag("F3", &[_]Var{var_f3});
 
     const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
@@ -1298,6 +1324,16 @@ test "unify - fails on infinite type" {
         .problem => |problem_idx| {
             const problem = env.problems.get(problem_idx);
             try std.testing.expectEqual(.infinite_recursion, @as(Problem.Tag, problem));
+
+            // Verify that a snapshot was created for the recursion error
+            const snapshot_idx = problem.infinite_recursion.snapshot;
+            const snapshot_content = env.snapshots.getContent(snapshot_idx);
+            // The snapshot should be some valid content (not just err)
+            try std.testing.expect(snapshot_content != .err);
+
+            // Verify a formatted string was created
+            const formatted = env.snapshots.getFormattedString(snapshot_idx);
+            try std.testing.expect(formatted != null);
         },
     }
 }
@@ -1326,6 +1362,16 @@ test "unify - fails on anonymous recursion" {
         .problem => |problem_idx| {
             const problem = env.problems.get(problem_idx);
             try std.testing.expectEqual(.anonymous_recursion, @as(Problem.Tag, problem));
+
+            // Verify that a snapshot was created for the recursion error
+            const snapshot_idx = problem.anonymous_recursion.snapshot;
+            const snapshot_content = env.snapshots.getContent(snapshot_idx);
+            // The snapshot should be some valid content (not just err)
+            try std.testing.expect(snapshot_content != .err);
+
+            // Verify a formatted string was created
+            const formatted = env.snapshots.getFormattedString(snapshot_idx);
+            try std.testing.expect(formatted != null);
         },
     }
 }
@@ -1483,7 +1529,7 @@ test "unify - flex with constraints vs structure captures deferred check" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    const deferred = env.scratch.deferred_constraints.items.items[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(structure_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1518,7 +1564,7 @@ test "unify - structure vs flex with constraints captures deferred check (revers
 
     // Check that constraint was captured (note: vars might be swapped due to merge order)
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    const deferred = env.scratch.deferred_constraints.items.items[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(flex_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,
@@ -1571,7 +1617,7 @@ test "unify - flex vs nominal type captures constraint" {
 
     // Check that constraint was captured
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
-    const deferred = env.scratch.deferred_constraints.get(@enumFromInt(0)).*;
+    const deferred = env.scratch.deferred_constraints.items.items[0];
     try std.testing.expectEqual(
         env.module_env.types.resolveVar(nominal_var).var_,
         env.module_env.types.resolveVar(deferred.var_).var_,

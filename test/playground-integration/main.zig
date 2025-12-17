@@ -1133,7 +1133,7 @@ pub fn main() !void {
         .steps = get_hover_info_steps,
     });
 
-    // ====== REPL Test Cases ======
+    // REPL Test Cases
 
     // Test: REPL Lifecycle - Init, Step, Clear, Reset
     var repl_lifecycle_steps = try allocator.alloc(MessageStep, 5);

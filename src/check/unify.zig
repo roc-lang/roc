@@ -1,4 +1,5 @@
 //! This module implements Hindley-Milner style type unification with extensions for:
+//!
 //! * flex/rigid variables
 //! * type aliases
 //! * tuples
@@ -134,9 +135,9 @@ pub fn unify(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     /// The "expected" variable
     a: Var,
     /// The "actual" variable
@@ -147,9 +148,9 @@ pub fn unify(
         types,
         problems,
         snapshots,
+        type_writer,
         unify_scratch,
         occurs_scratch,
-        module_lookup,
         a,
         b,
         Conf{ .ctx = .anon, .constraint_origin_var = null },
@@ -165,29 +166,6 @@ pub const Conf = struct {
     pub const Ctx = enum { anon, anno };
 };
 
-/// Provides access to module environments needed for cross-module method lookups
-pub const ModuleEnvLookup = struct {
-    /// Auto-imported modules available during type checking (e.g. Bool, Try, Builtin)
-    auto_imported: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
-    /// Optional interpreter callback for resolving module envs at runtime
-    interpreter_lookup_ctx: ?*const anyopaque = null,
-    interpreter_lookup_fn: ?*const fn (?*const anyopaque, Ident.Idx) ?*const ModuleEnv = null,
-
-    pub fn get(self: ModuleEnvLookup, module_ident: Ident.Idx) ?*const ModuleEnv {
-        if (self.auto_imported) |map| {
-            if (map.get(module_ident)) |entry| {
-                return entry.env;
-            }
-        }
-        if (self.interpreter_lookup_fn) |getter| {
-            if (getter(self.interpreter_lookup_ctx, module_ident)) |env| {
-                return env;
-            }
-        }
-        return null;
-    }
-};
-
 /// Unify two type variables
 ///
 /// This function
@@ -201,9 +179,9 @@ pub fn unifyWithConf(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     /// The "expected" variable
     a: Var,
     /// The "actual" variable
@@ -217,7 +195,7 @@ pub fn unifyWithConf(
     unify_scratch.reset();
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch, module_lookup);
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
@@ -225,8 +203,8 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.deepCopyVar(types, a);
-                    const actual_snapshot = try snapshots.deepCopyVar(types, b);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
 
                     break :blk .{ .type_mismatch = .{
                         .types = .{
@@ -256,7 +234,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -279,7 +257,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -302,35 +280,35 @@ pub fn unifyWithConf(
                     if (unify_scratch.err) |unify_err| {
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .recursion_infinite => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -338,11 +316,13 @@ pub fn unifyWithConf(
                             },
                         }
                     } else {
+                        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = try snapshots.deepCopyVar(types, a),
+                            .expected = expected_snapshot,
                             .actual_var = b,
-                            .actual = try snapshots.deepCopyVar(types, b),
+                            .actual = actual_snapshot,
                         } };
                     }
                 },
@@ -385,7 +365,6 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    module_lookup: ModuleEnvLookup,
     depth: u8,
     skip_depth_check: bool,
 
@@ -395,14 +374,12 @@ const Unifier = struct {
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
-        module_lookup: ModuleEnvLookup,
     ) Unifier {
         return .{
             .module_env = module_env,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
-            .module_lookup = module_lookup,
             .depth = 0,
             .skip_depth_check = false,
         };
@@ -672,8 +649,10 @@ const Unifier = struct {
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+
+                // TODO: Is it possible to loose rank information here? I suspect so...
+                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
             .recursion_var => |_| {
                 // Unify alias backing var with recursion var
@@ -759,8 +738,10 @@ const Unifier = struct {
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+
+                // TODO: Is it possible to loose rank information here? I suspect so...
+                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
@@ -875,6 +856,11 @@ const Unifier = struct {
                         try self.unifyTagUnionWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_tag_union, .a_is_nominal);
                     },
                     .empty_tag_union => {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!a_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
                         if (a_backing_resolved.desc.content == .structure and
                             a_backing_resolved.desc.content.structure == .empty_tag_union)
                         {
@@ -1039,6 +1025,11 @@ const Unifier = struct {
                         try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
                     },
                     .nominal_type => |b_type| {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
                         // Try to unify anonymous tag union (a) with nominal tag union (b)
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
@@ -1116,319 +1107,6 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
-    /// Check if a nominal type has a from_int_digits method by unifying its signature
-    /// with the expected type: List(U8) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromIntDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.idents.from_int_digits) orelse return false;
-        const resolved = self.types_store.resolveVar(method_var);
-
-        const func = switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => structure.fn_pure,
-                .fn_effectful => structure.fn_effectful,
-                .fn_unbound => structure.fn_unbound,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        const ret_desc = self.types_store.resolveVar(func.ret);
-        const ret_nominal = switch (ret_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .nominal_type => structure.nominal_type,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (!self.isBuiltinTryNominal(ret_nominal)) return false;
-        const ret_args = self.types_store.sliceVars(ret_nominal.vars.nonempty);
-        if (ret_args.len < 3) return false;
-
-        const args_slice = self.types_store.sliceVars(func.args);
-        if (args_slice.len != 1) return false;
-
-        const list_u8_var = try self.createListU8Var();
-        self.unifyGuarded(args_slice[0], list_u8_var) catch return false;
-
-        const self_ret_var = try self.createNominalInstanceVar(nominal_type);
-        self.unifyGuarded(ret_args[1], self_ret_var) catch return false;
-
-        const try_error_var = try self.createOutOfRangeTagUnion();
-        self.unifyGuarded(ret_args[2], try_error_var) catch return false;
-
-        return true;
-    }
-
-    /// Check if a nominal type has a from_dec_digits method by unifying its signature
-    /// with the expected type: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromDecDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        const method_var = try self.getNominalMethodVar(nominal_type, self.module_env.idents.from_dec_digits) orelse return false;
-        const resolved = self.types_store.resolveVar(method_var);
-
-        const func = switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .fn_pure => structure.fn_pure,
-                .fn_effectful => structure.fn_effectful,
-                .fn_unbound => structure.fn_unbound,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        const ret_desc = self.types_store.resolveVar(func.ret);
-        const ret_nominal = switch (ret_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .nominal_type => structure.nominal_type,
-                else => return false,
-            },
-            else => return false,
-        };
-        if (!self.isBuiltinTryNominal(ret_nominal)) return false;
-        const ret_args = self.types_store.sliceVars(ret_nominal.vars.nonempty);
-        if (ret_args.len < 3) return false;
-
-        const args_slice = self.types_store.sliceVars(func.args);
-        if (args_slice.len != 1) return false;
-
-        const before_ident = self.module_env.idents.before_dot;
-        const after_ident = self.module_env.idents.after_dot;
-
-        const record_desc = self.types_store.resolveVar(args_slice[0]);
-        const record = switch (record_desc.desc.content) {
-            .structure => |structure| switch (structure) {
-                .record => structure.record,
-                else => return false,
-            },
-            else => return false,
-        };
-
-        if (record.fields.len() != 2) return false;
-        const fields_slice = self.types_store.getRecordFieldsSlice(record.fields);
-        const names = fields_slice.items(.name);
-        const vars = fields_slice.items(.var_);
-
-        var before_idx: ?usize = null;
-        var after_idx: ?usize = null;
-        for (names, 0..) |name, idx| {
-            if (name == before_ident) {
-                before_idx = idx;
-            } else if (name == after_ident) {
-                after_idx = idx;
-            }
-        }
-
-        if (before_idx == null or after_idx == null) return false;
-
-        const list_u8_first = try self.createListU8Var();
-        const list_u8_second = try self.createListU8Var();
-
-        self.unifyGuarded(vars[before_idx.?], list_u8_first) catch return false;
-        self.unifyGuarded(vars[after_idx.?], list_u8_second) catch return false;
-
-        const self_ret_var = try self.createNominalInstanceVar(nominal_type);
-        self.unifyGuarded(ret_args[1], self_ret_var) catch return false;
-
-        const try_error_var = try self.createOutOfRangeTagUnion();
-        self.unifyGuarded(ret_args[2], try_error_var) catch return false;
-
-        return true;
-    }
-
-    fn getNominalMethodVar(
-        self: *Self,
-        nominal_type: NominalType,
-        method_ident: Ident.Idx,
-    ) Error!?Var {
-        const is_this_module = nominal_type.origin_module == self.module_env.module_name_idx;
-        const origin_env = if (is_this_module)
-            self.module_env
-        else
-            self.module_lookup.get(nominal_type.origin_module) orelse return null;
-
-        // For cross-module lookups, use getMethodIdent to build the qualified method name
-        const lookup_ident = if (is_this_module)
-            method_ident
-        else blk: {
-            // Get the type name and method name for the qualified lookup
-            const type_name = self.module_env.getIdent(nominal_type.ident.ident_idx);
-            const method_name = self.module_env.getIdent(method_ident);
-            break :blk origin_env.getMethodIdent(type_name, method_name) orelse return null;
-        };
-
-        // Look up method by the ident
-        const method_def_idx: CIR.Def.Idx = blk: {
-            if (origin_env.getExposedNodeIndexById(lookup_ident)) |node_idx| {
-                break :blk @enumFromInt(@as(u32, node_idx));
-            }
-
-            if (Self.findDefIdxByIdent(origin_env, lookup_ident)) |def_idx| {
-                break :blk def_idx;
-            }
-
-            return null;
-        };
-
-        const ident_store = origin_env.getIdentStoreConst();
-        const origin_var = ModuleEnv.varFrom(method_def_idx);
-
-        var mapping = std.AutoHashMap(Var, Var).init(self.module_env.gpa);
-        defer mapping.deinit();
-
-        const start_slots = self.types_store.len();
-        const copied_var = copy_import.copyVar(
-            &origin_env.types,
-            self.types_store,
-            origin_var,
-            &mapping,
-            ident_store,
-            self.module_env.getIdentStore(),
-            self.module_env.gpa,
-        ) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return copied_var;
-    }
-
-    fn findDefIdxByIdent(origin_env: *const ModuleEnv, ident_idx: Ident.Idx) ?CIR.Def.Idx {
-        const defs = origin_env.store.sliceDefs(origin_env.all_defs);
-        for (defs) |def_idx| {
-            const def = origin_env.store.getDef(def_idx);
-            const pattern = origin_env.store.getPattern(def.pattern);
-
-            if (pattern == .assign and pattern.assign.ident == ident_idx) {
-                return def_idx;
-            }
-        }
-
-        return null;
-    }
-
-    fn createListU8Var(self: *Self) Error!Var {
-        const start_slots = self.types_store.len();
-        const u8_var = self.types_store.register(.{
-            .content = .{ .err = {} },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        // Create nominal List(U8) - List is from Builtin module
-        // If List ident is not found, something is wrong with the environment
-        // This should never happen in a properly initialized compiler!
-        const list_ident = self.module_env.idents.list;
-
-        // Use the cached builtin_module ident which represents the "Builtin" module.
-        const origin_module = if (self.module_lookup.get(self.module_env.idents.builtin_module)) |_|
-            self.module_env.idents.builtin_module
-        else
-            // Builtin module not loaded (probably compiling Builtin itself), use current module
-            self.module_env.module_name_idx;
-
-        // List's backing is [ProvidedByCompiler] with closed extension (empty_tag_union)
-        // The element type (u8_var) is a type parameter, not the backing
-        const empty_tag_union_content = Content{ .structure = .empty_tag_union };
-        const ext_var = self.types_store.register(.{
-            .content = empty_tag_union_content,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        // Create the [ProvidedByCompiler] tag
-        const provided_tag_ident = self.module_env.idents.provided_by_compiler;
-        const provided_tag = self.types_store.mkTag(provided_tag_ident, &.{}) catch return error.AllocatorError;
-
-        const tag_union = TagUnion{
-            .tags = self.types_store.appendTags(&[_]Tag{provided_tag}) catch return error.AllocatorError,
-            .ext = ext_var,
-        };
-        const backing_content = Content{ .structure = .{ .tag_union = tag_union } };
-        const backing_var = self.types_store.register(.{
-            .content = backing_content,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        const list_content = self.types_store.mkNominal(
-            .{ .ident_idx = list_ident },
-            backing_var,
-            &[_]Var{u8_var},
-            origin_module,
-        ) catch return error.AllocatorError;
-
-        const list_var = self.types_store.register(.{
-            .content = list_content,
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return list_var;
-    }
-
-    fn createNominalInstanceVar(self: *Self, nominal_type: NominalType) Error!Var {
-        const start_slots = self.types_store.len();
-
-        const self_var = self.types_store.register(.{
-            .content = .{ .structure = .{ .nominal_type = nominal_type } },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return self_var;
-    }
-
-    fn isBuiltinTryNominal(self: *Self, nominal: NominalType) bool {
-        // Check if this is the Try type from the Builtin module
-        if (nominal.origin_module == self.module_env.idents.builtin_module and
-            nominal.ident.ident_idx == self.module_env.idents.@"try")
-        {
-            return true;
-        }
-
-        // Also check for fully qualified Builtin.Try
-        return nominal.ident.ident_idx == self.module_env.idents.builtin_try;
-    }
-
-    fn createOutOfRangeTagUnion(self: *Self) Error!Var {
-        const start_slots = self.types_store.len();
-        const tag = Tag{
-            .name = self.module_env.idents.out_of_range,
-            .args = Var.SafeList.Range.empty(),
-        };
-        const tags_range = self.types_store.appendTags(&[_]Tag{tag}) catch return error.AllocatorError;
-        const empty_ext = self.types_store.register(.{
-            .content = .{ .structure = .empty_tag_union },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        const tag_union_var = self.types_store.register(.{
-            .content = .{ .structure = .{ .tag_union = .{ .tags = tags_range, .ext = empty_ext } } },
-            .rank = Rank.generalized,
-            .mark = Mark.none,
-        }) catch return error.AllocatorError;
-
-        try self.trackNewVars(start_slots);
-        return tag_union_var;
-    }
-
-    fn trackNewVars(self: *Self, start_slots: u64) error{AllocatorError}!void {
-        var slot = start_slots;
-        const end_slots = self.types_store.len();
-        while (slot < end_slots) : (slot += 1) {
-            const new_var = @as(Var, @enumFromInt(@as(u32, @intCast(slot))));
-            _ = self.scratch.fresh_vars.append(self.scratch.gpa, new_var) catch return error.AllocatorError;
-        }
-    }
-
     // Unify nominal type //
 
     /// Unify when `a` was a nominal type
@@ -1485,7 +1163,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        _ = nominal_type; // Used for identity in nominal type, but not needed here
+        // If this nominal is opaque and we're not in the origin module, error
+        if (!nominal_type.canLiftInner(self.module_env.module_name_idx)) {
+            return error.TypeMismatch;
+        }
 
         // Check if the nominal's backing type is a tag union (including empty)
         const nominal_backing_content = nominal_backing_resolved.desc.content;
@@ -1595,54 +1276,54 @@ const Unifier = struct {
     ///
     /// **Case 1: Exactly the Same Fields**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - All fields are shared
-    /// - We unify `ext_a ~ ext_b`
+    /// - We unify `others_a ~ others_b`
     /// - Then unify each shared field pair
     ///
     /// ---
     ///
     /// **Case 2: `a` Extends `b`**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - `a` has additional fields not in `b`
-    /// - We generate a new var `only_in_a_var = { z }ext_a`
-    /// - Unify `only_in_a_var ~ ext_b`
+    /// - We generate a new var `only_in_a_var = { z, ..others_a }`
+    /// - Unify `only_in_a_var ~ others_b`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 3: `b` Extends `a`**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y, z }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, z, ..others_b }
     ///
     /// - Same as Case 2, but reversed
     /// - `b` has additional fields not in `a`
-    /// - We generate a new var `only_in_b_var = { z }ext_b`
-    /// - Unify `ext_a ~ only_in_b_var`
+    /// - We generate a new var `only_in_b_var = { z, ..others_b }`
+    /// - Unify `others_a ~ only_in_b_var`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 4: Both Extend Each Other**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y, w }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, w, ..others_b }
     ///
     /// - Each has unique fields the other lacks
     /// - Generate:
-    ///     - shared_ext = fresh flex_var
-    ///     - only_in_a_var = { z }shared_ext
-    ///     - only_in_b_var = { w }shared_ext
+    ///     - shared_others = fresh flex_var
+    ///     - only_in_a_var = { z, ..shared_others }
+    ///     - only_in_b_var = { w, ..shared_others }
     /// - Unify:
-    ///     - `ext_a ~ only_in_b_var`
-    ///     - `only_in_a_var ~ ext_b`
-    /// - Then unify shared fields into `{ x, y }shared_ext`
+    ///     - `others_a ~ only_in_b_var`
+    ///     - `only_in_a_var ~ others_b`
+    /// - Then unify shared fields into `{ x, y, ..shared_others }`
     ///
     /// ---
     ///
@@ -1829,12 +1510,17 @@ const Unifier = struct {
             record_fields,
         ) catch return Error.AllocatorError;
 
-        // TODO: Below if we run into a record with the same field, then we
-        // prefer the leftmost field. But we should probably unify the dups
+        // Note: If a field name appears multiple times (e.g., in both base and extension),
+        // we keep the leftmost field (left-bias semantics, like Haskell's Map.union).
+        // Duplicates within a single record's extension chain are rare and typically
+        // indicate a type system bug (e.g., malformed type like `{ name: Str, ..{ name: U32 } }`).
+        // The outer unification logic handles unifying fields across *different* records.
 
-        // then recursiv
+        // Recursively gather fields from extensions
         var ext = record_ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
         while (true) {
+            guard.tick();
             switch (ext) {
                 .unbound => {
                     return .{ .ext = ext, .range = range };
@@ -1854,42 +1540,28 @@ const Unifier = struct {
                             switch (flat_type) {
                                 .record => |ext_record| {
                                     const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
-                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
 
-                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
-                                        // Check if field name already exists (O(n) but fields are small)
-                                        const already_exists = for (already_gathered) |existing| {
-                                            if (existing.name == name) break true;
-                                        } else false;
+                                    // Merge extension fields while maintaining sorted order
+                                    self.scratch.mergeSortedExtensionFields(
+                                        &range,
+                                        next_fields.items(.name),
+                                        next_fields.items(.var_),
+                                        self.module_env.getIdentStore(),
+                                    ) catch return Error.AllocatorError;
 
-                                        // Only append if NOT already present (Map.union left-bias)
-                                        if (!already_exists) {
-                                            _ = self.scratch.gathered_fields.append(
-                                                self.scratch.gpa,
-                                                RecordField{ .name = name, .var_ = var_ },
-                                            ) catch return Error.AllocatorError;
-                                            range.count += 1;
-                                        }
-                                    }
                                     ext = .{ .ext = ext_record.ext };
                                 },
                                 .record_unbound => |fields| {
                                     const next_fields = self.types_store.record_fields.sliceRange(fields);
-                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
 
-                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
-                                        const already_exists = for (already_gathered) |existing| {
-                                            if (existing.name == name) break true;
-                                        } else false;
+                                    // Merge extension fields while maintaining sorted order
+                                    self.scratch.mergeSortedExtensionFields(
+                                        &range,
+                                        next_fields.items(.name),
+                                        next_fields.items(.var_),
+                                        self.module_env.getIdentStore(),
+                                    ) catch return Error.AllocatorError;
 
-                                        if (!already_exists) {
-                                            _ = self.scratch.gathered_fields.append(
-                                                self.scratch.gpa,
-                                                RecordField{ .name = name, .var_ = var_ },
-                                            ) catch return Error.AllocatorError;
-                                            range.count += 1;
-                                        }
-                                    }
                                     return .{ .ext = ext, .range = range };
                                 },
                                 .empty_record => {
@@ -1932,7 +1604,7 @@ const Unifier = struct {
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedRecordFields {
-        // First sort the fields
+        // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
         std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
@@ -2215,35 +1887,40 @@ const Unifier = struct {
                 );
             },
             .both_extend => {
+                // Create a shared extension variable first
+                // This is critical: both only_in_a_var and only_in_b_var must use this
+                // shared extension to avoid creating circular type references
+                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
+
                 // Create a new variable of a tag_union with only a's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
                 const only_in_a_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_a_tags_range,
-                    .ext = a_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
 
                 // Create a new variable of a tag_union with only b's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
                 const only_in_b_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_b_tags_range,
-                    .ext = b_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
-
-                // Create a new ext var
-                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
 
                 // Unify shared tags
-                // This copies tags from scratch into type_store
+                // Include all tags in the merged type - both shared and unique
+                // The unique tags must be included because the merged type is what
+                // callers see, and the extension chain via only_in_a_var/only_in_b_var
+                // is for proper type equality, not for visibility
                 try self.unifySharedTags(
                     vars,
                     self.scratch.in_both_tags.sliceRange(partitioned.in_both),
@@ -2279,7 +1956,9 @@ const Unifier = struct {
 
         // then loop gathering extensible tags
         var ext_var = tag_union.ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherTagUnionTags");
         while (true) {
+            guard.tick();
             switch (self.types_store.resolveVar(ext_var).desc.content) {
                 .flex => {
                     return .{ .ext = ext_var, .range = range };
@@ -2293,11 +1972,16 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .tag_union => |ext_tag_union| {
-                            const next_range = self.scratch.copyGatherTagsFromMultiList(
-                                &self.types_store.tags,
-                                ext_tag_union.tags,
+                            const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
+
+                            // Merge extension tags while maintaining sorted order
+                            self.scratch.mergeSortedExtensionTags(
+                                &range,
+                                next_tags.items(.name),
+                                next_tags.items(.args),
+                                self.module_env.getIdentStore(),
                             ) catch return Error.AllocatorError;
-                            range.count += next_range.count;
+
                             ext_var = ext_tag_union.ext;
                         },
                         .empty_tag_union => {
@@ -2318,7 +2002,7 @@ const Unifier = struct {
     };
 
     /// Given two ranges of tag_union tags stored in `scratch.gathered_tags`, this function:
-    /// * sorts both slices in-place by field name
+    /// * sorts both slices in-place by tag name
     /// * partitions them into three disjoint groups:
     ///     - tags only in `a`
     ///     - tags only in `b`
@@ -2338,7 +2022,7 @@ const Unifier = struct {
         a_tags_range: TagSafeList.Range,
         b_tags_range: TagSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedTags {
-        // First sort the tags
+        // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
         const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
         std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
         const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
@@ -2408,8 +2092,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const range_start: u32 = self.types_store.tags.len();
-
+        // IMPORTANT: First unify all shared tag arguments BEFORE recording range_start.
+        // This is because unifyGuarded may trigger recursive unifications that also
+        // append tags to the global tags list. We need to record range_start AFTER
+        // all inner unifications complete, so we only capture this level's tags.
         for (shared_tags) |tags| {
             const tag_a_args = self.types_store.sliceVars(tags.a.args);
             const tag_b_args = self.types_store.sliceVars(tags.b.args);
@@ -2419,7 +2105,13 @@ const Unifier = struct {
             for (tag_a_args, tag_b_args) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
+        }
 
+        // NOW record range_start after all inner unifications are done
+        const range_start: u32 = self.types_store.tags.len();
+
+        // Append this level's shared tags
+        for (shared_tags) |tags| {
             _ = self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
@@ -2434,7 +2126,7 @@ const Unifier = struct {
             _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
         }
 
-        // Merge vars
+        // Merge vars (sorting happens in merge() for all tag unions)
         self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
             .tags = self.types_store.tags.rangeToEnd(range_start),
             .ext = ext,
@@ -2693,14 +2385,11 @@ pub fn partitionTags(
 ///    while SafeLists waste some space compared to MultiList, the cost isn't too
 ///    high
 ///
-/// TODO: If canonicalization can ensure that record fields/tags are always sorted
-/// then we could switch these to use multi lists.
-///
-/// TODO: Currently, we capture vars created during unifcation in `fresh_vars`
-/// and constraints to check later in `deferred_constraints`. We then copy
-/// these values into other arrays in Check.  In the future, we should consider
-/// passing in references to arrays by the caller of unify. Then we can write
-/// directly into the output arrays and save the extra copying.
+/// NOTE: Record fields and tags are merged in sorted order during gathering
+/// (via mergeSortedExtensionFields/mergeSortedExtensionTags). However, unification
+/// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
+/// still perform a final sort. To fully eliminate these sorts, we would need to ensure
+/// unifySharedTags also produces sorted output.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -2736,7 +2425,11 @@ pub const Scratch = struct {
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: Set these based on the heuristics
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // These values handle common cases without reallocation:
+        // - fresh_vars: 8 - most unifications create few fresh variables
+        // - fields/tags: 32 - typical records/unions have fewer than 32 members
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
@@ -2789,6 +2482,7 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.err = null;
     }
@@ -2811,6 +2505,118 @@ pub const Scratch = struct {
             );
         }
         return self.gathered_fields.rangeToEnd(@intCast(start_int));
+    }
+
+    /// Merge sorted extension fields into an already-sorted gathered range.
+    /// Maintains sorted order and left-bias semantics (base fields take precedence).
+    /// The range is updated in-place to reflect the new count.
+    /// Returns whether any new fields were added.
+    fn mergeSortedExtensionFields(
+        self: *Self,
+        range: *RecordFieldSafeList.Range,
+        ext_names: []const Ident.Idx,
+        ext_vars: []const Var,
+        ident_store: *const Ident.Store,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(ext_names.len == ext_vars.len);
+        if (ext_names.len == 0) return;
+
+        // Get current gathered fields
+        const current_fields = self.gathered_fields.sliceRange(range.*);
+        const current_len = current_fields.len;
+
+        // Count how many extension fields are NOT duplicates
+        var new_count: usize = 0;
+        for (ext_names) |ext_name| {
+            const is_dup = for (current_fields) |existing| {
+                if (existing.name == ext_name) break true;
+            } else false;
+            if (!is_dup) new_count += 1;
+        }
+
+        if (new_count == 0) return;
+
+        // Allocate space for merged result
+        try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
+
+        // We need to merge in-place. Strategy:
+        // 1. Append all new (non-duplicate) extension fields to the end
+        // 2. Then do an in-place merge of the two sorted regions
+
+        // Append non-duplicate extension fields
+        for (ext_names, ext_vars) |name, var_| {
+            const is_dup = for (current_fields) |existing| {
+                if (existing.name == name) break true;
+            } else false;
+            if (!is_dup) {
+                self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .var_ = var_ });
+            }
+        }
+
+        // Now we have: [sorted_base | sorted_extension]
+        // Do an in-place merge using the standard merge technique
+        // Get the slice starting from range.start with the new total length
+        const start_idx: usize = @intFromEnum(range.start);
+        const total_len = current_len + new_count;
+        const items = self.gathered_fields.items.items[start_idx..][0..total_len];
+
+        // In-place merge: we have [sorted_left | sorted_right]
+        // Use rotation-based merge which is O(n) for this case
+        inPlaceMergeFields(items, current_len, ident_store);
+
+        // Update range count
+        range.count = @intCast(total_len);
+    }
+
+    /// Merge sorted extension tags into an already-sorted gathered range.
+    /// Maintains sorted order and left-bias semantics (base tags take precedence).
+    fn mergeSortedExtensionTags(
+        self: *Self,
+        range: *TagSafeList.Range,
+        ext_names: []const Ident.Idx,
+        ext_args: []const Var.SafeList.Range,
+        ident_store: *const Ident.Store,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(ext_names.len == ext_args.len);
+        if (ext_names.len == 0) return;
+
+        // Get current gathered tags
+        const current_tags = self.gathered_tags.sliceRange(range.*);
+        const current_len = current_tags.len;
+
+        // Count how many extension tags are NOT duplicates
+        var new_count: usize = 0;
+        for (ext_names) |ext_name| {
+            const is_dup = for (current_tags) |existing| {
+                if (existing.name == ext_name) break true;
+            } else false;
+            if (!is_dup) new_count += 1;
+        }
+
+        if (new_count == 0) return;
+
+        // Allocate space for merged result
+        try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
+
+        // Append non-duplicate extension tags
+        for (ext_names, ext_args) |name, args| {
+            const is_dup = for (current_tags) |existing| {
+                if (existing.name == name) break true;
+            } else false;
+            if (!is_dup) {
+                self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });
+            }
+        }
+
+        // In-place merge
+        const start_idx: usize = @intFromEnum(range.start);
+        const total_len = current_len + new_count;
+        const items = self.gathered_tags.items.items[start_idx..][0..total_len];
+
+        inPlaceMergeTags(items, current_len, ident_store);
+
+        // Update range count
+        range.count = @intCast(total_len);
     }
 
     /// Given a multi list of tag and a range, copy from the multi list
@@ -2845,3 +2651,40 @@ pub const Scratch = struct {
         self.err = err;
     }
 };
+
+/// In-place merge of two sorted regions of record fields.
+/// Given an array [left_sorted | right_sorted], produces [merged_sorted].
+/// Uses insertion sort approach which is O(n*m) but efficient for small arrays.
+fn inPlaceMergeFields(items: []RecordField, left_len: usize, ident_store: *const Ident.Store) void {
+    if (left_len == 0 or left_len == items.len) return;
+
+    // Simple approach: insertion sort the right portion into the left
+    // This is O(n*m) but records typically have few fields
+    var i = left_len;
+    while (i < items.len) : (i += 1) {
+        const key = items[i];
+        var j = i;
+        // Shift elements right until we find the correct position
+        while (j > 0 and RecordField.orderByName(ident_store, items[j - 1], key) == .gt) {
+            items[j] = items[j - 1];
+            j -= 1;
+        }
+        items[j] = key;
+    }
+}
+
+/// In-place merge of two sorted regions of tags.
+fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Store) void {
+    if (left_len == 0 or left_len == items.len) return;
+
+    var i = left_len;
+    while (i < items.len) : (i += 1) {
+        const key = items[i];
+        var j = i;
+        while (j > 0 and Tag.orderByName(ident_store, items[j - 1], key) == .gt) {
+            items[j] = items[j - 1];
+            j -= 1;
+        }
+        items[j] = key;
+    }
+}

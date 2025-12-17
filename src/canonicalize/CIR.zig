@@ -271,7 +271,7 @@ pub const WhereClause = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .w_malformed => |malformed| {
+            .w_malformed => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("malformed");
 
@@ -280,7 +280,6 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                _ = malformed;
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
@@ -354,19 +353,12 @@ pub const ExposedItem = struct {
     }
 };
 
-/// Represents a field in a record pattern for pattern matching
-pub const PatternRecordField = struct {
-    pub const Idx = enum(u32) { _ };
-    pub const Span = extern struct { start: u32, len: u32 };
-};
-
 /// Represents an arbitrary precision smallish decimal value
 pub const SmallDecValue = struct {
     numerator: i16,
     denominator_power_of_ten: u8,
 
     /// Convert a small dec to f64 (use for size comparisons)
-    /// TODO: Review, claude generated
     pub fn toF64(self: @This()) f64 {
         const numerator_f64 = @as(f64, @floatFromInt(self.numerator));
         const divisor = std.math.pow(f64, 10, @as(f64, @floatFromInt(self.denominator_power_of_ten)));
@@ -486,7 +478,6 @@ pub const IntValue = struct {
     }
 
     /// Calculate the int requirements of an IntValue
-    /// TODO: Review, claude generated
     pub fn toIntRequirements(self: IntValue) types_mod.IntRequirements {
         var is_negated = false;
         var u128_val: u128 = undefined;
@@ -529,8 +520,6 @@ pub const IntValue = struct {
         };
     }
 
-    /// Calculate the frac requirements of an IntValue
-    /// TODO: Review, claude generated
     /// Calculate the frac requirements of an IntValue
     pub fn toFracRequirements(self: IntValue) types_mod.FracRequirements {
         // Convert to f64 for checking
@@ -720,7 +709,10 @@ pub fn fromF64(f: f64) ?RocDec {
 
 /// Represents an import statement in a module
 pub const Import = struct {
-    pub const Idx = enum(u32) { _ };
+    pub const Idx = enum(u32) {
+        first = 0,
+        _,
+    };
 
     /// Sentinel value indicating unresolved import (max u32)
     pub const UNRESOLVED_MODULE: u32 = std.math.maxInt(u32);
@@ -827,6 +819,9 @@ pub const Import = struct {
         ///
         /// For each import, this finds the module in available_modules whose module_name
         /// matches the import name and sets the resolved index accordingly.
+        ///
+        /// For package-qualified imports like "pf.Stdout", this also tries to match the
+        /// base module name ("Stdout") if the full qualified name doesn't match.
         pub fn resolveImports(self: *Store, env: anytype, available_modules: []const *const @import("ModuleEnv.zig")) void {
             const import_count: usize = @intCast(self.imports.len());
             for (0..import_count) |i| {
@@ -834,9 +829,18 @@ pub const Import = struct {
                 const str_idx = self.imports.items.items[i];
                 const import_name = env.common.getString(str_idx);
 
+                // For package-qualified imports like "pf.Stdout", extract the base module name
+                const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+                    import_name[dot_pos + 1 ..]
+                else
+                    import_name;
+
                 // Find matching module in available_modules by comparing module names
                 for (available_modules, 0..) |module_env, module_idx| {
-                    if (std.mem.eql(u8, module_env.module_name, import_name)) {
+                    // Try exact match first, then base name match for package-qualified imports
+                    if (std.mem.eql(u8, module_env.module_name, import_name) or
+                        std.mem.eql(u8, module_env.module_name, base_name))
+                    {
                         self.setResolvedModule(import_idx, @intCast(module_idx));
                         break;
                     }
@@ -1028,7 +1032,6 @@ pub fn isCastable(comptime T: type) bool {
         TypeAnno.RecordField.Idx,
         ExposedItem.Idx,
         Expr.Match.BranchPattern.Idx,
-        PatternRecordField.Idx,
         Node.Idx,
         TypeVar,
         => true,

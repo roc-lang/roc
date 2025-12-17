@@ -84,13 +84,10 @@ pub const CacheKey = struct {
     /// Format cache key for debugging output.
     pub fn format(
         self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        _ = fmt;
-        _ = options;
-
         try writer.print("CacheKey{{ content: {x}, mtime: {}, compiler: {x} }}", .{
             self.content_hash[0..8], // First 8 bytes for readability
             self.file_mtime,

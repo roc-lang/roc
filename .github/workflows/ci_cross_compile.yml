@@ -7,8 +7,8 @@ name: Cross Compilation Test
 permissions: {}
 
 jobs:
-  # Step 1: Cross-compile musl and glibc targets from different host platforms
-  cross-compile:
+  # Cross-compile all fx platform tests from all host platforms
+  cross-compile-fx-tests:
     runs-on: ${{ matrix.host }}
     strategy:
       fail-fast: false
@@ -20,10 +20,8 @@ jobs:
             windows-2022, # Windows x64 host
           ]
         target: [
-            x64musl, # Linux x86_64 musl
-            arm64musl, # Linux ARM64 musl
-            x64glibc, # Linux x86_64 glibc
-            arm64glibc, # Linux ARM64 glibc
+            x64musl, # Linux x86_64 musl (static linking)
+            arm64musl, # Linux ARM64 musl (static linking)
           ]
     steps:
       - name: Checkout
@@ -40,26 +38,38 @@ jobs:
         with:
           arch: x64
 
-      - name: Build roc compiler and other necessary libs
+      - name: Build roc compiler and test_runner
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build'
-          error_string_contains: 'EndOfStream|503'
+          error_string_contains: 'EndOfStream|503|Timeout'
           retry_count: 3
 
-      - name: Cross-compile int platform (Unix)
+      - name: Run fx platform cross-compilation tests (Unix)
         if: runner.os != 'Windows'
         run: |
-          echo "Cross-compiling from ${{ matrix.host }} to ${{ matrix.target }}"
-          ./zig-out/bin/roc build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
+          echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
+          ./zig-out/bin/test_runner ./zig-out/bin/roc fx --target=${{ matrix.target }} --mode=cross
 
-      - name: Cross-compile int platform (Windows)
+      - name: Run fx platform cross-compilation tests (Windows)
         if: runner.os == 'Windows'
         run: |
-          echo "Cross-compiling from ${{ matrix.host }} to ${{ matrix.target }}"
+          echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
+          zig-out\bin\test_runner.exe zig-out\bin\roc.exe fx --target=${{ matrix.target }} --mode=cross
+
+      - name: Cross-compile int platform test app (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          echo "Cross-compiling int platform from ${{ matrix.host }} to ${{ matrix.target }}"
+          ./zig-out/bin/roc build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
+
+      - name: Cross-compile int platform test app (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "Cross-compiling int platform from ${{ matrix.host }} to ${{ matrix.target }}"
           zig-out\bin\roc.exe build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
 
-      - name: Upload cross-compiled executables
+      - name: Upload cross-compiled int app executables
         uses: actions/upload-artifact@v4 # ratchet:actions/upload-artifact@v4
         with:
           name: cross-compiled-${{ matrix.host }}-${{ matrix.target }}
@@ -67,9 +77,9 @@ jobs:
             int_app_${{ matrix.target }}_*
           retention-days: 1
 
-  # Step 2: Test cross-compiled executables on actual target platforms
-  test-cross-compiled:
-    needs: cross-compile
+  # Test cross-compiled int platform executables on actual target platforms
+  test-int-on-target:
+    needs: [cross-compile-fx-tests]
     runs-on: ${{ matrix.target_os }}
     strategy:
       fail-fast: false
@@ -81,14 +91,6 @@ jobs:
             arch: x64
           # Test arm64musl executables on Linux ARM64
           - target: arm64musl
-            target_os: ubuntu-24.04-arm
-            arch: arm64
-          # Test x64glibc executables on Linux x64
-          - target: x64glibc
-            target_os: ubuntu-22.04
-            arch: x64
-          # Test arm64glibc executables on Linux ARM64
-          - target: arm64glibc
             target_os: ubuntu-24.04-arm
             arch: arm64
     steps:

@@ -23,6 +23,7 @@
 
 # Ignore the following directories and file extensions
 target
+!src/target
 generated-docs
 
 zig-out
@@ -66,6 +67,7 @@ metadata
 .exrc
 .vimrc
 .nvimrc
+.zed/
 
 # rust cache (sccache folder)
 sccache_dir

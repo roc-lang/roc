@@ -10,6 +10,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const Allocators = base.Allocators;
+const cli_ctx = @import("CliContext.zig");
+const CliContext = cli_ctx.CliContext;
+const Io = cli_ctx.Io;
 const fs = std.fs;
 const process = std.process;
 
@@ -52,13 +55,13 @@ fn getDynamicLinkerName(arch: []const u8) []const u8 {
 
 /// finds libc and dynamic linker
 /// Solely allocates into the arena
-pub fn findLibc(allocs: *Allocators) !LibcInfo {
+pub fn findLibc(ctx: *CliContext) !LibcInfo {
     // Try compiler-based detection first (most reliable)
-    if (try findViaCompiler(allocs.arena)) |info|
+    if (try findViaCompiler(ctx.arena)) |info|
         return info
     else
         // Fall back to filesystem search
-        return try findViaFilesystem(allocs.arena);
+        return try findViaFilesystem(ctx.arena);
 }
 
 /// Find libc using compiler queries (gcc/clang)
@@ -308,11 +311,15 @@ test "libc detection integration test" {
     // This test is not relevant on Windows (`uname` not available)
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var allocs: Allocators = undefined;
-    allocs.initInPlace(std.testing.allocator);
-    defer allocs.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
-    const libc_info = findLibc(&allocs) catch |err| switch (err) {
+    var io = Io.init();
+    var ctx = CliContext.init(std.testing.allocator, arena.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const libc_info = findLibc(&ctx) catch |err| switch (err) {
         error.LibcNotFound => return,
         else => return err,
     };

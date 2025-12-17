@@ -13,20 +13,17 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiation_arity_mismatch.md:5:5:5:19
+TOO MANY ARGUMENTS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO MANY ARGUMENTS**
+The function `identity` expects 1 argument, but 2 were provided:
 **test_instantiation_arity_mismatch.md:5:5:5:19:**
 ```roc
     identity(1, 2)
 ```
     ^^^^^^^^^^^^^^
 
-It has the type:
-    _c, d -> _ret where [c.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]_
-
-But I expected it to be:
+The function has the signature:
     _(a, b) -> (a, b)_
 
 # TOKENS
@@ -88,5 +85,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_c"))
+(expr (type "Error"))
 ~~~

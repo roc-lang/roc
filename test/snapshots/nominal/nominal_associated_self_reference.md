@@ -88,10 +88,13 @@ EndOfFile,
 ~~~roc
 Foo := [Whatever].{
 	Bar := [X, Y, Z]
+
 	defaultBar : Bar
 	defaultBar = X
+
 	transform : Bar -> Bar
 	transform = |x| x
+
 	useDefault = transform(defaultBar)
 }
 

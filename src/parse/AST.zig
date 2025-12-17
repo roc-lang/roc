@@ -729,6 +729,30 @@ pub const Diagnostic = struct {
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
         where_clause_not_allowed_in_type_declaration,
+
+        // Targets section parse errors
+        expected_targets,
+        expected_targets_colon,
+        expected_targets_open_curly,
+        expected_targets_close_curly,
+        expected_targets_field_name,
+        expected_targets_field_colon,
+        expected_targets_files_string,
+        unknown_targets_field,
+
+        // Target entry parse errors
+        expected_target_link_open_curly,
+        expected_target_link_close_curly,
+        expected_target_name,
+        expected_target_colon,
+        expected_target_files_open_square,
+        expected_target_files_close_square,
+        expected_target_file,
+        expected_target_file_string_end,
+
+        // Semantic warnings (detected at CLI time, not parse time)
+        targets_exe_empty,
+        targets_duplicate_target,
     };
 };
 
@@ -834,12 +858,14 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
     try tree.toStringPretty(writer, .include_linecol);
 }
 
-/// The kind of the type declaration represented, either:
+/// The kind of the type declaration represented:
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
+/// 3. An opaque type of the form `Foo :: [Bar, Baz]`
 pub const TypeDeclKind = enum {
     alias,
     nominal,
+    @"opaque",
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.
@@ -994,7 +1020,7 @@ pub const Statement = union(enum) {
                     try tree.pushStaticAtom("exposing");
                     const attrs2 = tree.beginNode();
                     for (ast.store.exposedItemSlice(import.exposes)) |e| {
-                        try ast.store.getExposedItem(e).pushToSExprTree(gpa, env, ast, tree);
+                        try ast.store.getExposedItem(e).pushToSExprTree(env, ast, tree);
                     }
                     try tree.endNode(exposed, attrs2);
                 }
@@ -1225,6 +1251,11 @@ pub const Pattern = union(enum) {
         ident_tok: Token.Idx,
         region: TokenizedRegion,
     },
+    /// A mutable variable binding in a pattern, e.g., `var $x` in `|var $x, y|`
+    var_ident: struct {
+        ident_tok: Token.Idx,
+        region: TokenizedRegion,
+    },
     tag: struct {
         tag_tok: Token.Idx,
         args: Pattern.Span,
@@ -1288,6 +1319,7 @@ pub const Pattern = union(enum) {
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |p| p.region,
+            .var_ident => |p| p.region,
             .tag => |p| p.region,
             .int => |p| p.region,
             .frac => |p| p.region,
@@ -1310,6 +1342,21 @@ pub const Pattern = union(enum) {
             .ident => |ident| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-ident");
+                try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
+
+                // Add raw attribute
+                const raw_begin = tree.beginNode();
+                try tree.pushStaticAtom("raw");
+                try tree.pushString(ast.resolve(ident.ident_tok));
+                const attrs2 = tree.beginNode();
+                try tree.endNode(raw_begin, attrs2);
+                const attrs = tree.beginNode();
+
+                try tree.endNode(begin, attrs);
+            },
+            .var_ident => |ident| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-var-ident");
                 try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
 
                 // Add raw attribute
@@ -1582,6 +1629,7 @@ pub const Header = union(enum) {
         exposes: Collection.Idx,
         packages: Collection.Idx,
         provides: Collection.Idx,
+        targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
         region: TokenizedRegion,
     },
     hosted: struct {
@@ -1624,7 +1672,7 @@ pub const Header = union(enum) {
                 // Could push region info for provides_coll here if desired
                 for (provides_items) |item_idx| {
                     const item = ast.store.getExposedItem(item_idx);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(provides_begin, attrs2);
 
@@ -1660,7 +1708,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1680,7 +1728,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1715,7 +1763,7 @@ pub const Header = union(enum) {
                 // Could push region info for rigids here if desired
                 for (ast.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(rigids_begin, attrs3);
 
@@ -1731,7 +1779,7 @@ pub const Header = union(enum) {
                 const attrs4 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs4);
 
@@ -1776,7 +1824,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1849,9 +1897,7 @@ pub const ExposedItem = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        _ = gpa;
-
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .lower_ident => |i| {
                 const begin = tree.beginNode();
@@ -1953,6 +1999,45 @@ pub const ExposedItem = union(enum) {
     }
 };
 
+/// A targets section in a platform header
+pub const TargetsSection = struct {
+    files_path: ?Token.Idx, // "files:" directive string literal
+    exe: ?TargetLinkType.Idx, // exe: { ... }
+    static_lib: ?TargetLinkType.Idx, // static_lib: { ... }
+    // shared_lib to be added later
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// A link type section (exe, static_lib, shared_lib)
+pub const TargetLinkType = struct {
+    entries: TargetEntry.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// Single target entry: x64musl: ["crt1.o", "host.o", app]
+pub const TargetEntry = struct {
+    target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
+    files: TargetFile.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// File item in target list
+pub const TargetFile = union(enum) {
+    string_literal: Token.Idx, // "crt1.o"
+    special_ident: Token.Idx, // app, win_gui
+    malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
 /// TODO
 pub const TypeHeader = struct {
     name: Token.Idx,
@@ -1995,6 +2080,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
+        ext: ?TypeAnno.Idx,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2135,6 +2221,15 @@ pub const TypeAnno = union(enum) {
                         },
                     };
                     try field.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                // Output extension if present
+                if (a.ext) |ext_idx| {
+                    const ext_begin = tree.beginNode();
+                    try tree.pushStaticAtom("ty-record-ext");
+                    const ext_attrs = tree.beginNode();
+                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
+                    try tree.endNode(ext_begin, ext_attrs);
                 }
 
                 try tree.endNode(begin, attrs);
@@ -2396,6 +2491,12 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     block: Block,
+    for_expr: struct {
+        patt: Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -2444,6 +2545,7 @@ pub const Expr = union(enum) {
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
+            .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
             .single_quote => |e| e.region,
@@ -2773,6 +2875,23 @@ pub const Expr = union(enum) {
 
                 // Push child expression
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .for_expr => |f| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-for");
+                try ast.appendRegionInfoToSexprTree(env, tree, f.region);
+                const attrs = tree.beginNode();
+
+                // Push pattern
+                try ast.store.getPattern(f.patt).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push list expression
+                try ast.store.getExpr(f.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push body expression
+                try ast.store.getExpr(f.body).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },

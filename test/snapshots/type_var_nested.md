@@ -218,42 +218,38 @@ main = |_| "done"
 (can-ir
 	(d-let
 		(p-assign (ident "map_result"))
-		(e-closure
-			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
-			(e-lambda
-				(args
-					(p-assign (ident "result"))
-					(p-assign (ident "transform")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Ok")
-											(args
-												(e-call
-													(e-lookup-local
-														(p-assign (ident "transform")))
-													(e-lookup-local
-														(p-assign (ident "value"))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Err")
-											(args
+		(e-lambda
+			(args
+				(p-assign (ident "result"))
+				(p-assign (ident "transform")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Ok")
+										(args
+											(e-call
 												(e-lookup-local
-													(p-assign (ident "error")))))))))))))
+													(p-assign (ident "transform")))
+												(e-lookup-local
+													(p-assign (ident "value"))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-lookup-local
+												(p-assign (ident "error"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

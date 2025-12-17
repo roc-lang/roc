@@ -27,7 +27,7 @@ test "exposed but not implemented - values" {
 
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
 
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
@@ -66,7 +66,7 @@ test "exposed but not implemented - types" {
 
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
 
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
@@ -105,7 +105,7 @@ test "redundant exposed entries" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -148,7 +148,7 @@ test "shadowing with exposed items" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -181,7 +181,7 @@ test "shadowing non-exposed items" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -221,7 +221,7 @@ test "exposed items correctly tracked across shadowing" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -277,7 +277,7 @@ test "complex case with redundant, shadowing, and not implemented" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -329,7 +329,7 @@ test "exposed_items is populated correctly" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -361,7 +361,7 @@ test "exposed_items persists after canonicalization" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -391,7 +391,7 @@ test "exposed_items never has entries removed" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);
@@ -424,7 +424,7 @@ test "exposed_items handles identifiers with different attributes" {
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
-    try env.initCIRFields(allocator, "Test");
+    try env.initCIRFields("Test");
     var ast = try parse.parse(&env.common, allocator);
     defer ast.deinit(allocator);
     var czer = try Can.init(&env, &ast, null);

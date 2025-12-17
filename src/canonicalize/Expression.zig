@@ -393,6 +393,42 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
     },
 
+    /// Type variable dispatch expression for calling methods on type variable aliases.
+    /// This is created when the user writes `Thing.method(args)` inside a function body
+    /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
+    ///
+    /// The actual function to call is resolved during type-checking once the type variable
+    /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
+    /// then `Thing.len(x)` becomes `List.len(x)`.
+    ///
+    /// ```roc
+    /// default_value : |thing| thing where thing implements Default
+    /// default_value = |thing|
+    ///     Thing : thing
+    ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
+    /// ```
+    e_type_var_dispatch: struct {
+        /// Reference to the s_type_var_alias statement that introduced this type alias
+        type_var_alias_stmt: CIR.Statement.Idx,
+        /// The method name being called (e.g., "default" in Thing.default())
+        method_name: Ident.Idx,
+        /// Arguments to the method call (may be empty for no-arg methods)
+        args: Expr.Span,
+    },
+
+    /// For expression that iterates over a list and executes a body for each element.
+    /// The for expression evaluates to the empty record `{}`.
+    /// This is the expression form of a for loop, allowing it to be used in expression contexts.
+    ///
+    /// ```roc
+    /// for_each! = |items, cb!| for item in items { cb!(item) }
+    /// ```
+    e_for: struct {
+        patt: CIR.Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+    },
+
     /// A hosted function that will be provided by the platform at runtime.
     /// This represents a lambda/function whose implementation is provided by the host application
     /// via the RocOps.hosted_fns array.
@@ -452,6 +488,7 @@ pub const Expr = union(enum) {
         str_from_utf8,
         str_split_on,
         str_join_with,
+        str_inspekt,
 
         // Numeric to_str operations
         u8_to_str,
@@ -475,6 +512,8 @@ pub const Expr = union(enum) {
         list_concat,
         list_with_capacity,
         list_sort_with,
+        list_drop_at,
+        list_sublist,
         list_append,
 
         // Set operations
@@ -497,12 +536,15 @@ pub const Expr = union(enum) {
 
         // Numeric arithmetic operations
         num_negate, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs_diff, // All numeric types (signed returns unsigned counterpart)
         num_plus, // All numeric types
         num_minus, // All numeric types
         num_times, // All numeric types
         num_div_by, // All numeric types
         num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
+        num_mod_by, // Integer types only: U8, I8, U16, I16, U32, I32, U64, I64, U128, I128
 
         // Bitwise shift operations (integer types only)
         num_shift_left_by, // Int a, U8 -> Int a
@@ -513,6 +555,7 @@ pub const Expr = union(enum) {
         num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
         num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
         num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
+        num_from_str, // Parse Str -> Try(num, [BadNumStr])
 
         // Numeric conversion operations (U8)
         u8_to_i8_wrap, // U8 -> I8 (wrapping)
@@ -817,14 +860,17 @@ pub const Expr = union(enum) {
                 .str_reserve => &.{ .consume, .borrow },
                 .str_release_excess_capacity => &.{.consume},
                 .str_join_with => &.{ .consume, .borrow }, // list consumed, separator borrowed
-                .str_split_on => &.{ .consume, .borrow },
 
                 // String operations - borrowing with seamless slice result (incref internally)
+                .str_split_on => &.{ .borrow, .borrow },
                 .str_to_utf8 => &.{.borrow},
                 .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
 
                 // String parsing - list consumed
                 .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
+
+                // Str.inspect - borrows the value to render it
+                .str_inspekt => &.{.borrow},
 
                 // Numeric to_str - value types (no ownership)
                 .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
@@ -837,18 +883,21 @@ pub const Expr = union(enum) {
                 .list_with_capacity => &.{.borrow}, // capacity is value type
                 .list_sort_with => &.{.consume},
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
+                .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
+                .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
 
                 // Bool operations - value types
                 .bool_is_eq => &.{ .borrow, .borrow },
 
                 // Numeric operations - all value types (no heap allocation)
-                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate => &.{.borrow},
-                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
+                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
+                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
 
-                // Numeric parsing - list borrowed for digits
+                // Numeric parsing - list borrowed for digits, string borrowed
                 .num_from_int_digits => &.{.borrow},
                 .num_from_dec_digits => &.{ .borrow, .borrow },
                 .num_from_numeral => &.{.borrow},
+                .num_from_str => &.{.borrow},
 
                 // All numeric conversions are value types (no heap allocation).
                 // Explicitly listed to get compile errors when new LowLevel variants are added.
@@ -1842,6 +1891,43 @@ pub const Expr = union(enum) {
 
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_var_dispatch => |tvd| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-var-dispatch");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Add method name
+                const method_text = ir.getIdent(tvd.method_name);
+                try tree.pushStringPair("method", method_text);
+
+                const attrs = tree.beginNode();
+
+                // Add arguments if any
+                for (ir.store.exprSlice(tvd.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_for => |for_expr| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-for");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add pattern
+                try ir.store.getPattern(for_expr.patt).pushToSExprTree(ir, tree, for_expr.patt);
+
+                // Add list expression
+                try ir.store.getExpr(for_expr.expr).pushToSExprTree(ir, tree, for_expr.expr);
+
+                // Add body expression
+                try ir.store.getExpr(for_expr.body).pushToSExprTree(ir, tree, for_expr.body);
 
                 try tree.endNode(begin, attrs);
             },

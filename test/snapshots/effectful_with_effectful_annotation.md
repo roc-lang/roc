@@ -16,20 +16,8 @@ print_msg! = |msg| Stdout.line!(msg)
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
-MODULE NOT FOUND - effectful_with_effectful_annotation.md:3:1:3:17
 UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**effectful_with_effectful_annotation.md:3:1:3:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?

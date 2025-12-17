@@ -229,25 +229,22 @@ UNDECLARED TYPE - fuzz_crash_023.md:45:8:45:10
 UNDECLARED TYPE - fuzz_crash_023.md:46:8:46:17
 UNDECLARED TYPE - fuzz_crash_023.md:52:4:52:6
 UNDECLARED TYPE - fuzz_crash_023.md:53:8:53:17
-MODULE NOT FOUND - fuzz_crash_023.md:4:1:4:42
-NOT IMPLEMENTED - :0:0:0:0
-MODULE NOT FOUND - fuzz_crash_023.md:6:1:12:4
-MODULE NOT FOUND - fuzz_crash_023.md:14:1:14:82
+NOT IMPLEMENTED - fuzz_crash_023.md:6:1:12:4
 MODULE NOT FOUND - fuzz_crash_023.md:16:1:16:27
 MODULE NOT FOUND - fuzz_crash_023.md:17:1:20:20
 UNDEFINED VARIABLE - fuzz_crash_023.md:72:4:72:13
 UNUSED VARIABLE - fuzz_crash_023.md:97:3:97:8
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_023.md:108:7:108:12
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_023.md:111:4:111:9
 UNUSED VARIABLE - fuzz_crash_023.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_023.md:120:7:120:12
 UNDEFINED VARIABLE - fuzz_crash_023.md:121:37:121:40
 UNUSED VARIABLE - fuzz_crash_023.md:121:21:121:27
 UNUSED VARIABLE - fuzz_crash_023.md:127:4:128:9
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_023.md:130:18:130:23
+NOT IMPLEMENTED - fuzz_crash_023.md:133:9:133:14
 UNUSED VARIABLE - fuzz_crash_023.md:82:2:82:3
 UNDEFINED VARIABLE - fuzz_crash_023.md:141:2:141:6
 UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
@@ -262,7 +259,7 @@ UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_023.md:188:18:188:32
 UNDEFINED VARIABLE - fuzz_crash_023.md:189:26:189:33
 UNDEFINED VARIABLE - fuzz_crash_023.md:189:34:189:38
 UNDEFINED VARIABLE - fuzz_crash_023.md:190:2:190:14
@@ -278,8 +275,7 @@ UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
 UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
-TYPE MISMATCH - fuzz_crash_023.md:155:2:157:3
-UNUSED VALUE - fuzz_crash_023.md:155:2:157:3
+TOO FEW ARGUMENTS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:175:26:175:27
 UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
 UNUSED VALUE - fuzz_crash_023.md:190:2:190:29
@@ -450,26 +446,9 @@ This type is referenced here:
 	      ^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:4:1:4:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**MODULE NOT FOUND**
-The module `MALFORMED_IMPORT` was not found in this Roc project.
-
-You're attempting to use this module here:
 **fuzz_crash_023.md:6:1:12:4:**
 ```roc
 import # Comment after import keyword
@@ -481,16 +460,7 @@ import # Comment after import keyword
 		] # Comment after exposing close
 ```
 
-
-**MODULE NOT FOUND**
-The module `pkg.Something` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_023.md:14:1:14:82:**
-```roc
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **MODULE NOT FOUND**
@@ -555,7 +525,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_023.md:108:7:108:12:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -572,7 +549,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_023.md:111:4:111:9:**
+```roc
+			2 | 5,
+```
+			^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -589,7 +573,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_023.md:120:7:120:12:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `add` in this scope.
@@ -629,12 +620,26 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_023.md:130:18:130:23:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		               ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_023.md:133:9:133:14:**
+```roc
+			bar: 2 | 7, # After last record field
+```
+			     ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -793,7 +798,14 @@ Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**fuzz_crash_023.md:188:18:188:32:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	                ^^^^^^^^^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.
@@ -1011,7 +1023,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red][Blue, Green][ProvidedByCompiler]_
+    _[Red, ..[Blue, Green, .._others2]]_
 
 All patterns in an `match` must have compatible types.
 
@@ -1026,10 +1038,10 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    _d_
+    __d_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `match_time` expects 2 arguments, but 1 was provided:
 **fuzz_crash_023.md:155:2:157:3:**
 ```roc
 	match_time(
@@ -1037,23 +1049,8 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
-    _[Red][Blue, Green][ProvidedByCompiler], _arg -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_023.md:155:2:157:3:**
-```roc
-	match_time(
-		..., # Single args with comment
-	)
-```
-
-It has the type:
-    _d_
+The function has the signature:
+    _[Red, ..[Blue, Green, .._others2]], _arg -> Error_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1078,7 +1075,7 @@ This expression produces a value, but it's not being used:
 	                                        ^^^
 
 It has the type:
-    _[Blue]_others_
+    _[Blue, .._others2]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1089,7 +1086,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _d_
+    __d_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2698,7 +2695,7 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "MALFORMED_IMPORT")
+	(s-import (module "#malformed_import_0")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
@@ -2735,7 +2732,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))
 		(patt (type "{}"))
@@ -2782,7 +2779,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red][Blue, Green][ProvidedByCompiler], _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))

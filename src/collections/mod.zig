@@ -21,6 +21,13 @@ pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuil
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
 
+/// Serialization format definitions for embedded module data.
+pub const serialization = @import("serialization.zig");
+pub const SerializedHeader = serialization.SerializedHeader;
+pub const SerializedModuleInfo = serialization.SerializedModuleInfo;
+pub const SERIALIZED_FORMAT_MAGIC = serialization.SERIALIZED_FORMAT_MAGIC;
+pub const SERIALIZED_FORMAT_VERSION = serialization.SERIALIZED_FORMAT_VERSION;
+
 /// Re-exported alignment constant from CompactWriter for convenience.
 /// This alignment is required for all serialization buffers to ensure proper memory access.
 pub const SERIALIZATION_ALIGNMENT = CompactWriter.SERIALIZATION_ALIGNMENT;
@@ -73,12 +80,20 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             return value;
         }
 
+        const init_capacity = @as(comptime_int, @max(1, std.atomic.cache_line / @sizeOf(V)));
+
+        /// Called when memory growth is necessary. Returns a capacity larger than
+        /// minimum that grows super-linearly. Copied from std.ArrayList.
+        inline fn growCapacity(minimum: usize) usize {
+            return minimum +| (minimum / 2 + init_capacity);
+        }
+
         pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
             const idx = @intFromEnum(key);
 
             // Grow if necessary
             if (idx >= self.entries.len) {
-                const new_size = idx + 1;
+                const new_size = growCapacity(idx);
                 const new_entries = try allocator.realloc(self.entries, new_size);
                 @memset(new_entries[self.entries.len..], V.none);
                 self.entries = new_entries;
@@ -98,5 +113,6 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
 }

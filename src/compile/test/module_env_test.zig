@@ -34,7 +34,7 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try original.common.line_starts.append(gpa, 20);
 
     // Initialize CIR fields to ensure imports are available
-    try original.initCIRFields(gpa, "TestModule");
+    try original.initCIRFields("TestModule");
 
     // Add some imports to test serialization/deserialization
     const import1 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
@@ -108,10 +108,8 @@ test "ModuleEnv.Serialized roundtrip" {
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
+        .method_idents = deserialized_ptr.method_idents.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
     };
-
-    // Verify the data was preserved
-    // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
@@ -124,7 +122,10 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 Bool tag identifiers: True, False
     // Plus 6 from_utf8 identifiers: byte_index, string, is_ok, problem_code, problem, index
     // Plus 2 synthetic identifiers for ? operator desugaring: #ok, #err
-    try testing.expectEqual(@as(u32, 62), original.common.idents.interner.entry_count);
+    // Plus 2 numeric method identifiers: abs, abs_diff
+    // Plus 1 inspect method identifier: to_inspect
+    // Plus 14 unqualified builtin type names: Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+    try testing.expectEqual(@as(u32, 79), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -133,9 +134,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 62 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring from ModuleEnv.init()
+    // Should have same 79 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 14 unqualified builtin type names from ModuleEnv.init()
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 62), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 79), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -190,7 +191,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     defer original.deinit();
 
 //     // Initialize CIR fields
-//     try original.initCIRFields(gpa, "test.Types");
+//     try original.initCIRFields("test.Types");
 
 //     // Add some type variables
 //     const var1 = try original.types.freshFromContent(.err);
@@ -355,7 +356,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     defer original.deinit();
 
 //     // Initialize CIR fields
-//     try original.initCIRFields(gpa, "test.Hello");
+//     try original.initCIRFields("test.Hello");
 
 //     // Create arena allocator for serialization
 //     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -426,12 +427,10 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
         .ident = types.TypeIdent{ .ident_idx = str_ident },
         .vars = .{ .nonempty = str_vars_range },
         .origin_module = builtin_ident,
+        .is_opaque = false,
     };
-    const str_type = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
-
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = str_type;
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));

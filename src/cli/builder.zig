@@ -3,8 +3,22 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const target = @import("target.zig");
+const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
+
+const is_windows = builtin.target.os.tag == .windows;
+
+var stderr_file_writer: std.fs.File.Writer = .{
+    .interface = std.fs.File.Writer.initInterface(&.{}),
+    .file = if (is_windows) undefined else std.fs.File.stderr(),
+    .mode = .streaming,
+};
+
+fn stderrWriter() *std.Io.Writer {
+    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
+    return &stderr_file_writer.interface;
+}
 
 // Re-export RocTarget from target.zig for backward compatibility
 pub const RocTarget = target.RocTarget;
@@ -33,6 +47,7 @@ pub const CompileConfig = struct {
     target: RocTarget,
     cpu: []const u8 = "",
     features: []const u8 = "",
+    debug: bool = false, // Enable debug info generation in output
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -175,7 +190,7 @@ pub fn initializeLLVM() void {
 /// Compile LLVM bitcode file to object file
 pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     if (comptime !llvm_available) {
-        std.log.err("LLVM is not available at compile time", .{});
+        renderLLVMNotAvailableError(gpa);
         return error.LLVMNotAvailable;
     }
 
@@ -189,7 +204,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
 
     // Verify input file exists
     std.fs.cwd().access(config.input_path, .{}) catch |err| {
-        std.log.err("Input bitcode file does not exist or is not accessible: {s}, error: {}", .{ config.input_path, err });
+        renderFileNotAccessibleError(gpa, config.input_path, err);
         return false;
     };
 
@@ -207,7 +222,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
-        std.log.err("Failed to load bitcode file: {s}", .{error_message});
+        renderLLVMError(gpa, "BITCODE LOAD ERROR", "Failed to load bitcode file", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -218,7 +233,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
-        std.log.err("Failed to parse bitcode: {s}", .{error_message});
+        renderLLVMError(gpa, "BITCODE PARSE ERROR", "Failed to parse bitcode", std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -238,7 +253,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
     if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &llvm_target, &error_message) != 0) {
-        std.log.err("Failed to get target from triple: {s}", .{error_message});
+        renderTargetError(gpa, target_triple, std.mem.span(error_message));
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -266,7 +281,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
         false, // emulated_tls
     );
     if (target_machine == null) {
-        std.log.err("Failed to create target machine for triple='{s}', cpu='{s}', features='{s}'", .{ target_triple, config.cpu, config.features });
+        renderTargetMachineError(gpa, target_triple, config.cpu, config.features);
         return false;
     }
     defer externs.LLVMDisposeTargetMachine(target_machine);
@@ -284,7 +299,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     coverage_options.CoverageType = .ZigLLVMCoverageType_None;
 
     const emit_options = ZigLLVMEmitOptions{
-        .is_debug = false,
+        // Auto-enable debug when roc is built in debug mode, OR when explicitly requested via --debug
+        .is_debug = (builtin.mode == .Debug) or config.debug,
         .is_small = config.optimization == .size,
         .time_report_out = null,
         .tsan = false,
@@ -307,7 +323,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
     );
 
     if (emit_result) {
-        std.log.err("Failed to emit object file to '{s}': {s}", .{ config.output_path, emit_error_message });
+        renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message));
         externs.LLVMDisposeMessage(emit_error_message);
         return false;
     }
@@ -319,4 +335,150 @@ pub fn compileBitcodeToObject(gpa: Allocator, config: CompileConfig) !bool {
 /// Check if LLVM is available
 pub fn isLLVMAvailable() bool {
     return llvm_available;
+}
+
+// --- Error Reporting Helpers ---
+
+fn renderLLVMNotAvailableError(allocator: Allocator) void {
+    var report = reporting.Report.init(allocator, "LLVM NOT AVAILABLE", .fatal);
+    defer report.deinit();
+
+    report.document.addText("LLVM is not available at compile time.") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("This binary was built without LLVM support.") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("To use this feature, rebuild roc with LLVM enabled.") catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: anyerror) void {
+    var report = reporting.Report.init(allocator, "FILE NOT ACCESSIBLE", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Input bitcode file does not exist or is not accessible:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    ") catch return;
+    report.document.addAnnotated(path, .path) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("Error: ") catch return;
+    report.document.addAnnotated(@errorName(err), .error_highlight) catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8, llvm_message: []const u8) void {
+    var report = reporting.Report.init(allocator, title, .fatal);
+    defer report.deinit();
+
+    report.document.addText(message) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("LLVM error: ") catch return;
+    report.document.addAnnotated(llvm_message, .error_highlight) catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) void {
+    var report = reporting.Report.init(allocator, "INVALID TARGET", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Failed to get LLVM target for triple:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    ") catch return;
+    report.document.addAnnotated(triple, .emphasized) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("LLVM error: ") catch return;
+    report.document.addAnnotated(llvm_message, .error_highlight) catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) void {
+    var report = reporting.Report.init(allocator, "TARGET MACHINE ERROR", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Failed to create LLVM target machine with configuration:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    Triple:   ") catch return;
+    report.document.addAnnotated(triple, .emphasized) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    CPU:      ") catch return;
+    if (cpu.len > 0) {
+        report.document.addAnnotated(cpu, .emphasized) catch return;
+    } else {
+        report.document.addText("(default)") catch return;
+    }
+    report.document.addLineBreak() catch return;
+    report.document.addText("    Features: ") catch return;
+    if (features.len > 0) {
+        report.document.addAnnotated(features, .emphasized) catch return;
+    } else {
+        report.document.addText("(default)") catch return;
+    }
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("This may indicate an unsupported target configuration.") catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
+}
+
+fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) void {
+    var report = reporting.Report.init(allocator, "OBJECT FILE EMIT ERROR", .fatal);
+    defer report.deinit();
+
+    report.document.addText("Failed to emit object file:") catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("    Output: ") catch return;
+    report.document.addAnnotated(output_path, .path) catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addLineBreak() catch return;
+    report.document.addText("LLVM error: ") catch return;
+    report.document.addAnnotated(llvm_message, .error_highlight) catch return;
+    report.document.addLineBreak() catch return;
+
+    reporting.renderReportToTerminal(
+        &report,
+        stderrWriter(),
+        .ANSI,
+        reporting.ReportingConfig.initColorTerminal(),
+    ) catch {};
 }

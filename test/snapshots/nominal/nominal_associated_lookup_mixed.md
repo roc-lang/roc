@@ -88,7 +88,9 @@ EndOfFile,
 ~~~roc
 Foo := [Whatever].{
 	Bar := [A, B, C]
+
 	defaultBar = Bar.A
+
 	transform : Foo.Bar -> Foo.Bar
 	transform = |x| x
 }

@@ -4,10 +4,15 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
+const RocTarget = @import("roc_target").RocTarget;
+const cli_ctx = @import("CliContext.zig");
+const CliContext = cli_ctx.CliContext;
+const Io = cli_ctx.Io;
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -32,7 +37,7 @@ pub const TargetFormat = enum {
         return switch (builtin.target.os.tag) {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
-            .wasi => .wasm,
+            .freestanding => .wasm,
             else => .elf,
         };
     }
@@ -42,7 +47,7 @@ pub const TargetFormat = enum {
         return switch (os) {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
-            .wasi => .wasm,
+            .freestanding => .wasm,
             else => .elf,
         };
     }
@@ -54,18 +59,18 @@ pub const TargetAbi = enum {
     gnu,
 
     /// Convert from RocTarget to TargetAbi
-    pub fn fromRocTarget(roc_target: anytype) TargetAbi {
-        // Use string matching to avoid circular imports
-        const target_str = @tagName(roc_target);
-        if (std.mem.endsWith(u8, target_str, "musl")) {
-            return .musl;
-        } else {
-            return .gnu;
-        }
+    pub fn fromRocTarget(roc_target: RocTarget) TargetAbi {
+        return if (roc_target.isStatic()) .musl else .gnu;
     }
 };
 
-/// Configuration for linking operation
+/// Default WASM initial memory: 64MB
+pub const DEFAULT_WASM_INITIAL_MEMORY: usize = 64 * 1024 * 1024;
+
+/// Default WASM stack size: 8MB
+pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// Configuration for the linker, specifying target format, ABI, paths, and linking options.
 pub const LinkConfig = struct {
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
@@ -99,6 +104,14 @@ pub const LinkConfig = struct {
 
     /// Whether to disable linker output
     disable_output: bool = false,
+
+    /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
+    /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
+    wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
+
+    /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
+    /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
+    wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
 };
 
 /// Errors that can occur during linking
@@ -111,7 +124,7 @@ pub const LinkError = error{
 } || std.zig.system.DetectError;
 
 /// Link object files into an executable using LLD
-pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
+pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
     // Check if LLVM is available at compile time
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
@@ -119,7 +132,7 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
-    var args = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 64) catch return LinkError.OutOfMemory;
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 64) catch return LinkError.OutOfMemory;
 
     // Add platform-specific linker name and arguments
     // Use target OS if provided, otherwise fall back to host OS
@@ -158,6 +171,11 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
             // Link against system libraries on macOS
             try args.append("-lSystem");
+
+            // Link C++ standard library if Tracy is enabled
+            if (build_options.enable_tracy) {
+                try args.append("-lc++");
+            }
         },
         .linux => {
             // Add linker name for Linux
@@ -192,7 +210,7 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
                     // for cross-compilation. Only detect locally for native builds
                     if (config.extra_args.len == 0) {
                         // Native build - try to detect dynamic linker
-                        if (libc_finder.findLibc(allocs)) |libc_info| {
+                        if (libc_finder.findLibc(ctx)) |libc_info| {
                             // We need to copy the path since args holds references
                             try args.append("-dynamic-linker");
                             try args.append(libc_info.dynamic_linker);
@@ -212,6 +230,11 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
                     // Otherwise, dynamic linker is set via extra_args from caller
                 },
             }
+
+            // Link C++ standard library if Tracy is enabled
+            if (build_options.enable_tracy) {
+                try args.append("-lstdc++");
+            }
         },
         .windows => {
             // Add linker name for Windows COFF
@@ -227,27 +250,27 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             const target = try std.zig.system.resolveTargetQuery(query);
 
             const native_libc = std.zig.LibCInstallation.findNative(.{
-                .allocator = allocs.arena,
+                .allocator = ctx.arena,
                 .target = &target,
             }) catch return error.WindowsSDKNotFound;
 
             if (native_libc.crt_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
                 try args.append(lib_arg);
             } else return error.WindowsSDKNotFound;
 
             if (native_libc.msvc_lib_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
                 try args.append(lib_arg);
             } else return error.WindowsSDKNotFound;
 
             if (native_libc.kernel32_lib_dir) |lib_dir| {
-                const lib_arg = try std.fmt.allocPrint(allocs.arena, "/libpath:{s}", .{lib_dir});
+                const lib_arg = try std.fmt.allocPrint(ctx.arena, "/libpath:{s}", .{lib_dir});
                 try args.append(lib_arg);
             } else return error.WindowsSDKNotFound;
 
             // Add output argument using Windows style
-            const out_arg = try std.fmt.allocPrint(allocs.arena, "/out:{s}", .{config.output_path});
+            const out_arg = try std.fmt.allocPrint(ctx.arena, "/out:{s}", .{config.output_path});
             try args.append(out_arg);
 
             // Add subsystem flag (console by default)
@@ -269,6 +292,43 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
             // Suppress warnings using Windows style
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
+
+            // Link C++ standard library if Tracy is enabled
+            if (build_options.enable_tracy) {
+                try args.append("/defaultlib:msvcprt");
+            }
+        },
+        .freestanding => {
+            // WebAssembly linker (wasm-ld) for freestanding wasm32 target
+            try args.append("wasm-ld");
+
+            // Add output argument
+            try args.append("-o");
+            try args.append(config.output_path);
+
+            // Don't look for _start or _main entry point - we export specific functions
+            try args.append("--no-entry");
+
+            // Export all symbols (the Roc app exports its entrypoints)
+            try args.append("--export-all");
+
+            // Disable garbage collection to preserve host-defined exports (init, handleEvent, update)
+            // Without this, wasm-ld removes symbols that aren't referenced by the Roc app
+            try args.append("--no-gc-sections");
+
+            // Allow undefined symbols (imports from host environment)
+            try args.append("--allow-undefined");
+
+            // Set initial memory size (configurable, default 64MB)
+            // Must be a multiple of 64KB (WASM page size)
+            const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
+            try args.append(initial_memory_str);
+
+            // Set stack size (configurable, default 8MB)
+            // Must be a multiple of 16 (stack alignment)
+            const stack_size_str = std.fmt.allocPrint(ctx.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
+            try args.append("-z");
+            try args.append(stack_size_str);
         },
         else => {
             // Generic ELF linker
@@ -283,9 +343,21 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
         },
     }
 
+    // For WASM targets, wrap platform files in --whole-archive to include all symbols
+    // This ensures host exports (init, handleEvent, update) aren't stripped even when
+    // not referenced by other code
+    const is_wasm = config.target_format == .wasm;
+    if (is_wasm and config.platform_files_pre.len > 0) {
+        try args.append("--whole-archive");
+    }
+
     // Add platform-provided files that come before object files
     for (config.platform_files_pre) |platform_file| {
         try args.append(platform_file);
+    }
+
+    if (is_wasm and config.platform_files_pre.len > 0) {
+        try args.append("--no-whole-archive");
     }
 
     // Add object files
@@ -311,10 +383,10 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 
     // Convert to null-terminated strings for C API
     // Arena allocator will clean up all these temporary allocations
-    var c_args = allocs.arena.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
+    var c_args = ctx.arena.alloc([*:0]const u8, args.items.len) catch return LinkError.OutOfMemory;
 
     for (args.items, 0..) |arg, i| {
-        c_args[i] = (allocs.arena.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
+        c_args[i] = (ctx.arena.dupeZ(u8, arg) catch return LinkError.OutOfMemory).ptr;
     }
 
     // Call appropriate LLD function based on target format
@@ -351,7 +423,7 @@ pub fn link(allocs: *Allocators, config: LinkConfig) LinkError!void {
 }
 
 /// Convenience function to link two object files into an executable
-pub fn linkTwoObjects(allocs: *Allocators, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
+pub fn linkTwoObjects(ctx: *CliContext, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -361,11 +433,11 @@ pub fn linkTwoObjects(allocs: *Allocators, obj1: []const u8, obj2: []const u8, o
         .object_files = &.{ obj1, obj2 },
     };
 
-    return link(allocs, config);
+    return link(ctx, config);
 }
 
 /// Convenience function to link multiple object files into an executable
-pub fn linkObjects(allocs: *Allocators, object_files: []const []const u8, output: []const u8) LinkError!void {
+pub fn linkObjects(ctx: *CliContext, object_files: []const []const u8, output: []const u8) LinkError!void {
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
     }
@@ -375,7 +447,7 @@ pub fn linkObjects(allocs: *Allocators, object_files: []const []const u8, output
         .object_files = object_files,
     };
 
-    return link(allocs, config);
+    return link(ctx, config);
 }
 
 test "link config creation" {
@@ -402,16 +474,17 @@ test "target format detection" {
 
 test "link error when LLVM not available" {
     if (comptime !llvm_available) {
-        var allocs: Allocators = undefined;
-        allocs.initInPlace(std.testing.allocator);
-        defer allocs.deinit();
+        var io = Io.init();
+        var ctx = CliContext.init(std.testing.allocator, std.testing.allocator, &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
 
         const config = LinkConfig{
             .output_path = "test_output",
             .object_files = &.{ "file1.o", "file2.o" },
         };
 
-        const result = link(&allocs, config);
+        const result = link(&ctx, config);
         try std.testing.expectError(LinkError.LLVMNotAvailable, result);
     }
 }

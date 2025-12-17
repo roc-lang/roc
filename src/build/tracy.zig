@@ -47,29 +47,15 @@ const ___tracy_c_zone_context = extern struct {
 /// The tracy context object for tracking zones.
 /// Make sure to defer calling end.
 pub const Ctx = if (enable) ___tracy_c_zone_context else struct {
-    pub inline fn end(self: @This()) void {
-        _ = self;
-    }
+    pub inline fn end(_: @This()) void {}
 
-    pub inline fn addText(self: @This(), text: []const u8) void {
-        _ = self;
-        _ = text;
-    }
+    pub inline fn addText(_: @This(), _: []const u8) void {}
 
-    pub inline fn setName(self: @This(), name: []const u8) void {
-        _ = self;
-        _ = name;
-    }
+    pub inline fn setName(_: @This(), _: []const u8) void {}
 
-    pub inline fn setColor(self: @This(), color: u32) void {
-        _ = self;
-        _ = color;
-    }
+    pub inline fn setColor(_: @This(), _: u32) void {}
 
-    pub inline fn setValue(self: @This(), value: u64) void {
-        _ = self;
-        _ = value;
-    }
+    pub inline fn setValue(_: @This(), _: u64) void {}
 };
 
 /// Creates a source location based tracing zone.
@@ -147,6 +133,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn allocFn(ptr: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            const zone = traceNamed(@src(), "alloc");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             const result = self.parent_allocator.rawAlloc(len, ptr_align, ret_addr);
             if (result) |data| {
@@ -164,6 +153,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn resizeFn(ptr: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+            const zone = traceNamed(@src(), "resize");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (self.parent_allocator.rawResize(buf, buf_align, new_len, ret_addr)) {
                 if (name) |n| {
@@ -183,6 +175,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn remapFn(ptr: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+            const zone = traceNamed(@src(), "remap");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             if (self.parent_allocator.rawRemap(buf, buf_align, new_len, ret_addr)) |remapped| {
                 if (name) |n| {
@@ -202,6 +197,9 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
         }
 
         fn freeFn(ptr: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
+            const zone = traceNamed(@src(), "free");
+            defer zone.end();
+
             const self: *Self = @ptrCast(@alignCast(ptr));
             self.parent_allocator.rawFree(buf, buf_align, ret_addr);
             // this condition is to handle free being called on an empty slice that was never even allocated
@@ -284,7 +282,9 @@ inline fn frameMarkEnd(comptime name: [:0]const u8) void {
 extern fn ___tracy_emit_frame_mark_start(name: [*:0]const u8) void;
 extern fn ___tracy_emit_frame_mark_end(name: [*:0]const u8) void;
 
-inline fn alloc(ptr: [*]u8, len: usize) void {
+/// Records a memory allocation with Tracy's memory profiler.
+/// Call this after allocating memory to track it in Tracy's memory view.
+pub inline fn alloc(ptr: [*]u8, len: usize) void {
     if (!enable) return;
 
     if (enable_callstack) {
@@ -304,7 +304,9 @@ inline fn allocNamed(ptr: [*]u8, len: usize, comptime name: [:0]const u8) void {
     }
 }
 
-inline fn free(ptr: [*]u8) void {
+/// Records a memory deallocation with Tracy's memory profiler.
+/// Call this before freeing memory to track it in Tracy's memory view.
+pub inline fn free(ptr: [*]u8) void {
     if (!enable) return;
 
     if (enable_callstack) {
@@ -404,7 +406,10 @@ extern fn ___tracy_wait_shutdown() void;
 pub fn waitForShutdown() !void {
     if (!enable) return;
 
-    try std.fs.File.stderr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
+    // stderr not available on freestanding
+    if (comptime builtin.os.tag != .freestanding) {
+        try std.fs.File.stderr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
+    }
     ___tracy_wait_shutdown();
 }
 

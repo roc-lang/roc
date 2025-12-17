@@ -97,7 +97,7 @@ test "interpreter poly: return a function then call (int)" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
@@ -118,7 +118,7 @@ test "interpreter poly: return a function then call (string)" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"hi"
@@ -142,7 +142,7 @@ test "interpreter captures (monomorphic): adder" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
@@ -163,7 +163,7 @@ test "interpreter captures (monomorphic): constant function" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"hi"
@@ -187,7 +187,7 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("41", rendered);
 }
@@ -208,7 +208,7 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"ok"
@@ -501,7 +501,7 @@ test "interpreter tag union: one-arg tag Ok(42)" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\Ok(42)
@@ -525,7 +525,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\Point(1, 2)

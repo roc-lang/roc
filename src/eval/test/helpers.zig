@@ -94,6 +94,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Check if this is an integer or Dec
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
@@ -132,6 +133,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // For boolean results, read the underlying byte value
     if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
@@ -171,6 +173,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     const actual = result.asF32();
     const epsilon: f32 = 0.0001;
@@ -204,6 +207,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     const actual = result.asF64();
     const epsilon: f64 = 0.000000001;
@@ -239,6 +243,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     const actual_dec = result.asDec();
     if (actual_dec.num != expected_dec_num) {
@@ -269,6 +274,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
+    defer interpreter.cleanupBindings(ops);
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.layout.data.scalar.tag == .str);
@@ -320,6 +326,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Verify we got a tuple layout
     try std.testing.expect(result.layout.tag == .tuple);
@@ -331,7 +338,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     for (expected_elements) |expected_element| {
         // Get the element at the specified index
-        const element = try tuple_accessor.getElement(@intCast(expected_element.index));
+        // Use the result's rt_var since we're accessing elements of the evaluated expression
+        const element = try tuple_accessor.getElement(@intCast(expected_element.index), result.rt_var);
 
         // Check if this is an integer or Dec
         try std.testing.expect(element.layout.tag == .scalar);
@@ -371,6 +379,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Verify we got a record layout
     try std.testing.expect(result.layout.tag == .record);
@@ -397,6 +406,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     .layout = field_layout,
                     .ptr = field_ptr,
                     .is_initialized = true,
+                    .rt_var = result.rt_var, // use result's rt_var for field access
                 };
                 // Check if this is an integer or Dec
                 const int_val = if (field_layout.data.scalar.tag == .int) blk: {
@@ -439,6 +449,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     // Verify we got a list layout
     try std.testing.expect(result.layout.tag == .list or result.layout.tag == .list_of_zst);
@@ -453,7 +464,64 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
     for (expected_elements, 0..) |expected_val, i| {
-        const element = try list_accessor.getElement(i);
+        // Use the result's rt_var since we're accessing elements of the evaluated expression
+        const element = try list_accessor.getElement(i, result.rt_var);
+
+        // Check if this is an integer
+        try std.testing.expect(element.layout.tag == .scalar);
+        try std.testing.expect(element.layout.data.scalar.tag == .int);
+        const int_val = element.asI128();
+        try std.testing.expectEqual(@as(i128, expected_val), int_val);
+    }
+}
+
+/// Like runExpectListI64 but asserts the layout is .list (not .list_of_zst).
+/// This is used to verify that type unification is working correctly -
+/// when a list is used with a non-ZST element type, its layout should be .list.
+pub fn runExpectListI64WithStrictLayout(src: []const u8, expected_elements: []const i64, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    // STRICT: Verify we got a .list layout (NOT .list_of_zst)
+    // If this fails, it means type unification didn't properly infer the element type
+    if (result.layout.tag != .list) {
+        std.debug.print("\n[FAIL] Expected .list layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        std.debug.print("This indicates a type inference bug - List.with_capacity should be unified to List(I64)\n", .{});
+        return error.TestExpectedEqual;
+    }
+
+    // Get the element layout
+    const elem_layout_idx = result.layout.data.list;
+    const elem_layout = layout_cache.getLayout(elem_layout_idx);
+
+    // Use the ListAccessor to safely access list elements
+    const list_accessor = try result.asList(layout_cache, elem_layout);
+
+    try std.testing.expectEqual(expected_elements.len, list_accessor.len());
+
+    for (expected_elements, 0..) |expected_val, i| {
+        // Use the result's rt_var since we're accessing elements of the evaluated expression
+        const element = try list_accessor.getElement(i, result.rt_var);
 
         // Check if this is an integer
         try std.testing.expect(element.layout.tag == .scalar);
@@ -621,7 +689,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     parse_ast.store.emptyScratch();
 
     // Initialize CIR fields in ModuleEnv
-    try module_env.initCIRFields(allocator, "test");
+    try module_env.initCIRFields("test");
 
     // Register Builtin as import so Bool, Try, and Str are available
     _ = try module_env.imports.getOrPut(allocator, &module_env.common.strings, "Builtin");
@@ -748,6 +816,7 @@ test "eval tag - already primitive" {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.ptr != null);
@@ -780,6 +849,7 @@ test "interpreter reuse across multiple evaluations" {
             const result = try interpreter.eval(resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
+            defer interpreter.cleanupBindings(ops);
 
             try std.testing.expect(result.layout.tag == .scalar);
 

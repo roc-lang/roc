@@ -182,9 +182,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:34:8:34:11
 UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
-MODULE NOT FOUND - fuzz_crash_027.md:4:1:4:38
 MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
-MODULE NOT FOUND - fuzz_crash_027.md:10:1:10:46
 MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
 MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
 UNDECLARED TYPE - fuzz_crash_027.md:29:2:29:5
@@ -195,14 +193,14 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
 UNUSED VARIABLE - fuzz_crash_027.md:64:11:64:14
 UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
 UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:88:4:88:6
+NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
@@ -214,7 +212,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:141:10:141:24
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:10:142:17
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:18:142:22
 DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
@@ -229,8 +227,7 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
-TYPE MISMATCH - fuzz_crash_027.md:111:2:113:3
-UNUSED VALUE - fuzz_crash_027.md:111:2:113:3
+TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
 MISSING METHOD - fuzz_crash_027.md:125:6:125:9
 MISSING METHOD - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
@@ -422,17 +419,6 @@ Func(a) : Maybe(a), a -> Maybe(a)
 
 
 **MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:4:1:4:38:**
-```roc
-import pf.Stdout exposing [line!, e!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
 The module `Stdot` was not found in this Roc project.
 
 You're attempting to use this module here:
@@ -442,17 +428,6 @@ import Stdot
 		exposing [ #tem
 		] # Cose
 ```
-
-
-**MODULE NOT FOUND**
-The module `pkg.S` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_027.md:10:1:10:46:**
-```roc
-import pkg.S exposing [func as fry, Custom.*]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -569,7 +544,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_027.md:74:7:74:12:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -598,7 +580,14 @@ ist
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_027.md:81:7:81:12:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `add` in this scope.
@@ -626,12 +615,26 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: report an error when unable to resolve field identifier
 
+**fuzz_crash_027.md:88:4:88:6:**
+```roc
+			..} => 12
+```
+			^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_027.md:89:18:89:23:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		               ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -758,7 +761,14 @@ Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**fuzz_crash_027.md:141:10:141:24:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	        ^^^^^^^^^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.
@@ -876,7 +886,7 @@ tuple : Value((a, b, c))
 
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **fuzz_crash_027.md:21:3:22:4:**
 ```roc
 		List( #rg
@@ -940,7 +950,7 @@ The third pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Red, Blue][ProvidedByCompiler]_
+    _[Red, Blue, .._others2]_
 
 All patterns in an `match` must have compatible types.
 
@@ -955,10 +965,10 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    _d_
+    __d_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `match_time` expects 2 arguments, but 1 was provided:
 **fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
@@ -966,23 +976,8 @@ This expression is used in an unexpected way:
 	)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
-    _[Red, Blue][ProvidedByCompiler], _arg -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_027.md:111:2:113:3:**
-```roc
-	match_time(
-		..., #
-	)
-```
-
-It has the type:
-    _d_
+The function has the signature:
+    _[Blue, Red, .._others2], _arg -> Error_
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -996,7 +991,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -1010,7 +1005,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -1024,7 +1019,7 @@ The value's type, which does not have a method named **plus**, is:
 
     _Str_
 
-**Hint: **The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1038,10 +1033,10 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Error)][Err(d), Ok({  })]_
+    _[Stdoline!(Error), ..[Err(_d), Ok({  }), .._others2]]_
 
 But the type annotation says it should have the type:
-    _Try(d)_
+    _Try({  }, _d)_
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2412,7 +2407,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
+		(patt (type "[Red, Blue, .._others2], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2449,7 +2444,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, Blue][ProvidedByCompiler], _arg -> Error"))
+		(expr (type "[Red, Blue, .._others2], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

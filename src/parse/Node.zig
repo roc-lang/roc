@@ -127,6 +127,15 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_nominal,
+    /// A Type declaration for opaque types
+    /// Example: `Color :: { red : U8, green: U8, blue: U8 }`
+    /// Example: `Color :: [Red, Green, Blue]`
+    /// * main_token - upper_ident for type ident
+    /// * lhs - describes extra_data: struct(packed){ num_type_args: u31, has_where: u1 }
+    /// * rhs - extra_data index
+    /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
+    /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
+    type_decl_opaque,
     /// A Type annotation
     /// Example: `main! : List Str => Try {} _`
     /// Example: `colors : List Color`
@@ -236,6 +245,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     ident_patt,
+    /// Mutable variable binding in pattern
+    /// Example: `var $x` in `|var $x, y|`
+    /// * main_token - the identifier token
+    var_ident_patt,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -434,6 +447,11 @@ pub const Tag = enum {
     /// * lhs - first statement node
     /// * rhs - number of statements
     block,
+    /// A for expression (for loop used as an expression, evaluates to {})
+    /// * main_token - node index for pattern for loop variable
+    /// * lhs - node index for loop initializing expression
+    /// * rhs - node index for loop body expression
+    for_expr,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -461,6 +479,33 @@ pub const Tag = enum {
 
     /// Collection of type annotations
     collection_ty_anno,
+
+    // Target section nodes
+
+    /// A targets section in a platform header
+    /// * main_token - files string token (or 0 if no files directive)
+    /// * lhs - exe TargetLinkType index (or 0 if none)
+    /// * rhs - reserved for future (static_lib, shared_lib)
+    targets_section,
+
+    /// A target link type section (exe, static_lib, shared_lib)
+    /// * lhs - start of entries span
+    /// * rhs - length of entries span
+    target_link_type,
+
+    /// A single target entry: x64musl: ["crt1.o", "host.o", app]
+    /// * main_token - target name identifier token
+    /// * lhs - start of files span
+    /// * rhs - length of files span
+    target_entry,
+
+    /// A string literal file in a target list: "crt1.o"
+    /// * main_token - string token
+    target_file_string,
+
+    /// A special identifier in a target list: app, win_gui
+    /// * main_token - identifier token
+    target_file_ident,
 };
 
 /// Unstructured information about a Node.  These

@@ -89,6 +89,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+        .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
     };
 
     return LoadedModule{
@@ -200,7 +201,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     parse_ast.store.emptyScratch();
 
     // Canonicalize
-    try module_env.initCIRFields(gpa, module_name);
+    try module_env.initCIRFields(module_name);
 
     can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();
@@ -320,7 +321,7 @@ pub fn init(module_name: []const u8, source: []const u8) !TestEnv {
     parse_ast.store.emptyScratch();
 
     // Canonicalize
-    try module_env.initCIRFields(gpa, module_name);
+    try module_env.initCIRFields(module_name);
 
     can.* = try Can.init(module_env, parse_ast, &module_envs);
     errdefer can.deinit();

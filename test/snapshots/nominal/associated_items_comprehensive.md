@@ -1879,7 +1879,7 @@ simple1 = Simple.value # Should work
 
 # Test 1.2: Forward reference within associated block
 Forward := [B].{
-	first = second
+	first = second # Forward reference - should work
 	second = 2
 }
 forward1 = Forward.first # Should be 2
@@ -1888,8 +1888,8 @@ forward2 = Forward.second # Should be 2
 # Test 1.3: Multiple items referencing each other
 Multi := [C].{
 	a = 10
-	b = a + 5
-	c = b * 2
+	b = a + 5 # Reference to sibling
+	c = b * 2 # Reference to another sibling
 }
 multi1 = Multi.a # 10
 multi2 = Multi.b # 15
@@ -1906,6 +1906,7 @@ externalTest1 = Simple.value # Must use qualified name
 # Test 2.1: Nested type with associated items
 Outer1 := [D].{
 	outerVal = 100
+
 	Inner1 := [E].{
 		innerVal = 200
 	}
@@ -1916,8 +1917,9 @@ depth2_2 = Outer1.Inner1.innerVal # 200
 # Test 2.2: Nested items referencing outer items
 Outer2 := [F].{
 	shared = 50
+
 	Inner2 := [G].{
-		usesOuter = Outer2.shared
+		usesOuter = Outer2.shared # Can reference outer scope
 		doubled = usesOuter * 2
 	}
 }
@@ -1927,7 +1929,8 @@ depth2_5 = Outer2.Inner2.doubled # 100
 
 # Test 2.3: Forward references at depth 2
 Outer3 := [H].{
-	first = Outer3.Inner3.nested
+	first = Outer3.Inner3.nested # Forward ref to nested item
+
 	Inner3 := [I].{
 		nested = 42
 	}
@@ -1938,11 +1941,13 @@ depth2_7 = Outer3.Inner3.nested # 42
 # Test 2.4: Multiple nested types at same level
 Outer4 := [J].{
 	val = 1
+
 	InnerA := [K].{
 		valA = 2
 	}
+
 	InnerB := [L].{
-		valB = Outer4.InnerA.valA + 1
+		valB = Outer4.InnerA.valA + 1 # Reference sibling nested type
 	}
 }
 depth2_8 = Outer4.val # 1
@@ -1956,8 +1961,10 @@ depth2_10 = Outer4.InnerB.valB # 3
 # Test 3.1: Three-level hierarchy
 Level1 := [M].{
 	val1 = 10
+
 	Level2 := [N].{
 		val2 = 20
+
 		Level3 := [O].{
 			val3 = 30
 		}
@@ -1970,10 +1977,12 @@ depth3_3 = Level1.Level2.Level3.val3 # 30
 # Test 3.2: Cross-level references
 CrossRef := [P].{
 	top = 5
+
 	Mid := [Q].{
-		middle = CrossRef.top * 2
+		middle = CrossRef.top * 2 # Ref to grandparent
+
 		Deep := [R].{
-			deep = CrossRef.Mid.middle + CrossRef.top
+			deep = CrossRef.Mid.middle + CrossRef.top # Ref to parent and grandparent
 		}
 	}
 }
@@ -1983,7 +1992,8 @@ depth3_6 = CrossRef.Mid.Deep.deep # 15
 
 # Test 3.3: Forward references spanning multiple levels
 ForwardDeep := [S].{
-	usesDeepNested = ForwardDeep.M1.M2.deepVal
+	usesDeepNested = ForwardDeep.M1.M2.deepVal # Forward ref through 2 levels
+
 	M1 := [T].{
 		M2 := [U].{
 			deepVal = 99
@@ -2000,10 +2010,13 @@ depth3_8 = ForwardDeep.M1.M2.deepVal # 99
 # Test 4.1: Four-level hierarchy with values at each level
 D1 := [V].{
 	v1 = 1000
+
 	D2 := [W].{
 		v2 = 2000
+
 		D3 := [X].{
 			v3 = 3000
+
 			D4 := [Y].{
 				v4 = 4000
 			}
@@ -2018,6 +2031,7 @@ depth4_4 = D1.D2.D3.D4.v4 # 4000
 # Test 4.2: Deep forward reference
 DeepForward := [Z].{
 	usesDeeply = DeepForward.A.B.C.deepest
+
 	A := [AA].{
 		B := [BB].{
 			C := [CC].{
@@ -2049,12 +2063,16 @@ depth5_1 = Max1.Max2.Max3.Max4.Max5.deepestValue # 5555
 # Test 5.2: Values at each level of 5-deep hierarchy
 Full := [II].{
 	val1 = 1
+
 	L2 := [JJ].{
 		val2 = Full.val1 + 1
+
 		L3 := [KK].{
 			val3 = Full.L2.val2 + 1
+
 			L4 := [LL].{
 				val4 = Full.L2.L3.val3 + 1
+
 				L5 := [MM].{
 					val5 = Full.L2.L3.L4.val4 + 1
 				}
@@ -2075,7 +2093,9 @@ depth5_6 = Full.L2.L3.L4.L5.val5 # 5
 # Test: Unqualified names only work within associated block
 ScopeTest := [NN].{
 	innerOnly = 888
-	canUse = innerOnly
+
+	# Within this block, "innerOnly" works unqualified
+	canUse = innerOnly # This works
 }
 # Outside the block, must use qualified name
 scopeOuter = ScopeTest.innerOnly # Must qualify
@@ -2084,10 +2104,14 @@ scopeAlias = ScopeTest.canUse # 888
 # Test: Nested block can access outer unqualified, but outer cannot access inner
 ScopeNested := [OO].{
 	outer = 111
+
 	Nested := [PP].{
+		# Can use "outer" unqualified because we're inside ScopeNested's block
 		usesOuter = outer
 		inner = 222
 	}
+
+	# Cannot use "inner" here - would need ScopeNested.Nested.inner
 	usesNested = ScopeNested.Nested.inner
 }
 
@@ -2099,6 +2123,7 @@ ScopeNested := [OO].{
 Annotated := [QQ].{
 	typed : U64
 	typed = 999
+
 	NestedAnnotated := [RR].{
 		alsoTyped : U64
 		alsoTyped = 111
@@ -2114,12 +2139,16 @@ annoTest2 = Annotated.NestedAnnotated.alsoTyped # 111
 # Test: Complex dependency chains across multiple nesting levels
 Chain := [SS].{
 	start = 1
+
 	Mid := [TT].{
 		step1 = Chain.start * 2
+
 		Deep := [UU].{
 			step2 = Chain.Mid.step1 * 3
+
 			Deeper := [VV].{
 				step3 = Chain.Mid.Deep.step2 * 4
+
 				Deepest := [WW].{
 					final = Chain.Mid.Deep.Deeper.step3 * 5
 				}
@@ -2139,7 +2168,9 @@ chain5 = Chain.Mid.Deep.Deeper.Deepest.final # 120
 
 # Test: Multiple forward references in circular dependency
 Circular := [XX].{
+	# All of these reference things defined later
 	sum = Circular.a + Circular.b + Circular.c
+
 	a = 10
 	b = 20
 	c = 30
@@ -2154,16 +2185,20 @@ circTest = Circular.sum # 60
 Ultimate := [YY].{
 	base : U64
 	base = 100
+
 	Branch1 := [ZZ].{
 		b1val = Ultimate.base + Ultimate.Branch2.b2forward
+
 		Branch1Inner := [AAA].{
 			innerSum : U64
 			innerSum = Ultimate.base + Ultimate.Branch1.b1val
 		}
 	}
+
 	Branch2 := [BBB].{
 		b2forward : U64
 		b2forward = 50
+
 		Branch2Inner := [CCC].{
 			usesEverything = Ultimate.base + Ultimate.Branch1.b1val + Ultimate.Branch2.b2forward + Ultimate.Branch1.Branch1Inner.innerSum
 		}
@@ -2186,10 +2221,13 @@ errModuleUnqualified = value # ERROR: 'value' not in scope at module level
 # Error 2: Outer scope trying to access inner scope item unqualified
 ErrOuterAccessInner := [ERR1].{
 	outerItem = 10
+
 	InnerScope := [ERR2].{
 		innerItem = 20
 	}
-	badAccess = innerItem
+
+	# This MUST fail - innerItem is only in InnerScope's block
+	badAccess = innerItem # ERROR: 'innerItem' not in scope here
 }
 
 # Error 3: Sibling nested types cannot access each other's items unqualified
@@ -2197,8 +2235,10 @@ ErrSiblingAccess := [ERR3].{
 	SiblingA := [ERR4].{
 		sibAVal = 100
 	}
+
 	SiblingB := [ERR5].{
-		badSiblingAccess = sibAVal
+		# Cannot access sibAVal unqualified - it's in SiblingA's scope, not here
+		badSiblingAccess = sibAVal # ERROR: 'sibAVal' not in scope
 	}
 }
 
@@ -2209,9 +2249,11 @@ ErrCousinAccess := [ERR6].{
 			leaf1Val = 1
 		}
 	}
+
 	Branch2 := [ERR9].{
 		Leaf2 := [ERR10].{
-			badCousinAccess = leaf1Val
+			# Cannot access leaf1Val unqualified - it's in a different branch
+			badCousinAccess = leaf1Val # ERROR: 'leaf1Val' not in scope
 		}
 	}
 }
@@ -2223,24 +2265,31 @@ ErrGrandchildAccess := [ERR11].{
 			grandchildVal = 999
 		}
 	}
-	badGrandchildAccess = grandchildVal
+
+	# Cannot access grandchildVal unqualified - need Child.Grandchild.grandchildVal
+	badGrandchildAccess = grandchildVal # ERROR: 'grandchildVal' not in scope
 }
 
 # Error 6: Three levels deep - inner trying to access outer's sibling
 ErrDeepSiblingAccess := [ERR14].{
 	outerSibling = 50
+
 	Level1 := [ERR15].{
 		Level2 := [ERR16].{
 			Level3 := [ERR17].{
-				goodAccess = outerSibling
+				# This works - outerSibling is in an ancestor scope
+				goodAccess = outerSibling # OK - ancestor scope
 			}
 		}
+
 		OtherBranch := [ERR18].{
 			otherVal = 77
 		}
 	}
+
 	Level1Alt := [ERR19].{
-		badDeepAccess = otherVal
+		# Cannot access otherVal - it's in Level1.OtherBranch, not an ancestor
+		badDeepAccess = otherVal # ERROR: 'otherVal' not in scope
 	}
 }
 

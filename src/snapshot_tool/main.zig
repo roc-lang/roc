@@ -21,6 +21,7 @@ const repl = @import("repl");
 const eval_mod = @import("eval");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -655,10 +656,17 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
-    const gpa = debug_allocator.allocator();
+    var gpa_tracy: tracy.TracyAllocator(null) = undefined;
+    var gpa = debug_allocator.allocator();
     defer {
         const mem_state = debug_allocator.deinit();
         std.debug.assert(mem_state == .ok);
+    }
+
+    // Wrap with Tracy for allocation profiling when enabled
+    if (tracy.enable_allocation) {
+        gpa_tracy = tracy.tracyAllocator(gpa);
+        gpa = gpa_tracy.allocator();
     }
 
     const args = try std.process.argsAlloc(gpa);
@@ -1129,7 +1137,7 @@ fn processSnapshotContent(
             basename;
     };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(allocator, module_name);
+    try can_ir.initCIRFields(module_name);
 
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
@@ -2918,8 +2926,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     return success;
 }
 
-fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
-    _ = content;
+fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
     try output.begin_section("PROBLEMS");
     try output.md_writer.writer.writeAll("NIL\n");
 
@@ -3151,9 +3158,7 @@ fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
+fn snapshotRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("snapshotRocDbg not implemented yet");
 }
 

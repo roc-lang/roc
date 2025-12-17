@@ -109,6 +109,7 @@ EndOfFile,
 ~~~roc
 BasicNoAnno := [Val(Str)].{
 	to_str = |BasicNoAnno.Val(s)| s
+
 	to_str2 = |test| test.to_str()
 }
 
@@ -126,15 +127,12 @@ main = (helper1(val), helper2(val))
 (can-ir
 	(d-let
 		(p-assign (ident "BasicNoAnno.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s"))))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "s")))))
 	(d-let
 		(p-assign (ident "BasicNoAnno.to_str2"))
 		(e-lambda

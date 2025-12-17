@@ -1,3 +1,5 @@
+//! Build system utilities for configuring Zig modules with test filtering and dependency management.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const Build = std.Build;
@@ -303,19 +305,19 @@ pub const ModuleType = enum {
     pub fn getDependencies(self: ModuleType) []const ModuleType {
         return switch (self) {
             .build_options => &.{},
-            .builtins => &.{},
+            .builtins => &.{.tracy},
             .fs => &.{},
-            .tracy => &.{ .build_options, .builtins },
+            .tracy => &.{.build_options},
             .collections => &.{},
-            .base => &.{.collections},
+            .base => &.{ .collections, .builtins },
             .roc_src => &.{},
-            .types => &.{ .base, .collections },
+            .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
-            .layout => &.{ .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
+            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
@@ -324,7 +326,7 @@ pub const ModuleType = enum {
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{},
+            .lsp => &.{ .compile, .reporting, .build_options, .fs },
         };
     }
 };
@@ -354,6 +356,7 @@ pub const RocModules = struct {
     unbundle: *Module,
     base58: *Module,
     lsp: *Module,
+    roc_target: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -386,6 +389,7 @@ pub const RocModules = struct {
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
+            .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -466,6 +470,7 @@ pub const RocModules = struct {
 
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
+        step.root_module.addImport("roc_target", self.roc_target);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {

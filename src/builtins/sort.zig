@@ -9,7 +9,8 @@ const std = @import("std");
 const GT = Ordering.GT;
 const LT = Ordering.LT;
 const EQ = Ordering.EQ;
-const Ordering = @import("utils.zig").Ordering;
+const utils = @import("utils.zig");
+const Ordering = utils.Ordering;
 const RocOps = @import("host_abi.zig").RocOps;
 const testing = std.testing;
 
@@ -35,8 +36,9 @@ comptime {
     std.debug.assert(MAX_ELEMENT_BUFFER_SIZE % BufferAlign == 0);
 }
 
-// ================ Fluxsort ==================================================
+// Fluxsort
 // The high level fluxsort functions.
+
 /// TODO: document fluxsort
 pub fn fluxsort(
     array: [*]u8,
@@ -70,7 +72,7 @@ pub fn fluxsort(
         const alloc_ptr = roc_ops.alloc(len * @sizeOf(usize), @alignOf(usize));
 
         // Build list of pointers to sort.
-        const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
+        const arr_ptr: [*]Opaque = utils.alignedPtrCast([*]Opaque, @as([*]u8, @ptrCast(alloc_ptr)), @src());
         defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
         for (0..len) |i| {
             arr_ptr[i] = array + i * element_width;
@@ -678,7 +680,7 @@ pub fn flux_reverse_partition(
     flux_partition(array, swap, array, pivot, arr_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 }
 
-// ================ Pivot Selection ===========================================
+// Pivot Selection
 // Used for selecting the quicksort pivot for various sized arrays.
 
 /// Returns the median of an array taking roughly cube root samples.
@@ -859,7 +861,7 @@ pub fn binary_median(
     copy(out, from);
 }
 
-// ================ Quadsort ==================================================
+// Quadsort
 // The high level quadsort functions.
 
 /// A version of quadsort given pre-allocated swap memory.
@@ -918,7 +920,7 @@ pub fn quadsort(
         const alloc_ptr = roc_ops.alloc(len * @sizeOf(usize), @alignOf(usize));
 
         // Build list of pointers to sort.
-        const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
+        const arr_ptr: [*]Opaque = utils.alignedPtrCast([*]Opaque, @as([*]u8, @ptrCast(alloc_ptr)), @src());
         defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
         for (0..len) |i| {
             arr_ptr[i] = array + i * element_width;
@@ -1000,7 +1002,7 @@ fn quadsort_stack_swap(
     rotate_merge(array, len, swap, 512, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 }
 
-// ================ Inplace Rotate Merge ======================================
+// Inplace Rotate Merge
 // These are used as backup if the swap size is not large enough.
 // Also can be used for the final merge to reduce memory footprint.
 
@@ -1307,7 +1309,7 @@ pub fn trinity_rotation(
     }
 }
 
-// ================ Unbalanced Merges =========================================
+// Unbalanced Merges
 
 /// Merges the remaining blocks at the tail of the array.
 pub fn tail_merge(
@@ -1752,7 +1754,7 @@ fn partial_forward_merge_left_head_2(
     return false;
 }
 
-// ================ Quad Merge Support ========================================
+// Quad Merge Support
 
 /// Merges an array of of sized blocks of sorted elements with a tail.
 /// Returns the block length of sorted runs after the call.
@@ -1984,7 +1986,7 @@ pub fn cross_merge(
     }
 }
 
-// ================ 32 Element Blocks =========================================
+// 32 Element Blocks
 
 const QuadSwapResult = enum {
     sorted,
@@ -2324,7 +2326,7 @@ pub fn quad_reversal(
     }
 }
 
-// ================ Small Arrays ==============================================
+// Small Arrays
 // Below are functions for sorting under 32 element arrays.
 
 /// Uses swap space to sort the tail of an array.
@@ -2420,7 +2422,7 @@ pub fn parity_merge(
     tail_branchless_merge(&dest_tail, &left_tail, &right_tail, cmp, cmp_data, element_width, copy, indirect);
 }
 
-// ================ Tiny Arrays ===============================================
+// Tiny Arrays
 // Below are functions for sorting 0 to 7 element arrays.
 
 /// Sort arrays of 0 to 7 elements.
@@ -2736,7 +2738,7 @@ fn parity_swap_seven(
     copy(arr_ptr, from);
 }
 
-// ================ Primitives ================================================
+// Primitives
 // Below are sorting primitives that attempt to be branchless.
 // They all also are always inline for performance.
 // The are the smallest fundamental unit.
@@ -2895,12 +2897,12 @@ inline fn compare(
     comptime indirect: bool,
 ) Ordering {
     if (indirect) {
-        const lhs = @as(*[*]u8, @ptrCast(@alignCast(lhs_opaque))).*;
-        const rhs = @as(*[*]u8, @ptrCast(@alignCast(rhs_opaque))).*;
-        return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs, rhs)));
+        const lhs_ptr: *[*]u8 = utils.alignedPtrCast(*[*]u8, @as([*]u8, @ptrCast(lhs_opaque)), @src());
+        const rhs_ptr: *[*]u8 = utils.alignedPtrCast(*[*]u8, @as([*]u8, @ptrCast(rhs_opaque)), @src());
+        return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs_ptr.*, rhs_ptr.*)));
     } else {
-        const lhs = @as([*]u8, @ptrCast(@alignCast(lhs_opaque)));
-        const rhs = @as([*]u8, @ptrCast(@alignCast(rhs_opaque)));
+        const lhs: [*]u8 = @ptrCast(lhs_opaque);
+        const rhs: [*]u8 = @ptrCast(rhs_opaque);
         return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs, rhs)));
     }
 }
@@ -2928,15 +2930,17 @@ inline fn compare_inc(
 /// Copies the value pointed to by `src_ptr` into the location pointed to by `dst_ptr`.
 /// Both pointers must be valid and properly aligned.
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    @as(*usize, @ptrCast(@alignCast(dst_ptr))).* = @as(*usize, @ptrCast(@alignCast(src_ptr))).*;
+    const dst: *usize = utils.alignedPtrCast(*usize, dst_ptr.?, @src());
+    const src: *const usize = utils.alignedPtrCast(*const usize, src_ptr.?, @src());
+    dst.* = src.*;
 }
 
 fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
-    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
+    const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
+    const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
-    const gt = @as(u8, @intFromBool(a > b));
-    const lt = @as(u8, @intFromBool(a < b));
+    const gt = @as(u8, @intFromBool(a.* > b.*));
+    const lt = @as(u8, @intFromBool(a.* < b.*));
 
     // Eq = 0
     // GT = 1
@@ -2945,13 +2949,14 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
 }
 
 fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
-    const a = @as(*i64, @ptrCast(@alignCast(a_ptr))).*;
-    const b = @as(*i64, @ptrCast(@alignCast(b_ptr))).*;
+    const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
+    const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
-    const gt = @as(u8, @intFromBool(a > b));
-    const lt = @as(u8, @intFromBool(a < b));
+    const gt = @as(u8, @intFromBool(a.* > b.*));
+    const lt = @as(u8, @intFromBool(a.* < b.*));
 
-    @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
+    const count: *isize = utils.alignedPtrCast(*isize, count_ptr.?, @src());
+    count.* -= 1;
     // Eq = 0
     // GT = 1
     // LT = 2
@@ -2959,11 +2964,14 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {
-    @as(*i64, @ptrCast(@alignCast(dst_ptr))).* = @as(*i64, @ptrCast(@alignCast(src_ptr))).*;
+    const dst: *i64 = utils.alignedPtrCast(*i64, dst_ptr.?, @src());
+    const src: *const i64 = utils.alignedPtrCast(*const i64, src_ptr.?, @src());
+    dst.* = src.*;
 }
 
 fn test_inc_n_data(_: ?*anyopaque, count_ptr: Opaque, n: usize) callconv(.c) void {
-    @as(*isize, @ptrCast(@alignCast(count_ptr))).* += @intCast(n);
+    const count: *isize = utils.alignedPtrCast(*isize, count_ptr.?, @src());
+    count.* += @intCast(n);
 }
 
 test "flux_default_partition" {

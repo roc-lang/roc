@@ -46,3 +46,12 @@
    fun:__libc_malloc_impl
    fun:*SmallVector*
 }
+
+{
+   musl-mallocng-enframe-llvm-mcregisterinfo
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   ...
+   fun:*llvm*MCRegisterInfo*
+}

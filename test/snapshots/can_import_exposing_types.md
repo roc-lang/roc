@@ -62,10 +62,7 @@ combineTrys = |jsonTry, httpStatus|
 UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
 UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
-MODULE NOT FOUND - can_import_exposing_types.md:1:1:1:49
-MODULE NOT FOUND - can_import_exposing_types.md:2:1:2:64
 DUPLICATE DEFINITION - can_import_exposing_types.md:3:1:3:32
-MODULE NOT FOUND - can_import_exposing_types.md:3:1:3:32
 UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
 UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
 UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
@@ -125,28 +122,6 @@ This type is referenced here:
                       ^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_exposing_types.md:1:1:1:49:**
-```roc
-import json.Json exposing [Value, Error, Config]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_exposing_types.md:2:1:2:64:**
-```roc
-import http.Client as Http exposing [Request, Response, Status]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **DUPLICATE DEFINITION**
 The name `Try` is being redeclared in this scope.
 
@@ -163,17 +138,6 @@ But `Try` was already defined here:
 import json.Json exposing [Value, Error, Config]
 ```
 ^
-
-
-**MODULE NOT FOUND**
-The module `utils.Try` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_exposing_types.md:3:1:3:32:**
-```roc
-import utils.Try exposing [Try]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -871,46 +835,42 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "combineTrys"))
-		(e-closure
-			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
-			(e-lambda
-				(args
-					(p-assign (ident "jsonTry"))
-					(p-assign (ident "httpStatus")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "jsonTry"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Ok")
-										(args
-											(e-record
-												(fields
-													(field (name "body")
-														(e-call
-															(e-runtime-error (tag "ident_not_in_scope"))
-															(e-lookup-local
-																(p-assign (ident "value")))))
-													(field (name "status")
+		(e-lambda
+			(args
+				(p-assign (ident "jsonTry"))
+				(p-assign (ident "httpStatus")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "jsonTry"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-tag (name "Ok")
+									(args
+										(e-record
+											(fields
+												(field (name "body")
+													(e-call
+														(e-runtime-error (tag "ident_not_in_scope"))
 														(e-lookup-local
-															(p-assign (ident "httpStatus"))))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Err")
-										(args
-											(e-lookup-local
-												(p-assign (ident "error"))))))))))))
+															(p-assign (ident "value")))))
+												(field (name "status")
+													(e-lookup-local
+														(p-assign (ident "httpStatus"))))))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-tag (name "Err")
+									(args
+										(e-lookup-local
+											(p-assign (ident "error")))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)

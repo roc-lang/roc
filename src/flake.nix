@@ -34,7 +34,7 @@
           testcmd() {
             zig build snapshot && zig build test
           }
-          export -f testscmd
+          export -f testcmd
 
           fmtcmd() {
             zig build fmt

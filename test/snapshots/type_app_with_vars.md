@@ -13,20 +13,17 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
+TOO FEW ARGUMENTS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `mapList` expects 2 arguments, but 1 was provided:
 **type_app_with_vars.md:6:13:6:33:**
 ```roc
 main! = |_| mapList([1,2,3,4,5])
 ```
             ^^^^^^^^^^^^^^^^^^^^
 
-It has the type:
-    _List(c) -> _ret where [c.from_numeral : Numeral -> Try(_d, [InvalidNumeral(Str)])]_
-
-But I expected it to be:
+The function has the signature:
     _List(a), (a -> b) -> List(b)_
 
 # TOKENS
@@ -147,8 +144,8 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 (inferred-types
 	(defs
 		(patt (type "List(a), (a -> b) -> List(b)"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> Error")))
 	(expressions
 		(expr (type "List(a), (a -> b) -> List(b)"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> Error"))))
 ~~~

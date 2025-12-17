@@ -259,15 +259,11 @@ fn downloadToFile(
             .location = .{ .uri = uri },
             .response_writer = &file_writer.interface,
         }) catch {
-            file.close();
-            dir.deleteFile(filename) catch {};
             return error.HttpError;
         };
 
         // Flush the writer before closing
         file_writer.interface.flush() catch {
-            file.close();
-            dir.deleteFile(filename) catch {};
             return error.FileError;
         };
 

@@ -52,7 +52,7 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
     errdefer builtin_module.deinit();
 
-    try module_env.initCIRFields(gpa, "test");
+    try module_env.initCIRFields("test");
     const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
         .bool_stmt = builtin_indices.bool_type,
@@ -195,7 +195,7 @@ fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocat
         if (i == decl_index) {
             defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
             const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, can.ModuleEnv.varFrom(def.expr));
-            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var);
+            return try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var, ops);
         }
     }
 
@@ -1951,9 +1951,7 @@ test "e_low_level_lambda - U8.plus method call syntax" {
     try testing.expectEqual(@as(i128, 8), value);
 }
 
-// =============================================================================
 // Bitwise shift operation tests
-// =============================================================================
 
 test "e_low_level_lambda - U8.shift_left_by basic" {
     const src =
@@ -2160,9 +2158,7 @@ test "e_low_level_lambda - U16.shift_right_zf_by equals shift_right_by for unsig
     try testing.expectEqualStrings("True", value); // For unsigned, >> and >>> are the same
 }
 
-// =============================================================================
 // Bitwise shift edge case tests
-// =============================================================================
 
 test "e_low_level_lambda - U8.shift_left_by overflow wraps" {
     const src =
@@ -2445,9 +2441,7 @@ test "e_low_level_lambda - U64.shift_right_zf_by max value by half" {
     try testing.expectEqual(@as(i128, 4294967295), value); // U64::MAX >>> 32
 }
 
-// =============================================================================
 // List.sort_with tests
-// =============================================================================
 
 test "e_low_level_lambda - List.sort_with basic ascending sort" {
     const src =
@@ -2568,4 +2562,112 @@ test "e_low_level_lambda - List.sort_with reverse sorted" {
     const first_value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(first_value);
     try testing.expectEqualStrings("Ok(1)", first_value);
+}
+// mod_by tests for integer types
+
+test "e_low_level_lambda - U8.mod_by basic" {
+    const src =
+        \\a : U8
+        \\a = 10
+        \\b : U8
+        \\b = 3
+        \\x : U8
+        \\x = U8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+test "e_low_level_lambda - U8.mod_by zero remainder" {
+    const src =
+        \\a : U8
+        \\a = 10
+        \\b : U8
+        \\b = 5
+        \\x : U8
+        \\x = U8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 0), value);
+}
+
+test "e_low_level_lambda - I8.mod_by positive positive" {
+    const src =
+        \\a : I8
+        \\a = 10
+        \\b : I8
+        \\b = 3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+test "e_low_level_lambda - I8.mod_by negative positive" {
+    const src =
+        \\a : I8
+        \\a = -10
+        \\b : I8
+        \\b = 3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    // -10 mod 3 = 2 (Euclidean modulo: result has sign of divisor)
+    try testing.expectEqual(@as(i128, 2), value);
+}
+
+test "e_low_level_lambda - I8.mod_by positive negative" {
+    const src =
+        \\a : I8
+        \\a = 10
+        \\b : I8
+        \\b = -3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    // 10 mod -3 = -2 (Euclidean modulo: result has sign of divisor)
+    try testing.expectEqual(@as(i128, -2), value);
+}
+
+test "e_low_level_lambda - I8.mod_by negative negative" {
+    const src =
+        \\a : I8
+        \\a = -10
+        \\b : I8
+        \\b = -3
+        \\x : I8
+        \\x = I8.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    // -10 mod -3 = -1 (Euclidean modulo: result has sign of divisor)
+    try testing.expectEqual(@as(i128, -1), value);
+}
+
+test "e_low_level_lambda - U64.mod_by large numbers" {
+    const src =
+        \\a : U64
+        \\a = 1000000
+        \\b : U64
+        \\b = 7
+        \\x : U64
+        \\x = U64.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 1), value);
+}
+
+test "e_low_level_lambda - I64.mod_by with zero result" {
+    const src =
+        \\a : I64
+        \\a = 100
+        \\b : I64
+        \\b = 10
+        \\x : I64
+        \\x = I64.mod_by(a, b)
+    ;
+    const value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 0), value);
 }

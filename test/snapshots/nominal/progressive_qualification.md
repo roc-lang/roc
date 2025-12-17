@@ -533,8 +533,12 @@ EndOfFile,
 Outer := [O].{
 	Inner := [I].{
 		value = 42
+
+		# From Inner's scope: unqualified access
 		fromInner = value
 	}
+
+	# From Outer's scope: partially qualified access (Inner.value)
 	fromOuter = Inner.value
 }
 
@@ -554,10 +558,16 @@ Level1 := [L1].{
 	Level2 := [L2].{
 		Level3 := [L3].{
 			deepValue = 100
+
+			# From Level3's scope: unqualified
 			accessFromL3 = deepValue
 		}
+
+		# From Level2's scope: partial qualification (Level3.deepValue)
 		accessFromL2 = Level3.deepValue
 	}
+
+	# From Level1's scope: more qualification (Level2.Level3.deepValue)
 	accessFromL1 = Level2.Level3.deepValue
 }
 
@@ -576,15 +586,21 @@ test2_mod = accessFromModule # 100
 
 Parent := [P].{
 	sharedVal = 999
+
 	Child1 := [C1].{
 		c1Val = 10
+		# Access parent's value with partial qualification
 		useParent = Parent.sharedVal
 	}
+
 	Child2 := [C2].{
 		c2Val = 20
+		# Access sibling's value - need to go through parent scope
 		useSibling = Child1.c1Val
 		useParent = Parent.sharedVal
 	}
+
+	# Parent can access both children with partial qualification
 	sumChildren = Child1.c1Val + Child2.c2Val
 }
 
@@ -640,8 +656,11 @@ test5_p2 = Parent2.Nested.val # 2
 Container := [CONT].{
 	outerA = 10
 	outerB = 20
+
 	Nested := [NEST].{
 		innerVal = 5
+
+		# Access outer values - these should be visible via scope chain
 		useOuterA = outerA
 		useOuterB = outerB
 		combined = innerVal + outerA + outerB

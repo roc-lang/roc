@@ -22,12 +22,12 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(32, @sizeOf(Descriptor));
-    try std.testing.expectEqual(24, @sizeOf(Content));
+    try std.testing.expectEqual(36, @sizeOf(Descriptor)); // Increased from 32 due to is_opaque in NominalType
+    try std.testing.expectEqual(28, @sizeOf(Content)); // Increased from 24 due to NominalType growth
     try std.testing.expectEqual(12, @sizeOf(Alias));
-    try std.testing.expectEqual(20, @sizeOf(FlatType));
+    try std.testing.expectEqual(24, @sizeOf(FlatType)); // Increased from 20
     try std.testing.expectEqual(12, @sizeOf(Record));
-    try std.testing.expectEqual(16, @sizeOf(NominalType));
+    try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
     try std.testing.expectEqual(72, @sizeOf(StaticDispatchConstraint)); // Includes recursion_info + num_literal fields
 }
 
@@ -669,6 +669,20 @@ pub const NominalType = struct {
     /// The full module path where this nominal type was originally defined
     /// (e.g., "Json.Decode" or "mypackage.Data.Person")
     origin_module: Ident.Idx,
+    /// True if this type was declared with :: (opaque), false if declared with := (nominal)
+    is_opaque: bool,
+
+    /// Checks if backing types can unify directly with this nominal type
+    pub fn canLiftInner(self: NominalType, cur_module_idx: Ident.Idx) bool {
+        if (self.is_opaque) {
+            // If opaque, then can only lift inner type if the current module is
+            // the same
+            return self.origin_module == cur_module_idx;
+        }
+
+        // If not opaque, then the inner type can always be lifted
+        return true;
+    }
 };
 
 // functions //

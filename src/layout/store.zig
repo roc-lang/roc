@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const tracy = @import("tracy");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
@@ -260,6 +261,9 @@ pub const Store = struct {
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putRecord");
+        defer trace.end();
+
         var temp_fields = std.ArrayList(RecordField).empty;
         defer temp_fields.deinit(self.env.gpa);
 
@@ -338,6 +342,9 @@ pub const Store = struct {
 
     /// Insert a tuple layout from concrete element layouts
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putTuple");
+        defer trace.end();
+
         // Collect fields
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.env.gpa);
@@ -626,6 +633,8 @@ pub const Store = struct {
                 .alias => |alias| {
                     current_ext = self.types_store.getAliasBackingVar(alias);
                 },
+                // flex and rigid are valid terminal extensions for open unions
+                .flex, .rigid => break,
                 else => return LayoutError.InvalidRecordExtension,
             }
         }
@@ -945,16 +954,15 @@ pub const Store = struct {
         // We reuse that stack from call to call to avoid reallocating it.
         self.work.clearRetainingCapacity();
 
-        var iterations: u32 = 0;
-        const max_iterations = 10000; // Safety limit to prevent infinite loops
         var layout_idx: Idx = undefined;
 
-        outer: while (true) {
-            iterations += 1;
-            if (iterations > max_iterations) {
-                @panic("Layout computation exceeded iteration limit - possible infinite loop");
-            }
+        // Debug-only: track vars visited via TypeScope lookup to detect cycles.
+        // Cycles in layout computation indicate a bug in type checking - they should
+        // have been detected earlier. In release builds we skip this check entirely.
+        var scope_lookup_visited: if (@import("builtin").mode == .Debug) [32]Var else void = if (@import("builtin").mode == .Debug) undefined else {};
+        var scope_lookup_count: if (@import("builtin").mode == .Debug) u8 else void = if (@import("builtin").mode == .Debug) 0 else {};
 
+        outer: while (true) {
             if (current.desc.content == .structure) {}
 
             var layout = switch (current.desc.content) {
@@ -1121,20 +1129,7 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(last_pending_field.var_);
                         continue :outer;
                     },
-                    .fn_pure => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .fn_effectful => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .fn_unbound => |func| {
-                        _ = func;
+                    .fn_pure, .fn_effectful, .fn_unbound => {
                         // Create empty captures layout for generic function type
                         const empty_captures_idx = try self.getEmptyRecordLayout();
                         break :flat_type Layout.closure(empty_captures_idx);
@@ -1285,7 +1280,7 @@ pub const Store = struct {
                         // and append our variant layouts. This ensures our variants are contiguous.
                         const variants_start: u32 = @intCast(self.tag_union_variants.len());
 
-                        for (variant_layout_indices, 0..) |variant_layout_idx, variant_i| {
+                        for (variant_layout_indices) |variant_layout_idx| {
                             const variant_layout = self.getLayout(variant_layout_idx);
                             const variant_size = self.layoutSize(variant_layout);
                             const variant_alignment = variant_layout.alignment(self.targetUsize());
@@ -1298,7 +1293,6 @@ pub const Store = struct {
                             _ = try self.tag_union_variants.append(self.env.gpa, .{
                                 .payload_layout = variant_layout_idx,
                             });
-                            _ = variant_i;
                         }
 
                         // Calculate discriminant info
@@ -1400,7 +1394,19 @@ pub const Store = struct {
                 .flex => |flex| blk: {
                     // First, check if this flex var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
+                        // Debug-only cycle detection: if we've visited this var before,
+                        // there's a cycle which indicates a bug in type checking.
+                        if (@import("builtin").mode == .Debug) {
+                            for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                if (visited == current.var_) {
+                                    @panic("Cycle detected in layout computation for flex var - this is a type checking bug");
+                                }
+                            }
+                            if (scope_lookup_count < 32) {
+                                scope_lookup_visited[scope_lookup_count] = current.var_;
+                                scope_lookup_count += 1;
+                            }
+                        }
                         current = self.types_store.resolveVar(mapped_var);
                         continue :outer;
                     }
@@ -1425,7 +1431,19 @@ pub const Store = struct {
                 .rigid => |rigid| blk: {
                     // First, check if this rigid var is mapped in the TypeScope
                     if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
+                        // Debug-only cycle detection: if we've visited this var before,
+                        // there's a cycle which indicates a bug in type checking.
+                        if (@import("builtin").mode == .Debug) {
+                            for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                if (visited == current.var_) {
+                                    @panic("Cycle detected in layout computation for rigid var - this is a type checking bug");
+                                }
+                            }
+                            if (scope_lookup_count < 32) {
+                                scope_lookup_visited[scope_lookup_count] = current.var_;
+                                scope_lookup_count += 1;
+                            }
+                        }
                         current = self.types_store.resolveVar(mapped_var);
                         continue :outer;
                     }
@@ -1552,6 +1570,9 @@ pub const Store = struct {
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
+        defer trace.end();
+
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
             const result = idxFromScalar(layout.data.scalar);

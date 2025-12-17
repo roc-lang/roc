@@ -19,7 +19,9 @@ const Ident = @This();
 
 /// Whether to enable debug store tracking. This adds runtime checks to verify
 /// that Idx values are only looked up in the store that created them.
-const enable_store_tracking = builtin.mode == .Debug;
+/// Disabled on freestanding targets where threading primitives aren't available.
+const is_freestanding = builtin.os.tag == .freestanding;
+const enable_store_tracking = builtin.mode == .Debug and !is_freestanding;
 
 /// Method name for parsing integers from digit lists - used by numeric literal type checking
 pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
@@ -287,6 +289,19 @@ pub const Store = struct {
             // Note: Serialized may be smaller than the runtime struct.
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
+
+            // Check struct sizes - if Store > Serialized, we'd write past the end!
+            comptime {
+                const store_size = @sizeOf(Store);
+                const serialized_size = @sizeOf(Serialized);
+                if (store_size > serialized_size) {
+                    @compileError(std.fmt.comptimePrint(
+                        "STRUCT SIZE MISMATCH: Store ({d} bytes) > Serialized ({d} bytes). " ++
+                            "Writing Store to Serialized memory will corrupt adjacent data!",
+                        .{ store_size, serialized_size },
+                    ));
+                }
+            }
 
             store.* = Store{
                 .interner = self.interner.deserialize(offset).*,

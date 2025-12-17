@@ -35,7 +35,7 @@ Other valid examples:
 
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **type_annotation_missing_parens.md:1:8:1:12:**
 ```roc
 nums : List U8

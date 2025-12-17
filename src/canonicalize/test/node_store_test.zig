@@ -158,6 +158,7 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(CIR.TypeHeader.Idx),
             .anno = rand_idx(CIR.TypeAnno.Idx),
+            .is_opaque = false,
         },
     });
 
@@ -165,6 +166,12 @@ test "NodeStore round trip - Statements" {
         .name = rand_ident_idx(),
         .anno = rand_idx(CIR.TypeAnno.Idx),
         .where = null,
+    } });
+
+    try statements.append(gpa, CIR.Statement{ .s_type_var_alias = .{
+        .alias_name = rand_ident_idx(),
+        .type_var_name = rand_ident_idx(),
+        .type_var_anno = rand_idx(CIR.TypeAnno.Idx),
     } });
 
     try statements.append(gpa, CIR.Statement{ .s_runtime_error = .{
@@ -401,6 +408,20 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_for = .{
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_var_dispatch = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
 
@@ -950,6 +971,7 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .record = .{
             .fields = CIR.TypeAnno.RecordField.Span{ .span = rand_span() },
+            .ext = null,
         },
     });
 

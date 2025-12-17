@@ -15,6 +15,7 @@ decode_things # After member name
 ~~~
 # EXPECTED
 MODULE NOT FOUND - where_clauses_10.md:1:1:1:32
+UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
 # PROBLEMS
 **MODULE NOT FOUND**
 The module `Decode` was not found in this Roc project.
@@ -25,6 +26,17 @@ You're attempting to use this module here:
 import Decode exposing [Decode]
 ```
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _Decode_ is not supported:
+**where_clauses_10.md:7:6:7:14:**
+```roc
+				[a.Decode]
+```
+				 ^^^^^^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
 
 # TOKENS
@@ -65,8 +77,9 @@ import Decode exposing [Decode]
 decode_things # After member name
 	: # After colon
 		List(List(U8)) -> List(a) # After anno
-			where
-				[a.Decode]
+			where [
+				a.Decode,
+			]
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -141,7 +141,6 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_019.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:24:24:24:25
-MODULE NOT FOUND - fuzz_crash_019.md:4:1:4:34
 MODULE NOT FOUND - fuzz_crash_019.md:6:1:8:6
 MODULE NOT FOUND - fuzz_crash_019.md:10:1:10:19
 MODULE NOT FOUND - fuzz_crash_019.md:11:1:12:4
@@ -175,7 +174,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:2:105:3
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_019.md:105:2:105:8
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:55:105:59
 UNDEFINED VARIABLE - fuzz_crash_019.md:105:60:105:64
 UNDEFINED VARIABLE - fuzz_crash_019.md:108:4:108:5
@@ -192,8 +191,7 @@ TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 UNUSED VALUE - fuzz_crash_019.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
 UNUSED VALUE - fuzz_crash_019.md:1:1:1:1
-TYPE MISMATCH - fuzz_crash_019.md:84:2:86:3
-UNUSED VALUE - fuzz_crash_019.md:84:2:86:3
+TOO FEW ARGUMENTS - fuzz_crash_019.md:84:2:86:3
 UNUSED VALUE - fuzz_crash_019.md:86:11:86:17
 MISSING METHOD - fuzz_crash_019.md:77:11:77:14
 UNUSED VALUE - fuzz_crash_019.md:98:4:104:3
@@ -350,17 +348,6 @@ This type variable is referenced here:
 Som : { foo : O, bar : g }
 ```
                        ^
-
-
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_019.md:4:1:4:34:**
-```roc
-import pf.Stdout exposing [line!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -739,7 +726,14 @@ Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**fuzz_crash_019.md:105:2:105:8:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `e_fn` in this scope.
@@ -876,7 +870,7 @@ app [main!] { pf: platform "c" }
 You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **fuzz_crash_019.md:17:3:18:4:**
 ```roc
 		List( #rg
@@ -894,7 +888,7 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    _f where [f.from_numeral : Numeral -> Try(_j, [InvalidNumeral(Str)])]_
+    _f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]_
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -925,7 +919,7 @@ The fourth pattern has this type:
     _Str_
 
 But all the previous patterns have this type: 
-    _[Blue][ProvidedByCompiler]_
+    _[Blue, .._others]_
 
 All patterns in an `match` must have compatible types.
 
@@ -940,10 +934,10 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    _f_
+    __f_
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `me` expects 2 arguments, but 1 was provided:
 **fuzz_crash_019.md:84:2:86:3:**
 ```roc
 	me(
@@ -951,23 +945,8 @@ This expression is used in an unexpected way:
 	)crash ke"Unr!" #)
 ```
 
-It has the type:
-    __arg -> _ret_
-
-But I expected it to be:
-    _[Blue][ProvidedByCompiler], [Tb]_others -> Error_
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_019.md:84:2:86:3:**
-```roc
-	me(
-		..., # r
-	)crash ke"Unr!" #)
-```
-
-It has the type:
-    _f_
+The function has the signature:
+    _[Blue, .._others], [Tb, .._others2] -> Error_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -992,7 +971,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     _Str_
 
-**Hint: **For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1008,7 +987,7 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(f, Str, Error, [O]_others, (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(_k, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(_l, [InvalidNumeral(Str)])]_
+    _(f, Str, Error, [O, .._others], (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1030,7 +1009,7 @@ This expression produces a value, but it's not being used:
 	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _f_
+    __f_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1041,7 +1020,7 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^
 
 It has the type:
-    _f_
+    __f_
 
 # TOKENS
 ~~~zig
@@ -2073,7 +2052,7 @@ expect {
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
+		(patt (type "[Blue, .._others], [Tb, .._others2] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2110,7 +2089,7 @@ expect {
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue][ProvidedByCompiler], [Tb]_others -> Error"))
+		(expr (type "[Blue, .._others], [Tb, .._others2] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))

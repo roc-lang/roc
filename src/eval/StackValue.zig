@@ -34,17 +34,242 @@ const Expr = CIR.Expr;
 
 const StackValue = @This();
 
+// Internal helper functions for memory operations that don't need rt_var
+
+/// Increment reference count for a value given its layout and pointer.
+/// Used internally when we don't need full StackValue type information.
+fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore) void {
+    if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
+        const raw_ptr = ptr orelse return;
+        const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
+        roc_str.incref(1);
+        return;
+    }
+    if (layout.tag == .list) {
+        const raw_ptr = ptr orelse return;
+        const list_value: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
+        list_value.incref(1, false);
+        return;
+    }
+    if (layout.tag == .box) {
+        const raw_ptr = ptr orelse return;
+        const slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(raw_ptr)), @src());
+        if (slot.* != 0) {
+            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+        }
+        return;
+    }
+    if (layout.tag == .record) {
+        if (ptr == null) return;
+        const record_data = layout_cache.getRecordData(layout.data.record.idx);
+        if (record_data.fields.count == 0) return;
+
+        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(ptr.?));
+
+        var field_index: usize = 0;
+        while (field_index < field_layouts.len) : (field_index += 1) {
+            const field_info = field_layouts.get(field_index);
+            const field_layout = layout_cache.getLayout(field_info.layout);
+            const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
+            const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+            increfLayoutPtr(field_layout, field_ptr, layout_cache);
+        }
+        return;
+    }
+    if (layout.tag == .tuple) {
+        if (ptr == null) return;
+        const tuple_data = layout_cache.getTupleData(layout.data.tuple.idx);
+        if (tuple_data.fields.count == 0) return;
+
+        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(ptr.?));
+
+        var elem_index: usize = 0;
+        while (elem_index < element_layouts.len) : (elem_index += 1) {
+            const elem_info = element_layouts.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_info.layout);
+            const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
+            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+            increfLayoutPtr(elem_layout, elem_ptr, layout_cache);
+        }
+        return;
+    }
+    if (layout.tag == .tag_union) {
+        if (ptr == null) return;
+        // For unions, we need to read the tag and incref the appropriate payload
+        // This is complex - for now just skip (caller should handle specific union types)
+        return;
+    }
+    // Other layout types (scalar ints/floats, zst, etc.) don't need refcounting
+}
+
+/// Decrement reference count for a value given its layout and pointer.
+/// Used internally when we don't need full StackValue type information.
+fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps) void {
+    if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
+        const raw_ptr = ptr orelse return;
+        const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
+        roc_str.decref(ops);
+        return;
+    }
+    if (layout.tag == .list) {
+        const raw_ptr = ptr orelse return;
+        const list_header: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
+        const list_value = list_header.*;
+        const elem_layout = layout_cache.getLayout(layout.data.list);
+        const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
+        const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
+        const elements_refcounted = elem_layout.isRefcounted();
+
+        // Decref elements when unique
+        if (list_value.isUnique()) {
+            if (list_value.getAllocationDataPtr()) |source| {
+                const count = list_value.getAllocationElementCount(elements_refcounted);
+                var idx: usize = 0;
+                while (idx < count) : (idx += 1) {
+                    const elem_ptr = source + idx * element_width;
+                    decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops);
+                }
+            }
+        }
+        list_value.decref(alignment_u32, element_width, elements_refcounted, null, &builtins.list.rcNone, ops);
+        return;
+    }
+    if (layout.tag == .box) {
+        const box_raw_ptr = ptr orelse return;
+        const slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(box_raw_ptr)), @src());
+        const raw_ptr = slot.*;
+        if (raw_ptr == 0) return;
+        const data_ptr = @as([*]u8, @ptrFromInt(raw_ptr));
+        const target_usize = layout_cache.targetUsize();
+        const elem_layout = layout_cache.getLayout(layout.data.box);
+        const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+
+        const ptr_int = @intFromPtr(data_ptr);
+        const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
+        const unmasked_ptr = ptr_int & ~tag_mask;
+        const refcount_addr = unmasked_ptr - @sizeOf(isize);
+
+        // Refcount address must be aligned - use alignedPtrCast via intFromPtr check
+        if (comptime builtin.mode == .Debug) {
+            if (refcount_addr % @alignOf(isize) != 0) {
+                std.debug.panic("decrefLayoutPtr: refcount_addr=0x{x} misaligned! unmasked=0x{x}, raw=0x{x}", .{
+                    refcount_addr,
+                    unmasked_ptr,
+                    raw_ptr,
+                });
+            }
+        }
+
+        const payload_ptr = @as([*]u8, @ptrFromInt(unmasked_ptr));
+        const refcount_ptr: *isize = @as(*isize, @ptrFromInt(refcount_addr));
+
+        if (builtins.utils.rcUnique(refcount_ptr.*)) {
+            if (elem_layout.isRefcounted()) {
+                decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops);
+            }
+        }
+        builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), elem_alignment, false, ops);
+        slot.* = 0;
+        return;
+    }
+    if (layout.tag == .record) {
+        if (ptr == null) return;
+        const record_data = layout_cache.getRecordData(layout.data.record.idx);
+        if (record_data.fields.count == 0) return;
+
+        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(ptr.?));
+
+        var field_index: usize = 0;
+        while (field_index < field_layouts.len) : (field_index += 1) {
+            const field_info = field_layouts.get(field_index);
+            const field_layout = layout_cache.getLayout(field_info.layout);
+            const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
+            const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
+            decrefLayoutPtr(field_layout, field_ptr, layout_cache, ops);
+        }
+        return;
+    }
+    if (layout.tag == .tuple) {
+        if (ptr == null) return;
+        const tuple_data = layout_cache.getTupleData(layout.data.tuple.idx);
+        if (tuple_data.fields.count == 0) return;
+
+        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
+        const base_ptr = @as([*]u8, @ptrCast(ptr.?));
+
+        var elem_index: usize = 0;
+        while (elem_index < element_layouts.len) : (elem_index += 1) {
+            const elem_info = element_layouts.get(elem_index);
+            const elem_layout = layout_cache.getLayout(elem_info.layout);
+            const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
+            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
+            decrefLayoutPtr(elem_layout, elem_ptr, layout_cache, ops);
+        }
+        return;
+    }
+    if (layout.tag == .closure) {
+        const closure_raw_ptr = ptr orelse return;
+        // Get the closure header to find the captures layout
+        const closure_header: *const layout_mod.Closure = builtins.utils.alignedPtrCast(*const layout_mod.Closure, @as([*]u8, @ptrCast(closure_raw_ptr)), @src());
+        const closure_ptr_val = @intFromPtr(closure_raw_ptr);
+
+        // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
+        const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={} body_idx={}", .{
+                closure_ptr_val,
+                idx_as_usize,
+                @intFromEnum(closure_header.body_idx),
+            });
+        }
+        if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
+            std.debug.panic("decrefLayoutPtr: closure has invalid captures_layout_idx=0x{x} (likely uninitialized or corrupted closure header at ptr={*})", .{ idx_as_usize, ptr.? });
+        }
+
+        const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+
+        if (comptime trace_refcount) {
+            traceRefcount("DECREF closure captures_layout.tag={}", .{@intFromEnum(captures_layout.tag)});
+        }
+
+        // Only decref if there are actual captures (record with fields)
+        if (captures_layout.tag == .record) {
+            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF closure record fields={}", .{record_data.fields.count});
+            }
+            if (record_data.fields.count > 0) {
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(closure_raw_ptr);
+                const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                if (comptime trace_refcount) {
+                    traceRefcount("DECREF closure rec_ptr=0x{x}", .{@intFromPtr(rec_ptr)});
+                }
+                decrefLayoutPtr(captures_layout, rec_ptr, layout_cache, ops);
+            }
+        }
+        return;
+    }
+    // Other layout types (scalar ints/floats, zst, etc.) don't need refcounting
+}
+
 /// Type and memory layout information for the result value
 layout: Layout,
 /// Ptr to the actual value in stack memory
 ptr: ?*anyopaque,
 /// Flag to track whether the memory has been initialized
 is_initialized: bool = false,
-/// Optional runtime type variable for type information (used in constant folding)
-rt_var: ?types.Var = null,
+/// Runtime type variable for type information (used for method dispatch and constant folding)
+rt_var: types.Var,
 
 /// Copy this stack value to a destination pointer with bounds checking
-pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, _: *RocOps) !void {
+pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
@@ -64,15 +289,14 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 // Copy the RocStr struct and incref the underlying data.
                 // This is more efficient than clone() which allocates new memory.
                 std.debug.assert(self.ptr != null);
-                const src_str: *const RocStr = @ptrCast(@alignCast(self.ptr.?));
-                const dest_str: *RocStr = @ptrCast(@alignCast(dest_ptr));
+                const src_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+                const dest_str: *RocStr = builtins.utils.alignedPtrCast(*RocStr, @as([*]u8, @ptrCast(dest_ptr)), @src());
                 dest_str.* = src_str.*;
                 if (comptime trace_refcount) {
                     if (!src_str.isSmallStr()) {
                         const alloc_ptr = src_str.getAllocationPtr();
                         const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                            if (@intFromPtr(ptr) % 8 != 0) break :blk -999;
-                            const isizes: [*]isize = @ptrCast(@alignCast(ptr));
+                            const isizes: [*]isize = builtins.utils.alignedPtrCast([*]isize, ptr, @src());
                             break :blk (isizes - 1)[0];
                         } else 0;
                         traceRefcount("INCREF str (copyToPtr) ptr=0x{x} len={} rc={} slice={}", .{
@@ -91,45 +315,46 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 std.debug.assert(self.ptr != null);
                 const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
+                const dest_bytes: [*]u8 = @ptrCast(dest_ptr);
                 switch (precision) {
                     .u8 => {
-                        const typed_ptr: *u8 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *u8 = builtins.utils.alignedPtrCast(*u8, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
                     },
                     .u16 => {
-                        const typed_ptr: *u16 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
                     },
                     .u32 => {
-                        const typed_ptr: *u32 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
                     },
                     .u64 => {
-                        const typed_ptr: *u64 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
                     },
                     .u128 => {
-                        const typed_ptr: *u128 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
                     },
                     .i8 => {
-                        const typed_ptr: *i8 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *i8 = builtins.utils.alignedPtrCast(*i8, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
                     },
                     .i16 => {
-                        const typed_ptr: *i16 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
                     },
                     .i32 => {
-                        const typed_ptr: *i32 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
                     },
                     .i64 => {
-                        const typed_ptr: *i64 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, dest_bytes, @src());
                         typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
                     },
                     .i128 => {
-                        const typed_ptr: *i128 = @ptrCast(@alignCast(dest_ptr));
+                        const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, dest_bytes, @src());
                         typed_ptr.* = value;
                     },
                 }
@@ -140,8 +365,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box) {
-        const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-        const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
+        const src_slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+        const dest_slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_slot.* = src_slot.*;
         if (dest_slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
@@ -151,7 +376,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     }
 
     if (self.layout.tag == .box_of_zst) {
-        const dest_slot: *usize = @ptrCast(@alignCast(dest_ptr));
+        const dest_slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_slot.* = 0;
         return;
     }
@@ -159,8 +384,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list) {
         // Copy the list header and incref the underlying data
         std.debug.assert(self.ptr != null);
-        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
-        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        const src_list: *const builtins.list.RocList = builtins.utils.alignedPtrCast(*const builtins.list.RocList, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+        const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_list.* = src_list.*;
 
         const elem_layout = layout_cache.getLayout(self.layout.data.list);
@@ -173,7 +398,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         if (src_list.getAllocationDataPtr()) |alloc_ptr| {
             if (comptime trace_refcount) {
                 const rc_before: isize = blk: {
-                    if (@intFromPtr(alloc_ptr) % 8 != 0) break :blk -999;
+                    if (@intFromPtr(alloc_ptr) % @alignOf(usize) != 0) break :blk -999;
                     const isizes: [*]isize = @ptrCast(@alignCast(alloc_ptr));
                     break :blk (isizes - 1)[0];
                 };
@@ -194,8 +419,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     if (self.layout.tag == .list_of_zst) {
         // Copy the list header for ZST lists - no refcounting needed for ZSTs
         std.debug.assert(self.ptr != null);
-        const src_list: *const builtins.list.RocList = @ptrCast(@alignCast(self.ptr.?));
-        const dest_list: *builtins.list.RocList = @ptrCast(@alignCast(dest_ptr));
+        const src_list: *const builtins.list.RocList = builtins.utils.alignedPtrCast(*const builtins.list.RocList, @as([*]u8, @ptrCast(self.ptr.?)), @src());
+        const dest_list: *builtins.list.RocList = builtins.utils.alignedPtrCast(*builtins.list.RocList, @as([*]u8, @ptrCast(dest_ptr)), @src());
         dest_list.* = src_list.*;
         return;
     }
@@ -226,13 +451,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
 
-            const field_value = StackValue{
-                .layout = field_layout,
-                .ptr = field_ptr,
-                .is_initialized = true,
-            };
-
-            field_value.incref(layout_cache);
+            increfLayoutPtr(field_layout, field_ptr, layout_cache);
         }
         return;
     }
@@ -263,13 +482,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
 
-            const elem_value = StackValue{
-                .layout = elem_layout,
-                .ptr = elem_ptr,
-                .is_initialized = true,
-            };
-
-            elem_value.incref(layout_cache);
+            increfLayoutPtr(elem_layout, elem_ptr, layout_cache);
         }
         return;
     }
@@ -304,29 +517,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
                 const rec_ptr: [*]u8 = @ptrCast(base_ptr + aligned_off);
 
-                // Iterate over each field in the captures record and incref all fields.
-                // We call incref on ALL fields (not just isRefcounted()) because:
-                // - For directly refcounted types (str, list, box): increfs them
-                // - For nested records/tuples: recursively handles their contents
-                // - For scalars: incref is a no-op
-                // This is symmetric with decref.
-                const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
-                var field_index: usize = 0;
-                while (field_index < field_layouts.len) : (field_index += 1) {
-                    const field_info = field_layouts.get(field_index);
-                    const field_layout = layout_cache.getLayout(field_info.layout);
-
-                    const field_offset = layout_cache.getRecordFieldOffset(captures_layout.data.record.idx, @intCast(field_index));
-                    const field_ptr = @as(*anyopaque, @ptrCast(rec_ptr + field_offset));
-
-                    const field_value = StackValue{
-                        .layout = field_layout,
-                        .ptr = field_ptr,
-                        .is_initialized = true,
-                    };
-
-                    field_value.incref(layout_cache);
-                }
+                // Incref the entire captures record (which handles all fields recursively)
+                increfLayoutPtr(captures_layout, @ptrCast(rec_ptr), layout_cache);
             }
         }
         return;
@@ -346,8 +538,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const disc_ptr = base_ptr + tu_data.discriminant_offset;
         const discriminant: u32 = switch (tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            2 => builtins.utils.alignedPtrCast(*const u16, disc_ptr, @src()).*,
+            4 => builtins.utils.alignedPtrCast(*const u32, disc_ptr, @src()).*,
             else => unreachable,
         };
 
@@ -365,13 +557,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         }
 
         // Incref only the active variant's payload (at offset 0)
-        const payload_value = StackValue{
-            .layout = variant_layout,
-            .ptr = @as(*anyopaque, @ptrCast(base_ptr)),
-            .is_initialized = true,
-        };
-
-        payload_value.incref(layout_cache);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache);
         return;
     }
 
@@ -419,47 +605,19 @@ pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
     const precision = self.layout.data.scalar.data.int;
+    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
     return switch (precision) {
-        .u8 => blk: {
-            const typed_ptr = @as(*const u8, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u16 => blk: {
-            const typed_ptr = @as(*const u16, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u32 => blk: {
-            const typed_ptr = @as(*const u32, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u64 => blk: {
-            const typed_ptr = @as(*const u64, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .u128 => blk: {
-            const typed_ptr = @as(*const u128, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, @intCast(typed_ptr.*));
-        },
-        .i8 => blk: {
-            const typed_ptr = @as(*const i8, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i16 => blk: {
-            const typed_ptr = @as(*const i16, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i32 => blk: {
-            const typed_ptr = @as(*const i32, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i64 => blk: {
-            const typed_ptr = @as(*const i64, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk @as(i128, typed_ptr.*);
-        },
-        .i128 => blk: {
-            const typed_ptr = @as(*const i128, @ptrCast(@alignCast(self.ptr.?)));
-            break :blk typed_ptr.*;
-        },
+        .u8 => @as(i128, @as(*const u8, @ptrCast(raw_ptr)).*),
+        .u16 => @as(i128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
+        .u32 => @as(i128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
+        .u64 => @as(i128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
+        .u128 => @as(i128, @intCast(@as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*)),
+        .i8 => @as(i128, @as(*const i8, @ptrCast(raw_ptr)).*),
+        .i16 => @as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*),
+        .i32 => @as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*),
+        .i64 => @as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*),
+        .i128 => @as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*,
     };
 }
 
@@ -479,48 +637,49 @@ pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
     std.debug.assert(!self.is_initialized);
 
     const precision = self.layout.data.scalar.data.int;
+    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
     // Inline integer writing logic with proper type casting and alignment
     // Use std.math.cast to safely check if value fits, returning error instead of panicking
     switch (precision) {
         .u8 => {
-            const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *u8 = @ptrCast(raw_ptr);
             typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
         },
         .u16 => {
-            const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
         },
         .u32 => {
-            const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
         },
         .u64 => {
-            const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
         },
         .u128 => {
-            const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, raw_ptr, @src());
             typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
         },
         .i8 => {
-            const typed_ptr: *i8 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *i8 = @ptrCast(raw_ptr);
             typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
         },
         .i16 => {
-            const typed_ptr: *i16 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, raw_ptr, @src());
             typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
         },
         .i32 => {
-            const typed_ptr: *i32 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, raw_ptr, @src());
             typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
         },
         .i64 => {
-            const typed_ptr: *i64 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, raw_ptr, @src());
             typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
         },
         .i128 => {
-            const typed_ptr: *i128 = @ptrCast(@alignCast(self.ptr.?));
+            const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, raw_ptr, @src());
             typed_ptr.* = value;
         },
     }
@@ -539,29 +698,30 @@ pub fn setIntFromBytes(self: *StackValue, bytes: [16]u8, is_u128: bool) error{In
     std.debug.assert(!self.is_initialized);
 
     const precision = self.layout.data.scalar.data.int;
+    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
 
     // For u128 values, use bitcast directly; for i128 values, use the signed path
     if (is_u128) {
         const u128_value: u128 = @bitCast(bytes);
         switch (precision) {
             .u8 => {
-                const typed_ptr: *u8 = @ptrCast(@alignCast(self.ptr.?));
+                const typed_ptr: *u8 = @ptrCast(raw_ptr);
                 typed_ptr.* = std.math.cast(u8, u128_value) orelse return error.IntegerOverflow;
             },
             .u16 => {
-                const typed_ptr: *u16 = @ptrCast(@alignCast(self.ptr.?));
+                const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, raw_ptr, @src());
                 typed_ptr.* = std.math.cast(u16, u128_value) orelse return error.IntegerOverflow;
             },
             .u32 => {
-                const typed_ptr: *u32 = @ptrCast(@alignCast(self.ptr.?));
+                const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, raw_ptr, @src());
                 typed_ptr.* = std.math.cast(u32, u128_value) orelse return error.IntegerOverflow;
             },
             .u64 => {
-                const typed_ptr: *u64 = @ptrCast(@alignCast(self.ptr.?));
+                const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, raw_ptr, @src());
                 typed_ptr.* = std.math.cast(u64, u128_value) orelse return error.IntegerOverflow;
             },
             .u128 => {
-                const typed_ptr: *u128 = @ptrCast(@alignCast(self.ptr.?));
+                const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, raw_ptr, @src());
                 typed_ptr.* = u128_value;
             },
             .i8, .i16, .i32, .i64, .i128 => {
@@ -636,6 +796,9 @@ pub fn asDec(self: StackValue) RocDec {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .dec);
 
+    // RocDec contains i128 which requires 16-byte alignment
+    const ptr_val = @intFromPtr(self.ptr.?);
+    if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[asDec] alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
     const typed_ptr = @as(*const RocDec, @ptrCast(@alignCast(self.ptr.?)));
     return typed_ptr.*;
 }
@@ -692,6 +855,10 @@ pub fn setDec(self: *StackValue, value: RocDec) void {
     // Avoid accidental overwrite, manually toggle this if updating an already initialized value
     std.debug.assert(!self.is_initialized);
 
+    // RocDec contains i128 which requires 16-byte alignment
+    const ptr_val = @intFromPtr(self.ptr.?);
+    if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[setDec] alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
+
     // Write the Dec value
     const typed_ptr: *RocDec = @ptrCast(@alignCast(self.ptr.?));
     typed_ptr.* = value;
@@ -722,7 +889,7 @@ pub const TupleAccessor = struct {
     element_layouts: layout_mod.TupleField.SafeMultiList.Slice,
 
     /// Get a StackValue for the element at the given original index (before sorting)
-    pub fn getElement(self: TupleAccessor, original_index: usize) !StackValue {
+    pub fn getElement(self: TupleAccessor, original_index: usize, elem_rt_var: types.Var) !StackValue {
         // Find the sorted index corresponding to this original index
         const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
 
@@ -748,13 +915,24 @@ pub const TupleAccessor = struct {
             .layout = element_layout,
             .ptr = element_ptr,
             .is_initialized = true, // Elements in existing tuples are initialized
+            .rt_var = elem_rt_var,
         };
     }
 
+    /// Get just the element pointer without needing type information (for internal operations like setElement)
+    pub fn getElementPtr(self: TupleAccessor, original_index: usize) !*anyopaque {
+        const sorted_index = self.findElementIndexByOriginal(original_index) orelse return error.TupleIndexOutOfBounds;
+        std.debug.assert(self.base_value.is_initialized);
+        std.debug.assert(self.base_value.ptr != null);
+        const element_offset = self.layout_cache.getTupleElementOffset(self.tuple_layout.data.tuple.idx, @intCast(sorted_index));
+        const base_ptr = @as([*]u8, @ptrCast(self.base_value.ptr.?));
+        return @as(*anyopaque, @ptrCast(base_ptr + element_offset));
+    }
+
     /// Set an element by copying from a source StackValue
-    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
-        const dest_element = try self.getElement(index);
-        try source.copyToPtr(self.layout_cache, dest_element.ptr.?, ops);
+    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue) !void {
+        const dest_ptr = try self.getElementPtr(index);
+        try source.copyToPtr(self.layout_cache, dest_ptr);
     }
 
     /// Find the sorted element index corresponding to an original tuple position
@@ -806,11 +984,21 @@ pub const TagUnionAccessor = struct {
     pub fn getDiscriminant(self: TagUnionAccessor) usize {
         const base_ptr: [*]u8 = @ptrCast(self.base_value.ptr.?);
         const disc_ptr = base_ptr + self.tu_data.discriminant_offset;
+        const disc_ptr_val = @intFromPtr(disc_ptr);
         return switch (self.tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-            8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
+            2 => blk: {
+                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[getDiscriminant] u16 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            4 => blk: {
+                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[getDiscriminant] u32 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            8 => blk: {
+                if (disc_ptr_val % @alignOf(u64) != 0) std.debug.panic("[getDiscriminant] u64 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*);
+            },
             else => 0,
         };
     }
@@ -849,6 +1037,13 @@ pub fn asList(self: StackValue, layout_cache: *LayoutStore, element_layout: Layo
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
 
+    // Verify alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const ptr_int = @intFromPtr(self.ptr.?);
+        if (ptr_int % @alignOf(RocList) != 0) {
+            std.debug.panic("asList: self.ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+        }
+    }
     const header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
     return ListAccessor{
         .base_value = self,
@@ -871,11 +1066,11 @@ pub const ListAccessor = struct {
         return self.list.len();
     }
 
-    pub fn getElement(self: ListAccessor, index: usize) !StackValue {
+    pub fn getElement(self: ListAccessor, index: usize, elem_rt_var: types.Var) !StackValue {
         if (index >= self.list.len()) return error.ListIndexOutOfBounds;
 
         if (self.element_size == 0) {
-            return StackValue{ .layout = self.element_layout, .ptr = null, .is_initialized = true };
+            return StackValue{ .layout = self.element_layout, .ptr = null, .is_initialized = true, .rt_var = elem_rt_var };
         }
 
         const base_ptr = self.list.bytes orelse return error.NullStackPointer;
@@ -884,13 +1079,30 @@ pub const ListAccessor = struct {
             .layout = self.element_layout,
             .ptr = @ptrCast(base_ptr + offset),
             .is_initialized = true,
+            .rt_var = elem_rt_var,
         };
+    }
+
+    /// Get just the element pointer without needing type information (for internal operations)
+    pub fn getElementPtr(self: ListAccessor, index: usize) !?*anyopaque {
+        if (index >= self.list.len()) return error.ListIndexOutOfBounds;
+        if (self.element_size == 0) return null;
+        const base_ptr = self.list.bytes orelse return error.NullStackPointer;
+        const offset = index * self.element_size;
+        return @ptrCast(base_ptr + offset);
     }
 };
 
 fn storeListElementCount(list: *RocList, elements_refcounted: bool) void {
     if (elements_refcounted and !list.isSeamlessSlice()) {
         if (list.getAllocationDataPtr()) |source| {
+            // Verify alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const source_int = @intFromPtr(source);
+                if (source_int % @alignOf(usize) != 0) {
+                    std.debug.panic("storeListElementCount: source=0x{x} is not {}-byte aligned", .{ source_int, @alignOf(usize) });
+                }
+            }
             const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
             ptr[0] = list.length;
         }
@@ -903,6 +1115,13 @@ fn copyListValueToPtr(
     dest_ptr: *anyopaque,
     dest_layout: Layout,
 ) error{ TypeMismatch, NullStackPointer }!void {
+    // Verify dest_ptr alignment before @alignCast
+    if (comptime builtin.mode == .Debug) {
+        const dest_ptr_int = @intFromPtr(dest_ptr);
+        if (dest_ptr_int % @alignOf(RocList) != 0) {
+            std.debug.panic("copyListValueToPtr: dest_ptr=0x{x} is not {}-byte aligned", .{ dest_ptr_int, @alignOf(RocList) });
+        }
+    }
     var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
 
     switch (dest_layout.tag) {
@@ -911,6 +1130,13 @@ fn copyListValueToPtr(
             if (src.ptr == null) {
                 dest_list.* = RocList.empty();
                 return;
+            }
+            // Verify src.ptr alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const src_ptr_int_zst = @intFromPtr(src.ptr.?);
+                if (src_ptr_int_zst % @alignOf(RocList) != 0) {
+                    std.debug.panic("copyListValueToPtr(list_of_zst): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_zst, @alignOf(RocList) });
+                }
             }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
             dest_list.* = src_list;
@@ -923,6 +1149,13 @@ fn copyListValueToPtr(
                 return;
             }
             if (src.layout.tag != .list) return error.TypeMismatch;
+            // Verify src.ptr alignment before @alignCast
+            if (comptime builtin.mode == .Debug) {
+                const src_ptr_int_list = @intFromPtr(src.ptr.?);
+                if (src_ptr_int_list % @alignOf(RocList) != 0) {
+                    std.debug.panic("copyListValueToPtr(list): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_list, @alignOf(RocList) });
+                }
+            }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
             dest_list.* = src_list;
 
@@ -961,7 +1194,7 @@ pub const RecordAccessor = struct {
     field_layouts: layout_mod.RecordField.SafeMultiList.Slice,
 
     /// Get a StackValue for the field at the given index
-    pub fn getFieldByIndex(self: RecordAccessor, index: usize) !StackValue {
+    pub fn getFieldByIndex(self: RecordAccessor, index: usize, field_rt_var: types.Var) !StackValue {
         if (index >= self.field_layouts.len) {
             return error.RecordIndexOutOfBounds;
         }
@@ -988,11 +1221,12 @@ pub const RecordAccessor = struct {
             .layout = field_layout,
             .ptr = field_ptr,
             .is_initialized = true, // Fields in existing records are initialized
+            .rt_var = field_rt_var,
         };
     }
 
     /// Get a StackValue for the field with the given name
-    pub fn getFieldByName(self: RecordAccessor, field_name_idx: Ident.Idx) !?StackValue {
+    pub fn getFieldByName(self: RecordAccessor, field_name_idx: Ident.Idx, field_rt_var: types.Var) !?StackValue {
         const field_offset = self.layout_cache.getRecordFieldOffsetByName(
             self.record_layout.data.record.idx,
             field_name_idx,
@@ -1026,13 +1260,14 @@ pub const RecordAccessor = struct {
             .layout = field_layout.?,
             .ptr = field_ptr,
             .is_initialized = true,
+            .rt_var = field_rt_var,
         };
     }
 
     /// Set a field by copying from a source StackValue
-    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, ops: *RocOps) !void {
-        const dest_field = try self.getFieldByIndex(index);
-        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, ops);
+    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue) !void {
+        const dest_field = try self.getFieldByIndex(index, source.rt_var);
+        try source.copyToPtr(self.layout_cache, dest_field.ptr.?);
     }
 
     /// Get the number of fields in this record
@@ -1071,6 +1306,11 @@ pub fn asRocStr(self: StackValue) *RocStr {
 pub fn asClosure(self: StackValue) *const Closure {
     std.debug.assert(self.layout.tag == .closure);
     std.debug.assert(self.ptr != null);
+    const ptr_val = @intFromPtr(self.ptr.?);
+    const required_align = @alignOf(Closure);
+    if (ptr_val % required_align != 0) {
+        std.debug.panic("[asClosure] ALIGNMENT MISMATCH: ptr=0x{x} required_align={} (mod={})", .{ ptr_val, required_align, ptr_val % required_align });
+    }
     return @ptrCast(@alignCast(self.ptr.?));
 }
 
@@ -1106,7 +1346,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
             if (!src_str.isSmallStr()) {
                 const alloc_ptr = src_str.getAllocationPtr();
                 const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                    if (@intFromPtr(ptr) % 8 != 0) break :blk -999;
+                    if (@intFromPtr(ptr) % @alignOf(usize) != 0) break :blk -999;
                     const isizes: [*]isize = @ptrCast(@alignCast(ptr));
                     break :blk (isizes - 1)[0];
                 } else 0;
@@ -1168,15 +1408,6 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
     );
 }
 
-/// Create a StackValue view of a memory region (no copy)
-pub fn fromPtr(layout: Layout, ptr: *anyopaque) StackValue {
-    return StackValue{
-        .layout = layout,
-        .ptr = ptr,
-        .is_initialized = true,
-    };
-}
-
 /// Copy value data to another StackValue WITHOUT incrementing refcounts (move semantics)
 pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
     std.debug.assert(self.is_initialized);
@@ -1223,7 +1454,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
             } else {
                 const alloc_ptr = roc_str.getAllocationPtr();
                 const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                    if (@intFromPtr(ptr) % 8 != 0) {
+                    if (@intFromPtr(ptr) % @alignOf(usize) != 0) {
                         traceRefcount("INCREF str ptr=0x{x} MISALIGNED!", .{@intFromPtr(ptr)});
                         break :blk -999;
                     }
@@ -1269,56 +1500,12 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
     }
     // Handle records by recursively incref'ing each field (symmetric with decref)
     if (self.layout.tag == .record) {
-        if (self.ptr == null) return;
-        const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
-        if (record_data.fields.count == 0) return;
-
-        const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
-        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-        var field_index: usize = 0;
-        while (field_index < field_layouts.len) : (field_index += 1) {
-            const field_info = field_layouts.get(field_index);
-            const field_layout = layout_cache.getLayout(field_info.layout);
-
-            const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
-            const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
-
-            const field_value = StackValue{
-                .layout = field_layout,
-                .ptr = field_ptr,
-                .is_initialized = true,
-            };
-
-            field_value.incref(layout_cache);
-        }
+        increfLayoutPtr(self.layout, self.ptr, layout_cache);
         return;
     }
     // Handle tuples by recursively incref'ing each element (symmetric with decref)
     if (self.layout.tag == .tuple) {
-        if (self.ptr == null) return;
-        const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
-        if (tuple_data.fields.count == 0) return;
-
-        const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
-        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-        var elem_index: usize = 0;
-        while (elem_index < element_layouts.len) : (elem_index += 1) {
-            const elem_info = element_layouts.get(elem_index);
-            const elem_layout = layout_cache.getLayout(elem_info.layout);
-
-            const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
-            const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-
-            const elem_value = StackValue{
-                .layout = elem_layout,
-                .ptr = elem_ptr,
-                .is_initialized = true,
-            };
-
-            elem_value.incref(layout_cache);
-        }
+        increfLayoutPtr(self.layout, self.ptr, layout_cache);
         return;
     }
     // Handle tag unions by reading discriminant and incref'ing only the active variant's payload
@@ -1329,10 +1516,17 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
 
         // Read discriminant to determine active variant
         const disc_ptr = base_ptr + tu_data.discriminant_offset;
+        const disc_ptr_val = @intFromPtr(disc_ptr);
         const discriminant: u32 = switch (tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-            4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
+            2 => blk: {
+                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[copyToPtr tag_union] u16 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
+            },
+            4 => blk: {
+                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[copyToPtr tag_union] u32 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
+            },
             else => unreachable,
         };
 
@@ -1342,17 +1536,37 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
         // Incref only the active variant's payload (at offset 0)
-        const payload_value = StackValue{
-            .layout = variant_layout,
-            .ptr = @as(*anyopaque, @ptrCast(base_ptr)),
-            .is_initialized = true,
-        };
-
         if (comptime trace_refcount) {
             traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
         }
 
-        payload_value.incref(layout_cache);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache);
+        return;
+    }
+    // Handle closures by incref'ing their captures (symmetric with decref)
+    if (self.layout.tag == .closure) {
+        if (self.ptr == null) return;
+        const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(self.ptr.?));
+        const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+
+        // Only incref if there are actual captures (record with fields)
+        if (captures_layout.tag == .record) {
+            const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
+            if (record_data.fields.count > 0) {
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF closure captures ptr=0x{x} fields={}", .{
+                        @intFromPtr(self.ptr),
+                        record_data.fields.count,
+                    });
+                }
+                const header_size = @sizeOf(layout_mod.Closure);
+                const cap_align = captures_layout.alignment(layout_cache.targetUsize());
+                const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
+                const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
+                const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
+                increfLayoutPtr(captures_layout, rec_ptr, layout_cache);
+            }
+        }
         return;
     }
 }
@@ -1397,7 +1611,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                         const alloc_ptr = roc_str.getAllocationPtr();
                         // Only read refcount if pointer is aligned (safety check)
                         const rc_before: isize = if (alloc_ptr) |ptr| blk: {
-                            if (@intFromPtr(ptr) % 8 != 0) {
+                            if (@intFromPtr(ptr) % @alignOf(usize) != 0) {
                                 traceRefcount("DECREF str ptr=0x{x} MISALIGNED!", .{@intFromPtr(ptr)});
                                 break :blk -999;
                             }
@@ -1441,10 +1655,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             // Decref for non-refcounted types (like plain integers) is a no-op.
             if (list_value.isUnique()) {
                 if (list_value.getAllocationDataPtr()) |source| {
-                    const count: usize = if (list_value.isSeamlessSlice()) blk: {
-                        const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
-                        break :blk ptr[0];
-                    } else list_value.len();
+                    const count = list_value.getAllocationElementCount(elements_refcounted);
 
                     if (comptime trace_refcount) {
                         traceRefcount("DECREF list decref-ing {} elements", .{count});
@@ -1453,12 +1664,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                     var idx: usize = 0;
                     while (idx < count) : (idx += 1) {
                         const elem_ptr = source + idx * element_width;
-                        const elem_value = StackValue{
-                            .layout = elem_layout,
-                            .ptr = @ptrCast(elem_ptr),
-                            .is_initialized = true,
-                        };
-                        elem_value.decref(layout_cache, ops);
+                        decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops);
                     }
                 }
             }
@@ -1501,12 +1707,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
                 if (elem_layout.isRefcounted()) {
-                    const payload_value = StackValue{
-                        .layout = elem_layout,
-                        .ptr = @ptrCast(@alignCast(payload_ptr)),
-                        .is_initialized = true,
-                    };
-                    payload_value.decref(layout_cache, ops);
+                    decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops);
                 }
             }
 
@@ -1526,26 +1727,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 });
             }
 
-            const field_layouts = layout_cache.record_fields.sliceRange(record_data.getFields());
-            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-            var field_index: usize = 0;
-            while (field_index < field_layouts.len) : (field_index += 1) {
-                const field_info = field_layouts.get(field_index);
-                const field_layout = layout_cache.getLayout(field_info.layout);
-
-                const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
-                const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
-
-                const field_value = StackValue{
-                    .layout = field_layout,
-                    .ptr = field_ptr,
-                    .is_initialized = true,
-                };
-
-                field_value.decref(layout_cache, ops);
-            }
-
+            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
             return;
         },
         .box_of_zst => {
@@ -1566,60 +1748,13 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 });
             }
 
-            const element_layouts = layout_cache.tuple_fields.sliceRange(tuple_data.getFields());
-            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-            var elem_index: usize = 0;
-            while (elem_index < element_layouts.len) : (elem_index += 1) {
-                const elem_info = element_layouts.get(elem_index);
-                const elem_layout = layout_cache.getLayout(elem_info.layout);
-
-                const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
-                const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-
-                const elem_value = StackValue{
-                    .layout = elem_layout,
-                    .ptr = elem_ptr,
-                    .is_initialized = true,
-                };
-
-                elem_value.decref(layout_cache, ops);
-            }
-
+            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
             return;
         },
         .closure => {
-            if (self.ptr == null) return;
-            // Get the closure header to find the captures layout
-            const closure = self.asClosure();
-            const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
-
-            // Only decref if there are actual captures (record with fields)
-            if (captures_layout.tag == .record) {
-                const record_data = layout_cache.getRecordData(captures_layout.data.record.idx);
-                if (record_data.fields.count > 0) {
-                    if (comptime trace_refcount) {
-                        traceRefcount("DECREF closure ptr=0x{x} captures={}", .{
-                            @intFromPtr(self.ptr),
-                            record_data.fields.count,
-                        });
-                    }
-
-                    // Calculate the offset to the captures record (after header, with alignment)
-                    const header_size = @sizeOf(layout_mod.Closure);
-                    const cap_align = captures_layout.alignment(layout_cache.targetUsize());
-                    const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
-                    const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
-                    const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
-
-                    // Create a StackValue for the captures record and decref it
-                    const captures_value = StackValue{
-                        .layout = captures_layout,
-                        .ptr = rec_ptr,
-                        .is_initialized = true,
-                    };
-                    captures_value.decref(layout_cache, ops);
-                }
+            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
+            if (comptime trace_refcount) {
+                traceRefcount("DECREF closure DONE ptr=0x{x}", .{@intFromPtr(self.ptr)});
             }
             return;
         },
@@ -1652,13 +1787,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             }
 
             // Decref only the active variant's payload (at offset 0)
-            const payload_value = StackValue{
-                .layout = variant_layout,
-                .ptr = @as(*anyopaque, @ptrCast(base_ptr)),
-                .is_initialized = true,
-            };
-
-            payload_value.decref(layout_cache, ops);
+            decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache, ops);
             return;
         },
         else => {},

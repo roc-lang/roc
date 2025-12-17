@@ -1,3 +1,5 @@
+//! Handler for the LSP `initialize` request that sets up the server-client connection.
+
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 const capabilities = @import("../capabilities.zig");

@@ -148,6 +148,7 @@ EndOfFile,
 Basic := [Val(Str)].{
 	to_str : Basic -> Str
 	to_str = |Basic.Val(s)| s
+
 	to_str2 : Basic -> Str
 	to_str2 = |test| test.to_str()
 }
@@ -169,15 +170,12 @@ main = (helper1(val), helper2(val))
 (can-ir
 	(d-let
 		(p-assign (ident "Basic.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "s"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Basic") (local))

@@ -54,11 +54,6 @@ pub const Result = enum {
 /// This function accepts a mutable reference to `Store`, but guarantees that it
 /// _only_ modifies a variable's `Mark`. Before returning, all visited nodes'
 /// `Mark`s will be reset to `none`.
-///
-/// TODO: See if there's a way to represent this ^ in the type system? If we
-/// switch the types_store descriptors to use a multi list (which we should do
-/// anyway), maybe we can only pass in only a mutable ref to the backing `Mark`s
-/// array?
 pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
     scratch.reset();
 
@@ -304,9 +299,12 @@ pub const Scratch = struct {
     visited: MkSafeList(DescStoreIdx),
 
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
-        // Rust compiler inits with 1024 capacity. But that feels like a lot.
-        // Typical recursion cases should only be a few layers deep?
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // Rust compiler uses 1024, but that's likely overkill for typical Roc code.
+        // These values handle common cases:
+        // - seen/err_chain: 32 - typical type depth is much shallower
+        // - visited: 64 - covers most type traversals without reallocation
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .seen = try Var.SafeList.initCapacity(gpa, 32),
@@ -399,6 +397,7 @@ test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
         backing_var,
         &.{v2},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
     try types_store.setRootVarContent(v2, Content{ .structure = .empty_record });
 
@@ -552,6 +551,7 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
         box_backing_var,
         &.{linked_list},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // Build tag args: (elem, Box(linked_list))
@@ -601,6 +601,7 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
         backing_var,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // assert that starting from the nominal type, it works
@@ -666,6 +667,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         type_b_backing,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // Set up TypeA = Type B
@@ -674,6 +676,7 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
         type_b_nominal,
         &.{},
         Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+        false,
     ));
 
     // assert that starting from the `TypeA` nominal, it works

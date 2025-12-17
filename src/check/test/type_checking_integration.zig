@@ -391,6 +391,13 @@ test "check type - record inequality - same records" {
     try checkTypesExpr(source, .pass, "Bool");
 }
 
+test "check type - record inequality - diff records" {
+    const source =
+        \\{ x: 1, y: 2 } == { x: 1, z: 2 }
+    ;
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+}
+
 test "check type - tuple inequality" {
     const source =
         \\(1, 2) != (1, 2)
@@ -443,14 +450,14 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag]_others");
+    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
 }
 
 test "check type - tag - args" {
     const source =
         \\MyTag("hello", 1)
     ;
-    try checkTypesExpr(source, .pass, "[MyTag(Str, a)]_others where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    try checkTypesExpr(source, .pass, "[MyTag(Str, a), .._others] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 // blocks //
@@ -1346,7 +1353,10 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // Numeric literals with from_numeral constraints are NOT generalized (GitHub #8666).
+    // This means constraints from `x == 1` (the is_eq constraint) DO propagate back
+    // to the definition of x, along with the original from_numeral constraint.
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {
@@ -2416,10 +2426,10 @@ test "check type - pure zero-arg function annotation" {
     try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {  }");
 }
 
-test "imports of non-existent modules produce MODULE NOT FOUND errors" {
-    // This test verifies that importing modules that don't exist produces
-    // MODULE NOT FOUND errors. This is a regression test - a parser change
-    // for zero-arg functions accidentally caused these errors to disappear.
+test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
+    // Qualified imports (e.g., "json.Json") are cross-package imports that are
+    // resolved by the workspace resolver, not during canonicalization.
+    // They should NOT produce MODULE NOT FOUND errors during canonicalization.
     //
     // Source from test/snapshots/can_import_comprehensive.md
     const source =
@@ -2470,9 +2480,119 @@ test "imports of non-existent modules produce MODULE NOT FOUND errors" {
         }
     }
 
-    // We expect exactly 3 MODULE NOT FOUND errors:
-    // 1. json.Json
-    // 2. http.Client
-    // 3. utils.String
-    try testing.expectEqual(@as(usize, 3), module_not_found_count);
+    // Qualified imports (json.Json, http.Client, utils.String) should NOT produce
+    // MODULE NOT FOUND errors - they're handled by the workspace resolver
+    try testing.expectEqual(@as(usize, 0), module_not_found_count);
+}
+
+// Try with match and error propagation //
+
+test "check type - try return with match and error propagation should type-check" {
+    // This tests that a function returning Try(Str, _) with a wildcard error type
+    // should accept both error propagation (?) and explicit Err tags in match branches.
+    // The wildcard _ in the return type annotation should unify with any error type.
+    const source =
+        \\get_greeting : {} -> Try(Str, _)
+        \\get_greeting = |{}| {
+        \\    match 0 {
+        \\        0 => Try.Ok(List.first(["hello"])?),
+        \\        _ => Err(Impossible)
+        \\    }
+        \\}
+    ;
+    // Expected: should pass type-checking with combined error type (open tag union)
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
+}
+
+// record extension in type annotations //
+
+test "check type - record extension - basic open record annotation" {
+    // Test that a function accepting { name: Str, ..others } can take records with extra fields
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, name: Str } -> Str");
+}
+
+test "check type - record extension - closed record satisfies open record" {
+    // A closed record { name: Str, age: I64 } should satisfy { name: Str, ..others }
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+        \\
+        \\result = getName({ name: "Alice", age: 30 })
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - record extension - multiple fields with extension" {
+    // Test with multiple required fields and an extension
+    const source =
+        \\getFullName : { first: Str, last: Str, ..others } -> Str
+        \\getFullName = |record| Str.concat(Str.concat(record.first, " "), record.last)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others, first: Str, last: Str } -> Str");
+}
+
+test "check type - record extension - nested records with extension" {
+    // Test record extension with nested record types
+    const source =
+        \\getPersonName : { person: { name: Str, ..inner }, ..outer } -> Str
+        \\getPersonName = |record| record.person.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..outer, person: { ..inner, name: Str } } -> Str");
+}
+
+test "check type - record extension - empty record with extension" {
+    // An empty record with extension means "any record"
+    const source =
+        \\takeAnyRecord : { ..others } -> Str
+        \\takeAnyRecord = |_record| "got a record"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ ..others } -> Str");
+}
+
+test "check type - record extension - mismatch should fail" {
+    // Test that a record missing a required field should fail
+    const source =
+        \\getName : { name: Str, ..others } -> Str
+        \\getName = |record| record.name
+        \\
+        \\result = getName({ age: 30 })
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// List method syntax tests
+
+test "check type - List.get method syntax" {
+    // Check what type is inferred for [1].get(0) (this works at runtime)
+    const source =
+        \\result = [1].get(0)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(item, [OutOfBounds, ..others]) where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+}
+
+// List.first method syntax tests - REGRESSION TEST for cycle detection bug
+
+test "check type - List.first method syntax should not create cyclic types" {
+    // REGRESSION TEST: This test reproduces a bug where calling [1].first() (method syntax)
+    // would cause an infinite loop in layout computation because the interpreter was creating
+    // cyclic rigid var mappings in the TypeScope when building layouts.
+    //
+    // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
+    // When the return type is Try(item, [ListWasEmpty, ..others]) with an open tag union,
+    // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
+    //
+    // Method syntax: [1].first()
+    // Should have same type as function syntax: List.first([1])
+    //
+    // NOTE: The type checking itself is correct - this test verifies type checking produces
+    // the right type. The bug manifests in the interpreter's layout computation phase.
+    const source =
+        \\result = [1].first()
+    ;
+    // Expected: Try(item, [ListWasEmpty, ..others]) with item having from_numeral constraint
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(item, [ListWasEmpty, ..others]) where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
 }

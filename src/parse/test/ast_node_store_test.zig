@@ -89,6 +89,7 @@ test "NodeStore round trip - Headers" {
             .provides = rand_idx(AST.Collection.Idx),
             .requires_rigids = rand_idx(AST.Collection.Idx),
             .requires_signatures = rand_idx(AST.TypeAnno.Idx),
+            .targets = null,
             .region = rand_region(),
         },
     });
@@ -282,6 +283,12 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(gpa, AST.Pattern{
+        .var_ident = .{
+            .ident_tok = rand_token_idx(),
+            .region = rand_region(),
+        },
+    });
+    try patterns.append(gpa, AST.Pattern{
         .tag = .{
             .args = AST.Pattern.Span{ .span = rand_span() },
             .qualifiers = AST.Token.Span{ .span = rand_span() },
@@ -425,6 +432,14 @@ test "NodeStore round trip - TypeAnno" {
     try ty_annos.append(gpa, AST.TypeAnno{
         .record = .{
             .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .ext = null,
+            .region = rand_region(),
+        },
+    });
+    try ty_annos.append(gpa, AST.TypeAnno{
+        .record = .{
+            .fields = AST.AnnoRecordField.Span{ .span = rand_span() },
+            .ext = rand_idx(AST.TypeAnno.Idx), // Test record with extension
             .region = rand_region(),
         },
     });
@@ -443,8 +458,10 @@ test "NodeStore round trip - TypeAnno" {
         },
     });
 
-    // We don't include .malformed variant
+    // We don't include .malformed variant, but we do include an extra test case
+    // for record with extension (so record is tested both with and without ext)
     expected_test_count -= 1;
+    expected_test_count += 1; // record with ext
 
     for (ty_annos.items) |anno| {
         const idx = try store.addTypeAnno(anno);
@@ -650,4 +667,89 @@ test "NodeStore round trip - Expr" {
         std.debug.print("Please add or remove test cases for missing expression variants.\n", .{});
         return error.IncompleteExprTestCoverage;
     }
+}
+
+test "NodeStore round trip - Targets" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, NodeStore.AST_HEADER_NODE_COUNT);
+    defer store.deinit();
+
+    // Test TargetFile round trip
+    const target_files = [_]AST.TargetFile{
+        .{ .string_literal = rand_token_idx() },
+        .{ .special_ident = rand_token_idx() },
+        .{ .malformed = .{ .reason = .expected_targets_field_name, .region = rand_region() } },
+    };
+
+    for (target_files) |file| {
+        const idx = try store.addTargetFile(file);
+        const retrieved = store.getTargetFile(idx);
+
+        testing.expectEqualDeep(file, retrieved) catch |err| {
+            std.debug.print("\n\nOriginal TargetFile:  {any}\n\n", .{file});
+            std.debug.print("Retrieved TargetFile: {any}\n\n", .{retrieved});
+            return err;
+        };
+    }
+
+    // Test TargetEntry round trip
+    const entry = AST.TargetEntry{
+        .target = rand_token_idx(),
+        .files = .{ .span = rand_span() },
+        .region = rand_region(),
+    };
+    const entry_idx = try store.addTargetEntry(entry);
+    const retrieved_entry = store.getTargetEntry(entry_idx);
+
+    testing.expectEqualDeep(entry, retrieved_entry) catch |err| {
+        std.debug.print("\n\nOriginal TargetEntry:  {any}\n\n", .{entry});
+        std.debug.print("Retrieved TargetEntry: {any}\n\n", .{retrieved_entry});
+        return err;
+    };
+
+    // Test TargetLinkType round trip
+    const link_type = AST.TargetLinkType{
+        .entries = .{ .span = rand_span() },
+        .region = rand_region(),
+    };
+    const link_type_idx = try store.addTargetLinkType(link_type);
+    const retrieved_link_type = store.getTargetLinkType(link_type_idx);
+
+    testing.expectEqualDeep(link_type, retrieved_link_type) catch |err| {
+        std.debug.print("\n\nOriginal TargetLinkType:  {any}\n\n", .{link_type});
+        std.debug.print("Retrieved TargetLinkType: {any}\n\n", .{retrieved_link_type});
+        return err;
+    };
+
+    // Test TargetsSection round trip
+    const section = AST.TargetsSection{
+        .files_path = rand_token_idx(),
+        .exe = link_type_idx,
+        .static_lib = null,
+        .region = rand_region(),
+    };
+    const section_idx = try store.addTargetsSection(section);
+    const retrieved_section = store.getTargetsSection(section_idx);
+
+    testing.expectEqualDeep(section, retrieved_section) catch |err| {
+        std.debug.print("\n\nOriginal TargetsSection:  {any}\n\n", .{section});
+        std.debug.print("Retrieved TargetsSection: {any}\n\n", .{retrieved_section});
+        return err;
+    };
+
+    // Test TargetsSection with null values
+    const section_nulls = AST.TargetsSection{
+        .files_path = null,
+        .exe = null,
+        .static_lib = null,
+        .region = rand_region(),
+    };
+    const section_nulls_idx = try store.addTargetsSection(section_nulls);
+    const retrieved_section_nulls = store.getTargetsSection(section_nulls_idx);
+
+    testing.expectEqualDeep(section_nulls, retrieved_section_nulls) catch |err| {
+        std.debug.print("\n\nOriginal TargetsSection (nulls):  {any}\n\n", .{section_nulls});
+        std.debug.print("Retrieved TargetsSection (nulls): {any}\n\n", .{retrieved_section_nulls});
+        return err;
+    };
 }

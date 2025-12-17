@@ -93,6 +93,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+        .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
     };
 
     return LoadedModule{
@@ -308,7 +309,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 3: Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(gpa, "test");
+    try cir.initCIRFields("test");
 
     // Get Bool, Try, and Str statement indices from the builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
@@ -356,7 +357,7 @@ test "Repl - minimal interpreter integration" {
     // Step 8: Verify result using renderer
     const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
     const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
-    const rendered = try interpreter.renderValueRocWithType(result, rt_var);
+    const rendered = try interpreter.renderValueRocWithType(result, rt_var, test_env.get_ops());
     defer gpa.free(rendered);
     try testing.expectEqualStrings("42", rendered);
 }
@@ -726,4 +727,28 @@ test "Repl - full str_to_utf8 snapshot test" {
         defer std.testing.allocator.free(result);
         try testing.expectEqualStrings("False", result);
     }
+}
+
+test "Repl - lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x| x + 1");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
+}
+
+test "Repl - multi-arg lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x, y| x + y");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
 }

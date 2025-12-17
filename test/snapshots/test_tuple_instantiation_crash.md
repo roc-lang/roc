@@ -16,20 +16,17 @@ swap = |(x, y)| (y, x)
 main = swap(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_tuple_instantiation_crash.md:9:8:9:18
+TOO MANY ARGUMENTS - test_tuple_instantiation_crash.md:9:8:9:18
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO MANY ARGUMENTS**
+The function `swap` expects 1 argument, but 2 were provided:
 **test_tuple_instantiation_crash.md:9:8:9:18:**
 ```roc
 main = swap(1, 2)
 ```
        ^^^^^^^^^^
 
-It has the type:
-    _c, d -> _ret where [c.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]_
-
-But I expected it to be:
+The function has the signature:
     _(a, b) -> (b, a)_
 
 # TOKENS
@@ -122,8 +119,8 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "(a, b) -> (b, a)"))
-		(patt (type "_c")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "(a, b) -> (b, a)"))
-		(expr (type "_c"))))
+		(expr (type "Error"))))
 ~~~
