@@ -1812,8 +1812,11 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
     defer app_file.close();
 
     const app_file_size = try app_file.getEndPos();
-    const app_source = try shm_allocator.alloc(u8, @intCast(app_file_size));
+    var app_source = try shm_allocator.alloc(u8, @intCast(app_file_size));
     _ = try app_file.read(app_source);
+    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
+    // SharedMemoryAllocator is a bump allocator, so normalize in-place and keep any trailing bytes unused.
+    app_source = base.source_utils.normalizeLineEndings(app_source);
 
     const app_basename = std.fs.path.basename(roc_file_path);
     const app_module_name = try shm_allocator.dupe(u8, app_basename);
@@ -2036,7 +2039,11 @@ pub fn setupSharedMemoryWithModuleEnv(allocs: *Allocators, roc_file_path: []cons
 /// Extract exposed modules from a platform's main.roc file
 fn extractExposedModulesFromPlatform(allocs: *Allocators, roc_file_path: []const u8, exposed_modules: *std.ArrayList([]const u8)) !void {
     // Read the Roc file
-    const source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    var source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(allocs.gpa, source) catch |err| {
+        allocs.gpa.free(source);
+        return err;
+    };
     defer allocs.gpa.free(source);
 
     // Extract module name from the file path
@@ -2129,8 +2136,11 @@ fn compileModuleToSharedMemory(
     defer file.close();
 
     const file_size = try file.getEndPos();
-    const source = try shm_allocator.alloc(u8, @intCast(file_size));
+    var source = try shm_allocator.alloc(u8, @intCast(file_size));
     _ = try file.read(source);
+    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
+    // SharedMemoryAllocator is a bump allocator, so normalize in-place and keep any trailing bytes unused.
+    source = base.source_utils.normalizeLineEndings(source);
 
     const module_name_copy = try shm_allocator.dupe(u8, module_name_arg);
 
@@ -2258,8 +2268,11 @@ fn compileModuleForSerialization(
     defer file.close();
 
     const file_size = try file.getEndPos();
-    const source = try allocs.arena.alloc(u8, @intCast(file_size));
+    var source = try allocs.arena.alloc(u8, @intCast(file_size));
     _ = try file.read(source);
+    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
+    // The arena keeps the original allocation; trailing bytes (if any) are harmless.
+    source = base.source_utils.normalizeLineEndings(source);
 
     const module_name_copy = try allocs.arena.dupe(u8, module_name_arg);
 
@@ -2817,7 +2830,11 @@ pub fn resolvePlatformPaths(allocs: *Allocators, roc_file_path: []const u8) (std
 /// Extract platform specification from app file header by parsing it properly.
 fn extractPlatformSpecFromApp(allocs: *Allocators, app_file_path: []const u8) ![]const u8 {
     // Read the app file
-    const source = std.fs.cwd().readFileAlloc(allocs.gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
+    var source = std.fs.cwd().readFileAlloc(allocs.gpa, app_file_path, std.math.maxInt(usize)) catch return error.FileNotFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(allocs.gpa, source) catch |err| {
+        allocs.gpa.free(source);
+        return err;
+    };
     defer allocs.gpa.free(source);
 
     // Extract module name from file path
@@ -3025,7 +3042,11 @@ fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.E
 /// TODO: Replace this with proper BuildEnv solution in the future
 fn extractEntrypointsFromPlatform(allocs: *Allocators, roc_file_path: []const u8, entrypoints: *std.array_list.Managed([]const u8)) !void {
     // Read the Roc file
-    const source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    var source = std.fs.cwd().readFileAlloc(allocs.gpa, roc_file_path, std.math.maxInt(usize)) catch return error.NoPlatformFound;
+    source = base.source_utils.normalizeLineEndingsRealloc(allocs.gpa, source) catch |err| {
+        allocs.gpa.free(source);
+        return err;
+    };
     defer allocs.gpa.free(source);
 
     // Extract module name from the file path
@@ -3847,8 +3868,12 @@ fn rocTest(allocs: *Allocators, args: cli_args.TestArgs) !void {
     defer stderr.flush() catch {};
 
     // Read the Roc file
-    const source = std.fs.cwd().readFileAlloc(allocs.gpa, args.path, std.math.maxInt(usize)) catch |err| {
+    var source = std.fs.cwd().readFileAlloc(allocs.gpa, args.path, std.math.maxInt(usize)) catch |err| {
         try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
+        return err;
+    };
+    source = base.source_utils.normalizeLineEndingsRealloc(allocs.gpa, source) catch |err| {
+        allocs.gpa.free(source);
         return err;
     };
     defer allocs.gpa.free(source);
