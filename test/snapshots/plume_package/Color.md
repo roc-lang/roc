@@ -869,8 +869,8 @@ named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
 	if str.is_named_color()
 		Ok(Color.Named(str))
-			else
-				Err(UnknownColor("Unknown color ${str}"))
+	else
+		Err(UnknownColor("Unknown color ${str}"))
 
 is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])

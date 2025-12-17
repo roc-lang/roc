@@ -1142,7 +1142,14 @@ const Formatter = struct {
                 try fmt.pushTokenText(t.token);
             },
             .if_then_else => |i| {
+                // Check if then/else are blocks - blocks use original behavior,
+                // non-blocks use base_indent to keep else at the same level as if
+                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
+                const else_is_block = fmt.ast.store.getExpr(i.@"else") == .block;
+                const has_blocks = then_is_block or else_is_block;
+
                 try fmt.pushAll("if");
+                const base_indent = fmt.curr_indent;
                 const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                 var flushed = try fmt.flushCommentsBefore(cond_region.start);
                 if (flushed) {
@@ -1152,6 +1159,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.condition);
+                if (!has_blocks) fmt.curr_indent = base_indent;
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 flushed = try fmt.flushCommentsBefore(then_region.start);
                 if (flushed) {
@@ -1161,14 +1169,16 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.then);
+                if (!has_blocks) fmt.curr_indent = base_indent;
                 flushed = try fmt.flushCommentsBefore(then_region.end);
                 if (flushed) {
-                    fmt.curr_indent += 1;
+                    if (has_blocks) fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll("else");
+                if (!has_blocks) fmt.curr_indent = base_indent;
                 const else_region = fmt.nodeRegion(@intFromEnum(i.@"else"));
                 flushed = try fmt.flushCommentsBefore(else_region.start);
                 if (flushed) {
@@ -1180,7 +1190,12 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(i.@"else");
             },
             .if_without_else => |i| {
+                // Check if then is a block - blocks use original behavior,
+                // non-blocks use base_indent logic
+                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
+
                 try fmt.pushAll("if");
+                const base_indent = fmt.curr_indent;
                 const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                 var flushed = try fmt.flushCommentsBefore(cond_region.start);
                 if (flushed) {
@@ -1190,6 +1205,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.condition);
+                if (!then_is_block) fmt.curr_indent = base_indent;
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 flushed = try fmt.flushCommentsBefore(then_region.start);
                 if (flushed) {
