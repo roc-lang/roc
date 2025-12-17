@@ -1636,8 +1636,9 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, allocs: *Allocators, roc
         try std.fs.path.join(allocs.arena, &[_][]const u8{ app_dir, platform_spec })
     else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
         // URL platform - resolve to cached package path
-        const platform_paths = resolveUrlPlatform(allocs, platform_spec) catch {
-            break :blk null;
+        const platform_paths = resolveUrlPlatform(ctx, allocs, platform_spec) catch |err| switch (err) {
+            error.CliError => break :blk null,
+            error.OutOfMemory => return error.OutOfMemory,
         };
         break :blk platform_paths.platform_source_path;
     } else null;
@@ -2464,8 +2465,9 @@ fn compileAndSerializeModulesForEmbedding(
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(allocs.gpa, &[_][]const u8{ app_dir, platform_spec })
     else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
-        const platform_paths = resolveUrlPlatform(allocs, platform_spec) catch {
-            break :blk null;
+        const platform_paths = resolveUrlPlatform(ctx, allocs, platform_spec) catch |err| switch (err) {
+            error.CliError => break :blk null,
+            error.OutOfMemory => return error.OutOfMemory,
         };
         break :blk platform_paths.platform_source_path;
     } else null;
@@ -2949,14 +2951,13 @@ fn validatePlatformSpec(ctx: *CliContext, platform_spec: []const u8) cli_error.C
 /// Resolve a platform specification to a platform source path.
 /// Uses CliContext for error reporting. Takes allocs for URL platform handling.
 fn resolvePlatformSpecToPaths(ctx: *CliContext, allocs: *Allocators, platform_spec: []const u8, base_dir: []const u8) cli_error.CliError!PlatformPaths {
-    // Handle URL-based platforms - delegate to legacy function for now
+    // Handle URL-based platforms
     if (std.mem.startsWith(u8, platform_spec, "http")) {
-        // TODO: Create resolveUrlPlatformWithContext
-        return resolveUrlPlatform(allocs, platform_spec) catch {
-            return ctx.fail(.{ .platform_not_found = .{
-                .app_path = base_dir,
-                .platform_path = platform_spec,
-            } });
+        return resolveUrlPlatform(ctx, allocs, platform_spec) catch |err| switch (err) {
+            error.CliError => return error.CliError,
+            error.OutOfMemory => return ctx.fail(.{ .cache_dir_unavailable = .{
+                .reason = "Out of memory while resolving URL platform",
+            } }),
         };
     }
 
@@ -3032,19 +3033,20 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
 
 /// Resolve a URL platform specification by downloading and caching the bundle.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
-fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.Error || error{PlatformNotSupported})!PlatformPaths {
+fn resolveUrlPlatform(ctx: *CliContext, allocs: *Allocators, url: []const u8) (cli_error.CliError || error{OutOfMemory})!PlatformPaths {
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
     const base58_hash = download.validateUrl(url) catch {
-        std.log.debug("Invalid platform URL: {s}", .{url});
-        return error.PlatformNotSupported;
+        return ctx.fail(.{ .invalid_url = .{
+            .url = url,
+            .reason = "Invalid platform URL format or missing hash",
+        } });
     };
 
     // 2. Get cache directory
     const cache_dir_path = getRocCacheDir(allocs.arena) catch {
-        std.log.err("Could not determine cache directory", .{});
-        return error.PlatformNotSupported;
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = "Could not determine cache directory" } });
     };
     const package_dir_path = try std.fs.path.join(allocs.arena, &.{ cache_dir_path, base58_hash });
 
@@ -3056,22 +3058,27 @@ fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.E
 
             // Create cache directory structure
             std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
-                std.log.err("Failed to create cache directory: {}", .{make_err});
-                return error.PlatformNotSupported;
+                return ctx.fail(.{ .directory_create_failed = .{
+                    .path = cache_dir_path,
+                    .err = make_err,
+                } });
             };
 
             // Create package directory
             std.fs.cwd().makeDir(package_dir_path) catch |make_err| switch (make_err) {
                 error.PathAlreadyExists => {}, // Race condition, another process created it
                 else => {
-                    std.log.err("Failed to create package directory: {}", .{make_err});
-                    return error.PlatformNotSupported;
+                    return ctx.fail(.{ .directory_create_failed = .{
+                        .path = package_dir_path,
+                        .err = make_err,
+                    } });
                 },
             };
 
-            var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |open_err| {
-                std.log.err("Failed to open package directory: {}", .{open_err});
-                return error.PlatformNotSupported;
+            var new_package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch {
+                return ctx.fail(.{ .directory_not_found = .{
+                    .path = package_dir_path,
+                } });
             };
 
             // Download and extract
@@ -3080,16 +3087,19 @@ fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.E
                 // Clean up failed download
                 new_package_dir.close();
                 std.fs.cwd().deleteTree(package_dir_path) catch {};
-                std.log.err("Failed to download platform: {}", .{download_err});
-                return error.PlatformNotSupported;
+                return ctx.fail(.{ .download_failed = .{
+                    .url = url,
+                    .err = download_err,
+                } });
             };
 
             std.log.info("Platform cached at {s}", .{package_dir_path});
             break :blk new_package_dir;
         },
         else => {
-            std.log.err("Failed to access package directory: {}", .{err});
-            return error.PlatformNotSupported;
+            return ctx.fail(.{ .directory_not_found = .{
+                .path = package_dir_path,
+            } });
         },
     };
     defer package_dir.close();
@@ -3097,8 +3107,10 @@ fn resolveUrlPlatform(allocs: *Allocators, url: []const u8) (std.mem.Allocator.E
     // Platforms must have a main.roc entry point
     const platform_source_path = try std.fs.path.join(allocs.arena, &.{ package_dir_path, "main.roc" });
     std.fs.cwd().access(platform_source_path, .{}) catch {
-        std.log.err("No main.roc found in platform bundle at {s}", .{package_dir_path});
-        return error.PlatformNotSupported;
+        return ctx.fail(.{ .platform_source_not_found = .{
+            .platform_path = package_dir_path,
+            .searched_paths = &.{platform_source_path},
+        } });
     };
 
     return PlatformPaths{
@@ -3783,8 +3795,10 @@ fn rocBuildEmbedded(ctx: *CliContext, allocs: *Allocators, args: cli_args.BuildA
 
     // Get the link spec for this target - tells us exactly what files to link
     const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
-        std.log.err("No link spec for target {s}/{s} - this shouldn't happen after selection", .{ @tagName(target), @tagName(link_type) });
-        return error.UnsupportedTarget;
+        return ctx.fail(.{ .linker_failed = .{
+            .err = error.UnsupportedTarget,
+            .target = @tagName(target),
+        } });
     };
 
     // Build link file lists from the link spec
@@ -3835,13 +3849,14 @@ fn rocBuildEmbedded(ctx: *CliContext, allocs: *Allocators, args: cli_args.BuildA
     // Extract entrypoints from the platform source file
     std.log.debug("Extracting entrypoints from platform...", .{});
     var entrypoints = std.array_list.Managed([]const u8).initCapacity(allocs.arena, 16) catch {
-        std.log.err("Failed to allocate entrypoints list", .{});
         return error.OutOfMemory;
     };
 
     extractEntrypointsFromPlatform(allocs, platform_source.?, &entrypoints) catch |err| {
-        std.log.err("Failed to extract entrypoints: {}", .{err});
-        return err;
+        return ctx.fail(.{ .entrypoint_extraction_failed = .{
+            .path = platform_source.?,
+            .reason = @errorName(err),
+        } });
     };
     std.log.debug("Found {} entrypoints", .{entrypoints.items.len});
 
@@ -3860,8 +3875,7 @@ fn rocBuildEmbedded(ctx: *CliContext, allocs: *Allocators, args: cli_args.BuildA
         // For roc build, use the target-specific shim for cross-compilation support
         std.log.debug("Extracting shim library for target {s} to {s}...", .{ target_name, shim_path });
         extractReadRocFilePathShimLibrary(allocs, shim_path, target) catch |err| {
-            std.log.err("Failed to extract shim library: {}", .{err});
-            return err;
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
     };
 
