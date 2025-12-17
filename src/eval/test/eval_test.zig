@@ -1428,6 +1428,26 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
     , "3", .no_trace);
 }
 
+test "List.get with polymorphic numeric index - regression #8666" {
+    // Regression test for GitHub issue #8666: interpreter panic when using
+    // a polymorphic numeric type as a list index.
+    //
+    // The bug occurred because numeric literals with from_numeral constraints
+    // were being generalized, causing each use to get a fresh instantiation.
+    // This meant the concrete U64 type from List.get didn't propagate back
+    // to the original definition, leaving it as a flex var that defaulted to Dec.
+    //
+    // The fix: don't generalize vars with from_numeral constraints, and don't
+    // instantiate them during lookup, so constraint propagation works correctly.
+    try runExpectInt(
+        \\{
+        \\    list = [10, 20, 30]
+        \\    index = 0
+        \\    match List.get(list, index) { Ok(v) => v, _ => 0 }
+        \\}
+    , 10, .no_trace);
+}
+
 test "for loop element type extracted from list runtime type - regression #8664" {
     // Regression test for InvalidMethodReceiver when calling methods on elements
     // from a for loop over a list passed to an untyped function parameter.

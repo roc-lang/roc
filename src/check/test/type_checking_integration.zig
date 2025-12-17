@@ -1353,10 +1353,10 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    // Inside lambdas, numeric flex vars ARE generalized (to support polymorphic functions).
-    // Each use of `x` gets a fresh instance, so constraints from `x == 1` don't
-    // propagate to the generalized type. Only `from_numeral` from the def is captured.
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // Numeric literals with from_numeral constraints are NOT generalized (GitHub #8666).
+    // This means constraints from `x == 1` (the is_eq constraint) DO propagate back
+    // to the definition of x, along with the original from_numeral constraint.
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {

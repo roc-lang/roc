@@ -12,8 +12,18 @@ platform ""
             arm64musl: ["crt1.o", "libhost.a", app, "libc.a"],
             x64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
             arm64glibc: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"],
+            x64win: ["host.lib", app],
+            arm64win: ["host.lib", app],
         }
     }
 
 process_string_for_host : Str -> Str
-process_string_for_host = process_string
+process_string_for_host = |input| {
+    result = process_string(input)
+    result
+}
+
+Simple := [A].{
+    make : {} -> Simple
+    make = |{}| A
+}

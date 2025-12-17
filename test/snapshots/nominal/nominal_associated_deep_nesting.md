@@ -145,7 +145,7 @@ deepType = C
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "U64"))
 		(patt (type "U64"))
 		(patt (type "Foo.Level1.Level2.Level3")))
 	(type_decls
@@ -158,7 +158,7 @@ deepType = C
 		(nominal (type "Foo.Level1.Level2.Level3")
 			(ty-header (name "Foo.Level1.Level2.Level3"))))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "U64"))
 		(expr (type "U64"))
 		(expr (type "Foo.Level1.Level2.Level3"))))
 ~~~

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Numeric let-generalization inside nested block (rank > top_level)
+description=Numeric without let-generalization gives type error (only lambdas get let-generalization)
 type=expr
 ~~~
 # SOURCE
@@ -13,9 +13,22 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
-NIL
+**TYPE MISMATCH**
+The first argument being passed to this function has the wrong type:
+**numeric_let_generalize_in_block.md:4:20:4:21:**
+```roc
+    b = Dec.to_str(n)
+```
+                   ^
+
+This argument has the type:
+    _I64_
+
+But the function needs the first argument to be:
+    _Dec_
+
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -87,5 +100,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~
