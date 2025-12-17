@@ -1276,10 +1276,25 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     }
 
     // Convert paths to Windows wide strings
-    const exe_path_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path);
+    const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, exe_path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } }),
+    };
 
-    const cwd = try std.fs.cwd().realpathAlloc(ctx.arena, ".");
-    const cwd_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cwd);
+    const cwd = std.fs.cwd().realpathAlloc(ctx.arena, ".") catch {
+        return ctx.fail(.{ .directory_not_found = .{
+            .path = ".",
+        } });
+    };
+    const cwd_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cwd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .directory_not_found = .{
+            .path = cwd,
+        } }),
+    };
 
     // Create command line with handle and size as arguments, plus any app arguments
     const handle_uint = @intFromPtr(shm_handle.fd);
@@ -1297,7 +1312,13 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     try cmd_builder.append(0); // null terminator for sentinel
 
     const cmd_line = cmd_builder.items[0 .. cmd_builder.items.len - 1 :0];
-    const cmd_line_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cmd_line);
+    const cmd_line_w = std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, cmd_line) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidUtf8 => return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } }),
+    };
 
     // Set up process creation structures
     var startup_info = std.mem.zeroes(windows.STARTUPINFOW);
