@@ -2818,9 +2818,24 @@ pub const Interpreter = struct {
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
-                // Get element layout
-                const elem_layout_idx = roc_list_arg.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                // Get element layout from the list's stored layout
+                const stored_elem_layout_idx = roc_list_arg.layout.data.list;
+                const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+
+                // Check if the stored element layout needs to be upgraded.
+                // This handles the case where the list was created with an unknown element type
+                // (e.g., List(List(?)) where the inner list type was inferred as list_of_zst),
+                // but we're now appending an element with a more specific layout.
+                // We should use the element's actual layout to ensure correct behavior.
+                const needs_element_layout_upgrade = stored_elem_layout.tag == .list_of_zst and
+                    elt_arg.layout.tag != .zst and elt_arg.layout.tag != .list_of_zst;
+
+                const elem_layout: Layout = if (needs_element_layout_upgrade) elt_arg.layout else stored_elem_layout;
+                const elem_layout_idx = if (needs_element_layout_upgrade)
+                    try self.runtime_layout_store.insertLayout(elt_arg.layout)
+                else
+                    stored_elem_layout_idx;
+
                 const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
                 const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
@@ -2882,7 +2897,11 @@ pub const Interpreter = struct {
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
-                const result_layout = roc_list_arg.layout; // Same layout as input
+                // If we upgraded the element layout, create a new list layout with the upgraded element
+                const result_layout: Layout = if (needs_element_layout_upgrade)
+                    Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
+                else
+                    roc_list_arg.layout; // Same layout as input
                 var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
                 out.is_initialized = false;
 

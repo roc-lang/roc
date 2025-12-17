@@ -581,3 +581,28 @@ test "roc build glibc target gives helpful error on non-Linux" {
     const suggests_musl = std.mem.indexOf(u8, result.stderr, "musl") != null;
     try testing.expect(suggests_musl);
 }
+
+test "roc test with nested list chunks does not panic on layout upgrade" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // This test verifies that nested list operations with layout upgrades
+    // (from list_of_zst to concrete list types) don't cause integer overflow panics.
+    // The expect in the test file is designed to fail, but execution should not panic.
+    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/issue8699.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed with exit code 1 (test failure, not panic)
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // 2. Stderr contains "FAIL" indicating a test failure (not a panic/crash)
+    const has_fail = std.mem.indexOf(u8, result.stderr, "FAIL") != null;
+    try testing.expect(has_fail);
+
+    // 3. Stderr should not contain "panic" or "overflow" (no crash occurred)
+    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    try testing.expect(!has_panic);
+}
