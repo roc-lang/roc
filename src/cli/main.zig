@@ -58,6 +58,7 @@ const cli_error = @import("cli_error.zig");
 
 const CliProblem = cli_error.CliProblem;
 const CliContext = cli_error.CliContext;
+const Io = cli_error.Io;
 
 comptime {
     if (builtin.is_test) {
@@ -187,14 +188,6 @@ pub const c = struct {
 // Platform-specific shared memory implementation
 const is_windows = builtin.target.os.tag == .windows;
 
-var stdout_buffer: [4096]u8 = undefined;
-var stdout_writer: std.fs.File.Writer = undefined;
-var stdout_initialized = false;
-
-var stderr_buffer: [4096]u8 = undefined;
-var stderr_writer: std.fs.File.Writer = undefined;
-var stderr_initialized = false;
-
 var windows_console_configured = false;
 var windows_console_previous_code_page: ?std.os.windows.UINT = null;
 
@@ -210,8 +203,7 @@ fn ensureWindowsConsoleSupportsAnsiAndUtf8() void {
         windows_console_previous_code_page = current_code_page;
         _ = kernel32.SetConsoleOutputCP(65001);
     }
-    _ = std.fs.File.stdout().getOrEnableAnsiEscapeSupport();
-    _ = std.fs.File.stderr().getOrEnableAnsiEscapeSupport();
+    // Note: ANSI escape support is enabled in Io.init()
 }
 
 fn restoreWindowsConsoleCodePage() void {
@@ -220,22 +212,6 @@ fn restoreWindowsConsoleCodePage() void {
         windows_console_previous_code_page = null;
         _ = std.os.windows.kernel32.SetConsoleOutputCP(code_page);
     }
-}
-
-fn stdoutWriter() *std.Io.Writer {
-    if (is_windows or !stdout_initialized) {
-        stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-        stdout_initialized = true;
-    }
-    return &stdout_writer.interface;
-}
-
-fn stderrWriter() *std.Io.Writer {
-    if (is_windows or !stderr_initialized) {
-        stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-        stderr_initialized = true;
-    }
-    return &stderr_writer.interface;
 }
 
 // POSIX shared memory functions
@@ -317,15 +293,15 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// Returns the count of errors (fatal/runtime_error severity).
 /// This is shared between rocCheck and rocRun to ensure consistent error reporting.
 fn renderTypeProblems(
-    gpa: Allocator,
+    ctx: *CliContext,
     checker: *Check,
     module_env: *ModuleEnv,
     filename: []const u8,
 ) usize {
-    const stderr = stderrWriter();
+    const stderr = ctx.io.stderr();
 
     var rb = ReportBuilder.init(
-        gpa,
+        ctx.gpa,
         module_env,
         module_env,
         &checker.snapshots,
@@ -381,7 +357,7 @@ fn renderTypeProblems(
     }
 
     // Flush stderr to ensure all error output is visible
-    stderr_writer.interface.flush() catch {};
+    ctx.io.flush();
 
     return error_count;
 }
@@ -697,11 +673,8 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
     ensureWindowsConsoleSupportsAnsiAndUtf8();
 
-    const stdout = stdoutWriter();
-    defer stdout.flush() catch {};
-
-    const stderr = stderrWriter();
-    defer stderr.flush() catch {};
+    // Create I/O interface - this is passed to all command handlers via ctx
+    var io = Io.init();
 
     const parsed_args = try cli_args.parse(allocs.arena, args[1..]);
 
@@ -718,8 +691,9 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
-    var ctx = CliContext.init(allocs.gpa, allocs.arena, command);
-    defer ctx.deinit();
+    var ctx = CliContext.init(allocs.gpa, allocs.arena, &io, command);
+    ctx.initIo(); // Must be called after ctx is at its final stack location
+    defer ctx.deinit(); // deinit flushes I/O
 
     try switch (parsed_args) {
         .run => |run_args| {
@@ -727,24 +701,24 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
                 std.fs.cwd().access(run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
                         const cwd_path = std.fs.cwd().realpathAlloc(allocs.arena, ".") catch |real_err| {
-                            stderr.print(
+                            ctx.io.stderr().print(
                                 "Error: No app file specified and default 'main.roc' was not found. Additionally, the current directory could not be resolved: {}\n",
                                 .{real_err},
                             ) catch {};
                             return error.FileNotFound;
                         };
-                        stderr.print(
+                        ctx.io.stderr().print(
                             "Error: No app file specified and default 'main.roc' was not found in {s}\n",
                             .{cwd_path},
                         ) catch {};
-                        stderr.print(
+                        ctx.io.stderr().print(
                             "\nHint: pass an explicit path (e.g. `roc my-app.roc`) or create a 'main.roc' in that directory.\n",
                             .{},
                         ) catch {};
                         return error.FileNotFound;
                     },
                     else => {
-                        stderr.print(
+                        ctx.io.stderr().print(
                             "Error: Unable to access default 'main.roc': {}\n",
                             .{err},
                         ) catch {};
@@ -772,7 +746,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args),
         .repl => rocRepl(&ctx),
-        .version => stdout.print("Roc compiler version {s}\n", .{build_options.compiler_version}),
+        .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
             .transport = lsp_args.debug_io,
@@ -781,16 +755,16 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
             .server = lsp_args.debug_server,
         }),
         .help => |help_message| {
-            try stdout.writeAll(help_message);
+            try ctx.io.stdout().writeAll(help_message);
         },
         .licenses => {
-            try stdout.writeAll(legalDetailsFileContent);
+            try ctx.io.stdout().writeAll(legalDetailsFileContent);
         },
         .problem => |problem| {
             try switch (problem) {
-                .missing_flag_value => |details| stderr.print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| stderr.print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| stderr.print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
+                .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
+                .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
+                .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
             };
             return error.InvalidArguments;
         },
@@ -798,7 +772,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
 
     // Render any problems accumulated during command execution
     if (ctx.hasProblems()) {
-        try ctx.renderProblemsTo(stderr);
+        try ctx.renderProblemsTo(ctx.io.stderr());
         if (ctx.hasErrors()) {
             return error.CliError;
         }
@@ -996,11 +970,10 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
             // Check if this is a static_lib-only platform (no exe targets)
             if (validation.config.exe.len == 0 and validation.config.static_lib.len > 0) {
-                const stderr = stderrWriter();
-                stderr.print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
-                stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
-                stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
-                stderr.print("the library artifact.\n", .{}) catch {};
+                ctx.io.stderr().print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
+                ctx.io.stderr().print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
+                ctx.io.stderr().print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+                ctx.io.stderr().print("the library artifact.\n", .{}) catch {};
                 return error.UnsupportedTarget;
             }
 
@@ -1015,7 +988,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                             .exe,
                             validation.config,
                         );
-                        _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+                        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                         return error.UnsupportedTarget;
                     },
                     else => {},
@@ -1027,10 +1000,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         } else |err| {
             switch (err) {
                 error.MissingTargetsSection => {
-                    const stderr = stderrWriter();
-                    stderr.print("Error: Platform is missing a targets section.\n\n", .{}) catch {};
-                    stderr.print("All platforms must have a 'targets:' section in their header\n", .{}) catch {};
-                    stderr.print("that specifies which targets are supported and what files to link.\n", .{}) catch {};
+                    ctx.io.stderr().print("Error: Platform is missing a targets section.\n\n", .{}) catch {};
+                    ctx.io.stderr().print("All platforms must have a 'targets:' section in their header\n", .{}) catch {};
+                    ctx.io.stderr().print("that specifies which targets are supported and what files to link.\n", .{}) catch {};
                     return error.PlatformNotSupported;
                 },
                 else => {
@@ -1042,10 +1014,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     // All platforms must have a targets section with a link spec for the native target
     const validated_link_spec = link_spec orelse {
-        const stderr = stderrWriter();
-        stderr.print("Error: Platform does not support the native target.\n\n", .{}) catch {};
-        stderr.print("The platform's targets section must specify files to link for\n", .{}) catch {};
-        stderr.print("the current system. Check the platform header for supported targets.\n", .{}) catch {};
+        ctx.io.stderr().print("Error: Platform does not support the native target.\n\n", .{}) catch {};
+        ctx.io.stderr().print("The platform's targets section must specify files to link for\n", .{}) catch {};
+        ctx.io.stderr().print("the current system. Check the platform header for supported targets.\n", .{}) catch {};
         return error.PlatformNotSupported;
     };
 
@@ -1390,12 +1361,12 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -1509,7 +1480,7 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = signal },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(signal)));
         },
@@ -1822,7 +1793,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                 .err = err,
             } },
         };
-        cli_error.renderProblem(ctx.gpa, stderrWriter(), problem);
+        cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), problem);
         return error.FileNotFound;
     };
     defer app_file.close();
@@ -1844,8 +1815,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     var app_parse_ast = try parse.parse(&app_env.common, ctx.gpa);
     defer app_parse_ast.deinit(ctx.gpa);
     if (app_parse_ast.hasErrors()) {
-        const stderr = stderrWriter();
-        defer stderr.flush() catch {};
+        const stderr = ctx.io.stderr();
         for (app_parse_ast.tokenize_diagnostics.items) |diagnostic| {
             error_count += 1;
             var report = app_parse_ast.tokenizeDiagnosticToReport(diagnostic, ctx.gpa, roc_file_path) catch continue;
@@ -1967,7 +1937,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         const result = platform_validation.targets_validator.ValidationResult{
             .no_platform_found = .{ .app_path = roc_file_path },
         };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.NoPlatformFound;
     };
     const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
@@ -2033,7 +2003,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
     error_count += if (!builtin.is_test)
-        renderTypeProblems(ctx.gpa, &app_checker, &app_env, roc_file_path)
+        renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path)
     else
         0;
 
@@ -2125,8 +2095,7 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
 
             // Render to stderr
             if (!builtin.is_test) {
-                const stderr = stderrWriter();
-                reporting.renderReportToTerminal(&report, stderr, .ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                reporting.renderReportToTerminal(&report, ctx.io.stderr(), .ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
             }
             return false;
         },
@@ -2839,7 +2808,7 @@ pub const PlatformPaths = struct {
 
 /// Resolve platform specification from a Roc file to find both host library and platform source.
 /// Returns PlatformPaths with arena-allocated paths (no need to free).
-pub fn resolvePlatformPaths(ctx: *CliContext, allocs: *Allocators, roc_file_path: []const u8) cli_error.CliError!PlatformPaths {
+pub fn resolvePlatformPaths(ctx: *CliContext, roc_file_path: []const u8) cli_error.CliError!PlatformPaths {
     // Use the parser to extract the platform spec
     const platform_spec = extractPlatformSpecFromApp(ctx, roc_file_path) catch {
         return ctx.fail(.{ .file_not_found = .{
@@ -2848,7 +2817,7 @@ pub fn resolvePlatformPaths(ctx: *CliContext, allocs: *Allocators, roc_file_path
         } });
     };
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    return resolvePlatformSpecToPaths(ctx, allocs, platform_spec, app_dir);
+    return resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
 }
 
 /// Extract platform specification from app file header by parsing it properly.
@@ -3284,8 +3253,8 @@ fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []c
 
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
-    const stdout = stdoutWriter();
-    const stderr = stderrWriter();
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
 
     // Start timing
     const start_time = std.time.nanoTimestamp();
@@ -3485,8 +3454,8 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
 }
 
 fn rocUnbundle(ctx: *CliContext, args: cli_args.UnbundleArgs) !void {
-    const stdout = stdoutWriter();
-    const stderr = stderrWriter();
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
     const cwd = std.fs.cwd();
 
     var had_errors = false;
@@ -3649,11 +3618,11 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                     const result = platform_validation.ValidationResult{
                         .missing_targets_section = .{ .platform_path = ps },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetsSection;
                 },
                 else => {
-                    cli_error.renderProblem(ctx.gpa, stderrWriter(), .{
+                    cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), .{
                         .platform_validation_failed = .{
                             .message = "Failed to validate platform header",
                         },
@@ -3663,7 +3632,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             }
         }
     else {
-        cli_error.renderProblem(ctx.gpa, stderrWriter(), .{
+        cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), .{
             .no_platform_found = .{ .app_path = args.path },
         });
         return error.NoPlatformSource;
@@ -3679,7 +3648,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.InvalidTarget;
         };
 
@@ -3697,7 +3666,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .exe, // Show exe as the expected type for error message
                 targets_config,
             );
-            _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+            _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
             return error.UnsupportedTarget;
         };
 
@@ -3705,7 +3674,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     } else blk: {
         // No --target provided: find the first compatible target across all link types
         const compatible = targets_config.getFirstCompatibleTarget() orelse {
-            cli_error.renderProblem(ctx.gpa, stderrWriter(), .{
+            cli_error.renderProblem(ctx.gpa, ctx.io.stderr(), .{
                 .platform_validation_failed = .{
                     .message = "No compatible target found. The platform does not support any target compatible with this system.",
                 },
@@ -3792,7 +3761,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                 .host_os = @tagName(host_os),
             },
         };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
         return error.UnsupportedCrossCompilation;
     }
 
@@ -3828,7 +3797,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
                             .expected_full_path = full_path,
                         },
                     };
-                    _ = platform_validation.renderValidationError(ctx.gpa, result, stderrWriter());
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
                     return error.MissingTargetFile;
                 };
 
@@ -3940,11 +3909,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Start timing
     const start_time = std.time.nanoTimestamp();
 
-    const stdout = stdoutWriter();
-    defer stdout.flush() catch {};
-
-    const stderr = stderrWriter();
-    defer stderr.flush() catch {};
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
 
     // Read the Roc file
     const source = std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch |err| {
@@ -4174,10 +4140,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(_: *CliContext) !void {
-    const stderr = stderrWriter();
-    defer stderr.flush() catch {};
-    stderr.print("repl not implemented\n", .{}) catch {};
+fn rocRepl(ctx: *CliContext) !void {
+    ctx.io.stderr().print("repl not implemented\n", .{}) catch {};
     return error.NotImplemented;
 }
 
@@ -4187,7 +4151,7 @@ fn rocFormat(ctx: *CliContext, args: cli_args.FormatArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = stdoutWriter();
+    const stdout = ctx.io.stdout();
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa) catch |err| return err;
         return;
@@ -4593,8 +4557,8 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = stdoutWriter();
-    const stderr = stderrWriter();
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
 
     var timer = try std.time.Timer.start();
 
@@ -4655,7 +4619,7 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         }
 
         // Flush stderr to ensure all error output is visible
-        stderr_writer.interface.flush() catch {};
+        ctx.io.flush();
 
         if (check_result.error_count > 0 or check_result.warning_count > 0) {
             stderr.writeAll("\n") catch {};
@@ -4667,13 +4631,13 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
             stderr.print(" for {s}.\n", .{args.path}) catch {};
 
             // Flush before exit
-            stderr_writer.interface.flush() catch {};
+            ctx.io.flush();
             return error.CheckFailed;
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
             stdout.print(" for {s}\n", .{args.path}) catch {};
-            stdout_writer.interface.flush() catch {};
+            ctx.io.flush();
         }
     }
 
@@ -4706,7 +4670,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
 
 /// Start an HTTP server to serve the generated documentation
 fn serveDocumentation(ctx: *CliContext, docs_dir: []const u8) !void {
-    const stdout = stdoutWriter();
+    const stdout = ctx.io.stdout();
 
     const address = try std.net.Address.parseIp("127.0.0.1", 8080);
     var server = try address.listen(.{
@@ -4850,8 +4814,8 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const stdout = stdoutWriter();
-    const stderr = stderrWriter();
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
 
     var timer = try std.time.Timer.start();
 

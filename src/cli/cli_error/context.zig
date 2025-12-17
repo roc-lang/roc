@@ -22,14 +22,16 @@
 //!   }
 //!
 //!   // At top level:
-//!   var ctx = CliContext.init(gpa, arena, .build);
+//!   var io = Io.init();
+//!   var ctx = CliContext.init(gpa, arena, &io, .build);
+//!   ctx.initIo();  // Initialize I/O writers after ctx is at its final location
 //!   defer ctx.deinit();
 //!
 //!   doSomething(&ctx, "app.roc") catch |err| switch (err) {
 //!       error.CliError => {}, // Problems already recorded
 //!   };
 //!
-//!   try ctx.renderProblemsTo(stderr_writer);
+//!   try ctx.renderProblemsTo(ctx.io.stderr());
 //!   return ctx.exitCode();
 
 const std = @import("std");
@@ -42,6 +44,60 @@ const Report = reporting.Report;
 const Severity = reporting.Severity;
 const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
+
+/// I/O interface for CLI operations.
+/// Wraps stdout/stderr with buffered writers. When Zig's std.Io interface
+/// becomes available, this struct will be replaced with std.Io.
+pub const Io = struct {
+    stdout_writer: std.fs.File.Writer,
+    stderr_writer: std.fs.File.Writer,
+    stdout_buffer: [4096]u8,
+    stderr_buffer: [4096]u8,
+
+    const Self = @This();
+
+    /// Create an uninitialized Io struct.
+    /// MUST call initWriters() after placing the struct at its final location.
+    pub fn init() Self {
+        return Self{
+            .stdout_writer = undefined,
+            .stderr_writer = undefined,
+            .stdout_buffer = undefined,
+            .stderr_buffer = undefined,
+        };
+    }
+
+    /// Initialize the writers after the struct is at its final memory location.
+    /// This MUST be called before using stdout() or stderr().
+    /// Also enables ANSI escape sequences for colored output.
+    pub fn initWriters(self: *Self) void {
+        const stdout_file = std.fs.File.stdout();
+        const stderr_file = std.fs.File.stderr();
+
+        // Enable ANSI escape sequences for colored output (needed on Windows)
+        _ = stdout_file.getOrEnableAnsiEscapeSupport();
+        _ = stderr_file.getOrEnableAnsiEscapeSupport();
+
+        self.stdout_writer = stdout_file.writer(&self.stdout_buffer);
+        self.stderr_writer = stderr_file.writer(&self.stderr_buffer);
+    }
+
+    /// Get the stdout writer interface
+    pub fn stdout(self: *Self) *std.Io.Writer {
+        return &self.stdout_writer.interface;
+    }
+
+    /// Get the stderr writer interface
+    pub fn stderr(self: *Self) *std.Io.Writer {
+        return &self.stderr_writer.interface;
+    }
+
+    /// Flush both stdout and stderr buffers
+    pub fn flush(self: *Self) void {
+        self.stdout_writer.interface.flush() catch {};
+        self.stderr_writer.interface.flush() catch {};
+    }
+};
 
 /// The single error type for CLI operations.
 /// When a function returns this error, it means a problem has been recorded
@@ -80,12 +136,14 @@ pub const Command = enum {
 };
 
 /// Shared context for CLI operations.
-/// Contains allocators and accumulated problems.
+/// Contains allocators, I/O, and accumulated problems.
 pub const CliContext = struct {
     /// General purpose allocator for long-lived allocations
     gpa: Allocator,
     /// Arena allocator for temporary/scoped allocations
     arena: Allocator,
+    /// I/O interface for stdout/stderr
+    io: *Io,
     /// Accumulated problems during CLI operations
     problems: std.ArrayList(CliProblem),
     /// The CLI command being executed
@@ -96,18 +154,27 @@ pub const CliContext = struct {
     const Self = @This();
 
     /// Initialize a new CLI context.
-    pub fn init(gpa: Allocator, arena: Allocator, command: Command) Self {
+    /// After init, call initIo() once the context is at its final memory location.
+    pub fn init(gpa: Allocator, arena: Allocator, io: *Io, command: Command) Self {
         return .{
             .gpa = gpa,
             .arena = arena,
+            .io = io,
             .problems = std.ArrayList(CliProblem).empty,
             .command = command,
             .exit_code = 0,
         };
     }
 
-    /// Clean up resources
+    /// Initialize the I/O writers. Must be called after the context is at its
+    /// final memory location (i.e., after init() returns and the result is stored).
+    pub fn initIo(self: *Self) void {
+        self.io.initWriters();
+    }
+
+    /// Clean up resources and flush I/O
     pub fn deinit(self: *Self) void {
+        self.io.flush();
         self.problems.deinit(self.gpa);
     }
 
@@ -230,15 +297,15 @@ pub const CliErrorContext = CliContext;
 /// Convenience function for simple error cases.
 pub fn reportSingleProblem(
     allocator: Allocator,
-    writer: anytype,
+    io: *Io,
     command: Command,
     problem: CliProblem,
 ) u8 {
-    var ctx = CliContext.init(allocator, allocator, command);
+    var ctx = CliContext.init(allocator, allocator, io, command);
     defer ctx.deinit();
 
     ctx.addProblemIgnoreError(problem);
-    ctx.renderProblemsTo(writer) catch {};
+    ctx.renderProblemsTo(io.stderr()) catch {};
 
     return ctx.exitCode();
 }
@@ -261,8 +328,10 @@ pub fn renderProblem(
 
 test "CliContext accumulates problems" {
     const allocator = std.testing.allocator;
+    var io = Io.init();
 
-    var ctx = CliContext.init(allocator, allocator, .build);
+    var ctx = CliContext.init(allocator, allocator, &io, .build);
+    ctx.initIo();
     defer ctx.deinit();
 
     try std.testing.expect(!ctx.hasProblems());
@@ -279,8 +348,10 @@ test "CliContext accumulates problems" {
 
 test "CliContext counts errors vs warnings correctly" {
     const allocator = std.testing.allocator;
+    var io = Io.init();
 
-    var ctx = CliContext.init(allocator, allocator, .build);
+    var ctx = CliContext.init(allocator, allocator, &io, .build);
+    ctx.initIo();
     defer ctx.deinit();
 
     try ctx.addProblem(.{ .file_not_found = .{ .path = "a.roc" } }); // fatal
@@ -292,8 +363,10 @@ test "CliContext counts errors vs warnings correctly" {
 
 test "CliContext clear resets state" {
     const allocator = std.testing.allocator;
+    var io = Io.init();
 
-    var ctx = CliContext.init(allocator, allocator, .build);
+    var ctx = CliContext.init(allocator, allocator, &io, .build);
+    ctx.initIo();
     defer ctx.deinit();
 
     try ctx.addProblem(.{ .file_not_found = .{ .path = "app.roc" } });

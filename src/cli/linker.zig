@@ -10,7 +10,9 @@ const base = @import("base");
 const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
 const RocTarget = @import("roc_target").RocTarget;
-const CliContext = @import("cli_error/context.zig").CliContext;
+const cli_ctx = @import("cli_error/context.zig");
+const CliContext = cli_ctx.CliContext;
+const Io = cli_ctx.Io;
 
 /// External C functions from zig_llvm.cpp - only available when LLVM is enabled
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -472,7 +474,9 @@ test "target format detection" {
 
 test "link error when LLVM not available" {
     if (comptime !llvm_available) {
-        var ctx = CliContext.init(std.testing.allocator, std.testing.allocator, .build);
+        var io = Io.init();
+        var ctx = CliContext.init(std.testing.allocator, std.testing.allocator, &io, .build);
+        ctx.initIo();
         defer ctx.deinit();
 
         const config = LinkConfig{

@@ -10,7 +10,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const Allocators = base.Allocators;
-const CliContext = @import("cli_error/context.zig").CliContext;
+const cli_ctx = @import("cli_error/context.zig");
+const CliContext = cli_ctx.CliContext;
+const Io = cli_ctx.Io;
 const fs = std.fs;
 const process = std.process;
 
@@ -309,7 +311,12 @@ test "libc detection integration test" {
     // This test is not relevant on Windows (`uname` not available)
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var ctx = CliContext.init(std.testing.allocator, std.testing.allocator, .build);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var io = Io.init();
+    var ctx = CliContext.init(std.testing.allocator, arena.allocator(), &io, .build);
+    ctx.initIo();
     defer ctx.deinit();
 
     const libc_info = findLibc(&ctx) catch |err| switch (err) {

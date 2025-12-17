@@ -9,7 +9,8 @@
 //! - The type system enforces proper error handling
 //!
 //! This module exports:
-//! - `CliContext`: Shared context with allocators, writers, and error accumulation
+//! - `CliContext`: Shared context with allocators, I/O, and error accumulation
+//! - `Io`: I/O interface wrapping stdout/stderr with buffered writers
 //! - `CliError`: The single error type for CLI operations
 //! - `CliProblem`: Union type representing all CLI error conditions
 //! - `FileContext`: Context enum for file operation errors
@@ -28,14 +29,16 @@
 //! }
 //!
 //! // At top level:
-//! var ctx = cli.CliContext.init(gpa, arena, .build);
+//! var io = cli.Io.init();
+//! var ctx = cli.CliContext.init(gpa, arena, &io, .build);
+//! ctx.initIo();  // Initialize I/O writers after ctx is at its final location
 //! defer ctx.deinit();
 //!
 //! doSomething(&ctx, "app.roc") catch |err| switch (err) {
 //!     error.CliError => {}, // Problems already recorded
 //! };
 //!
-//! try ctx.renderProblems();
+//! try ctx.renderProblemsTo(ctx.io.stderr());
 //! return ctx.exitCode();
 //! ```
 
@@ -47,6 +50,7 @@ pub const CliError = context.CliError;
 
 // Re-export main types - CliContext is the primary type
 pub const CliContext = context.CliContext;
+pub const Io = context.Io;
 pub const CliProblem = problem.CliProblem;
 pub const FileContext = problem.FileContext;
 pub const Command = context.Command;

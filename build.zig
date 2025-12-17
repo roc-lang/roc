@@ -616,6 +616,143 @@ const CheckUnusedSuppressionStep = struct {
     }
 };
 
+/// Build step that checks for global stdio usage in CLI code.
+///
+/// The CLI code uses a context-based I/O pattern where stdout/stderr are accessed
+/// through `ctx.io.stdout()` and `ctx.io.stderr()`. This prepares for Zig's upcoming
+/// I/O interface changes where I/O is passed through functions (like Allocator).
+///
+/// This step enforces that pattern by failing the build if direct global stdio
+/// access is found in src/cli/main.zig.
+const CheckCliGlobalStdioStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckCliGlobalStdioStep {
+        const self = b.allocator.create(CheckCliGlobalStdioStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-cli-global-stdio",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Only scan src/cli/main.zig
+        const file_path = "src/cli/main.zig";
+        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+            return step.fail("Failed to open {s}: {}", .{ file_path, err });
+        };
+        defer file.close();
+
+        const content = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch |err| {
+            return step.fail("Failed to read {s}: {}", .{ file_path, err });
+        };
+        defer allocator.free(content);
+
+        var line_number: usize = 1;
+        var line_start: usize = 0;
+
+        for (content, 0..) |char, i| {
+            if (char == '\n') {
+                const line = content[line_start..i];
+                const trimmed = std.mem.trim(u8, line, " \t");
+
+                // Check for forbidden patterns that indicate global stdio usage
+                // These patterns bypass ctx.io and use global state
+                const forbidden_patterns = [_][]const u8{
+                    "std.io.getStdOut()",
+                    "std.io.getStdErr()",
+                    "std.fs.File.stdout()",
+                    "std.fs.File.stderr()",
+                };
+
+                for (forbidden_patterns) |pattern| {
+                    if (std.mem.indexOf(u8, trimmed, pattern) != null) {
+                        try violations.append(allocator, .{
+                            .file_path = file_path,
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                            .pattern = pattern,
+                        });
+                    }
+                }
+
+                line_number += 1;
+                line_start = i + 1;
+            }
+        }
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("GLOBAL STDIO USAGE DETECTED IN CLI\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\In the CLI code, we use context-based I/O, not global stdio functions.
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  1. TESTABILITY: Context-based I/O allows tests to inject mock writers
+                \\     to capture and verify output.
+                \\
+                \\  2. FUTURE COMPATIBILITY: Zig's upcoming I/O interface will pass I/O
+                \\     through functions (like Allocator). Using ctx.io prepares us for this.
+                \\
+                \\  3. CONSISTENCY: All CLI functions receive ctx which contains allocators
+                \\     and I/O. This provides a uniform interface for resources.
+                \\
+                \\WHAT TO DO INSTEAD:
+                \\  Access stdout/stderr through the CliContext:
+                \\
+                \\  Example - WRONG:
+                \\    const stdout = std.io.getStdOut().writer();
+                \\    const stderr = std.fs.File.stderr().writer();
+                \\
+                \\  Example - RIGHT:
+                \\    const stdout = ctx.io.stdout();
+                \\    const stderr = ctx.io.stderr();
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: found `{s}` in: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.pattern,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} global stdio usage(s) in CLI code. " ++
+                    "Use ctx.io.stdout() and ctx.io.stderr() instead.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+        pattern: []const u8,
+    };
+};
+
 fn checkFxPlatformTestCoverage(step: *Step) !void {
     const b = step.owner;
     std.debug.print("---- checking fx platform test coverage ----\n", .{});
@@ -1785,6 +1922,10 @@ pub fn build(b: *std.Build) void {
     // Add check for unused variable suppression patterns
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
+
+    // Add check for global stdio usage in CLI code
+    const check_cli_stdio = CheckCliGlobalStdioStep.create(b);
+    test_step.dependOn(&check_cli_stdio.step);
 
     test_step.dependOn(&tests_summary.step);
 
