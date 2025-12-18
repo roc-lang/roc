@@ -1159,6 +1159,10 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 ///
 /// The `platform_to_app_idents` map translates platform ident indices to app ident indices,
 /// built by the caller to avoid string lookups during type checking.
+///
+/// TODO: There are some non-type errors that this function produces (like
+/// if the required alias or definition) are not found These errors could be
+/// reporter in czer.
 pub fn checkPlatformRequirements(
     self: *Self,
     platform_env: *const ModuleEnv,
@@ -1259,16 +1263,56 @@ pub fn checkPlatformRequirements(
             // This substitutes concrete app types for platform rigid type variables.
             for (type_aliases_slice) |alias| {
                 // Translate the platform's alias name to the app's namespace
-                const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse continue;
+                const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse {
+                    const expected_alias_ident = try self.cir.insertIdent(
+                        Ident.for_text(platform_env.getIdentText(alias.alias_name)),
+                    );
+                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                        .expected_alias_ident = expected_alias_ident,
+                        .ctx = .not_found,
+                    } });
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
 
                 // Look up the rigid var we stored earlier.
                 // rigid_vars is keyed by the APP's ident index (the rigid name was translated when copied),
                 // so we translate the platform's rigid_name to the app's ident space using the pre-built map.
-                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
-                const rigid_var = self.cir.rigid_vars.get(app_rigid_name) orelse continue;
+                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Expected to find platform alias rigid var ident {s} in module", .{
+                            platform_env.getIdentText(alias.rigid_name),
+                        });
+                    }
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
+                const rigid_var = self.cir.rigid_vars.get(app_rigid_name) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Expected to find rigid var in map {s} in instantiate platform required type", .{
+                            platform_env.getIdentText(alias.rigid_name),
+                        });
+                    }
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
 
                 // Look up the app's type alias's (eg Model) body (the underlying type, not the alias wrapper)
-                const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse continue;
+                const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse {
+                    const expected_alias_ident = try self.cir.insertIdent(
+                        Ident.for_text(platform_env.getIdentText(alias.alias_name)),
+                    );
+                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                        .expected_alias_ident = expected_alias_ident,
+                        .ctx = .found_but_not_alias,
+                    } });
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
 
                 // Now unify the (now-flex) var with the app's type alias body.
                 // This properly handles rank propagation (unlike dangerousSetVarRedirect).
@@ -1280,6 +1324,46 @@ pub fn checkPlatformRequirements(
             // to match the platform's expected types. After this, the fresh vars
             // stored in rigid_vars will redirect to the concrete app types.
             _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+        } else {
+            // If we got here, it means that the the definition was not found in
+            // the module's *export* list
+            const expected_def_ident = try self.cir.insertIdent(
+                Ident.for_text(platform_env.getIdentText(required_type.ident)),
+            );
+            _ = try self.problems.appendProblem(self.gpa, .{
+                .platform_def_not_found = .{
+                    .expected_def_ident = expected_def_ident,
+                    .ctx = blk: {
+                        // We know the def is not exported, but here we check
+                        // if it's defined *but not exported* in the module so
+                        // we can show a nicer error message
+
+                        var found_def: ?CIR.Def.Idx = null;
+
+                        // Check all defs in the module
+                        const app_defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
+                        for (app_defs_slice) |def_idx| {
+                            const def = self.cir.store.getDef(def_idx);
+                            const pattern = self.cir.store.getPattern(def.pattern);
+
+                            if (pattern == .assign) {
+                                // Compare ident indices - if app_required_ident is null, there's no match
+                                if (app_required_ident != null and pattern.assign.ident == app_required_ident.?) {
+                                    found_def = def_idx;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Break with more specific context
+                        if (found_def == null) {
+                            break :blk .not_found;
+                        } else {
+                            break :blk .found_but_not_exported;
+                        }
+                    },
+                },
+            });
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }
