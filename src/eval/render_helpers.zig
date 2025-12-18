@@ -373,6 +373,55 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                     }
                     return out.toOwnedSlice();
                 }
+            } else if (value.layout.tag == .list) {
+                const elem_type = blk: {
+                    const list_resolved = ctx.runtime_types.resolveVar(value.rt_var);
+                    if (list_resolved.desc.content == .structure) {
+                        if (list_resolved.desc.content.structure == .nominal_type) {
+                            const list_nom = list_resolved.desc.content.structure.nominal_type;
+                            const list_args = ctx.runtime_types.sliceNominalArgs(list_nom);
+                            if (list_args.len > 0) {
+                                // List(elem) - the first type arg is the element type
+                                break :blk list_args[0];
+                            }
+                        }
+                    }
+                    // Fallback: couldn't extract element type, will render without type info
+                    break :blk null;
+                };
+
+                if (elem_type == null) {
+                    // Couldn't extract element type, fall through to layout-only rendering
+                } else {
+                    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                    errdefer out.deinit();
+                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(value.ptr.?));
+                    const len = roc_list.len();
+                    try out.append('[');
+                    if (len > 0) {
+                        const elem_layout_idx = value.layout.data.list;
+                        const elem_layout = ctx.layout_store.getLayout(elem_layout_idx);
+                        const elem_size = ctx.layout_store.layoutSize(elem_layout);
+                        var i: usize = 0;
+                        while (i < len) : (i += 1) {
+                            if (roc_list.bytes) |bytes| {
+                                const elem_ptr: *anyopaque = @ptrCast(bytes + i * elem_size);
+                                const elem_val = StackValue{
+                                    .layout = elem_layout,
+                                    .ptr = elem_ptr,
+                                    .is_initialized = true,
+                                    .rt_var = elem_type.?,
+                                };
+                                const rendered = try renderValueRocWithType(ctx, elem_val, elem_type.?);
+                                defer gpa.free(rendered);
+                                try out.appendSlice(rendered);
+                                if (i + 1 < len) try out.appendSlice(", ");
+                            }
+                        }
+                    }
+                    try out.append(']');
+                    return out.toOwnedSlice();
+                }
             }
         },
         .nominal_type => |nominal| {
