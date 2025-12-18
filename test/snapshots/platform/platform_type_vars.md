@@ -134,7 +134,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ init: a, render: a -> I64, update: a, I64 -> a }")))
+		(patt (type "{ init: model, render: model -> I64, update: model, I64 -> model }")))
 	(expressions
-		(expr (type "{ init: a, render: a -> I64, update: a, I64 -> a }"))))
+		(expr (type "{ init: model, render: model -> I64, update: model, I64 -> model }"))))
 ~~~
