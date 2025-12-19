@@ -347,10 +347,6 @@ test "roundtrip: complex arithmetic produces same result" {
     try testing.expectEqual(@as(i128, 16), emitted_result);
 }
 
-// ============================================================================
-// Slice 2: Closure Transformation Tests
-// ============================================================================
-
 /// Helper to check if source code contains a closure with captures
 fn hasClosureWithCaptures(allocator: std.mem.Allocator, source: []const u8) !bool {
     const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
@@ -568,10 +564,6 @@ test "transform closure with multiple captures" {
     // The call should have been transformed to a match expression
     try testing.expect(std.mem.indexOf(u8, output, "match") != null);
 }
-
-// ============================================================================
-// Slice 2: Roundtrip Verification Tests
-// ============================================================================
 
 test "roundtrip: closure with single capture produces same result" {
     const source =
