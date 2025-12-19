@@ -538,6 +538,9 @@ test "transform closure with single capture to tag" {
     // The capture 'x' should appear in the tag's record argument
     try testing.expect(std.mem.indexOf(u8, output, "x:") != null or
         std.mem.indexOf(u8, output, "{x") != null);
+
+    // The call should have been transformed to a match expression
+    try testing.expect(std.mem.indexOf(u8, output, "match") != null);
 }
 
 test "transform closure with multiple captures" {

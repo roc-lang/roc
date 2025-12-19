@@ -78,6 +78,9 @@ closure_counter: u32,
 /// Map from original closure expression to its transformation info
 closures: std.AutoHashMap(Expr.Idx, ClosureInfo),
 
+/// Map from pattern index to closure info (for tracking which variables hold closures)
+pattern_closures: std.AutoHashMap(CIR.Pattern.Idx, ClosureInfo),
+
 /// List of dispatch functions to generate
 dispatch_functions: std.ArrayList(DispatchFunction),
 
@@ -88,6 +91,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .module_env = module_env,
         .closure_counter = 0,
         .closures = std.AutoHashMap(Expr.Idx, ClosureInfo).init(allocator),
+        .pattern_closures = std.AutoHashMap(CIR.Pattern.Idx, ClosureInfo).init(allocator),
         .dispatch_functions = std.ArrayList(DispatchFunction).empty,
     };
 }
@@ -100,6 +104,9 @@ pub fn deinit(self: *Self) void {
         info.capture_names.deinit(self.allocator);
     }
     self.closures.deinit();
+
+    // pattern_closures shares ClosureInfo with closures, don't double-free
+    self.pattern_closures.deinit();
 
     // Free dispatch function closure lists
     for (self.dispatch_functions.items) |*df| {
@@ -132,6 +139,145 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
     );
     defer self.allocator.free(tag_name);
     return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
+}
+
+/// Generate a dispatch match expression for a closure call.
+///
+/// Transforms a call like `f(10)` where `f` is a closure into:
+/// ```roc
+/// match f {
+///     `f({ x }) => {
+///         y = 10      # Bind call arguments to lambda parameters
+///         x + y       # Original lambda body
+///     }
+/// }
+/// ```
+fn generateDispatchMatch(
+    self: *Self,
+    closure_var_expr: Expr.Idx,
+    closure_info: ClosureInfo,
+    call_args: []const Expr.Idx,
+) !Expr.Idx {
+    // Step 1: Create the capture record destructure pattern
+    // For `{ x, y }` we need a record_destructure with each field
+
+    const record_destruct_start = self.module_env.store.scratchRecordDestructTop();
+
+    for (closure_info.capture_names.items) |capture_name| {
+        // Create an assign pattern for this capture binding
+        const assign_pattern = try self.module_env.store.addPattern(
+            Pattern{ .assign = .{ .ident = capture_name } },
+            base.Region.zero(),
+        );
+
+        // Create the record destruct for this field
+        const destruct = Pattern.RecordDestruct{
+            .label = capture_name,
+            .ident = capture_name,
+            .kind = .{ .Required = assign_pattern },
+        };
+        const destruct_idx = try self.module_env.store.addRecordDestruct(destruct, base.Region.zero());
+        try self.module_env.store.addScratchRecordDestruct(destruct_idx);
+    }
+
+    const destructs_span = try self.module_env.store.recordDestructSpanFrom(record_destruct_start);
+
+    // Create the record destructure pattern
+    const record_pattern = try self.module_env.store.addPattern(
+        Pattern{ .record_destructure = .{ .destructs = destructs_span } },
+        base.Region.zero(),
+    );
+
+    // Step 2: Create the applied_tag pattern: `f({ x, y })
+    // The tag pattern takes the record pattern as its single argument
+    const pattern_args_start = self.module_env.store.scratchPatternTop();
+    try self.module_env.store.addScratchPattern(record_pattern);
+    const pattern_args_span = try self.module_env.store.patternSpanFrom(pattern_args_start);
+
+    const tag_pattern = try self.module_env.store.addPattern(
+        Pattern{ .applied_tag = .{
+            .name = closure_info.tag_name,
+            .args = pattern_args_span,
+        } },
+        base.Region.zero(),
+    );
+
+    // Step 3: Create the body - a block that binds arguments then executes lambda body
+    // We need to bind each call argument to the corresponding lambda parameter
+
+    const lambda_params = self.module_env.store.slicePatterns(closure_info.lambda_args);
+
+    // If we have arguments to bind, create a block with let bindings
+    const body_expr = if (call_args.len > 0 and lambda_params.len > 0) blk: {
+        const stmt_start = self.module_env.store.scratch.?.statements.top();
+
+        // Bind each argument to its parameter
+        const num_args = @min(call_args.len, lambda_params.len);
+        for (0..num_args) |i| {
+            const param_pattern = lambda_params[i];
+            const arg_expr = call_args[i];
+
+            const stmt = CIR.Statement{ .s_decl = .{
+                .pattern = param_pattern,
+                .expr = arg_expr,
+                .anno = null,
+            } };
+            const stmt_idx = try self.module_env.store.addStatement(stmt, base.Region.zero());
+            try self.module_env.store.scratch.?.statements.append(stmt_idx);
+        }
+
+        const stmts_span = try self.module_env.store.statementSpanFrom(stmt_start);
+
+        // Create block with bindings and lambda body as final expression
+        break :blk try self.module_env.store.addExpr(Expr{
+            .e_block = .{
+                .stmts = stmts_span,
+                .final_expr = closure_info.lambda_body,
+            },
+        }, base.Region.zero());
+    } else blk: {
+        // No arguments, just use the lambda body directly
+        break :blk closure_info.lambda_body;
+    };
+
+    // Step 4: Create the match branch
+    const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
+    const branch_pattern = try self.module_env.store.addMatchBranchPattern(
+        Expr.Match.BranchPattern{
+            .pattern = tag_pattern,
+            .degenerate = false,
+        },
+        base.Region.zero(),
+    );
+    try self.module_env.store.addScratchMatchBranchPattern(branch_pattern);
+    const branch_patterns_span = try self.module_env.store.matchBranchPatternSpanFrom(branch_pattern_start);
+
+    // Create a fresh type variable for the redundant field
+    const redundant_var = try self.module_env.types.fresh();
+
+    const branch = Expr.Match.Branch{
+        .patterns = branch_patterns_span,
+        .value = body_expr,
+        .guard = null,
+        .redundant = redundant_var,
+    };
+    const branch_idx = try self.module_env.store.addMatchBranch(branch, base.Region.zero());
+
+    // Step 5: Create the match expression
+    const branch_start = self.module_env.store.scratchMatchBranchTop();
+    try self.module_env.store.addScratchMatchBranch(branch_idx);
+    const branches_span = try self.module_env.store.matchBranchSpanFrom(branch_start);
+
+    // Create a fresh type variable for exhaustiveness
+    const exhaustive_var = try self.module_env.types.fresh();
+
+    return try self.module_env.store.addExpr(Expr{
+        .e_match = .{
+            .cond = closure_var_expr,
+            .branches = branches_span,
+            .exhaustive = exhaustive_var,
+        },
+    }, base.Region.zero());
 }
 
 /// Transform a closure expression into a tag with capture record.
@@ -285,7 +431,14 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
                         // Check if this is a closure binding
                         const decl_expr = self.module_env.store.getExpr(decl.expr);
                         const new_expr = switch (decl_expr) {
-                            .e_closure, .e_lambda => try self.transformClosure(decl.expr, name_hint),
+                            .e_closure, .e_lambda => blk: {
+                                const transformed = try self.transformClosure(decl.expr, name_hint);
+                                // Track this pattern as holding a closure
+                                if (self.closures.get(decl.expr)) |closure_info| {
+                                    try self.pattern_closures.put(decl.pattern, closure_info);
+                                }
+                                break :blk transformed;
+                            },
                             else => try self.transformExpr(decl.expr),
                         };
 
@@ -309,7 +462,14 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
 
                         const decl_expr = self.module_env.store.getExpr(decl.expr);
                         const new_expr = switch (decl_expr) {
-                            .e_closure, .e_lambda => try self.transformClosure(decl.expr, name_hint),
+                            .e_closure, .e_lambda => blk: {
+                                const transformed = try self.transformClosure(decl.expr, name_hint);
+                                // Track this pattern as holding a closure
+                                if (self.closures.get(decl.expr)) |closure_info| {
+                                    try self.pattern_closures.put(decl.pattern, closure_info);
+                                }
+                                break :blk transformed;
+                            },
                             else => try self.transformExpr(decl.expr),
                         };
 
@@ -344,8 +504,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
             }, base.Region.zero());
         },
         .e_call => |call| {
-            // For now, just transform arguments recursively
-            // Full dispatch function generation will come in the next step
+            // First transform arguments recursively
             const args = self.module_env.store.sliceExpr(call.args);
             const args_start = self.module_env.store.scratch.?.exprs.top();
 
@@ -355,6 +514,26 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
             }
 
             const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
+            const transformed_args = self.module_env.store.sliceExpr(new_args_span);
+
+            // Check if the function is a local variable that holds a closure
+            const func_expr = self.module_env.store.getExpr(call.func);
+            switch (func_expr) {
+                .e_lookup_local => |lookup| {
+                    // Check if this pattern was assigned a closure
+                    if (self.pattern_closures.get(lookup.pattern_idx)) |closure_info| {
+                        // Generate a dispatch match expression
+                        return try self.generateDispatchMatch(
+                            call.func,
+                            closure_info,
+                            transformed_args,
+                        );
+                    }
+                },
+                else => {},
+            }
+
+            // Not a closure call, transform normally
             const new_func = try self.transformExpr(call.func);
 
             return try self.module_env.store.addExpr(Expr{
