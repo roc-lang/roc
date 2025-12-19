@@ -622,6 +622,55 @@ test "roundtrip: closure with multiple captures produces same result" {
     try testing.expectEqual(original_result, transformed_result);
 }
 
+test "roundtrip: pure lambda (no captures) produces same result" {
+    const source =
+        \\{
+        \\    f = |x| x + 1
+        \\    f(41)
+        \\}
+    ;
+
+    // Get original result (expected: 41 + 1 = 42)
+    const original_result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 42), original_result);
+
+    // Transform the code
+    const transformed = try transformBlockAndEmit(test_allocator, source);
+    defer test_allocator.free(transformed);
+
+    // Evaluate the transformed code - should produce the same result
+    const transformed_result = try evalToInt(test_allocator, transformed);
+
+    // Verify they match
+    try testing.expectEqual(original_result, transformed_result);
+}
+
+test "roundtrip: nested closures with captures" {
+    // A closure that returns another closure, both with captures
+    const source =
+        \\{
+        \\    x = 10
+        \\    makeAdder = |y| |z| x + y + z
+        \\    addFive = makeAdder(5)
+        \\    addFive(3)
+        \\}
+    ;
+
+    // Get original result (expected: 10 + 5 + 3 = 18)
+    const original_result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 18), original_result);
+
+    // Transform the code
+    const transformed = try transformBlockAndEmit(test_allocator, source);
+    defer test_allocator.free(transformed);
+
+    // Evaluate the transformed code - should produce the same result
+    const transformed_result = try evalToInt(test_allocator, transformed);
+
+    // Verify they match
+    try testing.expectEqual(original_result, transformed_result);
+}
+
 test "ClosureTransformer: can generate tag names" {
     // Test that the transformer can generate unique tag names
     const allocator = test_allocator;
