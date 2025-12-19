@@ -1,0 +1,1 @@
+The LLVM bitcode generation has been adapted from the Zig compiler (copyright Zig contributors) under the MIT License (eexpat) - the source code of which can be found at https://github.com/ziglang/zig - thank you, Zig contributors!
