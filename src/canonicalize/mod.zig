@@ -18,6 +18,8 @@ pub const HostedCompiler = @import("HostedCompiler.zig");
 pub const RocEmitter = @import("RocEmitter.zig");
 /// Monomorphizer - specializes polymorphic functions to concrete types
 pub const Monomorphizer = @import("Monomorphizer.zig");
+/// Closure Transformer - transforms closures with captures into tagged values
+pub const ClosureTransformer = @import("ClosureTransformer.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
@@ -54,4 +56,5 @@ test "compile tests" {
 
     // Monomorphization
     std.testing.refAllDecls(@import("Monomorphizer.zig"));
+    std.testing.refAllDecls(@import("ClosureTransformer.zig"));
 }
