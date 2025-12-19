@@ -778,6 +778,45 @@ test "transform: if expression with closures that have captures" {
     try testing.expectEqual(original_result, transformed_result);
 }
 
+test "eval: nested if with three closures" {
+    // Test case: nested if creates three possible closures
+    const source =
+        \\{
+        \\    a = True
+        \\    b = False
+        \\    f = if a (if b |x| x + 1 else |x| x + 2) else |x| x + 3
+        \\    f(10)
+        \\}
+    ;
+
+    // a=True, b=False -> second closure (x + 2) -> 10 + 2 = 12
+    const result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 12), result);
+}
+
+test "transform: nested if with three closures" {
+    const source =
+        \\{
+        \\    a = True
+        \\    b = False
+        \\    f = if a (if b |x| x + 1 else |x| x + 2) else |x| x + 3
+        \\    f(10)
+        \\}
+    ;
+
+    // Get original result (should be 12)
+    const original_result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 12), original_result);
+
+    // Transform the code
+    const transformed = try transformBlockAndEmit(test_allocator, source);
+    defer test_allocator.free(transformed);
+
+    // Evaluate the transformed code - should produce the same result
+    const transformed_result = try evalToInt(test_allocator, transformed);
+    try testing.expectEqual(original_result, transformed_result);
+}
+
 test "ClosureTransformer: can generate tag names" {
     // Test that the transformer can generate unique tag names
     const allocator = test_allocator;
