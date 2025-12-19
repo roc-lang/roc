@@ -137,8 +137,8 @@ test "emit tag with no arguments" {
     const expr_idx = try module_env.store.addExpr(.{
         .e_zero_argument_tag = .{
             .closure_name = true_ident,
-            .variant_var = @enumFromInt(0),
-            .ext_var = @enumFromInt(0),
+            .variant_var = undefined, // not read by emitter
+            .ext_var = undefined, // not read by emitter
             .name = true_ident,
         },
     }, base.Region.zero());

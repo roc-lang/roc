@@ -126,9 +126,8 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const pattern = self.module_env.store.getPattern(lookup.pattern_idx);
             try self.emitPatternValue(pattern);
         },
-        .e_lookup_external => |lookup| {
+        .e_lookup_external => {
             // For external lookups, emit the qualified name
-            _ = lookup;
             try self.write("<external>");
         },
         .e_list => |list| {
