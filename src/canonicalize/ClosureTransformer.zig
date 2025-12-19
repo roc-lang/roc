@@ -58,6 +58,33 @@ pub const ClosureInfo = struct {
     capture_names: std.ArrayList(base.Ident.Idx),
 };
 
+/// A lambda set - the set of closures that can reach a particular call site
+pub const LambdaSet = struct {
+    /// All closures that can be held by this variable
+    closures: std.ArrayList(ClosureInfo),
+
+    pub fn init() LambdaSet {
+        return .{ .closures = std.ArrayList(ClosureInfo).empty };
+    }
+
+    pub fn deinit(self: *LambdaSet, allocator: std.mem.Allocator) void {
+        for (self.closures.items) |*info| {
+            info.capture_names.deinit(allocator);
+        }
+        self.closures.deinit(allocator);
+    }
+
+    pub fn addClosure(self: *LambdaSet, allocator: std.mem.Allocator, info: ClosureInfo) !void {
+        try self.closures.append(allocator, info);
+    }
+
+    pub fn merge(self: *LambdaSet, allocator: std.mem.Allocator, other: *const LambdaSet) !void {
+        for (other.closures.items) |info| {
+            try self.closures.append(allocator, info);
+        }
+    }
+};
+
 /// Information for generating a dispatch function
 pub const DispatchFunction = struct {
     /// Name of the dispatch function (e.g., `call_addX`)
@@ -78,8 +105,8 @@ closure_counter: u32,
 /// Map from original closure expression to its transformation info
 closures: std.AutoHashMap(Expr.Idx, ClosureInfo),
 
-/// Map from pattern index to closure info (for tracking which variables hold closures)
-pattern_closures: std.AutoHashMap(CIR.Pattern.Idx, ClosureInfo),
+/// Map from pattern index to lambda set (for tracking which closures can reach a variable)
+pattern_lambda_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 
 /// List of dispatch functions to generate
 dispatch_functions: std.ArrayList(DispatchFunction),
@@ -91,7 +118,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .module_env = module_env,
         .closure_counter = 0,
         .closures = std.AutoHashMap(Expr.Idx, ClosureInfo).init(allocator),
-        .pattern_closures = std.AutoHashMap(CIR.Pattern.Idx, ClosureInfo).init(allocator),
+        .pattern_lambda_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .dispatch_functions = std.ArrayList(DispatchFunction).empty,
     };
 }
@@ -105,8 +132,12 @@ pub fn deinit(self: *Self) void {
     }
     self.closures.deinit();
 
-    // pattern_closures shares ClosureInfo with closures, don't double-free
-    self.pattern_closures.deinit();
+    // Free lambda sets (they don't own the ClosureInfo, closures map does)
+    var lambda_set_iter = self.pattern_lambda_sets.valueIterator();
+    while (lambda_set_iter.next()) |ls| {
+        ls.closures.deinit(self.allocator);
+    }
+    self.pattern_lambda_sets.deinit();
 
     // Free dispatch function closure lists
     for (self.dispatch_functions.items) |*df| {
@@ -143,23 +174,12 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
     return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
 }
 
-/// Generate a dispatch match expression for a closure call.
-///
-/// Transforms a call like `f(10)` where `f` is a closure into:
-/// ```roc
-/// match f {
-///     Closure_f({ x }) => {
-///         y = 10      # Bind call arguments to lambda parameters
-///         x + y       # Original lambda body
-///     }
-/// }
-/// ```
-fn generateDispatchMatch(
+/// Generate a single match branch for one closure in a lambda set.
+fn generateMatchBranch(
     self: *Self,
-    closure_var_expr: Expr.Idx,
     closure_info: ClosureInfo,
     call_args: []const Expr.Idx,
-) !Expr.Idx {
+) !Expr.Match.Branch.Idx {
     // Step 1: Create the capture record destructure pattern
     // For `{ x, y }` we need a record_destructure with each field
 
@@ -190,7 +210,7 @@ fn generateDispatchMatch(
         base.Region.zero(),
     );
 
-    // Step 2: Create the applied_tag pattern: `f({ x, y })
+    // Step 2: Create the applied_tag pattern: `Closure_f({ x, y })
     // The tag pattern takes the record pattern as its single argument
     const pattern_args_start = self.module_env.store.scratchPatternTop();
     try self.module_env.store.addScratchPattern(record_pattern);
@@ -263,11 +283,38 @@ fn generateDispatchMatch(
         .guard = null,
         .redundant = redundant_var,
     };
-    const branch_idx = try self.module_env.store.addMatchBranch(branch, base.Region.zero());
+    return try self.module_env.store.addMatchBranch(branch, base.Region.zero());
+}
 
-    // Step 5: Create the match expression
+/// Generate a dispatch match expression for a closure call.
+///
+/// Transforms a call like `f(10)` where `f` is a closure into:
+/// ```roc
+/// match f {
+///     Closure_1({ x }) => {
+///         y = 10      # Bind call arguments to lambda parameters
+///         x + y       # Original lambda body
+///     },
+///     Closure_2({}) => {
+///         y = 10
+///         y * 2
+///     },
+/// }
+/// ```
+fn generateDispatchMatch(
+    self: *Self,
+    closure_var_expr: Expr.Idx,
+    lambda_set: *const LambdaSet,
+    call_args: []const Expr.Idx,
+) !Expr.Idx {
+    // Generate a branch for each closure in the lambda set
     const branch_start = self.module_env.store.scratchMatchBranchTop();
-    try self.module_env.store.addScratchMatchBranch(branch_idx);
+
+    for (lambda_set.closures.items) |closure_info| {
+        const branch_idx = try self.generateMatchBranch(closure_info, call_args);
+        try self.module_env.store.addScratchMatchBranch(branch_idx);
+    }
+
     const branches_span = try self.module_env.store.matchBranchSpanFrom(branch_start);
 
     // Create a fresh type variable for exhaustiveness
@@ -280,6 +327,44 @@ fn generateDispatchMatch(
             .exhaustive = exhaustive_var,
         },
     }, base.Region.zero());
+}
+
+/// Collect all closures that could result from an expression.
+/// This traverses if expressions to find all possible closure branches.
+fn collectClosuresFromExpr(self: *Self, expr_idx: Expr.Idx, lambda_set: *LambdaSet) !void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+
+    switch (expr) {
+        .e_tag => |tag| {
+            // Check if this tag is one of our transformed closures
+            // by looking for it in our closures map (keyed by original expr)
+            var iter = self.closures.iterator();
+            while (iter.next()) |entry| {
+                if (std.meta.eql(entry.value_ptr.tag_name, tag.name)) {
+                    try lambda_set.addClosure(self.allocator, entry.value_ptr.*);
+                    return;
+                }
+            }
+        },
+        .e_if => |if_expr| {
+            // Collect from all branches
+            const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
+            for (branches) |branch_idx| {
+                const branch = self.module_env.store.getIfBranch(branch_idx);
+                try self.collectClosuresFromExpr(branch.body, lambda_set);
+            }
+            // Collect from else branch
+            try self.collectClosuresFromExpr(if_expr.final_else, lambda_set);
+        },
+        .e_block => |block| {
+            // Collect from final expression of the block
+            try self.collectClosuresFromExpr(block.final_expr, lambda_set);
+        },
+        else => {
+            // For other expressions, check if the original expression was a closure
+            // This handles cases where transformClosure was called directly
+        },
+    }
 }
 
 /// Transform a closure expression into a tag with capture record.
@@ -437,11 +522,24 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
                                 const transformed = try self.transformClosure(decl.expr, name_hint);
                                 // Track this pattern as holding a closure
                                 if (self.closures.get(decl.expr)) |closure_info| {
-                                    try self.pattern_closures.put(decl.pattern, closure_info);
+                                    var lambda_set = LambdaSet.init();
+                                    try lambda_set.addClosure(self.allocator, closure_info);
+                                    try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
                                 }
                                 break :blk transformed;
                             },
-                            else => try self.transformExpr(decl.expr),
+                            else => blk: {
+                                const transformed = try self.transformExpr(decl.expr);
+                                // After transformation, collect any closures that could reach this variable
+                                var lambda_set = LambdaSet.init();
+                                try self.collectClosuresFromExpr(transformed, &lambda_set);
+                                if (lambda_set.closures.items.len > 0) {
+                                    try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
+                                } else {
+                                    lambda_set.closures.deinit(self.allocator);
+                                }
+                                break :blk transformed;
+                            },
                         };
 
                         // Create new statement with transformed expression
@@ -468,11 +566,24 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
                                 const transformed = try self.transformClosure(decl.expr, name_hint);
                                 // Track this pattern as holding a closure
                                 if (self.closures.get(decl.expr)) |closure_info| {
-                                    try self.pattern_closures.put(decl.pattern, closure_info);
+                                    var lambda_set = LambdaSet.init();
+                                    try lambda_set.addClosure(self.allocator, closure_info);
+                                    try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
                                 }
                                 break :blk transformed;
                             },
-                            else => try self.transformExpr(decl.expr),
+                            else => blk: {
+                                const transformed = try self.transformExpr(decl.expr);
+                                // After transformation, collect any closures that could reach this variable
+                                var lambda_set = LambdaSet.init();
+                                try self.collectClosuresFromExpr(transformed, &lambda_set);
+                                if (lambda_set.closures.items.len > 0) {
+                                    try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
+                                } else {
+                                    lambda_set.closures.deinit(self.allocator);
+                                }
+                                break :blk transformed;
+                            },
                         };
 
                         const new_stmt_idx = try self.module_env.store.addStatement(
@@ -522,12 +633,12 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
             const func_expr = self.module_env.store.getExpr(call.func);
             switch (func_expr) {
                 .e_lookup_local => |lookup| {
-                    // Check if this pattern was assigned a closure
-                    if (self.pattern_closures.get(lookup.pattern_idx)) |closure_info| {
-                        // Generate a dispatch match expression
+                    // Check if this pattern has a lambda set (one or more closures)
+                    if (self.pattern_lambda_sets.getPtr(lookup.pattern_idx)) |lambda_set| {
+                        // Generate a dispatch match expression with all possible closures
                         return try self.generateDispatchMatch(
                             call.func,
-                            closure_info,
+                            lambda_set,
                             transformed_args,
                         );
                     }

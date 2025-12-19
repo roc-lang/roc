@@ -663,6 +663,121 @@ test "roundtrip: nested closures with captures" {
     try testing.expectEqual(original_result, transformed_result);
 }
 
+// Slice 3: Multiple Closures in Same Lambda Set
+
+test "eval: if expression with two closures (condition True)" {
+    // First, verify the original code evaluates correctly
+    const source =
+        \\{
+        \\    condition = True
+        \\    f = if condition |x| x + 1 else |x| x * 2
+        \\    f(10)
+        \\}
+    ;
+
+    // Should evaluate to 10 + 1 = 11 (since condition is True)
+    const result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 11), result);
+}
+
+test "eval: if expression with two closures (condition False)" {
+    const source =
+        \\{
+        \\    condition = False
+        \\    f = if condition |x| x + 1 else |x| x * 2
+        \\    f(10)
+        \\}
+    ;
+
+    // Should evaluate to 10 * 2 = 20 (since condition is False)
+    const result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 20), result);
+}
+
+test "eval: if expression with closures that have captures" {
+    const source =
+        \\{
+        \\    a = 5
+        \\    b = 3
+        \\    condition = False
+        \\    f = if condition |x| x + a else |x| x * b
+        \\    f(10)
+        \\}
+    ;
+
+    // Should evaluate to 10 * 3 = 30 (since condition is False, uses b)
+    const result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 30), result);
+}
+
+test "transform: if expression with two closures (condition True)" {
+    const source =
+        \\{
+        \\    condition = True
+        \\    f = if condition |x| x + 1 else |x| x * 2
+        \\    f(10)
+        \\}
+    ;
+
+    // Get original result (should be 11)
+    const original_result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 11), original_result);
+
+    // Transform the code
+    const transformed = try transformBlockAndEmit(test_allocator, source);
+    defer test_allocator.free(transformed);
+
+    // Evaluate the transformed code - should produce the same result
+    const transformed_result = try evalToInt(test_allocator, transformed);
+    try testing.expectEqual(original_result, transformed_result);
+}
+
+test "transform: if expression with two closures (condition False)" {
+    const source =
+        \\{
+        \\    condition = False
+        \\    f = if condition |x| x + 1 else |x| x * 2
+        \\    f(10)
+        \\}
+    ;
+
+    // Get original result (should be 20)
+    const original_result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 20), original_result);
+
+    // Transform the code
+    const transformed = try transformBlockAndEmit(test_allocator, source);
+    defer test_allocator.free(transformed);
+
+    // Evaluate the transformed code - should produce the same result
+    const transformed_result = try evalToInt(test_allocator, transformed);
+    try testing.expectEqual(original_result, transformed_result);
+}
+
+test "transform: if expression with closures that have captures" {
+    const source =
+        \\{
+        \\    a = 5
+        \\    b = 3
+        \\    condition = False
+        \\    f = if condition |x| x + a else |x| x * b
+        \\    f(10)
+        \\}
+    ;
+
+    // Get original result (should be 30)
+    const original_result = try evalToInt(test_allocator, source);
+    try testing.expectEqual(@as(i128, 30), original_result);
+
+    // Transform the code
+    const transformed = try transformBlockAndEmit(test_allocator, source);
+    defer test_allocator.free(transformed);
+
+    // Evaluate the transformed code - should produce the same result
+    const transformed_result = try evalToInt(test_allocator, transformed);
+    try testing.expectEqual(original_result, transformed_result);
+}
+
 test "ClosureTransformer: can generate tag names" {
     // Test that the transformer can generate unique tag names
     const allocator = test_allocator;
