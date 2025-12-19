@@ -138,7 +138,7 @@ pub const RocList = extern struct {
     // The pointer is to just after the refcount.
     // For big lists, it just returns their bytes pointer.
     // For seamless slices, it returns the pointer stored in capacity_or_alloc_ptr.
-    pub fn getAllocationDataPtr(self: RocList) ?[*]u8 {
+    pub fn getAllocationDataPtr(self: RocList, roc_ops: *RocOps) ?[*]u8 {
         const list_alloc_ptr = @intFromPtr(self.bytes);
         const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
@@ -147,10 +147,9 @@ pub const RocList = extern struct {
         // Verify the computed allocation pointer is properly aligned
         if (comptime builtin.mode == .Debug) {
             if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
-                std.debug.panic(
-                    "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
-                    .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
-                );
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})", .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() }) catch "getAllocationDataPtr: misaligned ptr";
+                roc_ops.crash(msg);
             }
         }
 
@@ -160,12 +159,12 @@ pub const RocList = extern struct {
     // Returns the number of elements to decref when freeing this list's allocation.
     // For seamless slices with refcounted elements, this reads the original allocation size from the heap.
     // For non-refcounted elements or non-slices, just returns the list length.
-    pub fn getAllocationElementCount(self: RocList, elements_refcounted: bool) usize {
+    pub fn getAllocationElementCount(self: RocList, elements_refcounted: bool, roc_ops: *RocOps) usize {
         // Only read from heap (-2) for seamless slices with refcounted elements.
         // The count is only written by setAllocationElementCount when elements_refcounted=true.
         if (self.isSeamlessSlice() and elements_refcounted) {
             // Seamless slices always refer to an underlying allocation.
-            const alloc_ptr = self.getAllocationDataPtr() orelse unreachable;
+            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable;
             // - 1 is refcount.
             // - 2 is size on heap.
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, alloc_ptr, @src());
@@ -177,9 +176,9 @@ pub const RocList = extern struct {
 
     // This needs to be called when creating seamless slices from unique list.
     // It will put the allocation size on the heap to enable the seamless slice to free the underlying allocation.
-    fn setAllocationElementCount(self: RocList, elements_refcounted: bool) void {
+    fn setAllocationElementCount(self: RocList, elements_refcounted: bool, roc_ops: *RocOps) void {
         if (elements_refcounted and !self.isSeamlessSlice()) {
-            if (self.getAllocationDataPtr()) |alloc_ptr| {
+            if (self.getAllocationDataPtr(roc_ops)) |alloc_ptr| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
                 const ptr: [*]usize = utils.alignedPtrCast([*]usize, alloc_ptr, @src());
@@ -188,17 +187,17 @@ pub const RocList = extern struct {
         }
     }
 
-    pub fn incref(self: RocList, amount: isize, elements_refcounted: bool) void {
+    pub fn incref(self: RocList, amount: isize, elements_refcounted: bool, roc_ops: *RocOps) void {
         // If the list is unique and not a seamless slice, the length needs to be store on the heap if the elements are refcounted.
-        if (elements_refcounted and self.isUnique() and !self.isSeamlessSlice()) {
-            if (self.getAllocationDataPtr()) |source| {
+        if (elements_refcounted and self.isUnique(roc_ops) and !self.isSeamlessSlice()) {
+            if (self.getAllocationDataPtr(roc_ops)) |source| {
                 // - 1 is refcount.
                 // - 2 is size on heap.
                 const ptr: [*]usize = utils.alignedPtrCast([*]usize, source, @src());
                 (ptr - 2)[0] = self.length;
             }
         }
-        increfDataPtrC(self.getAllocationDataPtr(), amount);
+        increfDataPtrC(self.getAllocationDataPtr(roc_ops), amount, roc_ops);
     }
 
     pub fn decref(
@@ -211,9 +210,9 @@ pub const RocList = extern struct {
         roc_ops: *RocOps,
     ) void {
         // If unique, decref will free the list. Before that happens, all elements must be decremented.
-        if (elements_refcounted and self.isUnique()) {
-            if (self.getAllocationDataPtr()) |source| {
-                const count = self.getAllocationElementCount(elements_refcounted);
+        if (elements_refcounted and self.isUnique(roc_ops)) {
+            if (self.getAllocationDataPtr(roc_ops)) |source| {
+                const count = self.getAllocationElementCount(elements_refcounted, roc_ops);
 
                 var i: usize = 0;
                 while (i < count) : (i += 1) {
@@ -225,7 +224,7 @@ pub const RocList = extern struct {
 
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
         utils.decref(
-            self.getAllocationDataPtr(),
+            self.getAllocationDataPtr(roc_ops),
             self.capacity_or_alloc_ptr,
             alignment,
             elements_refcounted,
@@ -240,22 +239,25 @@ pub const RocList = extern struct {
         return null;
     }
 
-    pub fn isUnique(self: RocList) bool {
-        return utils.rcUnique(@bitCast(self.refcount()));
+    pub fn isUnique(self: RocList, roc_ops: *RocOps) bool {
+        return utils.rcUnique(@bitCast(self.refcount(roc_ops)));
     }
 
-    fn refcount(self: RocList) usize {
+    fn refcount(self: RocList, roc_ops: *RocOps) usize {
         // Reduced debug output - only print on potential issues
         if (self.getCapacity() == 0 and !self.isSeamlessSlice()) {
             // the zero-capacity is Clone, copying it will not leak memory
             return 1;
         }
 
-        if (self.getAllocationDataPtr()) |non_null_ptr| {
+        if (self.getAllocationDataPtr(roc_ops)) |non_null_ptr| {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            @panic("RocList.refcount: getAllocationDataPtr returned null");
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "RocList.refcount: getAllocationDataPtr returned null (capacity={}, is_slice={})", .{ self.getCapacity(), self.isSeamlessSlice() }) catch "RocList.refcount: getAllocationDataPtr returned null";
+            roc_ops.crash(msg);
+            unreachable;
         }
     }
 
@@ -270,7 +272,7 @@ pub const RocList = extern struct {
         dec: Dec,
         roc_ops: *RocOps,
     ) RocList {
-        if (self.isUnique()) {
+        if (self.isUnique(roc_ops)) {
             return self;
         }
 
@@ -363,7 +365,7 @@ pub const RocList = extern struct {
         roc_ops: *RocOps,
     ) RocList {
         if (self.bytes) |source_ptr| {
-            if (self.isUnique() and !self.isSeamlessSlice()) {
+            if (self.isUnique(roc_ops) and !self.isSeamlessSlice()) {
                 const capacity = self.capacity_or_alloc_ptr;
                 if (capacity >= new_length) {
                     const result = RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
@@ -412,15 +414,15 @@ pub const RocList = extern struct {
         }
 
         // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        utils.decref(self.getAllocationDataPtr(), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
+        utils.decref(self.getAllocationDataPtr(roc_ops), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
 
         return result;
     }
 };
 
 /// Increment the reference count.
-pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool) callconv(.c) void {
-    list.incref(amount, elements_refcounted);
+pub fn listIncref(list: RocList, amount: isize, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+    list.incref(amount, elements_refcounted, roc_ops);
 }
 
 /// Get the number of elements in the list.
@@ -504,7 +506,7 @@ pub fn listReserve(
     const cap = @as(u64, @intCast(list.getCapacity()));
     const desired_cap = @as(u64, @intCast(original_len)) +| spare;
 
-    if ((update_mode == .InPlace or list.isUnique()) and cap >= desired_cap) {
+    if ((update_mode == .InPlace or list.isUnique(roc_ops)) and cap >= desired_cap) {
         return list;
     } else {
         // Make sure on 32-bit targets we don't accidentally wrap when we cast our U64 desired capacity to U32.
@@ -539,7 +541,7 @@ pub fn listReleaseExcessCapacity(
 ) callconv(.c) RocList {
     const old_length = list.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
-    if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_alloc_ptr == old_length) {
+    if ((update_mode == .InPlace or list.isUnique(roc_ops)) and list.capacity_or_alloc_ptr == old_length) {
         return list;
     } else if (old_length == 0) {
         list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
@@ -864,7 +866,7 @@ pub fn listSublist(
 ) callconv(.c) RocList {
     const size = list.len();
     if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) {
-        if (list.isUnique()) {
+        if (list.isUnique(roc_ops)) {
             // Decrement the reference counts of all elements.
             if (list.bytes) |source_ptr| {
                 if (elements_refcounted) {
@@ -898,7 +900,7 @@ pub fn listSublist(
         // than something that fit in usize.
         const keep_len = @as(usize, @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start)))));
 
-        if (start == 0 and list.isUnique()) {
+        if (start == 0 and list.isUnique(roc_ops)) {
             // The list is unique, we actually have to decrement refcounts to elements we aren't keeping around.
             // Decrement the reference counts of elements after `start + keep_len`.
             if (elements_refcounted) {
@@ -914,11 +916,11 @@ pub fn listSublist(
             output.length = keep_len;
             return output;
         } else {
-            if (list.isUnique()) {
+            if (list.isUnique(roc_ops)) {
                 // Store original element count for proper cleanup when the slice is freed.
                 // When the seamless slice is later decreffed, it will decref ALL elements
                 // starting from the original allocation pointer, not just the slice elements.
-                list.setAllocationElementCount(elements_refcounted);
+                list.setAllocationElementCount(elements_refcounted, roc_ops);
             }
             const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
             const slice_alloc_ptr = list.capacity_or_alloc_ptr;
@@ -933,12 +935,16 @@ pub fn listSublist(
                 else
                     @intFromPtr(source_ptr);
                 if (test_decode != (original_ptr & ~@as(usize, 1))) {
-                    @panic("listSublist: encoding error");
+                    var buf: [128]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "listSublist: encoding error (test_decode=0x{x}, original_ptr=0x{x})", .{ test_decode, original_ptr }) catch "listSublist: encoding error";
+                    roc_ops.crash(msg);
                 }
 
                 // Verify alignment of the original allocation pointer
                 if (original_ptr % @alignOf(usize) != 0) {
-                    @panic("listSublist: misaligned original ptr");
+                    var buf: [128]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "listSublist: misaligned original ptr=0x{x} (alignment={d})", .{ original_ptr, @alignOf(usize) }) catch "listSublist: misaligned original ptr";
+                    roc_ops.crash(msg);
                 }
             }
 
@@ -1018,7 +1024,7 @@ pub fn listDropAt(
         // were >= than `size`, and we know `size` fits in usize.
         const drop_index: usize = @intCast(drop_index_u64);
 
-        if (list.isUnique()) {
+        if (list.isUnique(roc_ops)) {
             if (elements_refcounted) {
                 const element = source_ptr + drop_index * element_width;
                 dec(dec_context, element);
@@ -1219,8 +1225,8 @@ pub fn listConcat(
     // Check if both lists share the same underlying allocation.
     // This can happen when the same list is passed as both arguments (e.g., in repeat_helper).
     const same_allocation = blk: {
-        const alloc_a = list_a.getAllocationDataPtr();
-        const alloc_b = list_b.getAllocationDataPtr();
+        const alloc_a = list_a.getAllocationDataPtr(roc_ops);
+        const alloc_b = list_b.getAllocationDataPtr(roc_ops);
         break :blk (alloc_a != null and alloc_a == alloc_b);
     };
 
@@ -1229,7 +1235,7 @@ pub fn listConcat(
     // 2. Only decref once at the end (to avoid double-free)
     // Instead, fall through to the general path that allocates a new list.
 
-    if (!same_allocation and list_a.isUnique()) {
+    if (!same_allocation and list_a.isUnique(roc_ops)) {
         const total_length: usize = list_a.len() + list_b.len();
 
         const resized_list_a = list_a.reallocate(
@@ -1264,7 +1270,7 @@ pub fn listConcat(
         list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
 
         return resized_list_a;
-    } else if (!same_allocation and list_b.isUnique()) {
+    } else if (!same_allocation and list_b.isUnique(roc_ops)) {
         const total_length: usize = list_a.len() + list_b.len();
 
         const resized_list_b = list_b.reallocate(
@@ -1415,8 +1421,9 @@ inline fn listReplaceInPlaceHelp(
 /// Check if list has exclusive ownership for safe in-place modification.
 pub fn listIsUnique(
     list: RocList,
+    roc_ops: *RocOps,
 ) callconv(.c) bool {
-    return list.isEmpty() or list.isUnique();
+    return list.isEmpty() or list.isUnique(roc_ops);
 }
 
 /// Create independent copy for safe mutation when list is shared.
@@ -1444,8 +1451,9 @@ pub fn listCapacity(
 /// Get raw memory pointer for direct access patterns.
 pub fn listAllocationPtr(
     list: RocList,
+    roc_ops: *RocOps,
 ) callconv(.c) ?[*]u8 {
-    return list.getAllocationDataPtr();
+    return list.getAllocationDataPtr(roc_ops);
 }
 
 /// No-op reference counting function for non-refcounted types
@@ -1590,7 +1598,7 @@ test "listConcat: non-unique with unique overlapping" {
     const nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..], false, test_env.getOps());
     const bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
     const refcount_ptr: [*]isize = utils.alignedPtrCast([*]isize, bytes - @sizeOf(usize), @src());
-    utils.increfRcPtrC(&refcount_ptr[0], 1);
+    utils.increfRcPtrC(&refcount_ptr[0], 1, test_env.getOps());
     // NOTE: nonUnique will be consumed by listConcat, so no defer decref needed
 
     const unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..], false, test_env.getOps());
@@ -1715,12 +1723,12 @@ test "RocList uniqueness and cloning" {
     const list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     // A freshly created list should be unique
-    try std.testing.expect(list.isUnique());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
 
     // Make the list non-unique by incrementing reference count
-    list.incref(1, false);
+    list.incref(1, false, test_env.getOps());
     defer list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
-    try std.testing.expect(!list.isUnique());
+    try std.testing.expect(!list.isUnique(test_env.getOps()));
 
     // Clone the list (this will consume one reference to the original)
     const cloned = listClone(list, @alignOf(i32), @sizeOf(i32), false, null, rcNone, null, rcNone, test_env.getOps());
@@ -1740,14 +1748,14 @@ test "RocList isUnique with reference counting" {
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unique initially
-    try std.testing.expect(list.isUnique());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
 
     // Increment reference count
-    list.incref(1, false);
+    list.incref(1, false, test_env.getOps());
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should no longer be unique
-    try std.testing.expect(!list.isUnique());
+    try std.testing.expect(!list.isUnique(test_env.getOps()));
 }
 
 test "listWithCapacity basic functionality" {
@@ -2596,15 +2604,15 @@ test "complex reference counting: multiple increfs and decrefs" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Should be unique initially
-    try std.testing.expect(list.isUnique());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
 
     // Increment reference count multiple times
-    list.incref(1, false);
-    list.incref(1, false);
-    list.incref(1, false);
+    list.incref(1, false, test_env.getOps());
+    list.incref(1, false, test_env.getOps());
+    list.incref(1, false, test_env.getOps());
 
     // Should no longer be unique
-    try std.testing.expect(!list.isUnique());
+    try std.testing.expect(!list.isUnique(test_env.getOps()));
 
     // Decrement back down
     list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
@@ -2612,7 +2620,7 @@ test "complex reference counting: multiple increfs and decrefs" {
     list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unique again
-    try std.testing.expect(list.isUnique());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
 
     // Final cleanup
     list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
@@ -2626,10 +2634,10 @@ test "complex reference counting: makeUnique with shared list" {
     const original_list = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     // Make the list non-unique by incrementing reference count
-    original_list.incref(1, false);
+    original_list.incref(1, false, test_env.getOps());
     defer original_list.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
-    try std.testing.expect(!original_list.isUnique());
+    try std.testing.expect(!original_list.isUnique(test_env.getOps()));
 
     // makeUnique should create a new copy
     const unique_list = original_list.makeUnique(@alignOf(i32), @sizeOf(i32), false, null, rcNone, null, rcNone, test_env.getOps());
@@ -2637,7 +2645,7 @@ test "complex reference counting: makeUnique with shared list" {
 
     // The unique list should be different from the original
     try std.testing.expect(unique_list.bytes != original_list.bytes);
-    try std.testing.expect(unique_list.isUnique());
+    try std.testing.expect(unique_list.isUnique(test_env.getOps()));
 
     // But should have the same content
     try std.testing.expect(unique_list.eql(original_list));
@@ -2651,14 +2659,14 @@ test "complex reference counting: listIsUnique consistency" {
     const list = RocList.fromSlice(u16, data[0..], false, test_env.getOps());
 
     // Test that listIsUnique function matches isUnique method
-    try std.testing.expectEqual(list.isUnique(), listIsUnique(list));
+    try std.testing.expectEqual(list.isUnique(test_env.getOps()), listIsUnique(list, test_env.getOps()));
 
     // After incref, both should report not unique
-    list.incref(1, false);
+    list.incref(1, false, test_env.getOps());
     defer list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
 
-    try std.testing.expectEqual(list.isUnique(), listIsUnique(list));
-    try std.testing.expect(!listIsUnique(list));
+    try std.testing.expectEqual(list.isUnique(test_env.getOps()), listIsUnique(list, test_env.getOps()));
+    try std.testing.expect(!listIsUnique(list, test_env.getOps()));
 
     // Final cleanup
     list.decref(@alignOf(u16), @sizeOf(u16), false, null, rcNone, test_env.getOps());
@@ -2676,7 +2684,7 @@ test "complex reference counting: clone behavior" {
     defer cloned_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Cloned list should be unique and have same content
-    try std.testing.expect(cloned_list.isUnique());
+    try std.testing.expect(cloned_list.isUnique(test_env.getOps()));
     try std.testing.expect(cloned_list.eql(original_list));
 }
 
@@ -2688,7 +2696,7 @@ test "complex reference counting: empty list operations" {
     defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Empty lists should handle basic operations gracefully
-    try std.testing.expect(empty_list.isUnique());
+    try std.testing.expect(empty_list.isUnique(test_env.getOps()));
     try std.testing.expect(empty_list.isEmpty());
     try std.testing.expectEqual(@as(usize, 0), empty_list.len());
 }
@@ -2854,7 +2862,7 @@ test "listAllocationPtr basic functionality" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
     defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
-    const alloc_ptr = listAllocationPtr(list);
+    const alloc_ptr = listAllocationPtr(list, test_env.getOps());
     try std.testing.expect(alloc_ptr != null);
 
     // The allocation pointer should be valid and accessible
@@ -2871,7 +2879,7 @@ test "listAllocationPtr empty list" {
     const empty_list = RocList.empty();
     defer empty_list.decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
-    const alloc_ptr = listAllocationPtr(empty_list);
+    const alloc_ptr = listAllocationPtr(empty_list, test_env.getOps());
     // Empty lists may have null allocation pointer
     _ = alloc_ptr; // Just verify the function doesn't crash
 }
@@ -2884,19 +2892,19 @@ test "listIncref and listDecref public functions" {
     const list = RocList.fromSlice(u8, data[0..], false, test_env.getOps());
 
     // Should be unique initially
-    try std.testing.expect(list.isUnique());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
 
     // Use public listIncref function
-    listIncref(list, 1, false);
+    listIncref(list, 1, false, test_env.getOps());
 
     // Should no longer be unique
-    try std.testing.expect(!list.isUnique());
+    try std.testing.expect(!list.isUnique(test_env.getOps()));
 
     // Use public listDecref function
     listDecref(list, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
 
     // Should be unique again
-    try std.testing.expect(list.isUnique());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
 
     // Final cleanup
     listDecref(list, @alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
@@ -3195,7 +3203,7 @@ test "memory management: clone with different update modes" {
     const original = RocList.fromSlice(i32, data[0..], false, test_env.getOps());
 
     // Make the list non-unique
-    original.incref(1, false);
+    original.incref(1, false, test_env.getOps());
     defer original.decref(@alignOf(i32), @sizeOf(i32), false, null, rcNone, test_env.getOps());
 
     // Clone should create an independent copy
@@ -3204,7 +3212,7 @@ test "memory management: clone with different update modes" {
 
     // Verify independence - they should have the same content but different memory
     try std.testing.expect(cloned.eql(original));
-    try std.testing.expect(cloned.isUnique());
+    try std.testing.expect(cloned.isUnique(test_env.getOps()));
 
     // Verify they can be modified independently by testing capacity operations
     const cloned_capacity = cloned.getCapacity();
@@ -3424,7 +3432,7 @@ test "append: with unique list (refcount 1)" {
     list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value1)), test_env.getOps());
 
     // Verify it's unique
-    try std.testing.expectEqual(@as(usize, 1), list.refcount());
+    try std.testing.expectEqual(@as(usize, 1), list.refcount(test_env.getOps()));
 
     // Append should mutate in place
     const value2: u8 = 20;
@@ -3453,8 +3461,8 @@ test "append: with shared list (refcount > 1)" {
     list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&value2)), test_env.getOps());
 
     // Increment refcount to simulate sharing
-    list.incref(1, false);
-    try std.testing.expect(list.refcount() > 1);
+    list.incref(1, false, test_env.getOps());
+    try std.testing.expect(list.refcount(test_env.getOps()) > 1);
 
     // Append should clone
     const value3: u8 = 50;
@@ -3601,7 +3609,7 @@ test "append: refcount transitions" {
     const val1: u8 = 10;
     list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val1)), test_env.getOps());
 
-    try std.testing.expectEqual(@as(usize, 1), list.refcount());
+    try std.testing.expectEqual(@as(usize, 1), list.refcount(test_env.getOps()));
 
     // Append while unique (should use push)
     const val2: u8 = 20;
@@ -3610,8 +3618,8 @@ test "append: refcount transitions" {
     try std.testing.expectEqual(@as(usize, 2), result1.len());
 
     // Increment refcount
-    result1.incref(1, false);
-    try std.testing.expect(result1.refcount() > 1);
+    result1.incref(1, false, test_env.getOps());
+    try std.testing.expect(result1.refcount(test_env.getOps()) > 1);
 
     // Append while shared (should clone)
     const val3: u8 = 30;
@@ -3642,7 +3650,7 @@ test "append: capacity growth strategy" {
     }
 
     // Make it shared
-    list.incref(1, false);
+    list.incref(1, false, test_env.getOps());
 
     // Append should create new list with growth-strategy determined capacity
     const new_val: u32 = 400;
@@ -3681,7 +3689,7 @@ test "append: mixed with push operations" {
     list = pushInPlace(list, @alignOf(u8), @sizeOf(u8), @ptrCast(@constCast(&val3)), test_env.getOps());
 
     // Make shared
-    list.incref(1, false);
+    list.incref(1, false, test_env.getOps());
 
     // Append while shared (should clone)
     const val4: u8 = 4;
@@ -3737,7 +3745,7 @@ fn testAppend(
     test_env: *TestEnv,
 ) RocList {
     // Check if list is unique (refcount == 1)
-    if (list.isUnique()) {
+    if (list.isUnique(test_env.getOps())) {
         // List is unique, can mutate in place
         return pushInPlace(list, alignment, element_size, element, test_env.getOps());
     } else {
@@ -3775,7 +3783,7 @@ test "append: stress test with cloning" {
     }
 
     // Make it shared
-    original.incref(1, false);
+    original.incref(1, false, test_env.getOps());
 
     // Create multiple clones via append
     var clones: [10]RocList = undefined;

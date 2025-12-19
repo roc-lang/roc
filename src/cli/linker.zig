@@ -123,13 +123,10 @@ pub const LinkError = error{
     WindowsSDKNotFound,
 } || std.zig.system.DetectError;
 
-/// Link object files into an executable using LLD
-pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
-    // Check if LLVM is available at compile time
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
-
+/// Build the linker command arguments for the given configuration.
+/// Returns the args array that would be passed to LLD.
+/// This is used both by link() and formatLinkCommand().
+fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
     var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 64) catch return LinkError.OutOfMemory;
@@ -347,33 +344,67 @@ pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
     // This ensures host exports (init, handleEvent, update) aren't stripped even when
     // not referenced by other code
     const is_wasm = config.target_format == .wasm;
+    const is_macos = target_os == .macos;
     if (is_wasm and config.platform_files_pre.len > 0) {
         try args.append("--whole-archive");
     }
 
     // Add platform-provided files that come before object files
-    for (config.platform_files_pre) |platform_file| {
-        try args.append(platform_file);
+    // Use --whole-archive (or -all_load on macOS) to include all members from static libraries
+    // This ensures host-exported functions like init, handleEvent, update are included
+    // even though they're not referenced by the Roc app's compiled code
+    if (config.platform_files_pre.len > 0) {
+        if (is_macos) {
+            // macOS uses -all_load to include all members from static libraries
+            try args.append("-all_load");
+        } else {
+            try args.append("--whole-archive");
+        }
+        for (config.platform_files_pre) |platform_file| {
+            try args.append(platform_file);
+        }
+        if (!is_macos) {
+            try args.append("--no-whole-archive");
+        }
     }
 
-    if (is_wasm and config.platform_files_pre.len > 0) {
-        try args.append("--no-whole-archive");
-    }
-
-    // Add object files
+    // Add object files (Roc shim libraries - don't need --whole-archive)
     for (config.object_files) |obj_file| {
         try args.append(obj_file);
     }
 
     // Add platform-provided files that come after object files
-    for (config.platform_files_post) |platform_file| {
-        try args.append(platform_file);
+    // Also use --whole-archive in case there are static libs here too
+    if (config.platform_files_post.len > 0) {
+        if (is_macos) {
+            try args.append("-all_load");
+        } else {
+            try args.append("--whole-archive");
+        }
+        for (config.platform_files_post) |platform_file| {
+            try args.append(platform_file);
+        }
+        if (!is_macos) {
+            try args.append("--no-whole-archive");
+        }
     }
 
     // Add any extra arguments
     for (config.extra_args) |extra_arg| {
         try args.append(extra_arg);
     }
+
+    return args;
+}
+
+/// Link object files into an executable using LLD
+pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
+    // Check if LLVM is available at compile time
+    if (comptime !llvm_available) {
+        return LinkError.LLVMNotAvailable;
+    }
+
+    const args = try buildLinkArgs(ctx, config);
 
     // Debug: Print the linker command
     std.log.debug("Linker command:", .{});
@@ -390,7 +421,7 @@ pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
     }
 
     // Call appropriate LLD function based on target format
-    const success = if (comptime llvm_available) switch (config.target_format) {
+    const success = switch (config.target_format) {
         .elf => llvm_externs.ZigLLDLinkELF(
             @intCast(c_args.len),
             c_args.ptr,
@@ -415,11 +446,43 @@ pub fn link(ctx: *CliContext, config: LinkConfig) LinkError!void {
             config.can_exit_early,
             config.disable_output,
         ),
-    } else false;
+    };
 
     if (!success) {
         return LinkError.LinkFailed;
     }
+}
+
+/// Format link configuration as a shell command string for manual reproduction.
+/// Useful for debugging linking issues by allowing users to run the linker manually.
+pub fn formatLinkCommand(ctx: *CliContext, config: LinkConfig) LinkError![]const u8 {
+    const args = try buildLinkArgs(ctx, config);
+
+    // Join args with spaces, quoting paths that contain spaces or special chars
+    var result = std.array_list.Managed(u8).init(ctx.arena);
+
+    for (args.items, 0..) |arg, i| {
+        if (i > 0) result.append(' ') catch return LinkError.OutOfMemory;
+
+        // Quote if contains spaces or shell metacharacters
+        const needs_quoting = std.mem.indexOfAny(u8, arg, " \t'\"\\$`") != null;
+        if (needs_quoting) {
+            result.append('\'') catch return LinkError.OutOfMemory;
+            // Escape single quotes within the string
+            for (arg) |c| {
+                if (c == '\'') {
+                    result.appendSlice("'\\''") catch return LinkError.OutOfMemory;
+                } else {
+                    result.append(c) catch return LinkError.OutOfMemory;
+                }
+            }
+            result.append('\'') catch return LinkError.OutOfMemory;
+        } else {
+            result.appendSlice(arg) catch return LinkError.OutOfMemory;
+        }
+    }
+
+    return result.toOwnedSlice() catch return LinkError.OutOfMemory;
 }
 
 /// Convenience function to link two object files into an executable

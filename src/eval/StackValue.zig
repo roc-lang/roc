@@ -36,19 +36,36 @@ const StackValue = @This();
 
 // Internal helper functions for memory operations that don't need rt_var
 
+/// Helper for unreachable code paths that provides better error messages in debug mode
+fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builtin.SourceLocation) noreturn {
+    if (comptime builtin.mode == .Debug) {
+        var buf: [512]u8 = undefined;
+        const full_msg = std.fmt.bufPrint(&buf, "Internal error: {s} at {s}:{d}:{d}", .{
+            msg,
+            src.file,
+            src.line,
+            src.column,
+        }) catch msg;
+        if (roc_ops) |ops| {
+            ops.crash(full_msg);
+        }
+    }
+    unreachable;
+}
+
 /// Increment reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.
-fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore) void {
+fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         const raw_ptr = ptr orelse return;
         const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
-        roc_str.incref(1);
+        roc_str.incref(1, roc_ops);
         return;
     }
     if (layout.tag == .list) {
         const raw_ptr = ptr orelse return;
         const list_value: *const RocList = builtins.utils.alignedPtrCast(*const RocList, @as([*]u8, @ptrCast(raw_ptr)), @src());
-        list_value.incref(1, false);
+        list_value.incref(1, false, roc_ops);
         return;
     }
     if (layout.tag == .box) {
@@ -56,7 +73,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
         const slot: *usize = builtins.utils.alignedPtrCast(*usize, @as([*]u8, @ptrCast(raw_ptr)), @src());
         if (slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
-            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
     }
@@ -74,7 +91,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
             const field_layout = layout_cache.getLayout(field_info.layout);
             const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
-            increfLayoutPtr(field_layout, field_ptr, layout_cache);
+            increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops);
         }
         return;
     }
@@ -92,7 +109,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore)
             const elem_layout = layout_cache.getLayout(elem_info.layout);
             const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-            increfLayoutPtr(elem_layout, elem_ptr, layout_cache);
+            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops);
         }
         return;
     }
@@ -124,9 +141,9 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const elements_refcounted = elem_layout.isRefcounted();
 
         // Decref elements when unique
-        if (list_value.isUnique()) {
-            if (list_value.getAllocationDataPtr()) |source| {
-                const count = list_value.getAllocationElementCount(elements_refcounted);
+        if (list_value.isUnique(ops)) {
+            if (list_value.getAllocationDataPtr(ops)) |source| {
+                const count = list_value.getAllocationElementCount(elements_refcounted, ops);
                 var idx: usize = 0;
                 while (idx < count) : (idx += 1) {
                     const elem_ptr = source + idx * element_width;
@@ -152,14 +169,13 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const unmasked_ptr = ptr_int & ~tag_mask;
         const refcount_addr = unmasked_ptr - @sizeOf(isize);
 
-        // Refcount address must be aligned - use alignedPtrCast via intFromPtr check
+        // Refcount address must be aligned - use roc_ops.crash() for WASM compatibility
         if (comptime builtin.mode == .Debug) {
             if (refcount_addr % @alignOf(isize) != 0) {
-                std.debug.panic("decrefLayoutPtr: refcount_addr=0x{x} misaligned! unmasked=0x{x}, raw=0x{x}", .{
-                    refcount_addr,
-                    unmasked_ptr,
-                    raw_ptr,
-                });
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "decrefLayoutPtr: refcount_addr=0x{x} misaligned", .{refcount_addr}) catch "decrefLayoutPtr: refcount misaligned";
+                ops.crash(msg);
+                return;
             }
         }
 
@@ -227,7 +243,10 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             });
         }
         if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
-            std.debug.panic("decrefLayoutPtr: closure has invalid captures_layout_idx=0x{x} (likely uninitialized or corrupted closure header at ptr={*})", .{ idx_as_usize, ptr.? });
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "decrefLayoutPtr: closure invalid captures_layout_idx=0x{x}", .{idx_as_usize}) catch "decrefLayoutPtr: invalid closure";
+            ops.crash(msg);
+            return;
         }
 
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
@@ -269,11 +288,11 @@ is_initialized: bool = false,
 rt_var: types.Var,
 
 /// Copy this stack value to a destination pointer with bounds checking
-pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque) !void {
+pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, roc_ops: *RocOps) !void {
     std.debug.assert(self.is_initialized); // Source must be initialized before copying
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
-    const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
+    const result_size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache, roc_ops) else layout_cache.layoutSize(self.layout);
     if (result_size == 0) {
         // Zero-sized types can have null pointers, which is valid
         return;
@@ -307,7 +326,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                         });
                     }
                 }
-                src_str.incref(1);
+                src_str.incref(1, roc_ops);
                 return;
             },
             .int => {
@@ -370,7 +389,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         dest_slot.* = src_slot.*;
         if (dest_slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
-            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
     }
@@ -395,7 +414,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         // not the bytes pointer (which points within the parent allocation).
         // We use getAllocationDataPtr() which correctly handles both regular lists
         // and seamless slices (where capacity_or_alloc_ptr stores the parent pointer).
-        if (src_list.getAllocationDataPtr()) |alloc_ptr| {
+        if (src_list.getAllocationDataPtr(roc_ops)) |alloc_ptr| {
             if (comptime trace_refcount) {
                 const rc_before: isize = blk: {
                     if (@intFromPtr(alloc_ptr) % @alignOf(usize) != 0) break :blk -999;
@@ -410,9 +429,9 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                     @intFromBool(elements_refcounted),
                 });
             }
-            builtins.utils.increfDataPtrC(alloc_ptr, 1);
+            builtins.utils.increfDataPtrC(alloc_ptr, 1, roc_ops);
         }
-        storeListElementCount(dest_list, elements_refcounted);
+        storeListElementCount(dest_list, elements_refcounted, roc_ops);
         return;
     }
 
@@ -451,7 +470,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
 
-            increfLayoutPtr(field_layout, field_ptr, layout_cache);
+            increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops);
         }
         return;
     }
@@ -482,7 +501,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
 
-            increfLayoutPtr(elem_layout, elem_ptr, layout_cache);
+            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops);
         }
         return;
     }
@@ -496,7 +515,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         @memcpy(dst, src);
 
         // Get the closure header to find the captures layout
-        const closure = self.asClosure();
+        const closure = self.asClosure(roc_ops);
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
 
         // Only incref if there are actual captures (record with fields)
@@ -518,7 +537,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const rec_ptr: [*]u8 = @ptrCast(base_ptr + aligned_off);
 
                 // Incref the entire captures record (which handles all fields recursively)
-                increfLayoutPtr(captures_layout, @ptrCast(rec_ptr), layout_cache);
+                increfLayoutPtr(captures_layout, @ptrCast(rec_ptr), layout_cache, roc_ops);
             }
         }
         return;
@@ -540,7 +559,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
             2 => builtins.utils.alignedPtrCast(*const u16, disc_ptr, @src()).*,
             4 => builtins.utils.alignedPtrCast(*const u32, disc_ptr, @src()).*,
-            else => unreachable,
+            else => debugUnreachable(roc_ops, "invalid discriminant size in tag_union copyToPtr", @src()),
         };
 
         // Get the active variant's payload layout
@@ -557,7 +576,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         }
 
         // Incref only the active variant's payload (at offset 0)
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache, roc_ops);
         return;
     }
 
@@ -790,15 +809,21 @@ pub fn asF64(self: StackValue) f64 {
 }
 
 /// Read this StackValue's Dec value
-pub fn asDec(self: StackValue) RocDec {
+pub fn asDec(self: StackValue, roc_ops: *RocOps) RocDec {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .dec);
 
-    // RocDec contains i128 which requires 16-byte alignment
-    const ptr_val = @intFromPtr(self.ptr.?);
-    if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[asDec] alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
+    // RocDec contains i128 which requires 16-byte alignment (debug builds only for performance)
+    if (comptime builtin.mode == .Debug) {
+        const ptr_val = @intFromPtr(self.ptr.?);
+        if (ptr_val % @alignOf(i128) != 0) {
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[asDec] alignment error: ptr=0x{x}", .{ptr_val}) catch "[asDec] alignment error";
+            roc_ops.crash(msg);
+        }
+    }
     const typed_ptr = @as(*const RocDec, @ptrCast(@alignCast(self.ptr.?)));
     return typed_ptr.*;
 }
@@ -842,7 +867,7 @@ pub fn setF64(self: *StackValue, value: f64) void {
 }
 
 /// Initialise the StackValue Dec value
-pub fn setDec(self: *StackValue, value: RocDec) void {
+pub fn setDec(self: *StackValue, value: RocDec, roc_ops: *RocOps) void {
     // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
 
@@ -855,9 +880,16 @@ pub fn setDec(self: *StackValue, value: RocDec) void {
     // Avoid accidental overwrite, manually toggle this if updating an already initialized value
     std.debug.assert(!self.is_initialized);
 
-    // RocDec contains i128 which requires 16-byte alignment
-    const ptr_val = @intFromPtr(self.ptr.?);
-    if (ptr_val % @alignOf(i128) != 0) std.debug.panic("[setDec] alignment error: ptr=0x{x} is not 16-byte aligned", .{ptr_val});
+    // RocDec contains i128 which requires 16-byte alignment (debug builds only for performance)
+    if (comptime builtin.mode == .Debug) {
+        const ptr_val = @intFromPtr(self.ptr.?);
+        if (ptr_val % @alignOf(i128) != 0) {
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[setDec] alignment error: ptr=0x{x}", .{ptr_val}) catch "[setDec] alignment error";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
 
     // Write the Dec value
     const typed_ptr: *RocDec = @ptrCast(@alignCast(self.ptr.?));
@@ -930,9 +962,9 @@ pub const TupleAccessor = struct {
     }
 
     /// Set an element by copying from a source StackValue
-    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue) !void {
+    pub fn setElement(self: TupleAccessor, index: usize, source: StackValue, roc_ops: *RocOps) !void {
         const dest_ptr = try self.getElementPtr(index);
-        try source.copyToPtr(self.layout_cache, dest_ptr);
+        try source.copyToPtr(self.layout_cache, dest_ptr, roc_ops);
     }
 
     /// Find the sorted element index corresponding to an original tuple position
@@ -981,22 +1013,42 @@ pub const TagUnionAccessor = struct {
     tu_data: layout_mod.TagUnionData,
 
     /// Read the discriminant (tag index) from the tag union
-    pub fn getDiscriminant(self: TagUnionAccessor) usize {
+    pub fn getDiscriminant(self: TagUnionAccessor, roc_ops: *RocOps) usize {
         const base_ptr: [*]u8 = @ptrCast(self.base_value.ptr.?);
         const disc_ptr = base_ptr + self.tu_data.discriminant_offset;
-        const disc_ptr_val = @intFromPtr(disc_ptr);
         return switch (self.tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
             2 => blk: {
-                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[getDiscriminant] u16 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                if (comptime builtin.mode == .Debug) {
+                    const disc_ptr_val = @intFromPtr(disc_ptr);
+                    if (disc_ptr_val % @alignOf(u16) != 0) {
+                        var buf: [64]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[getDiscriminant] u16 alignment error: 0x{x}", .{disc_ptr_val}) catch "[getDiscriminant] alignment error";
+                        roc_ops.crash(msg);
+                    }
+                }
                 break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
             },
             4 => blk: {
-                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[getDiscriminant] u32 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                if (comptime builtin.mode == .Debug) {
+                    const disc_ptr_val = @intFromPtr(disc_ptr);
+                    if (disc_ptr_val % @alignOf(u32) != 0) {
+                        var buf: [64]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[getDiscriminant] u32 alignment error: 0x{x}", .{disc_ptr_val}) catch "[getDiscriminant] alignment error";
+                        roc_ops.crash(msg);
+                    }
+                }
                 break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
             },
             8 => blk: {
-                if (disc_ptr_val % @alignOf(u64) != 0) std.debug.panic("[getDiscriminant] u64 alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                if (comptime builtin.mode == .Debug) {
+                    const disc_ptr_val = @intFromPtr(disc_ptr);
+                    if (disc_ptr_val % @alignOf(u64) != 0) {
+                        var buf: [64]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[getDiscriminant] u64 alignment error: 0x{x}", .{disc_ptr_val}) catch "[getDiscriminant] alignment error";
+                        roc_ops.crash(msg);
+                    }
+                }
                 break :blk @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*);
             },
             else => 0,
@@ -1024,24 +1076,26 @@ pub const TagUnionAccessor = struct {
     }
 
     /// Get discriminant and payload layout together
-    pub fn getVariant(self: *const TagUnionAccessor) struct { discriminant: usize, payload_layout: Layout } {
-        const discriminant = self.getDiscriminant();
+    pub fn getVariant(self: *const TagUnionAccessor, roc_ops: *RocOps) struct { discriminant: usize, payload_layout: Layout } {
+        const discriminant = self.getDiscriminant(roc_ops);
         const payload_layout = self.getVariantLayout(discriminant);
         return .{ .discriminant = discriminant, .payload_layout = payload_layout };
     }
 };
 
 /// Create a ListAccessor for safe list element access
-pub fn asList(self: StackValue, layout_cache: *LayoutStore, element_layout: Layout) !ListAccessor {
+pub fn asList(self: StackValue, layout_cache: *LayoutStore, element_layout: Layout, roc_ops: *RocOps) !ListAccessor {
     std.debug.assert(self.is_initialized);
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
 
-    // Verify alignment before @alignCast
+    // Verify alignment before @alignCast (debug builds only for performance)
     if (comptime builtin.mode == .Debug) {
         const ptr_int = @intFromPtr(self.ptr.?);
         if (ptr_int % @alignOf(RocList) != 0) {
-            std.debug.panic("asList: self.ptr=0x{x} is not {}-byte aligned", .{ ptr_int, @alignOf(RocList) });
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[asList] alignment error: ptr=0x{x}", .{ptr_int}) catch "[asList] alignment error";
+            roc_ops.crash(msg);
         }
     }
     const header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
@@ -1093,14 +1147,16 @@ pub const ListAccessor = struct {
     }
 };
 
-fn storeListElementCount(list: *RocList, elements_refcounted: bool) void {
+fn storeListElementCount(list: *RocList, elements_refcounted: bool, roc_ops: *RocOps) void {
     if (elements_refcounted and !list.isSeamlessSlice()) {
-        if (list.getAllocationDataPtr()) |source| {
-            // Verify alignment before @alignCast
+        if (list.getAllocationDataPtr(roc_ops)) |source| {
+            // Verify alignment before @alignCast (debug builds only for performance)
             if (comptime builtin.mode == .Debug) {
                 const source_int = @intFromPtr(source);
                 if (source_int % @alignOf(usize) != 0) {
-                    std.debug.panic("storeListElementCount: source=0x{x} is not {}-byte aligned", .{ source_int, @alignOf(usize) });
+                    var buf: [64]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "[storeListElementCount] alignment error: 0x{x}", .{source_int}) catch "[storeListElementCount] alignment error";
+                    roc_ops.crash(msg);
                 }
             }
             const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
@@ -1114,12 +1170,15 @@ fn copyListValueToPtr(
     layout_cache: *LayoutStore,
     dest_ptr: *anyopaque,
     dest_layout: Layout,
+    roc_ops: *RocOps,
 ) error{ TypeMismatch, NullStackPointer }!void {
-    // Verify dest_ptr alignment before @alignCast
+    // Verify dest_ptr alignment before @alignCast (debug builds only for performance)
     if (comptime builtin.mode == .Debug) {
         const dest_ptr_int = @intFromPtr(dest_ptr);
         if (dest_ptr_int % @alignOf(RocList) != 0) {
-            std.debug.panic("copyListValueToPtr: dest_ptr=0x{x} is not {}-byte aligned", .{ dest_ptr_int, @alignOf(RocList) });
+            var buf: [64]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] dest alignment error: 0x{x}", .{dest_ptr_int}) catch "[copyListValueToPtr] alignment error";
+            roc_ops.crash(msg);
         }
     }
     var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
@@ -1131,11 +1190,13 @@ fn copyListValueToPtr(
                 dest_list.* = RocList.empty();
                 return;
             }
-            // Verify src.ptr alignment before @alignCast
+            // Verify src.ptr alignment before @alignCast (debug builds only for performance)
             if (comptime builtin.mode == .Debug) {
                 const src_ptr_int_zst = @intFromPtr(src.ptr.?);
                 if (src_ptr_int_zst % @alignOf(RocList) != 0) {
-                    std.debug.panic("copyListValueToPtr(list_of_zst): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_zst, @alignOf(RocList) });
+                    var buf: [64]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] src zst alignment error: 0x{x}", .{src_ptr_int_zst}) catch "[copyListValueToPtr] alignment error";
+                    roc_ops.crash(msg);
                 }
             }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
@@ -1149,11 +1210,13 @@ fn copyListValueToPtr(
                 return;
             }
             if (src.layout.tag != .list) return error.TypeMismatch;
-            // Verify src.ptr alignment before @alignCast
+            // Verify src.ptr alignment before @alignCast (debug builds only for performance)
             if (comptime builtin.mode == .Debug) {
                 const src_ptr_int_list = @intFromPtr(src.ptr.?);
                 if (src_ptr_int_list % @alignOf(RocList) != 0) {
-                    std.debug.panic("copyListValueToPtr(list): src.ptr=0x{x} is not {}-byte aligned", .{ src_ptr_int_list, @alignOf(RocList) });
+                    var buf: [64]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] src list alignment error: 0x{x}", .{src_ptr_int_list}) catch "[copyListValueToPtr] alignment error";
+                    roc_ops.crash(msg);
                 }
             }
             const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
@@ -1162,7 +1225,7 @@ fn copyListValueToPtr(
             const elem_layout = layout_cache.getLayout(dest_layout.data.list);
             const elements_refcounted = elem_layout.isRefcounted();
             dest_list.incref(1, elements_refcounted);
-            storeListElementCount(dest_list, elements_refcounted);
+            storeListElementCount(dest_list, elements_refcounted, roc_ops);
             return;
         },
         else => return error.TypeMismatch,
@@ -1265,9 +1328,9 @@ pub const RecordAccessor = struct {
     }
 
     /// Set a field by copying from a source StackValue
-    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue) !void {
+    pub fn setFieldByIndex(self: RecordAccessor, index: usize, source: StackValue, roc_ops: *RocOps) !void {
         const dest_field = try self.getFieldByIndex(index, source.rt_var);
-        try source.copyToPtr(self.layout_cache, dest_field.ptr.?);
+        try source.copyToPtr(self.layout_cache, dest_field.ptr.?, roc_ops);
     }
 
     /// Get the number of fields in this record
@@ -1303,13 +1366,18 @@ pub fn asRocStr(self: StackValue) *RocStr {
 }
 
 /// Get this value as a closure pointer
-pub fn asClosure(self: StackValue) *const Closure {
+pub fn asClosure(self: StackValue, roc_ops: *RocOps) *const Closure {
     std.debug.assert(self.layout.tag == .closure);
     std.debug.assert(self.ptr != null);
-    const ptr_val = @intFromPtr(self.ptr.?);
-    const required_align = @alignOf(Closure);
-    if (ptr_val % required_align != 0) {
-        std.debug.panic("[asClosure] ALIGNMENT MISMATCH: ptr=0x{x} required_align={} (mod={})", .{ ptr_val, required_align, ptr_val % required_align });
+    // Alignment check (debug builds only for performance)
+    if (comptime builtin.mode == .Debug) {
+        const ptr_val = @intFromPtr(self.ptr.?);
+        const required_align = @alignOf(Closure);
+        if (ptr_val % required_align != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[asClosure] alignment error: ptr=0x{x} align={}", .{ ptr_val, required_align }) catch "[asClosure] alignment error";
+            roc_ops.crash(msg);
+        }
     }
     return @ptrCast(@alignCast(self.ptr.?));
 }
@@ -1329,12 +1397,12 @@ pub fn moveForBinding(self: StackValue) StackValue {
 }
 
 /// Copy value data to another StackValue (with special string handling)
-pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
+pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
     std.debug.assert(self.is_initialized);
     std.debug.assert(dest.ptr != null);
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
-    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
+    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache, roc_ops) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
@@ -1358,7 +1426,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
                 });
             }
         }
-        dest_str.incref(1);
+        dest_str.incref(1, roc_ops);
         return;
     }
 
@@ -1375,10 +1443,10 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
         if (self.layout.tag == .list) {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
             const elements_refcounted = elem_layout.isRefcounted();
-            dest_list.incref(1, elements_refcounted);
-            storeListElementCount(dest_list, elements_refcounted);
+            dest_list.incref(1, elements_refcounted, roc_ops);
+            storeListElementCount(dest_list, elements_refcounted, roc_ops);
         } else {
-            dest_list.incref(1, false);
+            dest_list.incref(1, false, roc_ops);
         }
         return;
     }
@@ -1389,7 +1457,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
         dest_slot.* = src_slot.*;
         if (dest_slot.* != 0) {
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
-            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
     }
@@ -1409,12 +1477,12 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) vo
 }
 
 /// Copy value data to another StackValue WITHOUT incrementing refcounts (move semantics)
-pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *LayoutStore) void {
+pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
     std.debug.assert(self.is_initialized);
     std.debug.assert(dest.ptr != null);
 
     // For closures, use getTotalSize to include capture data; for others use layoutSize
-    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache) else layout_cache.layoutSize(self.layout);
+    const size = if (self.layout.tag == .closure) self.getTotalSize(layout_cache, roc_ops) else layout_cache.layoutSize(self.layout);
     if (size == 0) return;
 
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
@@ -1440,7 +1508,7 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
 
 /// Increment reference count for refcounted types.
 /// Must be symmetric with decref - handles records and tuples by recursively incref'ing fields.
-pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
+pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
     if (comptime trace_refcount) {
         traceRefcount("INCREF layout.tag={} ptr=0x{x}", .{ @intFromEnum(self.layout.tag), @intFromPtr(self.ptr) });
     }
@@ -1470,7 +1538,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
                 });
             }
         }
-        roc_str.incref(1);
+        roc_str.incref(1, roc_ops);
         return;
     }
     if (self.layout.tag == .list) {
@@ -1478,12 +1546,12 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
         const list_value = @as(*const RocList, @ptrCast(@alignCast(self.ptr.?))).*;
         if (comptime trace_refcount) {
             traceRefcount("INCREF list ptr=0x{x} len={}", .{
-                @intFromPtr(list_value.getAllocationDataPtr()),
+                @intFromPtr(list_value.getAllocationDataPtr(roc_ops)),
                 list_value.len(),
             });
         }
         // We don't know element layout here to store counts; assume caller already handled
-        list_value.incref(1, false);
+        list_value.incref(1, false, roc_ops);
         return;
     }
     if (self.layout.tag == .box) {
@@ -1494,18 +1562,18 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
                 traceRefcount("INCREF box ptr=0x{x}", .{slot.*});
             }
             const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
-            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1);
+            builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
     }
     // Handle records by recursively incref'ing each field (symmetric with decref)
     if (self.layout.tag == .record) {
-        increfLayoutPtr(self.layout, self.ptr, layout_cache);
+        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops);
         return;
     }
     // Handle tuples by recursively incref'ing each element (symmetric with decref)
     if (self.layout.tag == .tuple) {
-        increfLayoutPtr(self.layout, self.ptr, layout_cache);
+        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops);
         return;
     }
     // Handle tag unions by reading discriminant and incref'ing only the active variant's payload
@@ -1516,18 +1584,31 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
 
         // Read discriminant to determine active variant
         const disc_ptr = base_ptr + tu_data.discriminant_offset;
-        const disc_ptr_val = @intFromPtr(disc_ptr);
         const discriminant: u32 = switch (tu_data.discriminant_size) {
             1 => @as(*const u8, @ptrCast(disc_ptr)).*,
             2 => blk: {
-                if (disc_ptr_val % @alignOf(u16) != 0) std.debug.panic("[copyToPtr tag_union] u16 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                if (comptime builtin.mode == .Debug) {
+                    const disc_ptr_val = @intFromPtr(disc_ptr);
+                    if (disc_ptr_val % @alignOf(u16) != 0) {
+                        var buf: [64]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[incref tag_union] u16 alignment error: 0x{x}", .{disc_ptr_val}) catch "[incref] alignment error";
+                        roc_ops.crash(msg);
+                    }
+                }
                 break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
             },
             4 => blk: {
-                if (disc_ptr_val % @alignOf(u32) != 0) std.debug.panic("[copyToPtr tag_union] u32 disc alignment error: disc_ptr=0x{x}", .{disc_ptr_val});
+                if (comptime builtin.mode == .Debug) {
+                    const disc_ptr_val = @intFromPtr(disc_ptr);
+                    if (disc_ptr_val % @alignOf(u32) != 0) {
+                        var buf: [64]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&buf, "[incref tag_union] u32 alignment error: 0x{x}", .{disc_ptr_val}) catch "[incref] alignment error";
+                        roc_ops.crash(msg);
+                    }
+                }
                 break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
             },
-            else => unreachable,
+            else => debugUnreachable(roc_ops, "invalid discriminant size in tag_union incref", @src()),
         };
 
         // Get the active variant's payload layout
@@ -1540,7 +1621,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
             traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
         }
 
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache, roc_ops);
         return;
     }
     // Handle closures by incref'ing their captures (symmetric with decref)
@@ -1564,7 +1645,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore) void {
                 const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
                 const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
                 const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
-                increfLayoutPtr(captures_layout, rec_ptr, layout_cache);
+                increfLayoutPtr(captures_layout, rec_ptr, layout_cache, roc_ops);
             }
         }
         return;
@@ -1646,16 +1727,16 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                     @intFromPtr(list_value.getAllocationDataPtr()),
                     list_value.len(),
                     @intFromBool(elements_refcounted),
-                    @intFromBool(list_value.isUnique()),
+                    @intFromBool(list_value.isUnique(ops)),
                 });
             }
 
             // Always decref elements when unique, not just when isRefcounted().
             // Records/tuples containing refcounted values also need their fields decreffed.
             // Decref for non-refcounted types (like plain integers) is a no-op.
-            if (list_value.isUnique()) {
-                if (list_value.getAllocationDataPtr()) |source| {
-                    const count = list_value.getAllocationElementCount(elements_refcounted);
+            if (list_value.isUnique(ops)) {
+                if (list_value.getAllocationDataPtr(ops)) |source| {
+                    const count = list_value.getAllocationElementCount(elements_refcounted, ops);
 
                     if (comptime trace_refcount) {
                         traceRefcount("DECREF list decref-ing {} elements", .{count});
@@ -1770,7 +1851,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 1 => @as(*const u8, @ptrCast(disc_ptr)).*,
                 2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
                 4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                else => unreachable,
+                else => debugUnreachable(ops, "invalid discriminant size in tag_union decref", @src()),
             };
 
             // Get the active variant's payload layout
@@ -1801,9 +1882,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 ///
 /// - For closures, this includes both the Closure header and captured data
 /// - For all other types, this is just the layout size
-pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore) u32 {
+pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) u32 {
     if (self.layout.tag == .closure and self.ptr != null) {
-        const closure = self.asClosure();
+        const closure = self.asClosure(roc_ops);
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
         const captures_alignment = captures_layout.alignment(layout_cache.targetUsize());
         const header_size = @sizeOf(Closure);

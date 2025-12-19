@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const builtins = @import("builtins");
 const base = @import("base");
 const can = @import("can");
@@ -15,6 +16,25 @@ const collections = @import("collections");
 const import_mapping_mod = types.import_mapping;
 const eval = @import("eval");
 const tracy = @import("tracy");
+
+// Module tracing flag - enabled via `zig build -Dtrace-modules`
+const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
+
+// Helper to emit trace messages when trace_modules is enabled.
+// On native platforms, uses std.debug.print. On WASM, uses roc_ops.dbg().
+fn traceDbg(roc_ops: *RocOps, comptime fmt: []const u8, args: anytype) void {
+    if (comptime trace_modules) {
+        if (comptime builtin.cpu.arch == .wasm32) {
+            // WASM: use roc_ops.dbg() since std.debug.print is unavailable
+            var buf: [512]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "[TRACE-MODULES] " ++ fmt ++ "\n", args) catch "[TRACE-MODULES] (message too long)\n";
+            roc_ops.dbg(msg);
+        } else {
+            // Native: use std.debug.print
+            std.debug.print("[TRACE-MODULES] " ++ fmt ++ "\n", args);
+        }
+    }
+}
 
 // Platform detection
 const is_wasm32 = builtin.cpu.arch == .wasm32;
@@ -372,8 +392,16 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const def = env_ptr.store.getDef(def_idx);
     const expr_idx = def.expr;
 
+    // WASM-compatible tracing for entry point evaluation
+    traceDbg(roc_ops, "Evaluating entry_idx={d}, def_idx={d}, expr_idx={d}", .{ entry_idx, def_idx_raw, @intFromEnum(expr_idx) });
+
     // Evaluate the expression (with optional arguments)
-    try interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr);
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
+        if (err == error.TypeMismatch) {
+            roc_ops.crash("TypeMismatch from evaluateExpression");
+        }
+        return err;
+    };
 }
 
 /// Result of setting up module environments
@@ -702,15 +730,34 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         return error.OutOfMemory;
     };
 
+    traceDbg(roc_ops, "=== Interpreter Shim Initialization ===", .{});
+    traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
+    if (app_env) |a_env| {
+        traceDbg(roc_ops, "app_env=\"{s}\"", .{a_env.module_name});
+    }
+
     // Resolve imports - map each import name to its index in imported_envs
+    traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
     env_ptr.imports.resolveImports(env_ptr, imported_envs);
 
     // Also resolve imports for the app env if it's different from the primary env
     // This is needed when the platform calls the app's main! via e_lookup_required
     if (app_env) |a_env| {
         if (a_env != env_ptr) {
+            traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{a_env.module_name});
             a_env.imports.resolveImports(a_env, imported_envs);
         }
+    }
+
+    // Also resolve imports for all imported module environments.
+    // This is needed when module A imports module B, and the interpreter evaluates
+    // code in A that calls into B (transitive module calls).
+    // Without this, A's import of B remains unresolved, causing "unresolved import"
+    // or TypeMismatch errors when A's code tries to call B.
+    traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
+    for (imported_envs) |imp_env| {
+        traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
+        @constCast(imp_env).imports.resolveImports(imp_env, imported_envs);
     }
 
     // Enable runtime inserts on all deserialized module environments.
@@ -737,8 +784,43 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         };
     }
 
-    const interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env) catch {
+    // Fix up module_name_idx for deserialized modules.
+    // Deserialized modules have module_name_idx set to NONE because the interner
+    // was read-only during deserialization. Now that enableRuntimeInserts has been
+    // called, we can insert the module names to enable runtime method lookups.
+    // This is critical for nominal type method dispatch (e.g., is_eq).
+    if (env_ptr.module_name_idx.isNone() and env_ptr.module_name.len > 0) {
+        env_ptr.module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for platform env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+    if (app_env) |a_env| {
+        if (a_env.module_name_idx.isNone() and a_env.module_name.len > 0) {
+            @constCast(a_env).module_name_idx = @constCast(a_env).insertIdent(base.Ident.for_text(a_env.module_name)) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for app env");
+                return error.InterpreterSetupFailed;
+            };
+        }
+    }
+    for (imported_envs) |imp_env| {
+        if (imp_env.module_name_idx.isNone() and imp_env.module_name.len > 0) {
+            @constCast(imp_env).module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for imported env");
+                return error.InterpreterSetupFailed;
+            };
+        }
+    }
+
+    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
+        return error.InterpreterSetupFailed;
+    };
+
+    // Setup for-clause type mappings from platform to app.
+    // This maps rigid variable names (like "model") to their concrete app types.
+    interpreter.setupForClauseTypeMappings(env_ptr) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
         return error.InterpreterSetupFailed;
     };
 

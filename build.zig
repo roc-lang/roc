@@ -622,6 +622,222 @@ const CheckUnusedSuppressionStep = struct {
     }
 };
 
+/// Build step that checks for @panic and std.debug.panic usage in interpreter and builtins.
+///
+/// In Roc's design philosophy, compile-time errors become runtime errors with helpful messages.
+/// Users can run apps despite errors, and we provide actionable feedback. Using @panic unwinds
+/// the stack and prevents showing helpful error messages.
+///
+/// Additionally, in WASM builds, @panic compiles to the `unreachable` instruction with no
+/// message output, making debugging impossible. All runtime code must use roc_ops.crash()
+/// to ensure error messages are properly displayed.
+const CheckPanicStep = struct {
+    step: Step,
+
+    // Files to scan individually
+    const scan_files = [_][]const u8{
+        "src/eval/interpreter.zig",
+        "src/eval/StackValue.zig",
+    };
+
+    // Directories to scan (all .zig files within)
+    const scan_dirs = [_][]const u8{
+        "src/builtins",
+    };
+
+    // Files to exclude from scanning (test-only files)
+    const excluded_files = [_][]const u8{
+        "fuzz_sort.zig",
+    };
+
+    // Line-level allowlist patterns - if any of these appear on the line, allow the @panic
+    const allowlist_patterns = [_][]const u8{
+        "trace_modules", // traceDbg helper in interpreter
+    };
+
+    // File-specific line ranges to exclude (test-only code)
+    // Format: { file_suffix, start_line, end_line }
+    const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
+    const excluded_ranges = [_]ExcludedRange{
+        // TestEnv struct in utils.zig is test-only (lines 60-214)
+        .{ .file = "utils.zig", .start = 60, .end = 214 },
+    };
+
+    fn create(b: *std.Build) *CheckPanicStep {
+        const self = b.allocator.create(CheckPanicStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-panic-usage",
+                .owner = b,
+                .makeFn = makePanic,
+            }),
+        };
+        return self;
+    }
+
+    fn isExcludedFile(file_name: []const u8) bool {
+        for (excluded_files) |excluded| {
+            if (std.mem.eql(u8, file_name, excluded)) return true;
+        }
+        return false;
+    }
+
+    fn isAllowlisted(line: []const u8) bool {
+        for (allowlist_patterns) |pattern| {
+            if (std.mem.indexOf(u8, line, pattern) != null) return true;
+        }
+        return false;
+    }
+
+    fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
+        for (excluded_ranges) |range| {
+            if (std.mem.endsWith(u8, file_path, range.file)) {
+                if (line_number >= range.start and line_number <= range.end) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn scanFile(allocator: std.mem.Allocator, file_path: []const u8, violations: *std.ArrayList(Violation)) !void {
+        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+            std.debug.print("Warning: Failed to open {s}: {}\n", .{ file_path, err });
+            return;
+        };
+        defer file.close();
+
+        const content = file.readToEndAlloc(allocator, 50 * 1024 * 1024) catch |err| {
+            std.debug.print("Warning: Failed to read {s}: {}\n", .{ file_path, err });
+            return;
+        };
+        defer allocator.free(content);
+
+        var line_number: usize = 1;
+        var line_start: usize = 0;
+
+        for (content, 0..) |char, i| {
+            if (char == '\n') {
+                const line = content[line_start..i];
+                const trimmed = std.mem.trim(u8, line, " \t");
+
+                // Skip comments
+                if (!std.mem.startsWith(u8, trimmed, "//")) {
+                    // Check for @panic usage
+                    const has_panic = std.mem.indexOf(u8, line, "@panic(") != null;
+                    // Check for std.debug.panic usage
+                    const has_debug_panic = std.mem.indexOf(u8, line, "std.debug.panic") != null;
+
+                    if (has_panic or has_debug_panic) {
+                        if (!isAllowlisted(line) and !isInExcludedRange(file_path, line_number)) {
+                            try violations.append(allocator, .{
+                                .file_path = try allocator.dupe(u8, file_path),
+                                .line_number = line_number,
+                                .line_content = try allocator.dupe(u8, trimmed),
+                            });
+                        }
+                    }
+                }
+
+                line_number += 1;
+                line_start = i + 1;
+            }
+        }
+    }
+
+    fn makePanic(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+
+        var violations = std.ArrayList(Violation).empty;
+        defer violations.deinit(allocator);
+
+        // Scan individual files
+        for (scan_files) |file_path| {
+            try scanFile(allocator, file_path, &violations);
+        }
+
+        // Scan directories
+        for (scan_dirs) |dir_path| {
+            var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+                std.debug.print("Warning: Failed to open directory {s}: {}\n", .{ dir_path, err });
+                continue;
+            };
+            defer dir.close();
+
+            var iter = dir.iterate();
+            while (try iter.next()) |entry| {
+                if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
+                    if (!isExcludedFile(entry.name)) {
+                        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+                        defer allocator.free(full_path);
+                        try scanFile(allocator, full_path, &violations);
+                    }
+                }
+            }
+        }
+
+        if (violations.items.len > 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 80 ++ "\n", .{});
+            std.debug.print("FORBIDDEN PATTERN: @panic / std.debug.panic in runtime code\n", .{});
+            std.debug.print("=" ** 80 ++ "\n\n", .{});
+
+            std.debug.print(
+                \\Using @panic or std.debug.panic is forbidden in interpreter and builtins.
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  1. Roc's design philosophy is that compile-time errors become runtime errors with
+                \\     helpful messages. Users can run apps despite errors, and we provide actionable
+                \\     feedback. @panic unwinds the stack and prevents us from showing helpful errors.
+                \\
+                \\  2. In WASM builds, @panic compiles to the `unreachable` instruction with NO
+                \\     message output, making debugging impossible.
+                \\
+                \\WHAT TO DO INSTEAD:
+                \\  In interpreter.zig, use the triggerCrash() method:
+                \\
+                \\    self.triggerCrash("Description of the error", false, roc_ops);
+                \\
+                \\  In StackValue.zig and builtins, use roc_ops.crash():
+                \\
+                \\    roc_ops.crash("Description of the error");
+                \\
+                \\  For debug output, use roc_ops.dbg():
+                \\
+                \\    roc_ops.dbg("Debug message");
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            , .{});
+
+            for (violations.items) |violation| {
+                std.debug.print("  {s}:{d}: {s}\n", .{
+                    violation.file_path,
+                    violation.line_number,
+                    violation.line_content,
+                });
+            }
+
+            std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
+
+            return step.fail(
+                "Found {d} uses of @panic or std.debug.panic in runtime code. " ++
+                    "Use roc_ops.crash() to report errors through the proper RocOps crash handler. " ++
+                    "See above for details.",
+                .{violations.items.len},
+            );
+        }
+    }
+
+    const Violation = struct {
+        file_path: []const u8,
+        line_number: usize,
+        line_content: []const u8,
+    };
+};
+
 /// Build step that checks for global stdio usage in CLI code.
 ///
 /// The CLI code uses a context-based I/O pattern where stdout/stderr are accessed
@@ -1429,6 +1645,7 @@ pub fn build(b: *std.Build) void {
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
+    const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
 
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
@@ -1461,6 +1678,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "enable_tracy", flag_enable_tracy != null);
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption(bool, "trace_refcount", trace_refcount);
+    build_options.addOption(bool, "trace_modules", trace_modules);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
@@ -1596,9 +1814,42 @@ pub fn build(b: *std.Build) void {
     roc_step.dependOn(clear_cache_step);
     b.getInstallStep().dependOn(clear_cache_step);
 
+    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
+    const test_runner_exe = b.addExecutable(.{
+        .name = "test_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/test/test_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(test_runner_exe);
+
     // CLI integration tests - run actual roc programs like CI does
+    // These tests can run in parallel since each build uses content-hashed shim files
     if (!no_bin) {
         const install = b.addInstallArtifact(roc_exe, .{});
+        const install_runner = b.addInstallArtifact(test_runner_exe, .{});
+
+        // Test int platform (native mode only for now)
+        const run_int_tests = b.addRunArtifact(test_runner_exe);
+        run_int_tests.addArg("zig-out/bin/roc");
+        run_int_tests.addArg("int");
+        run_int_tests.addArg("--mode=native");
+        run_int_tests.step.dependOn(&install.step);
+        run_int_tests.step.dependOn(&install_runner.step);
+        run_int_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_int_tests.step);
+
+        // Test str platform (native mode only for now)
+        const run_str_tests = b.addRunArtifact(test_runner_exe);
+        run_str_tests.addArg("zig-out/bin/roc");
+        run_str_tests.addArg("str");
+        run_str_tests.addArg("--mode=native");
+        run_str_tests.step.dependOn(&install.step);
+        run_str_tests.step.dependOn(&install_runner.step);
+        run_str_tests.step.dependOn(test_platforms_step);
+        test_cli_step.dependOn(&run_str_tests.step);
 
         // Roc subcommands integration test
         const roc_subcommands_test = b.addTest(.{
@@ -1616,10 +1867,7 @@ pub fn build(b: *std.Build) void {
             run_roc_subcommands_test.addArgs(run_args);
         }
         run_roc_subcommands_test.step.dependOn(&install.step);
-
-        // test-cli needs the test platforms to be built and copied first
         run_roc_subcommands_test.step.dependOn(test_platforms_step);
-
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
     }
 
@@ -1668,17 +1916,6 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
-
-    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
-    const test_runner_exe = b.addExecutable(.{
-        .name = "test_runner",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/test/test_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(test_runner_exe);
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -1948,6 +2185,10 @@ pub fn build(b: *std.Build) void {
     // Add check for unused variable suppression patterns
     const check_unused = CheckUnusedSuppressionStep.create(b);
     test_step.dependOn(&check_unused.step);
+
+    // Check for @panic and std.debug.panic in interpreter and builtins
+    const check_panic = CheckPanicStep.create(b);
+    test_step.dependOn(&check_panic.step);
 
     // Add check for global stdio usage in CLI code
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);

@@ -88,13 +88,11 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                 }
                 const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
 
-                // Create an e_runtime_error body that crashes when the function is called in the interpreter
-                const error_msg_lit = try env.insertString("Hosted functions cannot be called in the interpreter");
-                const diagnostic_idx = try env.addDiagnostic(.{ .not_implemented = .{
-                    .feature = error_msg_lit,
-                    .region = def_region,
-                } });
-                const body_idx = try env.addExpr(.{ .e_runtime_error = .{ .diagnostic = diagnostic_idx } }, def_region);
+                // Create an e_crash body that crashes when the function is called in the interpreter.
+                // This is a placeholder - hosted functions are provided by the platform's native code,
+                // so this body should never be evaluated during normal compilation/execution.
+                const crash_msg = try env.insertString("Hosted functions cannot be called in the interpreter");
+                const body_idx = try env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, def_region);
 
                 // Ensure types array has entries for all new expressions
                 const body_int = @intFromEnum(body_idx);

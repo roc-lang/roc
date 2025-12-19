@@ -102,7 +102,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         break :blk result.asI128();
     } else blk: {
         // Unsuffixed numeric literals default to Dec, so extract the integer value
-        const dec_value = result.asDec();
+        const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
         // Convert Dec to integer by dividing by the decimal scale factor
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
@@ -245,7 +245,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer result.decref(layout_cache, ops);
     defer interpreter.cleanupBindings(ops);
 
-    const actual_dec = result.asDec();
+    const actual_dec = result.asDec(ops);
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
         return error.TestExpectedEqual;
@@ -348,7 +348,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             break :blk element.asI128();
         } else blk: {
             // Unsuffixed numeric literals default to Dec
-            const dec_value = element.asDec();
+            const dec_value = element.asDec(ops);
             const RocDec = builtins.dec.RocDec;
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
@@ -414,7 +414,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     break :blk field_value.asI128();
                 } else blk: {
                     // Unsuffixed numeric literals default to Dec
-                    const dec_value = field_value.asDec();
+                    const dec_value = field_value.asDec(ops);
                     const RocDec = builtins.dec.RocDec;
                     break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
                 };
@@ -459,7 +459,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const elem_layout = layout_cache.getLayout(elem_layout_idx);
 
     // Use the ListAccessor to safely access list elements
-    const list_accessor = try result.asList(layout_cache, elem_layout);
+    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
 
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
@@ -515,7 +515,7 @@ pub fn runExpectListI64WithStrictLayout(src: []const u8, expected_elements: []co
     const elem_layout = layout_cache.getLayout(elem_layout_idx);
 
     // Use the ListAccessor to safely access list elements
-    const list_accessor = try result.asList(layout_cache, elem_layout);
+    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
 
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
@@ -859,7 +859,7 @@ test "interpreter reuse across multiple evaluations" {
                 .int => result.asI128(),
                 .frac => blk: {
                     try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
-                    const dec_value = result.asDec();
+                    const dec_value = result.asDec(ops);
                     // Dec stores values scaled by 10^18, divide to get the integer part
                     break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },

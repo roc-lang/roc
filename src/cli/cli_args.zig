@@ -92,6 +92,7 @@ pub const BuildArgs = struct {
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
+    z_dump_linker: bool = false, // dump linker inputs to temp directory for debugging
 };
 
 /// Arguments for `roc test`
@@ -271,6 +272,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var wasm_stack_size: ?usize = null;
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
+    var z_dump_linker: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -291,6 +293,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
             \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
+            \\      --z-dump-linker                Dump linker inputs to temp directory for debugging
             \\      -h, --help                     Print help
             \\
         };
@@ -348,6 +351,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--wasm-stack-size" } } };
             }
+        } else if (mem.eql(u8, arg, "--z-dump-linker")) {
+            z_dump_linker = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -355,7 +360,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

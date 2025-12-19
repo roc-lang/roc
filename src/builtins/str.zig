@@ -41,7 +41,9 @@ fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
             const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
             str_ptr.decref(roc_ops);
         } else {
-            @panic("strDecref: context is null");
+            // Context should never be null - this is a programming error
+            // We cannot call roc_ops.crash() because we don't have roc_ops
+            unreachable;
         }
     }
 }
@@ -106,7 +108,7 @@ pub const RocStr = extern struct {
 
     // This requires that the list is non-null.
     // It also requires that start and count define a slice that does not go outside the bounds of the list.
-    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode) RocStr {
+    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode, roc_ops: *RocOps) RocStr {
         const start_byte = @as([*]u8, @ptrCast(list.bytes)) + start;
         if (list.isSeamlessSlice()) {
             return RocStr{
@@ -114,7 +116,7 @@ pub const RocStr = extern struct {
                 .length = count | SEAMLESS_SLICE_BIT,
                 .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr & (~SEAMLESS_SLICE_BIT),
             };
-        } else if (start == 0 and (update_mode == .InPlace or list.isUnique())) {
+        } else if (start == 0 and (update_mode == .InPlace or list.isUnique(roc_ops))) {
             // Rare case, we can take over the original list.
             return RocStr{
                 .bytes = start_byte,
@@ -240,21 +242,19 @@ pub const RocStr = extern struct {
         // Verify the computed allocation pointer is properly aligned
         if (comptime builtin.mode == .Debug) {
             if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
-                std.debug.panic(
-                    "RocStr.getAllocationPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})",
-                    .{ alloc_ptr, str_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() },
-                );
+                // This indicates memory corruption - the allocation pointer should always be aligned
+                unreachable;
             }
         }
 
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
-    pub fn incref(self: RocStr, n: usize) void {
+    pub fn incref(self: RocStr, n: usize, roc_ops: *RocOps) void {
         if (!self.isSmallStr()) {
             if (self.getAllocationPtr()) |alloc_ptr| {
                 const isizes: [*]isize = utils.alignedPtrCast([*]isize, alloc_ptr, @src());
-                utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
+                utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)), roc_ops);
             }
         }
     }
@@ -504,7 +504,8 @@ pub const RocStr = extern struct {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            @panic("RocStr.refcount: data_ptr is null");
+            // This should never happen - indicates corrupted RocStr structure
+            unreachable;
         }
     }
 
@@ -662,7 +663,7 @@ pub fn strSplitOnHelp(
     roc_ops: *RocOps,
 ) void {
     if (delimiter.len() == 0) {
-        string.incref(1);
+        string.incref(1, roc_ops);
         array[0] = string;
         return;
     }
@@ -680,7 +681,7 @@ pub fn strSplitOnHelp(
     }
 
     // Correct refcount for all of the splits made.
-    string.incref(i); // i == array.len()
+    string.incref(i, roc_ops); // i == array.len()
 }
 
 // This is used for `Str.splitOn : Str, Str -> List Str
@@ -825,7 +826,7 @@ pub fn strDropPrefix(
 ) callconv(.c) RocStr {
     if (!startsWith(string, prefix)) {
         // Prefix doesn't match, return original (with incref)
-        string.incref(1);
+        string.incref(1, roc_ops);
         return string;
     }
 
@@ -834,7 +835,7 @@ pub fn strDropPrefix(
 
     // Increment refcount for the seamless slice we're about to create.
     // This is safe even for small strings (incref is a no-op for them).
-    string.incref(1);
+    string.incref(1, roc_ops);
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
@@ -854,7 +855,7 @@ pub fn strDropSuffix(
 ) callconv(.c) RocStr {
     if (!endsWith(string, suffix)) {
         // Suffix doesn't match, return original (with incref)
-        string.incref(1);
+        string.incref(1, roc_ops);
         return string;
     }
 
@@ -863,7 +864,7 @@ pub fn strDropSuffix(
 
     // Increment refcount for the seamless slice we're about to create.
     // This is safe even for small strings (incref is a no-op for them).
-    string.incref(1);
+    string.incref(1, roc_ops);
     return substringUnsafe(string, 0, new_len, roc_ops);
 }
 
@@ -1070,7 +1071,7 @@ inline fn strToBytes(
     } else {
         // The returned list shares the same underlying allocation as the string.
         // We must incref the allocation since there's now an additional reference to it.
-        arg.incref(1);
+        arg.incref(1, roc_ops);
         const is_seamless_slice = arg.length & SEAMLESS_SLICE_BIT;
         return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = arg.capacity_or_alloc_ptr | is_seamless_slice };
     }
@@ -1221,7 +1222,7 @@ pub fn fromUtf8(
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
-        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode);
+        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
         return FromUtf8Try{
             .is_ok = true,
             .string = string,

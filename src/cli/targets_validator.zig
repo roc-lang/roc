@@ -728,7 +728,7 @@ test "validatePlatformHasTargets detects missing targets section" {
     // Platform without targets section
     const source =
         \\platform ""
-        \\    requires {} { main : {} }
+        \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
         \\    provides { main_for_host: "main" }
@@ -764,7 +764,7 @@ test "validatePlatformHasTargets accepts platform with targets section" {
     // Platform with targets section
     const source =
         \\platform ""
-        \\    requires {} { main : {} }
+        \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
         \\    provides { main_for_host: "main" }
@@ -825,7 +825,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
     // Platform with exe and static_lib targets
     const source =
         \\platform ""
-        \\    requires {} { main : {} }
+        \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
         \\    provides { main_for_host: "main" }
@@ -863,7 +863,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
     // Platform with win_gui special identifier
     const source =
         \\platform ""
-        \\    requires {} { main : {} }
+        \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
         \\    provides { main_for_host: "main" }
@@ -896,7 +896,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     // Platform with various targets
     const source =
         \\platform ""
-        \\    requires {} { main : {} }
+        \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
         \\    provides { main_for_host: "main" }
