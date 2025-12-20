@@ -7,60 +7,71 @@ type=file
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-fail : a -> a
-fail = |x| {
-    g : b -> b
+test_scoped : a, b -> a
+test_scoped = |a, b| {
+		# Beacuse we introduce `a` at an outer rank and `f` references `a`,
+		# `f` is _not_ generalized
+    f : a -> a
+    f = |z| z
+
+		# Because this as no annotation, it is generalized
     g = |z| z
 
-		result : c
-		result = g(x)
+		# No err because we correctly provide `a` as the arg
+		result : a
+		result = f(a)
+
+		# Err because we incorrectly provide `b` as the arg
+		_result2 : b
+		_result2 = f(b)
+
+		# No err because `f` is generalized
+		_result3 : a
+		_result3 = g(a)
+
+		# No err because `f` is generalized
+		_result4 : b
+		_result4 = g(b)
 
 		result
-}
-
-pass : a -> a
-pass = |x| {
-    inner : a -> a
-    inner = |y| y
-
-    inner(x)
 }
 
 main! = |_| {}
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_local_scope_vars.md:9:12:9:16
+TYPE MISMATCH - type_local_scope_vars.md:19:16:19:17
 # PROBLEMS
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**type_local_scope_vars.md:9:12:9:16:**
+The first argument being passed to this function has the wrong type:
+**type_local_scope_vars.md:19:16:19:17:**
 ```roc
-		result = g(x)
+		_result2 = f(b)
 ```
-		         ^^^^
+		             ^
 
-It has the type:
+This argument has the type:
+    _b_
+
+But `f` needs the first argument to be:
     _a_
-
-But the type annotation says it should have the type:
-    _c_
 
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
+LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
-LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
 LowerIdent,OpColon,LowerIdent,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+NamedUnderscore,OpColon,LowerIdent,
+NamedUnderscore,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+NamedUnderscore,OpColon,LowerIdent,
+NamedUnderscore,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
+NamedUnderscore,OpColon,LowerIdent,
+NamedUnderscore,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,
-CloseCurly,
-LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
-LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
-LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 CloseCurly,
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,CloseCurly,
 EndOfFile,
@@ -80,21 +91,29 @@ EndOfFile,
 				(e-string
 					(e-string-part (raw "../basic-cli/main.roc"))))))
 	(statements
-		(s-type-anno (name "fail")
+		(s-type-anno (name "test_scoped")
 			(ty-fn
 				(ty-var (raw "a"))
+				(ty-var (raw "b"))
 				(ty-var (raw "a"))))
 		(s-decl
-			(p-ident (raw "fail"))
+			(p-ident (raw "test_scoped"))
 			(e-lambda
 				(args
-					(p-ident (raw "x")))
+					(p-ident (raw "a"))
+					(p-ident (raw "b")))
 				(e-block
 					(statements
-						(s-type-anno (name "g")
+						(s-type-anno (name "f")
 							(ty-fn
-								(ty-var (raw "b"))
-								(ty-var (raw "b"))))
+								(ty-var (raw "a"))
+								(ty-var (raw "a"))))
+						(s-decl
+							(p-ident (raw "f"))
+							(e-lambda
+								(args
+									(p-ident (raw "z")))
+								(e-ident (raw "z"))))
 						(s-decl
 							(p-ident (raw "g"))
 							(e-lambda
@@ -102,37 +121,34 @@ EndOfFile,
 									(p-ident (raw "z")))
 								(e-ident (raw "z"))))
 						(s-type-anno (name "result")
-							(ty-var (raw "c")))
+							(ty-var (raw "a")))
 						(s-decl
 							(p-ident (raw "result"))
 							(e-apply
-								(e-ident (raw "g"))
-								(e-ident (raw "x"))))
-						(e-ident (raw "result"))))))
-		(s-type-anno (name "pass")
-			(ty-fn
-				(ty-var (raw "a"))
-				(ty-var (raw "a"))))
-		(s-decl
-			(p-ident (raw "pass"))
-			(e-lambda
-				(args
-					(p-ident (raw "x")))
-				(e-block
-					(statements
-						(s-type-anno (name "inner")
-							(ty-fn
-								(ty-var (raw "a"))
-								(ty-var (raw "a"))))
+								(e-ident (raw "f"))
+								(e-ident (raw "a"))))
+						(s-type-anno (name "_result2")
+							(ty-var (raw "b")))
 						(s-decl
-							(p-ident (raw "inner"))
-							(e-lambda
-								(args
-									(p-ident (raw "y")))
-								(e-ident (raw "y"))))
-						(e-apply
-							(e-ident (raw "inner"))
-							(e-ident (raw "x")))))))
+							(p-ident (raw "_result2"))
+							(e-apply
+								(e-ident (raw "f"))
+								(e-ident (raw "b"))))
+						(s-type-anno (name "_result3")
+							(ty-var (raw "a")))
+						(s-decl
+							(p-ident (raw "_result3"))
+							(e-apply
+								(e-ident (raw "g"))
+								(e-ident (raw "a"))))
+						(s-type-anno (name "_result4")
+							(ty-var (raw "b")))
+						(s-decl
+							(p-ident (raw "_result4"))
+							(e-apply
+								(e-ident (raw "g"))
+								(e-ident (raw "b"))))
+						(e-ident (raw "result"))))))
 		(s-decl
 			(p-ident (raw "main!"))
 			(e-lambda
@@ -144,23 +160,33 @@ EndOfFile,
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-fail : a -> a
-fail = |x| {
-	g : b -> b
+test_scoped : a, b -> a
+test_scoped = |a, b| {
+	# Beacuse we introduce `a` at an outer rank and `f` references `a`,
+	# `f` is _not_ generalized
+	f : a -> a
+	f = |z| z
+
+	# Because this as no annotation, it is generalized
 	g = |z| z
 
-	result : c
-	result = g(x)
+	# No err because we correctly provide `a` as the arg
+	result : a
+	result = f(a)
+
+	# Err because we incorrectly provide `b` as the arg
+	_result2 : b
+	_result2 = f(b)
+
+	# No err because `f` is generalized
+	_result3 : a
+	_result3 = g(a)
+
+	# No err because `f` is generalized
+	_result4 : b
+	_result4 = g(b)
 
 	result
-}
-
-pass : a -> a
-pass = |x| {
-	inner : a -> a
-	inner = |y| y
-
-	inner(x)
 }
 
 main! = |_| {}
@@ -169,11 +195,19 @@ main! = |_| {}
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "fail"))
+		(p-assign (ident "test_scoped"))
 		(e-lambda
 			(args
-				(p-assign (ident "x")))
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
 			(e-block
+				(s-let
+					(p-assign (ident "f"))
+					(e-lambda
+						(args
+							(p-assign (ident "z")))
+						(e-lookup-local
+							(p-assign (ident "z")))))
 				(s-let
 					(p-assign (ident "g"))
 					(e-lambda
@@ -185,36 +219,36 @@ main! = |_| {}
 					(p-assign (ident "result"))
 					(e-call
 						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "a")))))
+				(s-let
+					(p-assign (ident "_result2"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-lookup-local
+							(p-assign (ident "b")))))
+				(s-let
+					(p-assign (ident "_result3"))
+					(e-call
+						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
-							(p-assign (ident "x")))))
+							(p-assign (ident "a")))))
+				(s-let
+					(p-assign (ident "_result4"))
+					(e-call
+						(e-lookup-local
+							(p-assign (ident "g")))
+						(e-lookup-local
+							(p-assign (ident "b")))))
 				(e-lookup-local
 					(p-assign (ident "result")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
-	(d-let
-		(p-assign (ident "pass"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-block
-				(s-let
-					(p-assign (ident "inner"))
-					(e-lambda
-						(args
-							(p-assign (ident "y")))
-						(e-lookup-local
-							(p-assign (ident "y")))))
-				(e-call
-					(e-lookup-local
-						(p-assign (ident "inner")))
-					(e-lookup-local
-						(p-assign (ident "x"))))))
-		(annotation
-			(ty-fn (effectful false)
-				(ty-rigid-var (name "a"))
+				(ty-rigid-var (name "b"))
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "main!"))
@@ -227,11 +261,9 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
-		(patt (type "a -> a"))
+		(patt (type "a, Error -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "Error -> Error"))
-		(expr (type "a -> a"))
+		(expr (type "a, Error -> a"))
 		(expr (type "_arg -> {}"))))
 ~~~

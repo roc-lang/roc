@@ -1741,6 +1741,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const annotation_var = ModuleEnv.varFrom(annotation_idx);
+    try self.setVarRank(annotation_var, env);
+
     const annotation = self.cir.store.getAnnotation(annotation_idx);
 
     // Reset seen type annos
@@ -1762,7 +1765,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     try self.generateAnnoTypeInPlace(annotation.anno, env, .annotation);
 
     // Redirect the root annotation to inner annotation
-    _ = try self.unify(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno), env);
+    _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
 }
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
@@ -3980,6 +3983,10 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
+                    // Enter a new rank
+                    try env.var_pool.pushRank();
+                    defer env.var_pool.popRank();
+
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
@@ -4003,10 +4010,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                             break :blk Expected.no_expectation;
                         }
                     };
-
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
@@ -4039,10 +4042,13 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     }
                 };
                 defer self.enclosing_func_name = saved_func_name;
-
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
+                    // Enter a new rank
+                    try env.var_pool.pushRank();
+                    defer env.var_pool.popRank();
+
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
@@ -4058,10 +4064,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                             break :blk Expected.no_expectation;
                         }
                     };
-
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
@@ -5223,7 +5225,7 @@ fn handleRecursiveConstraint(
 
     // Create a new type variable to represent the recursion point
     // Use the current environment's rank for the recursion var
-    const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
+    const recursion_var = try self.freshFromContent(rec_var_content, env, self.getRegionAt(var_));
 
     // Create RecursionInfo to track the recursion metadata
     _ = types_mod.RecursionInfo{
