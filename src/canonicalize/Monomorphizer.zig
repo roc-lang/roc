@@ -147,20 +147,6 @@ pub fn createSpecializedName(
     return specialized_ident;
 }
 
-/// Monomorphize a module's top-level expressions
-/// Returns a new ModuleEnv with specialized functions
-pub fn monomorphize(_: *Self) !void {
-    // Phase 1: Just traverse and identify what needs specialization
-    // For now, this is a placeholder for the full implementation
-
-    // In a full implementation, we would:
-    // 1. Find all top-level function definitions
-    // 2. Analyze their types to find polymorphic ones
-    // 3. Find all call sites and their concrete types
-    // 4. Create specialized versions
-    // 5. Update call sites to use specialized versions
-}
-
 // Tests
 
 const testing = std.testing;
