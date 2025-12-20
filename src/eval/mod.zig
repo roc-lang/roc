@@ -55,4 +55,5 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
+    std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
 }
