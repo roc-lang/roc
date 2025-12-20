@@ -5,7 +5,11 @@ app [main!] {
 main! : List(Str) => Try({}, [Exit(I32)])
 main! = |_args| {
     utf8 = [120, 121, 122]
-    _parsed = parse!(utf8, 0, [])?
+    _parsed = 
+        match parse!(utf8, 0, []) {
+            Ok(v) => Ok(v)
+            Err(_) => Err(1)
+        }
     Ok({})
 }
 
@@ -91,12 +95,12 @@ TopLevel : [
     TypeDefinition({name: Str, type: Type, position: U64}),
 ]
 
-parse_type = |file, index| {
+parse_type = |_file, index| {
     Ok((Name("T"), index))
 }
 
 parse_block : List(U8), U64, List(Statement) -> Try((List(Statement), U64), Str)
-parse_block = |file, index, acc| {
+parse_block = |_file, index, acc| {
     Ok((acc, index))
 }
 

@@ -328,9 +328,15 @@ pub const Generalizer = struct {
                 return group_rank;
             },
             .alias => |alias| {
-                // THEORY: Here, we don't need to recurse into the alias backing
-                // variable, because those variables are have been instantiated
-                // at the alias's rank.
+                // THEORY: Here, we don't need to recurse into the backing type because:
+                // 1. We visit the type arguments (args)
+                // 2. Anything in the RHS of the alias is either:
+                //    - A reference to an arg (already visited via args)
+                //    - A concrete type (doesn't need rank adjustment)
+                // So traversing the backing var would be redundant.
+                //
+                // We use top_level as a default, as the type container itself
+                // does not contribute to the rank calculation.
                 var next_rank = Rank.top_level;
                 var args_iter = self.store.iterAliasArgs(alias);
                 while (args_iter.next()) |arg_var| {
@@ -341,7 +347,7 @@ pub const Generalizer = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .empty_record, .empty_tag_union => {
-                        // Empty records/tag unions never need to be generalized
+                        // THEORY: Empty records/tag unions never need to be generalized
                         return .top_level;
                     },
                     .tuple => |tuple| {
@@ -353,17 +359,21 @@ pub const Generalizer = struct {
                             }
                             return next_rank;
                         } else {
-                            // Empty tuples never need to be generalized
+                            // THEORY: Empty tuples never need to be generalized
                             return .top_level;
                         }
                     },
                     .nominal_type => |nominal| {
-                        // TODO: Do we need to recurse into the nominal types backing
-                        // var here? We do not for alias. But here, it may make sense
-                        // to do so, because types can be unified directly against
-                        // a nominal type's backing var.
-
-                        var next_rank = try self.adjustRank(self.store.getNominalBackingVar(nominal), group_rank, vars_to_generalize);
+                        // THEORY: Here, we don't need to recurse into the backing type because:
+                        // 1. We visit the type arguments (args)
+                        // 2. Anything in the RHS of the nominal type is either:
+                        //    - A reference to an arg (already visited via args)
+                        //    - A concrete type (doesn't need rank adjustment)
+                        // So traversing the backing var would be redundant.
+                        //
+                        // We use top_level as a default, as the type container itself
+                        // does not contribute to the rank calculation.
+                        var next_rank = Rank.top_level;
                         var args_iter = self.store.iterNominalArgs(nominal);
                         while (args_iter.next()) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
