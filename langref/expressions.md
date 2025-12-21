@@ -12,7 +12,10 @@ can't be wrapped in parentheses without causing an error. Some examples:
 - `# Something` is a [comment](comments), not an expression. `(# Something)` is invalid.
 - `package […]` is a [module heaader](modules#headers), not an expression. `(package […])` is invalid.
 
-## Values
+Another way to think of an expression is that you can always assign it to a name—so, you
+can always put it after an `=` sign.
+
+## [Values](#values) {#values}
 
 A Roc value is a semantically immutable piece of data. 
 
@@ -28,16 +31,18 @@ This implies that Roc has no concept of [pointers](https://en.wikipedia.org/wiki
 > whether it's a good idea for users of their platform to start needing to think about memory
 > addresses, when the rest of the language is designed to keep them behind the scenes.
 
-### [Reference Counting Without Cycles](#reference-counting) {#reference-counting}
+### [Reference Counting](#reference-counting) {#reference-counting}
 
 Heap-allocated Roc values are automatically [reference-counted](https://en.wikipedia.org/wiki/Reference_counting) ([atomically](https://en.wikipedia.org/wiki/Linearizability#Primitive_atomic_instructions), for thread-safety). 
 
 Heap-allocated values include as strings, lists, boxes, and recursive tag unions. Numbers,
 records, tuples, and non-recursive tag unions are stack-allocated, and so are not reference counted.
 
+### [Reference Cycles](#reference-cycles) {#reference-cycles}
+
 Other languages support [reference cycles](https://en.wikipedia.org/wiki/Reference_counting#Dealing_with_reference_cycles), which create problems for reference counting systems. Solutions to these problems include runtime tracing garbage collectors for cycles, or a concept of [weak references](https://en.wikipedia.org/wiki/Weak_reference). By design, Roc has no way to express reference cycles, so none of these solutions are necessary.
 
-### Opportunistic Mutation
+### [Opportunistic Mutation](#opportunistic-mutation) {#opportunistic-mutation}
 
 Roc's compiler does _opportunistic mutation_ using the [Perceus](https://www.microsoft.com/en-us/research/wp-content/uploads/2020/11/perceus-tr-v4.pdf) "functional-but-in-place" reference counting system. The way this works is:
 
@@ -46,4 +51,25 @@ Roc's compiler does _opportunistic mutation_ using the [Perceus](https://www.mic
 
 For example, when [`List.set`](../builtins/List#set) is passed a unique list (reference count is 1), then that list will have the given element replaced. When it's given a shared list (reference count is not 1), it will first shallowly clone the list, and then replace the given element in the clone. Either way, the modified list will be returned—regardless of whether the clone or the original was the one modified.
 
-## Blocks
+## [Block Expressions](#block-expressions) {#block-expressions}
+
+A _block expression_ is an expression with some optional [statements](statements) 
+before it. It has its own scope, so anything assigned in it can't be accessed
+outsdie the block.
+
+The statements are optional, so `{ x }` is a valid block expression. This is useful 
+stylistically in situations like conditional branches:
+
+```roc
+x = if foo {
+    …
+} else {
+    x
+}
+```
+
+> Note that `{ x, y }` is a [record](records) with two fields (it's syntax sugar for `{ x: x, y: y }`),
+> but `{ x }` is always a block expression. That's because it's much more useful to have `{ x }` 
+> be a block expression, for situations like `else { x }`, than syntax sugar for a single-field 
+> record like `{ x: x }`. Single-field records are much less common than blocks in 
+> conditional branches.
