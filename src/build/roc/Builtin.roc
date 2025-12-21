@@ -90,10 +90,16 @@ Builtin :: [].{
 		}
 
 		map : List(a), (a -> b) -> List(b)
-		map = |list, transform|
-		# Implement using fold + concat for now
-		# TODO: Optimize with in-place update when list is unique and element sizes match
-			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
+		map = |list, transform| {
+			# TODO: Optimize with in-place update when list is unique and element sizes match
+			var $new_list = List.with_capacity(list.len())
+			for item in list {
+				# TODO: Use something like list_append_unsafe, since we know 
+				# we're in bounds
+				$new_list = $new_list.append(transform(item))
+			}
+			$new_list
+		}
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate|
