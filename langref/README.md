@@ -1,3 +1,5 @@
+**NOTE:** This is heavily WIP! This line will be removed when the langref is considered complete, and at that point, missing sections and outdated information will be considered bugs. If you'd like to contribute to this (other than minor corrections of obvious mistakes), **definitely** mention it in the [langref Zulip channel](https://roc.zulipchat.com/#narrow/channel/316715-contributing/topic/language.20reference/with/564909757) before getting started on anything!
+
 # Language Reference
 
 This is Roc's language reference (or _langref_ for short).
