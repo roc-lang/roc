@@ -1036,8 +1036,15 @@ pub const Store = struct {
             var layout: Layout = undefined;
 
             if (!skip_layout_computation) {
-                // Mark this var as in-progress before processing
-                try self.work.in_progress_vars.put(current.var_, {});
+                // Mark this var as in-progress before processing.
+                // Note: We don't add aliases to in_progress_vars because aliases are transparent
+                // wrappers that just continue to their backing type. The alias handling code
+                // does `current = backing; continue;` without ever completing the alias entry,
+                // which would cause spurious cycle detection when the alias var is encountered
+                // again. See issue #8708.
+                if (current.desc.content != .alias) {
+                    try self.work.in_progress_vars.put(current.var_, {});
+                }
 
                 layout = switch (current.desc.content) {
                     .structure => |flat_type| flat_type: switch (flat_type) {
