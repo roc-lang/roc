@@ -131,7 +131,7 @@ pub const Instantiator = struct {
                 };
 
                 // Update the placeholder fresh var with the real content
-                try self.store.setVarDesc(
+                try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
@@ -152,7 +152,7 @@ pub const Instantiator = struct {
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
                 // Update the placeholder fresh var with the real content
-                try self.store.setVarDesc(
+                try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,

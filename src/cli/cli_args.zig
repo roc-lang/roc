@@ -21,7 +21,7 @@ pub const CliArgs = union(enum) {
     experimental_lsp: ExperimentalLspArgs,
     help: []const u8,
     licenses,
-    problem: CliProblem,
+    problem: ArgProblem,
 
     pub fn deinit(self: CliArgs, alloc: mem.Allocator) void {
         switch (self) {
@@ -35,7 +35,7 @@ pub const CliArgs = union(enum) {
 };
 
 /// Errors that can occur due to bad input while parsing the arguments
-pub const CliProblem = union(enum) {
+pub const ArgProblem = union(enum) {
     missing_flag_value: struct {
         flag: []const u8,
     },
@@ -92,6 +92,7 @@ pub const BuildArgs = struct {
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
+    z_dump_linker: bool = false, // dump linker inputs to temp directory for debugging
 };
 
 /// Arguments for `roc test`
@@ -241,7 +242,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             if (getFlagValue(arg)) |value| {
                 main = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--main" } } };
             }
         } else if (mem.eql(u8, arg, "--time")) {
             time = true;
@@ -251,7 +252,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             verbose = true;
         } else {
             if (path != null) {
-                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
             }
             path = arg;
         }
@@ -271,6 +272,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var wasm_stack_size: ?usize = null;
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
+    var z_dump_linker: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -291,6 +293,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
             \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
+            \\      --z-dump-linker                Dump linker inputs to temp directory for debugging
             \\      -h, --help                     Print help
             \\
         };
@@ -298,35 +301,35 @@ fn parseBuild(args: []const []const u8) CliArgs {
             if (getFlagValue(arg)) |value| {
                 target = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--target" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--target" } } };
             }
         } else if (mem.startsWith(u8, arg, "--output")) {
             if (getFlagValue(arg)) |value| {
                 output = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--output" } } };
             }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
-                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
                 }
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
             if (getFlagValue(arg)) |value| {
                 z_bench_tokenize = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--z-bench-tokenize" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--z-bench-tokenize" } } };
             }
         } else if (mem.startsWith(u8, arg, "--z-bench-parse")) {
             if (getFlagValue(arg)) |value| {
                 z_bench_parse = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--z-bench-parse" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--z-bench-parse" } } };
             }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
@@ -335,27 +338,29 @@ fn parseBuild(args: []const []const u8) CliArgs {
         } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
             if (getFlagValue(arg)) |value| {
                 wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--wasm-memory", .value = value, .valid_options = "positive integer (bytes)" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--wasm-memory", .value = value, .valid_options = "positive integer (bytes)" } } };
                 };
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--wasm-memory" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--wasm-memory" } } };
             }
         } else if (mem.startsWith(u8, arg, "--wasm-stack-size")) {
             if (getFlagValue(arg)) |value| {
                 wasm_stack_size = std.fmt.parseInt(usize, value, 10) catch {
-                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--wasm-stack-size", .value = value, .valid_options = "positive integer (bytes)" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--wasm-stack-size", .value = value, .valid_options = "positive integer (bytes)" } } };
                 };
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--wasm-stack-size" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--wasm-stack-size" } } };
             }
+        } else if (mem.eql(u8, arg, "--z-dump-linker")) {
+            z_dump_linker = true;
         } else {
             if (path != null) {
-                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
             }
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -385,27 +390,27 @@ fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator
         } else if (mem.eql(u8, arg, "--output-dir")) {
             if (i + 1 >= args.len) {
                 paths.deinit();
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output-dir" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--output-dir" } } };
             }
             i += 1;
             output_dir = args[i];
         } else if (mem.eql(u8, arg, "--compression")) {
             if (i + 1 >= args.len) {
                 paths.deinit();
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--compression" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--compression" } } };
             }
             i += 1;
             compression_level = std.fmt.parseInt(i32, args[i], 10) catch {
                 paths.deinit();
-                return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
             };
             if (compression_level < 1 or compression_level > 22) {
                 paths.deinit();
-                return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .value = args[i], .flag = "--compression", .valid_options = "integer between 1 and 22" } } };
             }
         } else if (mem.startsWith(u8, arg, "--")) {
             paths.deinit();
-            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "bundle", .arg = arg } } };
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "bundle", .arg = arg } } };
         } else {
             try paths.append(arg);
         }
@@ -444,7 +449,7 @@ fn parseUnbundle(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
         };
         } else if (mem.startsWith(u8, arg, "-")) {
             paths.deinit();
-            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "unbundle", .arg = arg } } };
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "unbundle", .arg = arg } } };
         } else {
             try paths.append(arg);
         }
@@ -552,23 +557,23 @@ fn parseTest(args: []const []const u8) CliArgs {
             if (getFlagValue(arg)) |value| {
                 main = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--main" } } };
             }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
                 } else {
-                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
                 }
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
         } else {
             if (path != null) {
-                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "test", .arg = arg } } };
             }
             path = arg;
         }
@@ -589,7 +594,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\
         };
         } else {
-            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
     return CliArgs.repl;
@@ -608,7 +613,7 @@ fn parseVersion(args: []const []const u8) CliArgs {
             \\
         };
         } else {
-            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "version", .arg = arg } } };
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "version", .arg = arg } } };
         }
     }
     return CliArgs.version;
@@ -627,7 +632,7 @@ fn parseLicenses(args: []const []const u8) CliArgs {
             \\
         };
         } else {
-            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "licenses", .arg = arg } } };
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "licenses", .arg = arg } } };
         }
     }
     return CliArgs.licenses;
@@ -666,13 +671,13 @@ fn parseDocs(args: []const []const u8) CliArgs {
             if (getFlagValue(arg)) |value| {
                 main = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--main" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--main" } } };
             }
         } else if (mem.startsWith(u8, arg, "--output")) {
             if (getFlagValue(arg)) |value| {
                 output = value;
             } else {
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--output" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--output" } } };
             }
         } else if (mem.eql(u8, arg, "--serve")) {
             serve = true;
@@ -684,7 +689,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
             verbose = true;
         } else {
             if (path != null) {
-                return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = arg } } };
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "docs", .arg = arg } } };
             }
             path = arg;
         }
@@ -723,7 +728,7 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
         } else if (mem.eql(u8, arg, "--debug-server")) {
             debug_server = true;
         } else {
-            return CliArgs{ .problem = CliProblem{ .unexpected_argument = .{ .cmd = "experimental-lsp", .arg = arg } } };
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "experimental-lsp", .arg = arg } } };
         }
     }
 
@@ -770,7 +775,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
                 target = value;
             } else {
                 app_args.deinit();
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--target" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--target" } } };
             }
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
@@ -778,11 +783,11 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
                     opt = level;
                 } else {
                     app_args.deinit();
-                    return CliArgs{ .problem = CliProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
                 }
             } else {
                 app_args.deinit();
-                return CliArgs{ .problem = CliProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;

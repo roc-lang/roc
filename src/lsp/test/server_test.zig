@@ -1,3 +1,5 @@
+//! Tests for the LSP server lifecycle and request handling.
+
 const std = @import("std");
 const server_module = @import("../server.zig");
 const protocol = @import("../protocol.zig");

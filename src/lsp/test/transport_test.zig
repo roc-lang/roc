@@ -1,3 +1,5 @@
+//! Tests for JSON-RPC transport layer message encoding and decoding.
+
 const std = @import("std");
 const transport_module = @import("../transport.zig");
 

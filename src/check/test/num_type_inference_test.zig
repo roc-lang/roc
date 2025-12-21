@@ -200,3 +200,57 @@ test "numeric literal in comparison unifies with typed operand" {
     }
     try testing.expect(found_result);
 }
+
+test "polymorphic numeric in list used as List.get index unifies to U64 - regression #8666" {
+    // When a numeric literal is stored in an unannotated list and later used as
+    // an index to List.get (which takes U64), the type should unify to U64.
+    // This is a regression test for GitHub issue #8666 where the type remained
+    // as a flex var, causing the interpreter to default it to Dec layout.
+    const source =
+        \\list = [10, 20, 30]
+        \\index = 0
+        \\result = List.get(list, index)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // First verify no type errors
+    try test_env.assertNoErrors();
+
+    // The key assertion: `index` should be U64 after unification with List.get's parameter.
+    // Find the `index` definition and check its type.
+    const ModuleEnv = @import("can").ModuleEnv;
+    const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    var found_index = false;
+    for (defs_slice) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const ptrn = test_env.module_env.store.getPattern(def.pattern);
+        if (ptrn == .assign) {
+            const def_name = test_env.module_env.getIdentStoreConst().getText(ptrn.assign.ident);
+            if (std.mem.eql(u8, def_name, "index")) {
+                found_index = true;
+
+                // Get the type from the expression (the literal 0)
+                const expr_var = ModuleEnv.varFrom(def.expr);
+                try test_env.type_writer.write(expr_var);
+                const expr_type = test_env.type_writer.get();
+
+                // After unification with List.get's U64 parameter, should be U64
+                try testing.expectEqualStrings("U64", expr_type);
+
+                // Also verify the pattern has the same type
+                const pattern_var = ModuleEnv.varFrom(def.pattern);
+                try test_env.type_writer.write(pattern_var);
+                const pattern_type = test_env.type_writer.get();
+                try testing.expectEqualStrings("U64", pattern_type);
+
+                // Verify the pattern is NOT generalized (numeric literals shouldn't be)
+                const resolved_pat = test_env.module_env.types.resolveVar(pattern_var);
+                try testing.expect(resolved_pat.desc.rank != types.Rank.generalized);
+                break;
+            }
+        }
+    }
+    try testing.expect(found_index);
+}

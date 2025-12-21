@@ -238,6 +238,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "0<short|1>short|0<|1>",
         .description = "Regression test: Stdin.line! in while loop with short input (small string optimization)",
     },
+    .{
+        .roc_file = "test/fx/list_method_get.roc",
+        .io_spec = "1>is ok",
+        .description = "Regression test: List.get with method syntax (issue #8662)",
+    },
+    .{
+        .roc_file = "test/fx/issue8654.roc",
+        .io_spec = "1>False",
+        .description = "Regression test: Method lookup for nominal types in roc build executables (issue #8654)",
+    },
 };
 
 /// Get the total number of IO spec tests

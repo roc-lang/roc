@@ -29,6 +29,7 @@ const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
+const runExpectListI64WithStrictLayout = helpers.runExpectListI64WithStrictLayout;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -779,7 +780,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
             break :blk result.asI128();
         } else blk: {
-            const dec_value = result.asDec();
+            const dec_value = result.asDec(ops);
             const RocDec = builtins.dec.RocDec;
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
@@ -855,7 +856,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
             const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
                 break :blk result.asI128();
             } else blk: {
-                const dec_value = result.asDec();
+                const dec_value = result.asDec(ops);
                 const RocDec = builtins.dec.RocDec;
                 break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
             };
@@ -1311,6 +1312,26 @@ test "List.map - adding" {
     );
 }
 
+// Test for List.repeat
+
+test "List.repeat - basic case" {
+    // Repeat a value multiple times
+    try runExpectListI64(
+        "List.repeat(7i64, 4)",
+        &[_]i64{ 7, 7, 7, 7 },
+        .no_trace,
+    );
+}
+
+test "List.repeat - empty case" {
+    // Repeat a value multiple times
+    try runExpectListI64(
+        "List.repeat(7i64, 0)",
+        &[_]i64{},
+        .no_trace,
+    );
+}
+
 // Bug regression tests - interpreter crash issues
 
 test "match with tag containing pattern-bound variable - regression" {
@@ -1405,4 +1426,125 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
         \\    n.to_str()
         \\}
     , "3", .no_trace);
+}
+
+test "List.get with polymorphic numeric index - regression #8666" {
+    // Regression test for GitHub issue #8666: interpreter panic when using
+    // a polymorphic numeric type as a list index.
+    //
+    // The bug occurred because numeric literals with from_numeral constraints
+    // were being generalized, causing each use to get a fresh instantiation.
+    // This meant the concrete U64 type from List.get didn't propagate back
+    // to the original definition, leaving it as a flex var that defaulted to Dec.
+    //
+    // The fix: don't generalize vars with from_numeral constraints, and don't
+    // instantiate them during lookup, so constraint propagation works correctly.
+    try runExpectInt(
+        \\{
+        \\    list = [10, 20, 30]
+        \\    index = 0
+        \\    match List.get(list, index) { Ok(v) => v, _ => 0 }
+        \\}
+    , 10, .no_trace);
+}
+
+test "for loop element type extracted from list runtime type - regression #8664" {
+    // Regression test for InvalidMethodReceiver when calling methods on elements
+    // from a for loop over a list passed to an untyped function parameter.
+    // The fix: extract element type from list's runtime type (e.g., List(Dec))
+    // instead of using the pattern's compile-time flex variable.
+    // Note: unsuffixed number literals default to Dec in Roc.
+    try runExpectStr(
+        \\{
+        \\    calc = |list| {
+        \\        var $result = ""
+        \\        for elem in list {
+        \\            $result = elem.to_str()
+        \\        }
+        \\        $result
+        \\    }
+        \\    calc([1, 2, 3])
+        \\}
+    , "3.0", .no_trace);
+}
+
+test "List.get method dispatch on Try type - issue 8665" {
+    // Regression test for issue #8665: InvalidMethodReceiver crash when calling
+    // ok_or() method on the result of List.get() using dot notation.
+    // The function call syntax works: Try.ok_or(List.get(list, 0), "fallback")
+    // But method syntax crashes: List.get(list, 0).ok_or("fallback")
+    try runExpectStr(
+        \\{
+        \\    list = ["hello"]
+        \\    List.get(list, 0).ok_or("fallback")
+        \\}
+    , "hello", .no_trace);
+}
+
+test "record destructuring with assignment - regression" {
+    // Regression test for GitHub issue #8647
+    // Record destructuring should not cause TypeMismatch error during evaluation
+    try runExpectInt(
+        \\{
+        \\    rec = { x: 1, y: 2 }
+        \\    { x, y } = rec
+        \\    x + y
+        \\}
+    , 3, .no_trace);
+}
+
+test "record field access - regression 8647" {
+    // Regression test for GitHub issue #8647
+    // Record field access should work properly
+    try runExpectStr(
+        \\{
+        \\    rec = { name: "test" }
+        \\    rec.name
+        \\}
+    , "test", .no_trace);
+}
+
+test "record field access with multiple string fields - regression 8648" {
+    // Regression test for GitHub issue #8648
+    // Record field access with app module ident space
+    try runExpectStr(
+        \\{
+        \\    record = { x: "a", y: "b" }
+        \\    record.x
+        \\}
+    , "a", .no_trace);
+}
+
+test "method calls on numeric variables with flex types - regression" {
+    // Regression test for InvalidMethodReceiver when calling methods on numeric
+    // variables that have unconstrained (flex/rigid) types at compile time.
+    // Bug report: https://github.com/roc-lang/roc/issues/8663
+    // The issue was that when a numeric variable's compile-time type is flex,
+    // method dispatch would fail because it requires a nominal type (like Dec).
+
+    // Simple case: variable bound to numeric literal
+    try runExpectStr(
+        \\{
+        \\    x = 7.0
+        \\    x.to_str()
+        \\}
+    , "7.0", .no_trace);
+
+    // With integer literal (defaults to Dec, so output has decimal point)
+    try runExpectStr(
+        \\{
+        \\    x = 42
+        \\    x.to_str()
+        \\}
+    , "42.0", .no_trace);
+}
+
+test "issue 8667: List.with_capacity should be inferred as List(I64)" {
+    // When List.with_capacity is used with List.append(_, 1i64), the type checker should
+    // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
+    // If it's .list_of_zst, that indicates a type inference bug.
+    try runExpectListI64WithStrictLayout("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
+
+    // Also test the fold case which is where the bug was originally reported
+    try runExpectListI64WithStrictLayout("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
 }

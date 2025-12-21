@@ -1592,7 +1592,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
         try src_dir.makePath("platform");
         const file = try src_dir.createFile("platform/main.roc", .{});
         defer file.close();
-        try file.writeAll("platform \"test\" requires {} { main : Str }\n");
+        try file.writeAll("platform \"test\" requires { main : Str }\n");
     }
 
     // Bundle to memory
@@ -1647,7 +1647,7 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
 
     const platform_content = buffer_writer.files.get("platform/main.roc");
     try testing.expect(platform_content != null);
-    try testing.expectEqualStrings("platform \"test\" requires {} { main : Str }\n", platform_content.?.items);
+    try testing.expectEqualStrings("platform \"test\" requires { main : Str }\n", platform_content.?.items);
 }
 
 // Test large file unbundle - verifies multi-block zstd streaming works correctly

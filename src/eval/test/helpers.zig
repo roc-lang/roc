@@ -102,7 +102,7 @@ pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { tr
         break :blk result.asI128();
     } else blk: {
         // Unsuffixed numeric literals default to Dec, so extract the integer value
-        const dec_value = result.asDec();
+        const dec_value = result.asDec(ops);
         const RocDec = builtins.dec.RocDec;
         // Convert Dec to integer by dividing by the decimal scale factor
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
@@ -245,7 +245,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer result.decref(layout_cache, ops);
     defer interpreter.cleanupBindings(ops);
 
-    const actual_dec = result.asDec();
+    const actual_dec = result.asDec(ops);
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
         return error.TestExpectedEqual;
@@ -348,7 +348,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             break :blk element.asI128();
         } else blk: {
             // Unsuffixed numeric literals default to Dec
-            const dec_value = element.asDec();
+            const dec_value = element.asDec(ops);
             const RocDec = builtins.dec.RocDec;
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
@@ -414,7 +414,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     break :blk field_value.asI128();
                 } else blk: {
                     // Unsuffixed numeric literals default to Dec
-                    const dec_value = field_value.asDec();
+                    const dec_value = field_value.asDec(ops);
                     const RocDec = builtins.dec.RocDec;
                     break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
                 };
@@ -459,7 +459,63 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const elem_layout = layout_cache.getLayout(elem_layout_idx);
 
     // Use the ListAccessor to safely access list elements
-    const list_accessor = try result.asList(layout_cache, elem_layout);
+    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
+
+    try std.testing.expectEqual(expected_elements.len, list_accessor.len());
+
+    for (expected_elements, 0..) |expected_val, i| {
+        // Use the result's rt_var since we're accessing elements of the evaluated expression
+        const element = try list_accessor.getElement(i, result.rt_var);
+
+        // Check if this is an integer
+        try std.testing.expect(element.layout.tag == .scalar);
+        try std.testing.expect(element.layout.data.scalar.tag == .int);
+        const int_val = element.asI128();
+        try std.testing.expectEqual(@as(i128, expected_val), int_val);
+    }
+}
+
+/// Like runExpectListI64 but asserts the layout is .list (not .list_of_zst).
+/// This is used to verify that type unification is working correctly -
+/// when a list is used with a non-ZST element type, its layout should be .list.
+pub fn runExpectListI64WithStrictLayout(src: []const u8, expected_elements: []const i64, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    // STRICT: Verify we got a .list layout (NOT .list_of_zst)
+    // If this fails, it means type unification didn't properly infer the element type
+    if (result.layout.tag != .list) {
+        std.debug.print("\n[FAIL] Expected .list layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        std.debug.print("This indicates a type inference bug - List.with_capacity should be unified to List(I64)\n", .{});
+        return error.TestExpectedEqual;
+    }
+
+    // Get the element layout
+    const elem_layout_idx = result.layout.data.list;
+    const elem_layout = layout_cache.getLayout(elem_layout_idx);
+
+    // Use the ListAccessor to safely access list elements
+    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
 
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
@@ -803,7 +859,7 @@ test "interpreter reuse across multiple evaluations" {
                 .int => result.asI128(),
                 .frac => blk: {
                     try std.testing.expect(result.layout.data.scalar.data.frac == .dec);
-                    const dec_value = result.asDec();
+                    const dec_value = result.asDec(ops);
                     // Dec stores values scaled by 10^18, divide to get the integer part
                     break :blk @divTrunc(dec_value.num, builtins.dec.RocDec.one_point_zero_i128);
                 },

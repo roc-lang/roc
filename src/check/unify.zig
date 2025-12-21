@@ -649,8 +649,12 @@ const Unifier = struct {
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+
+                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
+                // Because of this, we do not loose any rank information.
+                // This is essentially a custom `self.merge` strategy
+                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
             .recursion_var => |_| {
                 // Unify alias backing var with recursion var
@@ -736,8 +740,12 @@ const Unifier = struct {
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+
+                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
+                // Because of this, we do not loose any rank information.
+                // This is essentially a custom `self.merge` strategy
+                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);

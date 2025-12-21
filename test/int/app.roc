@@ -1,7 +1,11 @@
-app [add_ints, multiply_ints] { pf: platform "./platform/main.roc" }
+app [main] { pf: platform "./platform/main.roc" }
 
-add_ints : I64, I64 -> I64
-add_ints = |a, b| a + b
+import pf.Simple
 
-multiply_ints : I64, I64 -> I64
-multiply_ints = |a, b| a * b
+Model : { value: I64 }
+
+main = {
+    init: |{}| { value: 0 },
+    update: |m, delta| { value: m.value + delta },
+    render: |_m| Simple.leaf("hello"),
+}

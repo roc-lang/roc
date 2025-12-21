@@ -1142,7 +1142,14 @@ const Formatter = struct {
                 try fmt.pushTokenText(t.token);
             },
             .if_then_else => |i| {
+                // Check if then/else are blocks - blocks use original behavior,
+                // non-blocks use base_indent to keep else at the same level as if
+                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
+                const else_is_block = fmt.ast.store.getExpr(i.@"else") == .block;
+                const has_blocks = then_is_block or else_is_block;
+
                 try fmt.pushAll("if");
+                const base_indent = fmt.curr_indent;
                 const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                 var flushed = try fmt.flushCommentsBefore(cond_region.start);
                 if (flushed) {
@@ -1152,6 +1159,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.condition);
+                if (!has_blocks) fmt.curr_indent = base_indent;
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 flushed = try fmt.flushCommentsBefore(then_region.start);
                 if (flushed) {
@@ -1161,14 +1169,16 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.then);
+                if (!has_blocks) fmt.curr_indent = base_indent;
                 flushed = try fmt.flushCommentsBefore(then_region.end);
                 if (flushed) {
-                    fmt.curr_indent += 1;
+                    if (has_blocks) fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 } else {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll("else");
+                if (!has_blocks) fmt.curr_indent = base_indent;
                 const else_region = fmt.nodeRegion(@intFromEnum(i.@"else"));
                 flushed = try fmt.flushCommentsBefore(else_region.start);
                 if (flushed) {
@@ -1180,7 +1190,12 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(i.@"else");
             },
             .if_without_else => |i| {
+                // Check if then is a block - blocks use original behavior,
+                // non-blocks use base_indent logic
+                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
+
                 try fmt.pushAll("if");
+                const base_indent = fmt.curr_indent;
                 const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                 var flushed = try fmt.flushCommentsBefore(cond_region.start);
                 if (flushed) {
@@ -1190,6 +1205,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(i.condition);
+                if (!then_is_block) fmt.curr_indent = base_indent;
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 flushed = try fmt.flushCommentsBefore(then_region.start);
                 if (flushed) {
@@ -1673,31 +1689,49 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("requires");
-                const rigids = fmt.ast.store.getCollection(p.requires_rigids);
-                if (try fmt.flushCommentsBefore(rigids.region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatCollection(
-                    rigids.region,
-                    .curly,
-                    AST.ExposedItem.Idx,
-                    fmt.ast.store.exposedItemSlice(.{ .span = rigids.span }),
-                    Formatter.formatExposedItem,
-                );
-                if (try fmt.flushCommentsBefore(rigids.region.end)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                _ = try fmt.formatTypeAnno(p.requires_signatures);
+                try fmt.pushAll("requires {");
+                // Format requires entries with for-clause syntax
+                const entries = fmt.ast.store.requiresEntrySlice(p.requires_entries);
+                if (entries.len > 0) {
+                    try fmt.ensureNewline();
+                    fmt.curr_indent = start_indent + 2;
+                    for (entries, 0..) |entry_idx, entry_i| {
+                        const entry = fmt.ast.store.getRequiresEntry(entry_idx);
+                        try fmt.pushIndent();
 
-                const signatures_region = fmt.nodeRegion(@intFromEnum(p.requires_signatures));
-                _ = try fmt.flushCommentsBefore(signatures_region.end);
+                        // Format type aliases: [Model : model] for ...
+                        // Only output the bracket syntax if there are type aliases
+                        const aliases = fmt.ast.store.forClauseTypeAliasSlice(entry.type_aliases);
+                        if (aliases.len > 0) {
+                            try fmt.push('[');
+                            for (aliases, 0..) |alias_idx, alias_i| {
+                                const alias = fmt.ast.store.getForClauseTypeAlias(alias_idx);
+                                try fmt.pushTokenText(alias.alias_name);
+                                try fmt.pushAll(" : ");
+                                try fmt.pushTokenText(alias.rigid_name);
+                                if (alias_i < aliases.len - 1) {
+                                    try fmt.pushAll(", ");
+                                }
+                            }
+                            try fmt.pushAll("] for ");
+                        }
+
+                        // Format entrypoint name
+                        try fmt.pushTokenText(entry.entrypoint_name);
+                        try fmt.pushAll(" : ");
+
+                        // Format type annotation
+                        _ = try fmt.formatTypeAnno(entry.type_anno);
+
+                        if (entry_i < entries.len - 1) {
+                            try fmt.push(',');
+                        }
+                        try fmt.ensureNewline();
+                    }
+                    fmt.curr_indent = start_indent + 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push('}');
                 try fmt.ensureNewline();
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
@@ -2431,7 +2465,8 @@ const Formatter = struct {
                         return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.packages);
                     },
                     .platform => |p| {
-                        if (fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, p.requires_rigids)) {
+                        // Requires entries with for-clause always multiline if present
+                        if (p.requires_entries.span.len > 0) {
                             return true;
                         }
                         if (fmt.collectionWillBeMultiline(AST.ExposedItem.Idx, p.exposes)) {

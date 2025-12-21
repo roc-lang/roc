@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=platform_header_empty (4)
+description=platform_header_empty (4) with for-clause syntax
 type=file
 ~~~
 # SOURCE
 ~~~roc
-platform "foo" requires {} {} exposes [] packages {} provides {}
+platform "foo" requires {} exposes [] packages {} provides {}
 ~~~
 # EXPECTED
 NIL
@@ -13,15 +13,14 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwPlatform,StringStart,StringPart,StringEnd,KwRequires,OpenCurly,CloseCurly,OpenCurly,CloseCurly,KwExposes,OpenSquare,CloseSquare,KwPackages,OpenCurly,CloseCurly,KwProvides,OpenCurly,CloseCurly,
+KwPlatform,StringStart,StringPart,StringEnd,KwRequires,OpenCurly,CloseCurly,KwExposes,OpenSquare,CloseSquare,KwPackages,OpenCurly,CloseCurly,KwProvides,OpenCurly,CloseCurly,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (file
 	(platform (name "foo")
-		(rigids)
-		(ty-record)
+		(requires)
 		(exposes)
 		(packages)
 		(provides))
@@ -30,7 +29,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 platform "foo"
-	requires {} {}
+	requires {}
 	exposes []
 	packages {}
 	provides {}

@@ -14,12 +14,22 @@ pub const TargetInfo = struct {
     requires_linux: bool,
 };
 
+/// Simple test file specification (no IO expectations)
+pub const SimpleTestSpec = struct {
+    /// Path to the roc file (relative to project root)
+    roc_file: []const u8,
+    /// Description of what the test verifies
+    description: []const u8 = "",
+};
+
 /// How test apps are discovered for a platform
 pub const TestApps = union(enum) {
-    /// Single app file (like int/str)
+    /// Single app file (like int)
     single: []const u8,
     /// List of test specs with IO expectations (like fx)
     spec_list: []const fx_test_specs.TestSpec,
+    /// List of simple test files without IO specs (like str)
+    simple_list: []const SimpleTestSpec,
 };
 
 /// Platform configuration
@@ -63,6 +73,49 @@ const targets_fx = [_]TargetInfo{
     .{ .name = "arm64win", .requires_linux = false },
 };
 
+/// Str platform test apps - test cross-module function calls
+const str_tests = [_]SimpleTestSpec{
+    // Basic test - no module imports from app
+    .{
+        .roc_file = "test/str/app.roc",
+        .description = "Basic app with no platform module imports",
+    },
+
+    // Direct calls from app to each exposed module
+    .{
+        .roc_file = "test/str/app_direct_utils.roc",
+        .description = "Direct call to Utils (base module, no imports)",
+    },
+    .{
+        .roc_file = "test/str/app_direct_core.roc",
+        .description = "Direct call to Core.wrap (Core imports Utils)",
+    },
+    .{
+        .roc_file = "test/str/app_direct_helper.roc",
+        .description = "Direct call to Helper.simple (no internal module calls)",
+    },
+    .{
+        .roc_file = "test/str/app_direct_helper2.roc",
+        .description = "Direct import of Helper (first in exposes list)",
+    },
+
+    // Transitive calls through modules
+    .{
+        .roc_file = "test/str/app_transitive.roc",
+        .description = "Transitive call: app->Helper.wrap_fancy->Core.wrap",
+    },
+    .{
+        .roc_file = "test/str/app_core_tagged.roc",
+        .description = "Transitive call: app->Core.wrap_tagged->Utils.tag",
+    },
+
+    // Diamond dependency pattern
+    .{
+        .roc_file = "test/str/app_diamond.roc",
+        .description = "Diamond: app->Helper->{Core->Utils, Utils}",
+    },
+};
+
 /// All platform configurations
 pub const platforms = [_]PlatformConfig{
     // INT PLATFORM - Integer operations
@@ -76,12 +129,12 @@ pub const platforms = [_]PlatformConfig{
         .valgrind_safe = true,
     },
 
-    // STR PLATFORM - String processing
+    // STR PLATFORM - String processing with multi-module tests
     .{
         .name = "str",
         .base_dir = "test/str",
         .targets = &targets_with_glibc,
-        .test_apps = .{ .single = "app.roc" },
+        .test_apps = .{ .simple_list = &str_tests },
         .supports_native_exec = true,
         .supports_io_specs = false,
         .valgrind_safe = true,
@@ -149,6 +202,14 @@ pub fn getTestApps(platform: PlatformConfig) []const []const u8 {
             return &result;
         },
         .spec_list => |specs| {
+            // Return just the roc_file paths
+            var paths: [specs.len][]const u8 = undefined;
+            for (specs, 0..) |spec, i| {
+                paths[i] = spec.roc_file;
+            }
+            return &paths;
+        },
+        .simple_list => |specs| {
             // Return just the roc_file paths
             var paths: [specs.len][]const u8 = undefined;
             for (specs, 0..) |spec, i| {

@@ -1,15 +1,17 @@
 # META
 ~~~ini
-description=Simple plaform module
+description=Simple platform module with for-clause syntax
 type=file
 ~~~
 # SOURCE
 ~~~roc
 platform ""
-	requires {} { main : Str -> Str }
-	exposes []
-	packages {}
-	provides { entrypoint: "roc__entrypoint" }
+    requires {
+        main : Str -> Str
+    }
+    exposes []
+    packages {}
+    provides { entrypoint: "roc__entrypoint" }
 
 entrypoint : Str -> Str
 entrypoint = main
@@ -21,7 +23,9 @@ NIL
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
-KwRequires,OpenCurly,CloseCurly,OpenCurly,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,CloseCurly,
+KwRequires,OpenCurly,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
 KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
@@ -33,9 +37,10 @@ EndOfFile,
 ~~~clojure
 (file
 	(platform (name "")
-		(rigids)
-		(ty-record
-			(anno-record-field (name "main")
+		(requires
+			(requires-entry
+				(type-aliases)
+				(entrypoint "main")
 				(ty-fn
 					(ty (name "Str"))
 					(ty (name "Str")))))
@@ -56,7 +61,16 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform ""
+	requires {
+		main : Str -> Str
+	}
+	exposes []
+	packages {}
+	provides { entrypoint: "roc__entrypoint" }
+
+entrypoint : Str -> Str
+entrypoint = main
 ~~~
 # CANONICALIZE
 ~~~clojure

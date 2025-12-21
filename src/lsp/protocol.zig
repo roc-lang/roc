@@ -1,3 +1,5 @@
+//! LSP protocol types and JSON-RPC message structures for client-server communication.
+
 const std = @import("std");
 
 /// LSP error codes mirrored from the specification.

@@ -227,6 +227,35 @@ fn runCrossCompileTests(
                 }
             }
         },
+
+        .simple_list => |specs| {
+            for (platform.targets) |target| {
+                // Apply target filter
+                if (args.target_filter) |filter| {
+                    if (!std.mem.eql(u8, target.name, filter)) continue;
+                }
+
+                // Skip glibc on non-Linux
+                if (runner_core.shouldSkipTarget(target.name)) {
+                    stats.record(.skipped);
+                    continue;
+                }
+
+                std.debug.print("Cross-compiling {d} tests for {s}...\n", .{ specs.len, target.name });
+
+                for (specs, 0..) |spec, i| {
+                    const test_num = i + 1;
+                    std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
+
+                    const basename = std.fs.path.stem(spec.roc_file);
+                    const output_name = try std.fmt.allocPrint(allocator, "{s}_{s}", .{ basename, target.name });
+                    defer allocator.free(output_name);
+
+                    const result = try runner_core.crossCompile(allocator, args.roc_binary, spec.roc_file, target.name, output_name);
+                    stats.record(result);
+                }
+            }
+        },
     }
 }
 
@@ -315,6 +344,33 @@ fn runNativeTests(
                 }
             }
         },
+
+        .simple_list => |specs| {
+            // Build and run each test (no IO spec verification)
+            std.debug.print("Running {d} native tests...\n", .{specs.len});
+
+            for (specs, 0..) |spec, i| {
+                const test_num = i + 1;
+                const basename = std.fs.path.stem(spec.roc_file);
+                const output_name = try std.fmt.allocPrint(allocator, "{s}_native", .{basename});
+                defer allocator.free(output_name);
+
+                std.debug.print("[{d}/{d}] Building {s}... ", .{ test_num, specs.len, spec.roc_file });
+                const build_result = try runner_core.buildNative(allocator, args.roc_binary, spec.roc_file, output_name);
+                stats.record(build_result);
+
+                if (build_result == .passed) {
+                    const exe_path = try std.fmt.allocPrint(allocator, "./{s}", .{output_name});
+                    defer allocator.free(exe_path);
+
+                    std.debug.print("         Running... ", .{});
+                    const run_result = try runner_core.runNative(allocator, exe_path);
+                    stats.record(run_result);
+
+                    runner_core.cleanup(output_name);
+                }
+            }
+        },
     }
 }
 
@@ -367,6 +423,18 @@ fn runValgrindTests(
 
                 test_num += 1;
                 std.debug.print("[{d}/{d}] {s}... ", .{ test_num, valgrind_safe_count, spec.roc_file });
+                const result = try runner_core.runWithValgrind(allocator, args.roc_binary, spec.roc_file);
+                stats.record(result);
+            }
+        },
+
+        .simple_list => |specs| {
+            // All simple tests are valgrind-safe (no stdin)
+            std.debug.print("Running {d} valgrind tests...\n", .{specs.len});
+
+            for (specs, 0..) |spec, i| {
+                const test_num = i + 1;
+                std.debug.print("[{d}/{d}] {s}... ", .{ test_num, specs.len, spec.roc_file });
                 const result = try runner_core.runWithValgrind(allocator, args.roc_binary, spec.roc_file);
                 stats.record(result);
             }

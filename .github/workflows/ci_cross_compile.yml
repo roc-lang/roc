@@ -42,7 +42,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build'
-          error_string_contains: 'EndOfStream|503'
+          error_string_contains: 'EndOfStream|503|Timeout'
           retry_count: 3
 
       - name: Run fx platform cross-compilation tests (Unix)

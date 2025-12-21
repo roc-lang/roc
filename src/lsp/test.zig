@@ -1,3 +1,5 @@
+//! Test aggregator that imports all LSP test modules.
+
 const std = @import("std");
 
 comptime {

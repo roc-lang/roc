@@ -223,3 +223,14 @@ pub fn exampleFunction(...) ReturnType { ... }
 - `listSublist` - consumes → List
   - If unique at start: shrinks in place (copy-on-write)
   - Otherwise: creates consuming seamless slice (inherits reference)
+
+### box.zig (interpreter intrinsics)
+
+**Consume arg, Independent result:**
+- `Box.box` - consumes value → Box (heap-allocated copy)
+  - Copies value data to heap with refcount = 1
+  - Original value is decremented after copy
+- `Box.unbox` - consumes Box → value (stack copy)
+  - Copies boxed data from heap to stack
+  - Box is decremented after copy (may free heap memory if refcount reaches 0)
+  - If boxed value is refcounted, its refcount is incremented (new reference created)

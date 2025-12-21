@@ -8,6 +8,10 @@
 const std = @import("std");
 const bytebox = @import("bytebox");
 
+/// Custom error type that host functions can return to signal a trap.
+/// This must be defined in the root module for bytebox to pick it up.
+pub const HostFunctionError = error{RocPanic};
+
 /// Holds the WASM module interface for testing.
 const WasmInterface = struct {
     module_def: *bytebox.ModuleDefinition,
@@ -49,14 +53,18 @@ const HostContext = struct {
         return "(invalid memory access)";
     }
 
-    /// Called when Roc panics - print the message
-    pub fn roc_panic(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    /// Called when Roc panics - print the message and trap
+    /// IMPORTANT: This must trap (return error or unreachable) because the WASM code
+    /// expects roc_panic to be noreturn. If we just return, the WASM code will hit
+    /// an unreachable instruction that the Zig compiler inserted after the call.
+    pub fn roc_panic(ctx: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) HostFunctionError!void {
         _ = module;
         const self: *HostContext = @ptrCast(@alignCast(ctx));
         const ptr = params[0].I32;
         const len = params[1].I32;
         const msg = self.readString(ptr, len);
         std.debug.print("[PANIC] {s}\n", .{msg});
+        return error.RocPanic;
     }
 
     /// Called for debug output
