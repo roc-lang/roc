@@ -8,11 +8,11 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const testing = std.testing;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
 
 test "list refcount function - pass list to identity function" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    id = |lst| lst
         \\    x = [1, 2]
@@ -23,7 +23,7 @@ test "list refcount function - pass list to identity function" {
 }
 
 test "list refcount function - list returned from function" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    f = |_| [1, 2]
         \\    result = f(0)
@@ -33,7 +33,7 @@ test "list refcount function - list returned from function" {
 }
 
 test "list refcount function - closure captures list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    f = |_| x
@@ -44,7 +44,7 @@ test "list refcount function - closure captures list" {
 }
 
 test "list refcount function - function called multiple times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    f = |lst| lst
         \\    x = [1, 2]
@@ -68,7 +68,7 @@ test "list refcount function - string list through function" {
 
 test "list refcount function - function extracts from list" {
     // Simplified: Inline match instead of function with match
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [10, 20, 30]
         \\    match x { [first, ..] => first, _ => 0 }
@@ -89,7 +89,7 @@ test "list refcount function - closure captures string list" {
 
 test "list refcount function - nested function calls with lists" {
     // Simplified: Direct match without function
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [5, 10]
         \\    match x { [first, ..] => first + first, _ => 0 }
@@ -101,7 +101,7 @@ test "list refcount function - same list twice in tuple returned from function" 
     // This tests the exact pattern that causes the segfault in fx platform tests:
     // A function that takes a list and returns a tuple containing that list twice.
     // When the tuple is destructured and the first element is used, it should work.
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    make_pair = |lst| (lst, lst)
         \\    x = [1, 2]
@@ -113,7 +113,7 @@ test "list refcount function - same list twice in tuple returned from function" 
 
 test "list refcount function - same list twice passed to function" {
     // Tests passing the same list twice as arguments to a function
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    add_lens = |a, b|
         \\        match a {
