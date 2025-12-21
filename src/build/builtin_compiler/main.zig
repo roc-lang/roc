@@ -172,6 +172,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
+    if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
+        try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
+    }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);
     }

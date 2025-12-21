@@ -94,9 +94,7 @@ Builtin :: [].{
 			# TODO: Optimize with in-place update when list is unique and element sizes match
 			var $new_list = List.with_capacity(list.len())
 			for item in list {
-				# TODO: Use something like list_append_unsafe, since we know 
-				# we're in bounds
-				$new_list = $new_list.append(transform(item))
+				$new_list = list_append_unsafe($new_list, transform(item))
 			}
 			$new_list
 		}
@@ -1108,6 +1106,9 @@ range_until = |var $current, end| {
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler, does not perform bounds checks
+list_append_unsafe : List(item), item -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler
