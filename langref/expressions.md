@@ -15,15 +15,35 @@ can't be wrapped in parentheses without causing an error. Some examples:
 Another way to think of an expression is that you can always assign it to a name—so, you
 can always put it after an `=` sign.
 
+## [Types of Expressions](#literal-expressions) {#literal-expression}
+
+Here are all the different types of expressions in Roc:
+
+- String literals, e.g. `"foo"` or `"Hello, ${name}!"`
+- Number literals, e.g. `1` or `2.34` or `0.123e4`
+- List literals, e.g. `[1, 2]` or `[]` or `["foo"]`
+- Record literals, e.g. `{ x: 1, y: 2 }` or `{}` or `{ x, y, ..other_record }`
+- Tag literals, e.g. `Foo` or `Foo(bar)`
+- Tuple literals, e.g. `(a, b, "foo")`
+- Function literals (aka "lambdas"), e.g. `|a, b| a + b` or `|| c + d`
+- Lookups, e.g. `blah` or `(blah)` or `$blah` or `($blah)` or `blah!` or `(blah!)`
+- Calls, e.g. `blah(arg)` or `foo.bar(baz)`
+- Operator applications, e.g. `a + b` or `!x`, which [desugar to calls](operators#desugaring)
+- [Block expressions](#block-expressions), e.g. `{ foo() }`
+
+There are no other types of expressions in the language.
+
 ## [Values](#values) {#values}
 
 A Roc value is a semantically immutable piece of data. 
+
+### [Value Identity](#value-identity) {#value-identity}
 
 Since values take up memory at runtime, each value has a [memory address](https://en.wikipedia.org/wiki/Memory_address). 
 Roc treats memory addresses as behind-the-scenes implementation details that should not affect
 program behavior, and by design exposes no language-level way to access or compare addresses.
 
-This implies that Roc has no concept of [pointers](https://en.wikipedia.org/wiki/Pointer_(computer_programming)), [value identity](https://en.wikipedia.org/wiki/Identity_(object-oriented_programming)), or reference equality (also known as [physical equality](https://ocaml.org/manual/5.4/api/Repr.html#VALphys_equal)), all of which are semantic concepts based on memory addresses. 
+This implies that Roc has no concept of [value identity](https://en.wikipedia.org/wiki/Identity_(object-oriented_programming)), reference equality (also known as [physical equality](https://ocaml.org/manual/5.4/api/Repr.html#VALphys_equal)), or [pointers](https://en.wikipedia.org/wiki/Pointer_(computer_programming)), all of which are semantic concepts based on memory addresses. 
 
 > Note that platform authors can choose to implement features based on memory addresses,
 > since platforms have access to lower-level languages which can naturally see the addresses
@@ -73,3 +93,48 @@ x = if foo {
 > be a block expression, for situations like `else { x }`, than syntax sugar for a single-field 
 > record like `{ x: x }`. Single-field records are much less common than blocks in 
 > conditional branches.
+
+## [Evaluation](#evaluation) {#evaluation}
+
+Evaluation is the process of an expression becoming a value.
+
+Like most programming languages, Roc uses [strict evaluation](https://en.wikipedia.org/wiki/Strict_programming_language) and does not support [lazy evaluation](https://en.wikipedia.org/wiki/Strict_programming_language) like some non-strict languages do (such as [Haskell](https://www.haskell.org)).
+
+Expressions that are already values (such as `4`, `"foo"`, etc.) evaluate to themselves.
+
+More complex expressions, such as function calls or [block expressions](#block-expressions)
+may require multiple steps to evaluate to a value. 
+
+### [Side Effects during evaluation](#side-effects-during-evaluation) {#side-effects-during-evaluation}
+
+Normally, only evaluating [effectful functions](functions#effectful-functions) can 
+cause [side effects](functions#side-effects), but evaluating any other type of expression cannot. 
+
+One exception to this rule is [`dbg` statements](statements#dbg), which perform the side effect of 
+logging a value for debugging purposes. This is intended to be an interface for debugging, much 
+like a [step debugger](https://en.wikipedia.org/wiki/Debugger), not part of a program's semantics, 
+and so the side effect is allowed outside effectful functions (just like step debugging works on
+any expression, not just calling effectful functions).
+
+The only other exception to the rule is [`expect` statements](statements#expect), 
+
+> Note that platform authors are in charge of what happens when memory gets allocated and
+> deallocated, and can therefore decide to perform side effects during memory allocation
+> and deallocation. This can easily cause surprising behavior for Roc applicationa authors,
+> and should not be relied upon because Roc's optimizer assumes memory allocation and deallocation
+> has no observable effect on the program (unless allocation fails), which means these side
+> effects may be optimized away differently between patch releases of the compiler.
+
+### [Compile-Time Evaluation](#compile-time-evaluation) {#compile-time-evaluation}
+
+When possible, Roc's compiler will evaluate expressions at compile-time instead of at runtime.
+
+This is only possible for expressions that depend only on values known at compile-time. The
+following are not known at compile time:
+
+- Values returned from effectful function calls (which can vary based on runtime state)
+- Values provided by the platform
+
+If a [`crash`](statements#crash) is encountered during compile-time evaluation,
+it will be reported at compile time just like any other compilation errors (such as
+syntax errors, naming errors, and type mismatches).
