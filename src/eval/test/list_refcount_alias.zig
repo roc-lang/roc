@@ -9,11 +9,11 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const testing = std.testing;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 
 test "list refcount alias - variable aliasing" {
     // Alias a list to another variable and return the alias
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2, 3]
         \\    y = x
@@ -24,7 +24,7 @@ test "list refcount alias - variable aliasing" {
 
 test "list refcount alias - return original after aliasing" {
     // Alias a list but return the original
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2, 3]
         \\    y = x
@@ -35,7 +35,7 @@ test "list refcount alias - return original after aliasing" {
 
 test "list refcount alias - triple aliasing" {
     // Create multiple levels of aliasing
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = x
@@ -47,7 +47,7 @@ test "list refcount alias - triple aliasing" {
 
 test "list refcount alias - shadowing decrefs old list" {
     // Shadow a variable with a new list - old list should be decreffed
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    x = [3, 4]
@@ -58,7 +58,7 @@ test "list refcount alias - shadowing decrefs old list" {
 
 test "list refcount alias - multiple independent lists" {
     // Multiple independent lists should not interfere
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = [3, 4]
@@ -69,7 +69,7 @@ test "list refcount alias - multiple independent lists" {
 
 test "list refcount alias - empty list aliasing" {
     // Empty list aliasing should work correctly
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = []
         \\    y = x
@@ -80,7 +80,7 @@ test "list refcount alias - empty list aliasing" {
 
 test "list refcount alias - alias then shadow" {
     // Alias a list, then shadow the original
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = x
@@ -92,7 +92,7 @@ test "list refcount alias - alias then shadow" {
 
 test "list refcount alias - both references used" {
     // Use both the original and alias in computation
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = x

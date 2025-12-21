@@ -12,7 +12,7 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const testing = std.testing;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
 
 // Lists of Records
@@ -29,7 +29,7 @@ test "list refcount complex - list of records with strings" {
 }
 
 test "list refcount complex - list of records with integers" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    r1 = {val: 10}
         \\    r2 = {val: 20}
@@ -40,7 +40,7 @@ test "list refcount complex - list of records with integers" {
 }
 
 test "list refcount complex - same record multiple times in list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    r = {val: 42}
         \\    lst = [r, r, r]
@@ -50,7 +50,7 @@ test "list refcount complex - same record multiple times in list" {
 }
 
 test "list refcount complex - list of records with nested data" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    r1 = {inner: {val: 10}}
         \\    r2 = {inner: {val: 20}}
@@ -63,7 +63,7 @@ test "list refcount complex - list of records with nested data" {
 // Lists of Tuples
 
 test "list refcount complex - list of tuples with integers" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    t1 = (1, 2)
         \\    t2 = (3, 4)
@@ -88,7 +88,7 @@ test "list refcount complex - list of tuples with strings" {
 
 test "list refcount complex - list of tags with integers" {
     // Alternative: Tag containing list instead of list of tags
-    try runExpectInt(
+    try runExpectI64(
         \\match Some([10, 20]) { Some(lst) => match lst { [x, ..] => x, _ => 0 }, None => 0 }
     , 10, .no_trace);
 }
@@ -114,7 +114,7 @@ test "list refcount complex - list of records of lists of strings" {
 }
 
 test "list refcount complex - inline complex structure" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    data = [{val: 1}, {val: 2}]
         \\    match data { [first, ..] => first.val, _ => 0 }
@@ -123,7 +123,7 @@ test "list refcount complex - inline complex structure" {
 }
 
 test "list refcount complex - deeply nested mixed structures" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    inner = {x: 42}
         \\    outer = {nested: inner}
@@ -135,7 +135,7 @@ test "list refcount complex - deeply nested mixed structures" {
 
 test "list refcount complex - list of Ok/Err tags" {
     // Alternative: Ok/Err containing lists instead of list of tags
-    try runExpectInt(
+    try runExpectI64(
         \\match Ok([1, 2]) { Ok(lst) => match lst { [x, ..] => x, _ => 0 }, Err(_) => 0 }
     , 1, .no_trace);
 }

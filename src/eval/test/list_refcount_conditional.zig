@@ -8,11 +8,11 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const testing = std.testing;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
 
 test "list refcount conditional - simple if-else with lists" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    result = if True {x} else {[3, 4]}
@@ -22,7 +22,7 @@ test "list refcount conditional - simple if-else with lists" {
 }
 
 test "list refcount conditional - return else branch" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    result = if False {x} else {[3, 4]}
@@ -32,7 +32,7 @@ test "list refcount conditional - return else branch" {
 }
 
 test "list refcount conditional - same list in both branches" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    result = if True {x} else {x}
@@ -42,7 +42,7 @@ test "list refcount conditional - same list in both branches" {
 }
 
 test "list refcount conditional - unused branch decreffed" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = [3, 4]
@@ -53,7 +53,7 @@ test "list refcount conditional - unused branch decreffed" {
 }
 
 test "list refcount conditional - nested conditionals" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1]
         \\    result = if True {if False {x} else {[2]}} else {[3]}
@@ -73,7 +73,7 @@ test "list refcount conditional - string lists in conditionals" {
 }
 
 test "list refcount conditional - inline list literals" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    result = if True {[10, 20]} else {[30, 40]}
         \\    match result { [a, b] => a + b, _ => 0 }
@@ -82,7 +82,7 @@ test "list refcount conditional - inline list literals" {
 }
 
 test "list refcount conditional - empty list in branch" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    result = if True {[]} else {[1, 2]}
         \\    match result { [] => 42, _ => 0 }

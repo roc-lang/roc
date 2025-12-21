@@ -23,13 +23,12 @@ const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
-const runExpectListI64WithStrictLayout = helpers.runExpectListI64WithStrictLayout;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -44,172 +43,172 @@ const TraceWriterState = struct {
 };
 
 test "eval simple number" {
-    try runExpectInt("1", 1, .no_trace);
-    try runExpectInt("42", 42, .no_trace);
-    try runExpectInt("-1234", -1234, .no_trace);
+    try runExpectI64("1", 1, .no_trace);
+    try runExpectI64("42", 42, .no_trace);
+    try runExpectI64("-1234", -1234, .no_trace);
 }
 
 test "if-else" {
-    try runExpectInt("if (1 == 1) 42 else 99", 42, .no_trace);
-    try runExpectInt("if (1 == 2) 42 else 99", 99, .no_trace);
-    try runExpectInt("if (5 > 3) 100 else 200", 100, .no_trace);
-    try runExpectInt("if (3 > 5) 100 else 200", 200, .no_trace);
+    try runExpectI64("if (1 == 1) 42 else 99", 42, .no_trace);
+    try runExpectI64("if (1 == 2) 42 else 99", 99, .no_trace);
+    try runExpectI64("if (5 > 3) 100 else 200", 100, .no_trace);
+    try runExpectI64("if (3 > 5) 100 else 200", 200, .no_trace);
 }
 
 test "nested if-else" {
-    try runExpectInt("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100, .no_trace);
-    try runExpectInt("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200, .no_trace);
-    try runExpectInt("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300, .no_trace);
+    try runExpectI64("if (1 == 1) (if (2 == 2) 100 else 200) else 300", 100, .no_trace);
+    try runExpectI64("if (1 == 1) (if (2 == 3) 100 else 200) else 300", 200, .no_trace);
+    try runExpectI64("if (1 == 2) (if (2 == 2) 100 else 200) else 300", 300, .no_trace);
 }
 
 test "eval single element record" {
-    try runExpectInt("{x: 42}.x", 42, .no_trace);
-    try runExpectInt("{foo: 100}.foo", 100, .no_trace);
-    try runExpectInt("{bar: 1 + 2}.bar", 3, .no_trace);
+    try runExpectI64("{x: 42}.x", 42, .no_trace);
+    try runExpectI64("{foo: 100}.foo", 100, .no_trace);
+    try runExpectI64("{bar: 1 + 2}.bar", 3, .no_trace);
 }
 
 test "eval multi-field record" {
-    try runExpectInt("{x: 10, y: 20}.x", 10, .no_trace);
-    try runExpectInt("{x: 10, y: 20}.y", 20, .no_trace);
-    try runExpectInt("{a: 1, b: 2, c: 3}.a", 1, .no_trace);
-    try runExpectInt("{a: 1, b: 2, c: 3}.b", 2, .no_trace);
-    try runExpectInt("{a: 1, b: 2, c: 3}.c", 3, .no_trace);
+    try runExpectI64("{x: 10, y: 20}.x", 10, .no_trace);
+    try runExpectI64("{x: 10, y: 20}.y", 20, .no_trace);
+    try runExpectI64("{a: 1, b: 2, c: 3}.a", 1, .no_trace);
+    try runExpectI64("{a: 1, b: 2, c: 3}.b", 2, .no_trace);
+    try runExpectI64("{a: 1, b: 2, c: 3}.c", 3, .no_trace);
 }
 
 test "nested record access" {
-    try runExpectInt("{outer: {inner: 42}}.outer.inner", 42, .no_trace);
-    try runExpectInt("{a: {b: {c: 100}}}.a.b.c", 100, .no_trace);
+    try runExpectI64("{outer: {inner: 42}}.outer.inner", 42, .no_trace);
+    try runExpectI64("{a: {b: {c: 100}}}.a.b.c", 100, .no_trace);
 }
 
 test "record field order independence" {
-    try runExpectInt("{x: 1, y: 2}.x + {y: 2, x: 1}.x", 2, .no_trace);
-    try runExpectInt("{a: 10, b: 20, c: 30}.b", 20, .no_trace);
-    try runExpectInt("{c: 30, a: 10, b: 20}.b", 20, .no_trace);
+    try runExpectI64("{x: 1, y: 2}.x + {y: 2, x: 1}.x", 2, .no_trace);
+    try runExpectI64("{a: 10, b: 20, c: 30}.b", 20, .no_trace);
+    try runExpectI64("{c: 30, a: 10, b: 20}.b", 20, .no_trace);
 }
 
 test "arithmetic binops" {
-    try runExpectInt("1 + 2", 3, .no_trace);
-    try runExpectInt("5 - 3", 2, .no_trace);
-    try runExpectInt("4 * 5", 20, .no_trace);
-    try runExpectInt("10 // 2", 5, .no_trace);
-    try runExpectInt("7 % 3", 1, .no_trace);
+    try runExpectI64("1 + 2", 3, .no_trace);
+    try runExpectI64("5 - 3", 2, .no_trace);
+    try runExpectI64("4 * 5", 20, .no_trace);
+    try runExpectI64("10 // 2", 5, .no_trace);
+    try runExpectI64("7 % 3", 1, .no_trace);
 }
 
 test "comparison binops" {
-    try runExpectInt("if 1 < 2 100 else 200", 100, .no_trace);
-    try runExpectInt("if 2 < 1 100 else 200", 200, .no_trace);
-    try runExpectInt("if 5 > 3 100 else 200", 100, .no_trace);
-    try runExpectInt("if 3 > 5 100 else 200", 200, .no_trace);
-    try runExpectInt("if 10 <= 10 100 else 200", 100, .no_trace);
-    try runExpectInt("if 10 <= 9 100 else 200", 200, .no_trace);
-    try runExpectInt("if 10 >= 10 100 else 200", 100, .no_trace);
-    try runExpectInt("if 9 >= 10 100 else 200", 200, .no_trace);
-    try runExpectInt("if 5 == 5 100 else 200", 100, .no_trace);
-    try runExpectInt("if 5 == 6 100 else 200", 200, .no_trace);
-    try runExpectInt("if 5 != 6 100 else 200", 100, .no_trace);
-    try runExpectInt("if 5 != 5 100 else 200", 200, .no_trace);
+    try runExpectI64("if 1 < 2 100 else 200", 100, .no_trace);
+    try runExpectI64("if 2 < 1 100 else 200", 200, .no_trace);
+    try runExpectI64("if 5 > 3 100 else 200", 100, .no_trace);
+    try runExpectI64("if 3 > 5 100 else 200", 200, .no_trace);
+    try runExpectI64("if 10 <= 10 100 else 200", 100, .no_trace);
+    try runExpectI64("if 10 <= 9 100 else 200", 200, .no_trace);
+    try runExpectI64("if 10 >= 10 100 else 200", 100, .no_trace);
+    try runExpectI64("if 9 >= 10 100 else 200", 200, .no_trace);
+    try runExpectI64("if 5 == 5 100 else 200", 100, .no_trace);
+    try runExpectI64("if 5 == 6 100 else 200", 200, .no_trace);
+    try runExpectI64("if 5 != 6 100 else 200", 100, .no_trace);
+    try runExpectI64("if 5 != 5 100 else 200", 200, .no_trace);
 }
 
 test "unary minus" {
-    try runExpectInt("-5", -5, .no_trace);
-    try runExpectInt("-(-10)", 10, .no_trace);
-    try runExpectInt("-(3 + 4)", -7, .no_trace);
-    try runExpectInt("-0", 0, .no_trace);
+    try runExpectI64("-5", -5, .no_trace);
+    try runExpectI64("-(-10)", 10, .no_trace);
+    try runExpectI64("-(3 + 4)", -7, .no_trace);
+    try runExpectI64("-0", 0, .no_trace);
 }
 
 test "parentheses and precedence" {
-    try runExpectInt("2 + 3 * 4", 14, .no_trace);
-    try runExpectInt("(2 + 3) * 4", 20, .no_trace);
-    try runExpectInt("100 - 20 - 10", 70, .no_trace);
-    try runExpectInt("100 - (20 - 10)", 90, .no_trace);
+    try runExpectI64("2 + 3 * 4", 14, .no_trace);
+    try runExpectI64("(2 + 3) * 4", 20, .no_trace);
+    try runExpectI64("100 - 20 - 10", 70, .no_trace);
+    try runExpectI64("100 - (20 - 10)", 90, .no_trace);
 }
 
 test "operator associativity - addition" {
     // Left associative: a + b + c should parse as (a + b) + c
-    try runExpectInt("100 + 20 + 10", 130, .no_trace); // (100 + 20) + 10 = 130
-    try runExpectInt("100 + (20 + 10)", 130, .no_trace); // Same result, but explicitly grouped
+    try runExpectI64("100 + 20 + 10", 130, .no_trace); // (100 + 20) + 10 = 130
+    try runExpectI64("100 + (20 + 10)", 130, .no_trace); // Same result, but explicitly grouped
 
     // More complex case
-    try runExpectInt("10 + 20 + 30 + 40", 100, .no_trace); // ((10 + 20) + 30) + 40 = 100
+    try runExpectI64("10 + 20 + 30 + 40", 100, .no_trace); // ((10 + 20) + 30) + 40 = 100
 }
 
 test "operator associativity - subtraction" {
     // Left associative: a - b - c should parse as (a - b) - c
-    try runExpectInt("100 - 20 - 10", 70, .no_trace); // (100 - 20) - 10 = 70
-    try runExpectInt("100 - (20 - 10)", 90, .no_trace); // Different result with explicit grouping
+    try runExpectI64("100 - 20 - 10", 70, .no_trace); // (100 - 20) - 10 = 70
+    try runExpectI64("100 - (20 - 10)", 90, .no_trace); // Different result with explicit grouping
 
     // More complex case showing the difference
-    try runExpectInt("100 - 50 - 25 - 5", 20, .no_trace); // ((100 - 50) - 25) - 5 = 20
-    try runExpectInt("100 - (50 - (25 - 5))", 70, .no_trace); // Right associative would give 70
+    try runExpectI64("100 - 50 - 25 - 5", 20, .no_trace); // ((100 - 50) - 25) - 5 = 20
+    try runExpectI64("100 - (50 - (25 - 5))", 70, .no_trace); // Right associative would give 70
 }
 
 test "operator associativity - mixed addition and subtraction" {
     // Regression test: + and - should have equal precedence and be left-associative
     // Previously + had higher precedence than -, causing 1 - 2 + 3 to parse as 1 - (2 + 3) = -4
-    try runExpectInt("1 - 2 + 3", 2, .no_trace); // (1 - 2) + 3 = 2, NOT 1 - (2 + 3) = -4
-    try runExpectInt("5 + 3 - 2", 6, .no_trace); // (5 + 3) - 2 = 6
-    try runExpectInt("10 - 5 + 3 - 2", 6, .no_trace); // ((10 - 5) + 3) - 2 = 6
-    try runExpectInt("1 + 2 - 3 + 4 - 5", -1, .no_trace); // (((1 + 2) - 3) + 4) - 5 = -1
+    try runExpectI64("1 - 2 + 3", 2, .no_trace); // (1 - 2) + 3 = 2, NOT 1 - (2 + 3) = -4
+    try runExpectI64("5 + 3 - 2", 6, .no_trace); // (5 + 3) - 2 = 6
+    try runExpectI64("10 - 5 + 3 - 2", 6, .no_trace); // ((10 - 5) + 3) - 2 = 6
+    try runExpectI64("1 + 2 - 3 + 4 - 5", -1, .no_trace); // (((1 + 2) - 3) + 4) - 5 = -1
 }
 
 test "operator associativity - multiplication" {
     // Left associative: a * b * c should parse as (a * b) * c
-    try runExpectInt("2 * 3 * 4", 24, .no_trace); // (2 * 3) * 4 = 24
-    try runExpectInt("2 * (3 * 4)", 24, .no_trace); // Same result for multiplication
+    try runExpectI64("2 * 3 * 4", 24, .no_trace); // (2 * 3) * 4 = 24
+    try runExpectI64("2 * (3 * 4)", 24, .no_trace); // Same result for multiplication
 
     // Chain of multiplications
-    try runExpectInt("2 * 3 * 4 * 5", 120, .no_trace); // ((2 * 3) * 4) * 5 = 120
+    try runExpectI64("2 * 3 * 4 * 5", 120, .no_trace); // ((2 * 3) * 4) * 5 = 120
 }
 
 test "operator associativity - division" {
     // Left associative: a / b / c should parse as (a / b) / c
     // Note: Using integer division (//) for predictable integer results
-    try runExpectInt("100 // 20 // 2", 2, .no_trace); // (100 // 20) // 2 = 5 // 2 = 2
-    try runExpectInt("100 // (20 // 2)", 10, .no_trace); // Different result: 100 // 10 = 10
+    try runExpectI64("100 // 20 // 2", 2, .no_trace); // (100 // 20) // 2 = 5 // 2 = 2
+    try runExpectI64("100 // (20 // 2)", 10, .no_trace); // Different result: 100 // 10 = 10
 
     // More complex case showing the difference
     // Using small numbers to avoid Dec overflow with multiple divisions
-    try runExpectInt("80 // 8 // 2", 5, .no_trace); // ((80 // 8) // 2) = (10 // 2) = 5
-    try runExpectInt("80 // (8 // 2)", 20, .no_trace); // 80 // 4 = 20
+    try runExpectI64("80 // 8 // 2", 5, .no_trace); // ((80 // 8) // 2) = (10 // 2) = 5
+    try runExpectI64("80 // (8 // 2)", 20, .no_trace); // 80 // 4 = 20
 }
 
 test "operator associativity - modulo" {
     // Left associative: a % b % c should parse as (a % b) % c
-    try runExpectInt("100 % 30 % 7", 3, .no_trace); // (100 % 30) % 7 = 10 % 7 = 3
-    try runExpectInt("100 % (30 % 7)", 0, .no_trace); // Different result: 100 % 2 = 0
+    try runExpectI64("100 % 30 % 7", 3, .no_trace); // (100 % 30) % 7 = 10 % 7 = 3
+    try runExpectI64("100 % (30 % 7)", 0, .no_trace); // Different result: 100 % 2 = 0
 
     // Another example
-    try runExpectInt("50 % 20 % 6", 4, .no_trace); // (50 % 20) % 6 = 10 % 6 = 4
-    try runExpectInt("50 % (20 % 6)", 0, .no_trace); // Right associative: 50 % 2 = 0
+    try runExpectI64("50 % 20 % 6", 4, .no_trace); // (50 % 20) % 6 = 10 % 6 = 4
+    try runExpectI64("50 % (20 % 6)", 0, .no_trace); // Right associative: 50 % 2 = 0
 }
 
 test "operator associativity - mixed precedence" {
     // Verify that precedence still works correctly with fixed associativity
-    try runExpectInt("2 + 3 * 4", 14, .no_trace); // 2 + (3 * 4) = 14
-    try runExpectInt("2 * 3 + 4", 10, .no_trace); // (2 * 3) + 4 = 10
+    try runExpectI64("2 + 3 * 4", 14, .no_trace); // 2 + (3 * 4) = 14
+    try runExpectI64("2 * 3 + 4", 10, .no_trace); // (2 * 3) + 4 = 10
 
     // More complex mixed operations
-    try runExpectInt("10 - 2 * 3", 4, .no_trace); // 10 - (2 * 3) = 4
-    try runExpectInt("100 // 5 + 10", 30, .no_trace); // (100 // 5) + 10 = 30
-    try runExpectInt("100 // 5 % 3", 2, .no_trace); // (100 // 5) % 3 = 20 % 3 = 2
+    try runExpectI64("10 - 2 * 3", 4, .no_trace); // 10 - (2 * 3) = 4
+    try runExpectI64("100 // 5 + 10", 30, .no_trace); // (100 // 5) + 10 = 30
+    try runExpectI64("100 // 5 % 3", 2, .no_trace); // (100 // 5) % 3 = 20 % 3 = 2
 }
 
 test "operator associativity - edge cases" {
     // Very long chains to ensure associativity is consistent
-    try runExpectInt("1000 - 100 - 50 - 25 - 10 - 5", 810, .no_trace);
+    try runExpectI64("1000 - 100 - 50 - 25 - 10 - 5", 810, .no_trace);
     // ((((1000 - 100) - 50) - 25) - 10) - 5 = 810
 
     // Complex nested expressions
-    try runExpectInt("(100 - 50) - (30 - 10)", 30, .no_trace); // 50 - 20 = 30
-    try runExpectInt("100 - (50 - 30) - 10", 70, .no_trace); // 100 - 20 - 10 = 70
+    try runExpectI64("(100 - 50) - (30 - 10)", 30, .no_trace); // 50 - 20 = 30
+    try runExpectI64("100 - (50 - 30) - 10", 70, .no_trace); // 100 - 20 - 10 = 70
 
     // Division chains that would overflow if right-associative
     // Using very small numbers to avoid Dec overflow with chained divisions
-    try runExpectInt("80 // 4 // 2", 10, .no_trace);
+    try runExpectI64("80 // 4 // 2", 10, .no_trace);
     // (((80 // 4) // 2) = (20 // 2) = 10
 
     // Modulo chains
-    try runExpectInt("1000 % 300 % 40 % 7", 6, .no_trace);
+    try runExpectI64("1000 % 300 % 40 % 7", 6, .no_trace);
     // ((1000 % 300) % 40) % 7 = (100 % 40) % 7 = 20 % 7 = 6
 }
 
@@ -230,8 +229,8 @@ test "operator associativity - documentation" {
 
     // LEFT ASSOCIATIVE (most arithmetic operators)
     // a op b op c = (a op b) op c
-    try runExpectInt("8 - 4 - 2", 2, .no_trace); // (8-4)-2 = 2, NOT 8-(4-2) = 6
-    try runExpectInt("16 // 4 // 2", 2, .no_trace); // (16//4)//2 = 2, NOT 16//(4//2) = 8
+    try runExpectI64("8 - 4 - 2", 2, .no_trace); // (8-4)-2 = 2, NOT 8-(4-2) = 6
+    try runExpectI64("16 // 4 // 2", 2, .no_trace); // (16//4)//2 = 2, NOT 16//(4//2) = 8
 
     // NON-ASSOCIATIVE (comparison operators)
     // Can't chain without parentheses
@@ -249,8 +248,8 @@ test "error test - divide by zero" {
 }
 
 test "simple lambda with if-else" {
-    try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
-    try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
+    try runExpectI64("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
+    try runExpectI64("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
 }
 
 test "crash in else branch inside lambda" {
@@ -265,7 +264,7 @@ test "crash in else branch inside lambda" {
 
 test "crash NOT taken when condition true" {
     // Test that crash in else branch is NOT executed when if branch is taken
-    try runExpectInt(
+    try runExpectI64(
         \\(|x| if x > 0 x else {
         \\    crash "this should not execute"
         \\    0
@@ -331,47 +330,47 @@ test "tuples" {
 }
 
 test "simple lambdas" {
-    try runExpectInt("(|x| x + 1)(5)", 6, .no_trace);
-    try runExpectInt("(|x| x * 2 + 1)(10)", 21, .no_trace);
-    try runExpectInt("(|x| x - 3)(8)", 5, .no_trace);
-    try runExpectInt("(|x| 100 - x)(25)", 75, .no_trace);
-    try runExpectInt("(|x| 5)(99)", 5, .no_trace);
-    try runExpectInt("(|x| x + x)(7)", 14, .no_trace);
+    try runExpectI64("(|x| x + 1)(5)", 6, .no_trace);
+    try runExpectI64("(|x| x * 2 + 1)(10)", 21, .no_trace);
+    try runExpectI64("(|x| x - 3)(8)", 5, .no_trace);
+    try runExpectI64("(|x| 100 - x)(25)", 75, .no_trace);
+    try runExpectI64("(|x| 5)(99)", 5, .no_trace);
+    try runExpectI64("(|x| x + x)(7)", 14, .no_trace);
 }
 
 test "multi-parameter lambdas" {
-    try runExpectInt("(|x, y| x + y)(3, 4)", 7, .no_trace);
+    try runExpectI64("(|x, y| x + y)(3, 4)", 7, .no_trace);
     // Using smaller numbers to avoid Dec overflow in multiplication
-    try runExpectInt("(|x, y| x * y)(5, 6)", 30, .no_trace);
-    try runExpectInt("(|a, b, c| a + b + c)(1, 2, 3)", 6, .no_trace);
+    try runExpectI64("(|x, y| x * y)(5, 6)", 30, .no_trace);
+    try runExpectI64("(|a, b, c| a + b + c)(1, 2, 3)", 6, .no_trace);
 }
 
 test "lambdas with if-then bodies" {
-    try runExpectInt("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
-    try runExpectInt("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
-    try runExpectInt("(|x| if x == 0 1 else x)(0)", 1, .no_trace);
-    try runExpectInt("(|x| if x == 0 1 else x)(42)", 42, .no_trace);
+    try runExpectI64("(|x| if x > 0 x else 0)(5)", 5, .no_trace);
+    try runExpectI64("(|x| if x > 0 x else 0)(-3)", 0, .no_trace);
+    try runExpectI64("(|x| if x == 0 1 else x)(0)", 1, .no_trace);
+    try runExpectI64("(|x| if x == 0 1 else x)(42)", 42, .no_trace);
 }
 
 test "lambdas with unary minus" {
-    try runExpectInt("(|x| -x)(5)", -5, .no_trace);
-    try runExpectInt("(|x| -x)(0)", 0, .no_trace);
-    try runExpectInt("(|x| -x)(-3)", 3, .no_trace);
-    try runExpectInt("(|x| -5)(999)", -5, .no_trace);
-    try runExpectInt("(|x| if True -x else 0)(5)", -5, .no_trace);
-    try runExpectInt("(|x| if True -10 else x)(999)", -10, .no_trace);
+    try runExpectI64("(|x| -x)(5)", -5, .no_trace);
+    try runExpectI64("(|x| -x)(0)", 0, .no_trace);
+    try runExpectI64("(|x| -x)(-3)", 3, .no_trace);
+    try runExpectI64("(|x| -5)(999)", -5, .no_trace);
+    try runExpectI64("(|x| if True -x else 0)(5)", -5, .no_trace);
+    try runExpectI64("(|x| if True -10 else x)(999)", -10, .no_trace);
 }
 
 test "lambdas closures" {
     // Curried functions still have interpreter issues with TypeMismatch
-    // try runExpectInt("(|a| |b| a * b)(5)(10)", 50, .no_trace);
-    // try runExpectInt("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
-    // try runExpectInt("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
-    // try runExpectInt("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
+    // try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    // try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    // try runExpectI64("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    // try runExpectI64("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
 }
 
 test "lambdas with capture" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = 10
         \\    f = |y| x + y
@@ -379,7 +378,7 @@ test "lambdas with capture" {
         \\}
     , 15, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = 20
         \\    y = 30
@@ -391,7 +390,7 @@ test "lambdas with capture" {
 
 test "lambdas nested closures" {
     // Nested closures still have interpreter issues with TypeMismatch
-    // try runExpectInt(
+    // try runExpectI64(
     //     \\(((|a| {
     //     \\    a_loc = a * 2
     //     \\    |b| {
@@ -431,9 +430,9 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
 test "integer type evaluation" {
     // Test integer types to verify basic evaluation works
     // This should help us debug why 255u8 shows as 42 in REPL
-    try runExpectInt("255u8", 255, .no_trace);
-    try runExpectInt("42i32", 42, .no_trace);
-    try runExpectInt("123i64", 123, .no_trace);
+    try runExpectI64("255u8", 255, .no_trace);
+    try runExpectI64("42i32", 42, .no_trace);
+    try runExpectI64("123i64", 123, .no_trace);
 }
 
 test "decimal literal evaluation" {
@@ -456,37 +455,37 @@ test "comprehensive integer literal formats" {
     // Test various integer literal formats and precisions
 
     // Unsigned integers
-    try runExpectInt("0u8", 0, .no_trace);
-    try runExpectInt("255u8", 255, .no_trace);
-    try runExpectInt("1000u16", 1000, .no_trace);
-    try runExpectInt("65535u16", 65535, .no_trace);
-    try runExpectInt("100000u32", 100000, .no_trace);
-    try runExpectInt("999999999u64", 999999999, .no_trace);
+    try runExpectI64("0u8", 0, .no_trace);
+    try runExpectI64("255u8", 255, .no_trace);
+    try runExpectI64("1000u16", 1000, .no_trace);
+    try runExpectI64("65535u16", 65535, .no_trace);
+    try runExpectI64("100000u32", 100000, .no_trace);
+    try runExpectI64("999999999u64", 999999999, .no_trace);
 
     // Signed integers
-    try runExpectInt("-128i8", -128, .no_trace);
-    try runExpectInt("127i8", 127, .no_trace);
-    try runExpectInt("-32768i16", -32768, .no_trace);
-    try runExpectInt("32767i16", 32767, .no_trace);
-    try runExpectInt("-2147483648i32", -2147483648, .no_trace);
-    try runExpectInt("2147483647i32", 2147483647, .no_trace);
-    try runExpectInt("-999999999i64", -999999999, .no_trace);
-    try runExpectInt("999999999i64", 999999999, .no_trace);
+    try runExpectI64("-128i8", -128, .no_trace);
+    try runExpectI64("127i8", 127, .no_trace);
+    try runExpectI64("-32768i16", -32768, .no_trace);
+    try runExpectI64("32767i16", 32767, .no_trace);
+    try runExpectI64("-2147483648i32", -2147483648, .no_trace);
+    try runExpectI64("2147483647i32", 2147483647, .no_trace);
+    try runExpectI64("-999999999i64", -999999999, .no_trace);
+    try runExpectI64("999999999i64", 999999999, .no_trace);
 
     // Default integer type (i64)
-    try runExpectInt("42", 42, .no_trace);
-    try runExpectInt("-1234", -1234, .no_trace);
-    try runExpectInt("0", 0, .no_trace);
+    try runExpectI64("42", 42, .no_trace);
+    try runExpectI64("-1234", -1234, .no_trace);
+    try runExpectI64("0", 0, .no_trace);
 }
 
 test "hexadecimal and binary integer literals" {
     // Test alternative number bases
-    try runExpectInt("0xFF", 255, .no_trace);
-    try runExpectInt("0x10", 16, .no_trace);
-    try runExpectInt("0xDEADBEEF", 3735928559, .no_trace);
-    try runExpectInt("0b1010", 10, .no_trace);
-    try runExpectInt("0b11111111", 255, .no_trace);
-    try runExpectInt("0b0", 0, .no_trace);
+    try runExpectI64("0xFF", 255, .no_trace);
+    try runExpectI64("0x10", 16, .no_trace);
+    try runExpectI64("0xDEADBEEF", 3735928559, .no_trace);
+    try runExpectI64("0b1010", 10, .no_trace);
+    try runExpectI64("0b11111111", 255, .no_trace);
+    try runExpectI64("0b0", 0, .no_trace);
 }
 
 test "scientific notation literals" {
@@ -628,7 +627,7 @@ test "string refcount - conditional strings" {
 
 test "string refcount - simpler record test" {
     // Test record containing integers first to see if the issue is record-specific or string-specific
-    try runExpectInt("{foo: 42}.foo", 42, .no_trace);
+    try runExpectI64("{foo: 42}.foo", 42, .no_trace);
 }
 
 test "string refcount - mixed string sizes" {
@@ -661,7 +660,7 @@ test "string refcount - record with empty string" {
 
 test "string refcount - simple integer closure" {
     // Test basic closure with integer first to see if the issue is closure-specific
-    try runExpectInt("(|x| x)(42)", 42, .no_trace);
+    try runExpectI64("(|x| x)(42)", 42, .no_trace);
 }
 
 test "string refcount - simple string closure" {
@@ -670,7 +669,7 @@ test "string refcount - simple string closure" {
 
 test "recursive factorial function" {
     // Test standalone evaluation of recursive factorial without comptime
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    factorial = |n|
         \\        if n <= 1
@@ -1184,7 +1183,7 @@ test "List.fold with record accumulator - single field record destructuring" {
 
 test "List.fold with list destructuring - simple first element" {
     // Simplest case: just extract the first element
-    try runExpectInt(
+    try runExpectI64(
         "List.fold([[10], [20], [30]], 0, |acc, [x]| acc + x)",
         60,
         .no_trace,
@@ -1193,7 +1192,7 @@ test "List.fold with list destructuring - simple first element" {
 
 test "List.fold with list destructuring - two element exact match" {
     // Extract exactly two elements
-    try runExpectInt(
+    try runExpectI64(
         "List.fold([[1, 2], [3, 4]], 0, |acc, [a, b]| acc + a + b)",
         10,
         .no_trace,
@@ -1203,7 +1202,7 @@ test "List.fold with list destructuring - two element exact match" {
 // Test that list destructuring works in match (not in lambda params) - this should work
 test "match with list destructuring - baseline" {
     // This tests list destructuring in a match context, not lambda params
-    try runExpectInt(
+    try runExpectI64(
         "match [1, 2, 3] { [a, b, c] => a + b + c, _ => 0 }",
         6,
         .no_trace,
@@ -1324,12 +1323,8 @@ test "List.repeat - basic case" {
 }
 
 test "List.repeat - empty case" {
-    // Repeat a value multiple times
-    try runExpectListI64(
-        "List.repeat(7i64, 0)",
-        &[_]i64{},
-        .no_trace,
-    );
+    // Repeat a value zero times returns empty list
+    try helpers.runExpectEmptyListI64("List.repeat(7i64, 0)", .no_trace);
 }
 
 // Bug regression tests - interpreter crash issues
@@ -1396,7 +1391,7 @@ test "list equality - single string element list - regression" {
 test "if block with local bindings - regression" {
     // Regression test for segfault in if block with local variable bindings
     // Bug report: `main! = || { if True { x = 0 _y = x } }`
-    try runExpectInt(
+    try runExpectI64(
         \\if True {
         \\    x = 0
         \\    _y = x
@@ -1451,7 +1446,7 @@ test "List.get with polymorphic numeric index - regression #8666" {
     //
     // The fix: don't generalize vars with from_numeral constraints, and don't
     // instantiate them during lookup, so constraint propagation works correctly.
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    list = [10, 20, 30]
         \\    index = 0
@@ -1496,7 +1491,7 @@ test "List.get method dispatch on Try type - issue 8665" {
 test "record destructuring with assignment - regression" {
     // Regression test for GitHub issue #8647
     // Record destructuring should not cause TypeMismatch error during evaluation
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    rec = { x: 1, y: 2 }
         \\    { x, y } = rec
@@ -1555,8 +1550,27 @@ test "issue 8667: List.with_capacity should be inferred as List(I64)" {
     // When List.with_capacity is used with List.append(_, 1i64), the type checker should
     // unify the list element type to I64. This means the layout should be .list (not .list_of_zst).
     // If it's .list_of_zst, that indicates a type inference bug.
-    try runExpectListI64WithStrictLayout("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
+    try runExpectListI64("List.append(List.with_capacity(1), 1i64)", &[_]i64{1}, .no_trace);
 
     // Also test the fold case which is where the bug was originally reported
-    try runExpectListI64WithStrictLayout("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
+    try runExpectListI64("[1i64].fold(List.with_capacity(1), List.append)", &[_]i64{1}, .no_trace);
+}
+
+test "issue 8710: tag union with heap payload in tuple should not leak" {
+    // Regression test for GitHub issue #8710
+    // When a tag union (like Ok) containing a heap-allocated payload (like a List)
+    // is stored in a tuple, the decref logic must properly free the payload.
+    // The bug was that decrefLayoutPtr was missing handling for .tag_union layouts,
+    // so the payload was never decremented and would leak.
+    // We create a list, wrap in Ok, and return just the list length to verify the
+    // tuple is properly cleaned up (the test allocator catches any leaks).
+    try runExpectI64("[1i64, 2i64, 3i64].len()", 3, .no_trace);
+    // Also test the actual bug scenario: tag union in a tuple
+    try runExpectListI64(
+        \\{
+        \\    list = [1i64, 2i64, 3i64]
+        \\    tuple = (Ok(list), 42i64)
+        \\    list
+        \\}
+    , &[_]i64{ 1, 2, 3 }, .no_trace);
 }
