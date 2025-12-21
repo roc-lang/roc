@@ -1,13 +1,13 @@
 # Conditionals
 
-## If
+## `if`
 
-## Else
+## `else`
 
-### Else If
+### `else if`
 
-## And
+## `and`
 
-## Or
+## `or`
 
-## Match
+## `match`

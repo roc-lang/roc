@@ -6,12 +6,12 @@
 
 ## Statements
 
-### Assignment
+### `=` (assignment)
 
-### Expect
+### `expect`
 
-### Return
+### `return`
 
-### Break (not implemented yet)
+### `break`
 
-### Continue (not implemented yet)
+### `continue`

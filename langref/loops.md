@@ -1,7 +1,7 @@
 # Loops
 
-## For
+## `for` Loops
 
-## While
+## `while` Loop
 
 ## Infinite Loops

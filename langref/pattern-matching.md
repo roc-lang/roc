@@ -1,15 +1,15 @@
 # Pattern Matching
 
-## Match
+## `match`
 
-### Alternatives
+### Branch Alternatives
 
 ### `if` Guards on Branches
 
 ## Exhaustiveness
 
-### Catch-all Patterns (underscore)
-
-## Assignment
+### Catch-all Patterns (`_`)
 
 ## Destructuring
+
+### Destructuring Assignments (with `=`)

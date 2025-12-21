@@ -4,6 +4,8 @@
 
 ## Effectful Functions
 
+### `!` suffix
+
 ## Recursive Functions
 
 ### Self-recursive Functions
