@@ -13,6 +13,7 @@ If you're looking for a beginner tutoral, check out [roc-lang.org/tutorial](http
   - [Blocks](expressions#blocks)
   - [Statements](expressions#statements)
     - [`=` (assignment)](expressions#assignment)
+    - [`import`](expressions#expect)
     - [`expect`](expressions#expect)
     - [`return`](expressions#return)
     - [`break`](expressions#break)
