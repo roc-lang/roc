@@ -1654,20 +1654,20 @@ EndOfFile,
 											(e-int (raw "5")))))))
 						(s-decl
 							(p-ident (raw "stale"))
-							(e-field-access
+							(e-question-suffix
 								(e-field-access
-									(e-field-access
-										(e-question-suffix
-											(e-apply
-												(e-ident (raw "some_fn"))
-												(e-ident (raw "arg1"))))
-										(e-question-suffix
-											(e-apply
-												(e-ident (raw "statod")))))
 									(e-question-suffix
-										(e-apply
-											(e-ident (raw "ned")))))
-								(e-question-suffix
+										(e-field-access
+											(e-question-suffix
+												(e-field-access
+													(e-question-suffix
+														(e-apply
+															(e-ident (raw "some_fn"))
+															(e-ident (raw "arg1"))))
+													(e-apply
+														(e-ident (raw "statod")))))
+											(e-apply
+												(e-ident (raw "ned")))))
 									(e-ident (raw "recd")))))
 						(e-apply
 							(e-tag (raw "Stdoline!"))
@@ -2249,36 +2249,101 @@ expect {
 										(e-num (value "5")))))))
 					(s-let
 						(p-assign (ident "stale"))
-						(e-dot-access (field "unknown")
-							(receiver
-								(e-dot-access (field "unknown")
-									(receiver
-										(e-dot-access (field "unknown")
-											(receiver
-												(e-match
-													(match
-														(cond
-															(e-call
-																(e-runtime-error (tag "ident_not_in_scope"))
-																(e-runtime-error (tag "ident_not_in_scope"))))
-														(branches
-															(branch
-																(patterns
-																	(pattern (degenerate false)
-																		(p-applied-tag)))
-																(value
-																	(e-lookup-local
-																		(p-assign (ident "#ok")))))
-															(branch
-																(patterns
-																	(pattern (degenerate false)
-																		(p-applied-tag)))
-																(value
-																	(e-return
-																		(e-tag (name "Err")
-																			(args
-																				(e-lookup-local
-																					(p-assign (ident "#err"))))))))))))))))))
+						(e-match
+							(match
+								(cond
+									(e-dot-access (field "recd")
+										(receiver
+											(e-match
+												(match
+													(cond
+														(e-dot-access (field "ned")
+															(receiver
+																(e-match
+																	(match
+																		(cond
+																			(e-dot-access (field "statod")
+																				(receiver
+																					(e-match
+																						(match
+																							(cond
+																								(e-call
+																									(e-runtime-error (tag "ident_not_in_scope"))
+																									(e-runtime-error (tag "ident_not_in_scope"))))
+																							(branches
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-lookup-local
+																											(p-assign (ident "#ok")))))
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-return
+																											(e-tag (name "Err")
+																												(args
+																													(e-lookup-local
+																														(p-assign (ident "#err"))))))))))))
+																				(args)))
+																		(branches
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-lookup-local
+																						(p-assign (ident "#ok")))))
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-return
+																						(e-tag (name "Err")
+																							(args
+																								(e-lookup-local
+																									(p-assign (ident "#err"))))))))))))
+															(args)))
+													(branches
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-lookup-local
+																	(p-assign (ident "#ok")))))
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-return
+																	(e-tag (name "Err")
+																		(args
+																			(e-lookup-local
+																				(p-assign (ident "#err"))))))))))))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err"))))))))))))
 					(e-tag (name "Stdoline!")
 						(args
 							(e-string
