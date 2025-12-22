@@ -341,8 +341,11 @@ pub const ComptimeEvaluator = struct {
     /// This replaces the expression in-place so future references see the constant value
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
-        const expr_idx = def.expr;
+        try self.tryFoldExpr(def.expr, stack_value);
+    }
 
+    /// Fold an expression to a constant value. Takes expr_idx directly for standalone expressions.
+    fn tryFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // Don't fold if the expression is already a constant
         const old_expr = self.env.store.getExpr(expr_idx);
         if (old_expr == .e_num or old_expr == .e_zero_argument_tag) {
@@ -376,8 +379,8 @@ pub const ComptimeEvaluator = struct {
         if (is_tag_union) {
             // Tag unions can be scalars (no payload) or tuples (with payload)
             switch (layout.tag) {
-                .scalar => try self.foldTagUnionScalar(def_idx, expr_idx, stack_value),
-                .tuple => try self.foldTagUnionTuple(def_idx, expr_idx, stack_value),
+                .scalar => try self.foldTagUnionScalar(expr_idx, stack_value),
+                .tuple => try self.foldTagUnionTuple(expr_idx, stack_value),
                 else => return error.NotImplemented,
             }
         } else {
@@ -487,8 +490,7 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
-    fn foldTagUnionScalar(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        _ = def_idx; // unused now that we get rt_var from stack_value
+    fn foldTagUnionScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // The value is the tag index directly (scalar integer).
         // The caller already verified layout.tag == .scalar, and scalar tag unions are always ints.
         std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
@@ -534,8 +536,7 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Fold a tag union (represented as tuple) to an e_zero_argument_tag expression
-    fn foldTagUnionTuple(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        _ = def_idx; // unused now that we get rt_var from stack_value
+    fn foldTagUnionTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // Tag unions are now represented as tuples (payload, tag)
         var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
 
@@ -1534,5 +1535,28 @@ pub const ComptimeEvaluator = struct {
             .evaluated = evaluated,
             .crashed = crashed,
         };
+    }
+
+    /// Evaluate and fold a standalone expression (not part of a def).
+    /// This is used for mono tests where we have a single expression to evaluate.
+    /// Returns true if the expression was successfully evaluated and folded.
+    pub fn evalAndFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx) !bool {
+        const ops = self.get_ops();
+
+        // Try to evaluate the expression
+        const result = self.interpreter.eval(expr_idx, ops) catch |err| {
+            // If evaluation fails, we can't fold - just return false
+            std.log.debug("Failed to evaluate expression for folding: {}", .{err});
+            return false;
+        };
+
+        // Try to fold the result into a constant
+        self.tryFoldExpr(expr_idx, result) catch |err| {
+            // If folding fails (e.g., unsupported type), just return false
+            std.log.debug("Failed to fold expression: {}", .{err});
+            return false;
+        };
+
+        return true;
     }
 };

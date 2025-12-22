@@ -12,10 +12,7 @@ type=mono
 ~~~
 # MONO
 ~~~roc
-{
-    identity = |x| x
-    identity(42)
-} : Dec
+42 : Dec
 ~~~
 # FORMATTED
 ~~~roc
@@ -52,18 +49,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block
-	(s-let
-		(p-assign (ident "identity"))
-		(e-lambda
-			(args
-				(p-assign (ident "x")))
-			(e-lookup-local
-				(p-assign (ident "x")))))
-	(e-call
-		(e-lookup-local
-			(p-assign (ident "identity")))
-		(e-num (value "42"))))
+(e-num (value "42"))
 ~~~
 # TYPES
 ~~~clojure

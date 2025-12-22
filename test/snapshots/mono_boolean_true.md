@@ -9,7 +9,7 @@ True
 ~~~
 # MONO
 ~~~roc
-True : Bool
+True : [True, .._others]
 ~~~
 # FORMATTED
 ~~~roc
@@ -30,7 +30,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-tag (name "True"))
+(e-zero-argument-tag (closure "True") (name "True"))
 ~~~
 # TYPES
 ~~~clojure

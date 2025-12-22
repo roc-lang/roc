@@ -9,7 +9,7 @@ type=mono
 ~~~
 # MONO
 ~~~roc
-(1 + 2) : Dec
+3 : Dec
 ~~~
 # FORMATTED
 ~~~roc
@@ -32,9 +32,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-binop (op "add")
-	(e-num (value "1"))
-	(e-num (value "2")))
+(e-num (value "3"))
 ~~~
 # TYPES
 ~~~clojure

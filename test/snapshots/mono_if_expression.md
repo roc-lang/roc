@@ -9,7 +9,7 @@ if True 1 else 2
 ~~~
 # MONO
 ~~~roc
-if True 1 else 2 : Dec
+1 : Dec
 ~~~
 # FORMATTED
 ~~~roc
@@ -33,13 +33,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-if
-	(if-branches
-		(if-branch
-			(e-tag (name "True"))
-			(e-num (value "1"))))
-	(if-else
-		(e-num (value "2"))))
+(e-num (value "1"))
 ~~~
 # TYPES
 ~~~clojure

@@ -1391,6 +1391,35 @@ fn processSnapshotContent(
         }
     }
 
+    // Run constant folding for mono tests
+    // This evaluates expressions at compile time and folds results back into the CIR.
+    if (content.meta.node_type == .mono) {
+        if (config.builtin_module) |builtin_env| {
+            const BuiltinTypes = eval_mod.BuiltinTypes;
+            const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
+            const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
+            const imported_envs: []const *const ModuleEnv = builtin_modules.items;
+            var comptime_evaluator = ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping) catch |err| {
+                // If constant folding fails, just skip it - the original expression is still valid
+                std.log.warn("Failed to create comptime evaluator for constant folding: {}", .{err});
+                return false;
+            };
+            defer comptime_evaluator.deinit();
+
+            // First evaluate any top-level defs
+            _ = comptime_evaluator.evalAll() catch |err| {
+                std.log.warn("Constant folding for defs failed: {}", .{err});
+            };
+
+            // Then evaluate and fold the standalone expression if present
+            if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
+                _ = comptime_evaluator.evalAndFoldExpr(expr_idx) catch |err| {
+                    std.log.warn("Constant folding for expression failed: {}", .{err});
+                };
+            }
+        }
+    }
+
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
@@ -2424,7 +2453,6 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
 /// Get the defaulted (monomorphized) type string for an expression.
 /// This defaults:
 /// - Flex vars with from_numeral constraint → Dec
-/// - Tag unions matching [True, False] or [True, .._] or [False, .._] → Bool
 /// - Recursively defaults element types in containers (List, Tuple)
 fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
     const resolved = can_ir.types.resolveVar(type_var);
@@ -2442,34 +2470,6 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
         },
         .structure => |flat_type| {
             switch (flat_type) {
-                .tag_union => |tag_union| {
-                    // Check if this matches Bool pattern: [True, False] or open variant
-                    const tag_slice = can_ir.types.getTagsSlice(tag_union.tags);
-                    var has_true = false;
-                    var has_false = false;
-                    var only_bool_tags = true;
-
-                    for (tag_slice.items(.name)) |tag_name| {
-                        const name_str = can_ir.getIdent(tag_name);
-                        if (std.mem.eql(u8, name_str, "True")) {
-                            has_true = true;
-                        } else if (std.mem.eql(u8, name_str, "False")) {
-                            has_false = true;
-                        } else {
-                            only_bool_tags = false;
-                        }
-                    }
-
-                    // Check extension - if open with _others, still could be Bool
-                    const is_open = switch (can_ir.types.resolveVar(tag_union.ext).desc.content) {
-                        .flex => true,
-                        else => false,
-                    };
-
-                    if (only_bool_tags and (has_true or has_false) and (is_open or (has_true and has_false))) {
-                        return allocator.dupe(u8, "Bool");
-                    }
-                },
                 .tuple => |tuple| {
                     // Recursively default tuple element types
                     var result = std.array_list.Managed(u8).init(allocator);
@@ -2480,6 +2480,7 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
                     for (elem_vars, 0..) |elem_var, i| {
                         if (i > 0) try result.appendSlice(", ");
                         const elem_type = try getDefaultedTypeString(allocator, can_ir, elem_var);
+                        defer allocator.free(elem_type);
                         try result.appendSlice(elem_type);
                     }
                     try result.append(')');
@@ -2492,6 +2493,7 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
                         var args_iter = can_ir.types.iterNominalArgs(nominal);
                         if (args_iter.next()) |elem_var| {
                             const elem_type = try getDefaultedTypeString(allocator, can_ir, elem_var);
+                            defer allocator.free(elem_type);
                             var result = std.array_list.Managed(u8).init(allocator);
                             errdefer result.deinit();
                             try result.appendSlice("List(");

@@ -1425,8 +1425,11 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
     writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
+        // Get the actual .txt file path for error reporting
+        const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
+        const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
         return ctx.fail(.{ .file_write_failed = .{
-            .path = exe_path,
+            .path = fd_file_path,
             .err = err,
         } });
     };
