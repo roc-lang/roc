@@ -105,5 +105,18 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(a, b, c, d, e, f, g, h, i, j, k) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]), k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)])]"))
+(expr (type "(a, b, c, d, e, f, g, h, i, j, k)
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
+    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+    g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)]),
+    h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]),
+    i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]),
+    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
+    k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
+  ]"))
 ~~~

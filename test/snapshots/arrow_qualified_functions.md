@@ -173,8 +173,10 @@ test7 = 42->Ok
 		(patt (type "b -> b"))
 		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "[Ok(b), .._others]
+  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "[Ok(b), .._others]
+  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "Bool"))
 		(expr (type "Bool"))
@@ -182,6 +184,8 @@ test7 = 42->Ok
 		(expr (type "b -> b"))
 		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "[Ok(b), .._others] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "[Ok(b), .._others]
+  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "[Ok(b), .._others]
+  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

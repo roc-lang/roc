@@ -256,10 +256,17 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> (_arg2 -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> (_arg2 -> a)
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a -> (_arg -> a)"))
 		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "(_arg -> a, _arg2 -> b, _arg3 -> (_arg4 -> c), _arg5 -> d) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]")))
+		(patt (type "(_arg -> a, _arg2 -> b, _arg3 -> (_arg4 -> c), _arg5 -> d)
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+  ]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
@@ -267,8 +274,15 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> (_arg2 -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> (_arg2 -> a)
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a -> (_arg -> a)"))
 		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "(_arg -> a, _arg2 -> b, _arg3 -> (_arg4 -> c), _arg5 -> d) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))))
+		(expr (type "(_arg -> a, _arg2 -> b, _arg3 -> (_arg4 -> c), _arg5 -> d)
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+  ]"))))
 ~~~
