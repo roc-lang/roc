@@ -7,6 +7,14 @@ type=mono
 ~~~roc
 []
 ~~~
+# MONO
+~~~roc
+[]
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,10 +28,6 @@ EndOfFile,
 ~~~clojure
 (e-list)
 ~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-empty_list)
@@ -31,8 +35,4 @@ NO CHANGE
 # TYPES
 ~~~clojure
 (expr (type "List(_a)"))
-~~~
-# MONO
-~~~roc
-[]
 ~~~

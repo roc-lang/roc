@@ -7,6 +7,14 @@ type=mono
 ~~~roc
 42
 ~~~
+# MONO
+~~~roc
+42
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,10 +28,6 @@ EndOfFile,
 ~~~clojure
 (e-int (raw "42"))
 ~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-num (value "42"))
@@ -31,8 +35,4 @@ NO CHANGE
 # TYPES
 ~~~clojure
 (expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-~~~
-# MONO
-~~~roc
-42
 ~~~

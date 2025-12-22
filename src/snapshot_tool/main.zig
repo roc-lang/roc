@@ -1417,19 +1417,30 @@ fn processSnapshotContent(
     }
 
     // Generate all sections
+    // For mono tests, the order is: META, SOURCE, MONO, FORMATTED, then the rest
+    // For other tests, the order is: META, SOURCE, EXPECTED, PROBLEMS, TOKENS, PARSE, FORMATTED, CANONICALIZE, TYPES
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
-    success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
-    try generateProblemsSection(&output, &generated_reports);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
-    try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
-    try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
-    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
 
-    // Generate MONO section only for mono tests
     if (content.meta.node_type == .mono) {
+        // Mono tests: MONO and FORMATTED come right after SOURCE
         try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+        try generateFormattedSection(&output, &content, &parse_ast);
+        success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
+        try generateProblemsSection(&output, &generated_reports);
+        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
+        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
+        try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+        try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+    } else {
+        // Other tests: standard order
+        success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
+        try generateProblemsSection(&output, &generated_reports);
+        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
+        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
+        try generateFormattedSection(&output, &content, &parse_ast);
+        try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+        try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
     }
 
     try generateHtmlClosing(&output);

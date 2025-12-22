@@ -7,6 +7,14 @@ type=mono
 ~~~roc
 True
 ~~~
+# MONO
+~~~roc
+True
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -20,10 +28,6 @@ EndOfFile,
 ~~~clojure
 (e-tag (raw "True"))
 ~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-tag (name "True"))
@@ -31,8 +35,4 @@ NO CHANGE
 # TYPES
 ~~~clojure
 (expr (type "[True, .._others]"))
-~~~
-# MONO
-~~~roc
-True
 ~~~

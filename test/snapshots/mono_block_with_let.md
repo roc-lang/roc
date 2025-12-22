@@ -10,6 +10,20 @@ type=mono
     x
 }
 ~~~
+# MONO
+~~~roc
+{
+    x = 42
+    x
+}
+~~~
+# FORMATTED
+~~~roc
+{
+	x = 42
+	x
+}
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -31,13 +45,6 @@ EndOfFile,
 			(e-int (raw "42")))
 		(e-ident (raw "x"))))
 ~~~
-# FORMATTED
-~~~roc
-{
-	x = 42
-	x
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-block
@@ -50,11 +57,4 @@ EndOfFile,
 # TYPES
 ~~~clojure
 (expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-~~~
-# MONO
-~~~roc
-{
-    x = 42
-    x
-}
 ~~~

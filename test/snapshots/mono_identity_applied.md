@@ -10,6 +10,20 @@ type=mono
     identity(42)
 }
 ~~~
+# MONO
+~~~roc
+{
+    identity = |x| x
+    identity(42)
+}
+~~~
+# FORMATTED
+~~~roc
+{
+	identity = |x| x
+	identity(42)
+}
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -36,13 +50,6 @@ EndOfFile,
 			(e-ident (raw "identity"))
 			(e-int (raw "42")))))
 ~~~
-# FORMATTED
-~~~roc
-{
-	identity = |x| x
-	identity(42)
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-block
@@ -61,11 +68,4 @@ EndOfFile,
 # TYPES
 ~~~clojure
 (expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-~~~
-# MONO
-~~~roc
-{
-    identity = |x| x
-    identity(42)
-}
 ~~~

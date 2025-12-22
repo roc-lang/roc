@@ -7,6 +7,14 @@ type=mono
 ~~~roc
 (1, 2)
 ~~~
+# MONO
+~~~roc
+(1, 2)
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -22,10 +30,6 @@ EndOfFile,
 	(e-int (raw "1"))
 	(e-int (raw "2")))
 ~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-tuple
@@ -36,8 +40,4 @@ NO CHANGE
 # TYPES
 ~~~clojure
 (expr (type "(a, b) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-~~~
-# MONO
-~~~roc
-(1, 2)
 ~~~

@@ -7,6 +7,14 @@ type=mono
 ~~~roc
 |x| x
 ~~~
+# MONO
+~~~roc
+|x| x
+~~~
+# FORMATTED
+~~~roc
+NO CHANGE
+~~~
 # EXPECTED
 NIL
 # PROBLEMS
@@ -23,10 +31,6 @@ EndOfFile,
 		(p-ident (raw "x")))
 	(e-ident (raw "x")))
 ~~~
-# FORMATTED
-~~~roc
-NO CHANGE
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-lambda
@@ -38,8 +42,4 @@ NO CHANGE
 # TYPES
 ~~~clojure
 (expr (type "a -> a"))
-~~~
-# MONO
-~~~roc
-|x| x
 ~~~
