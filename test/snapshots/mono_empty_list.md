@@ -9,7 +9,8 @@ items = []
 ~~~
 # MONO
 ~~~roc
-items : List(_a) = []
+items : List(_a)
+items = []
 ~~~
 # FORMATTED
 ~~~roc

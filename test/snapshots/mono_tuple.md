@@ -9,7 +9,8 @@ pair = (1, 2)
 ~~~
 # MONO
 ~~~roc
-pair : (Dec, Dec) = (1, 2)
+pair : (Dec, Dec)
+pair = (1, 2)
 ~~~
 # FORMATTED
 ~~~roc

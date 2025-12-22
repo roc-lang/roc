@@ -9,7 +9,8 @@ numbers = [1, 2, 3]
 ~~~
 # MONO
 ~~~roc
-numbers : List(Dec) = [1, 2, 3]
+numbers : List(Dec)
+numbers = [1, 2, 3]
 ~~~
 # FORMATTED
 ~~~roc

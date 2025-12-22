@@ -10,8 +10,10 @@ result = add_one(5)
 ~~~
 # MONO
 ~~~roc
-add_one : Dec -> Dec = |x| x + 1
-result : Dec = 6
+add_one : Dec -> Dec
+add_one = |x| x + 1
+result : Dec
+result = 6
 ~~~
 # FORMATTED
 ~~~roc

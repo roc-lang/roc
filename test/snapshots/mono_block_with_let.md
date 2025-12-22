@@ -12,7 +12,8 @@ result = {
 ~~~
 # MONO
 ~~~roc
-result : Dec = 42
+result : Dec
+result = 42
 ~~~
 # FORMATTED
 ~~~roc

@@ -124,16 +124,34 @@ fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     }
 }
 
-/// Emit a binop operand, wrapping in parens if it's also a binop to preserve precedence
-fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx) !void {
+/// Emit a binop operand, wrapping in parens only if needed for precedence
+fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !void {
     const expr = self.module_env.store.getExpr(expr_idx);
     if (expr == .e_binop) {
-        try self.write("(");
-        try self.emitExprValue(expr);
-        try self.write(")");
+        const inner_op = expr.e_binop.op;
+        // Only add parens if inner op has lower precedence than outer op
+        if (binopPrecedence(inner_op) < binopPrecedence(outer_op)) {
+            try self.write("(");
+            try self.emitExprValue(expr);
+            try self.write(")");
+        } else {
+            try self.emitExprValue(expr);
+        }
     } else {
         try self.emitExprValue(expr);
     }
+}
+
+/// Returns precedence level for a binary operator (higher = binds tighter)
+fn binopPrecedence(op: Expr.Binop.Op) u8 {
+    return switch (op) {
+        .@"or" => 1,
+        .@"and" => 2,
+        .eq, .ne => 3,
+        .lt, .gt, .le, .ge => 4,
+        .add, .sub => 5,
+        .mul, .div, .div_trunc, .rem => 6,
+    };
 }
 
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
@@ -308,19 +326,27 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(name);
         },
         .e_closure => |closure| {
-            // Emit closure as a lambda with captures as leading arguments
-            // e.g., |y| x + y with capture x becomes |x, y| x + y
+            // Emit closure as a lambda with non-top-level captures as leading arguments
+            // e.g., |y| x + y with capture x becomes |x, y| x + y (if x is local)
+            // but top-level captures are not lifted (they're always in scope)
             // Handle shadowing by generating unique names for captures
             const lambda = self.module_env.store.getExpr(closure.lambda_idx);
             std.debug.assert(lambda == .e_lambda);
 
             try self.write("|");
 
-            // First emit captures as arguments, renaming if they would shadow
+            // First emit non-top-level captures as arguments, renaming if they would shadow
             const captures = self.module_env.store.sliceCaptures(closure.captures);
-            for (captures, 0..) |capture_idx, i| {
-                if (i > 0) try self.write(", ");
+            var emitted_captures: u32 = 0;
+            for (captures) |capture_idx| {
                 const capture = self.module_env.store.getCapture(capture_idx);
+
+                // Skip top-level captures - they're always in scope
+                if (self.isTopLevelPattern(capture.pattern_idx)) continue;
+
+                if (emitted_captures > 0) try self.write(", ");
+                emitted_captures += 1;
+
                 const capture_name = self.module_env.getIdent(capture.name);
 
                 // Check if this name would shadow an existing name
@@ -343,7 +369,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             // Then emit the lambda's own arguments (also check for shadowing)
             const args = self.module_env.store.slicePatterns(lambda.e_lambda.args);
             for (args, 0..) |arg_idx, i| {
-                if (captures.len > 0 or i > 0) try self.write(", ");
+                if (emitted_captures > 0 or i > 0) try self.write(", ");
                 try self.emitPatternWithShadowCheck(arg_idx);
             }
 
@@ -361,12 +387,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitExpr(lambda.body);
         },
         .e_binop => |binop| {
-            // Wrap nested binops in parens to preserve precedence
-            try self.emitBinopOperand(binop.lhs);
+            // Wrap nested binops in parens only when precedence requires it
+            try self.emitBinopOperand(binop.lhs, binop.op);
             try self.write(" ");
             try self.write(binopToStr(binop.op));
             try self.write(" ");
-            try self.emitBinopOperand(binop.rhs);
+            try self.emitBinopOperand(binop.rhs, binop.op);
         },
         .e_unary_minus => |unary| {
             try self.write("-");
@@ -645,6 +671,18 @@ fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     }
     // For other pattern types (destructuring, etc.), we could recursively add names
     // but for now just handling simple assigns
+}
+
+/// Check if a pattern belongs to a top-level definition
+fn isTopLevelPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) bool {
+    const defs = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn emitIntValue(self: *Self, value: CIR.IntValue) !void {

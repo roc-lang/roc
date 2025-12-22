@@ -12,10 +12,14 @@ result = add_five(3)
 ~~~
 # MONO
 ~~~roc
-x : Dec = 10
-make_adder : Dec, Dec -> (Dec, Dec, Dec -> Dec) = |x, y| |x0, y1, z| (x0 + y1) + z
-add_five : Dec -> Dec = make_adder(5)
-result : Dec = 18
+x : Dec
+x = 10
+make_adder : Dec, Dec -> (Dec, Dec, Dec -> Dec)
+make_adder = |y| |y0, z| x + y0 + z
+add_five : Dec -> Dec
+add_five = make_adder(5)
+result : Dec
+result = 18
 ~~~
 # FORMATTED
 ~~~roc

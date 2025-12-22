@@ -9,7 +9,8 @@ result = if True 1 else 2
 ~~~
 # MONO
 ~~~roc
-result : Dec = 1
+result : Dec
+result = 1
 ~~~
 # FORMATTED
 ~~~roc

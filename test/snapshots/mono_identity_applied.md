@@ -10,8 +10,10 @@ result = identity(42)
 ~~~
 # MONO
 ~~~roc
-identity : _a -> _a = |x| x
-result : Dec = 42
+identity : _a -> _a
+identity = |x| x
+result : Dec
+result = 42
 ~~~
 # FORMATTED
 ~~~roc

@@ -11,9 +11,12 @@ result = add_x(10)
 ~~~
 # MONO
 ~~~roc
-x : Dec = 42
-add_x : Dec, Dec -> Dec = |x, y| x + y
-result : Dec = 52
+x : Dec
+x = 42
+add_x : Dec, Dec -> Dec
+add_x = |y| x + y
+result : Dec
+result = 52
 ~~~
 # FORMATTED
 ~~~roc

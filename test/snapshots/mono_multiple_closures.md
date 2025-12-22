@@ -14,12 +14,18 @@ result2 = add_y(5)
 ~~~
 # MONO
 ~~~roc
-x : Dec = 10
-y : Dec = 20
-add_x : Dec, Dec -> Dec = |x, a| a + x
-add_y : Dec, Dec -> Dec = |y, b| b + y
-result1 : Dec = 15
-result2 : Dec = 25
+x : Dec
+x = 10
+y : Dec
+y = 20
+add_x : Dec, Dec -> Dec
+add_x = |a| a + x
+add_y : Dec, Dec -> Dec
+add_y = |b| b + y
+result1 : Dec
+result1 = 15
+result2 : Dec
+result2 = 25
 ~~~
 # FORMATTED
 ~~~roc

@@ -9,7 +9,8 @@ flag = True
 ~~~
 # MONO
 ~~~roc
-flag : [True, .._others] = True
+flag : [True, .._others]
+flag = True
 ~~~
 # FORMATTED
 ~~~roc

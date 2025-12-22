@@ -2656,10 +2656,13 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         emitter.reset();
         try emitter.emitExpr(def.expr);
 
-        // Write: name : Type = expr
+        // Write: name : Type (on one line)
+        //        name = expr (on next line)
         try output.md_writer.writer.writeAll(pattern_output);
         try output.md_writer.writer.writeAll(" : ");
         try output.md_writer.writer.writeAll(type_str);
+        try output.md_writer.writer.writeAll("\n");
+        try output.md_writer.writer.writeAll(pattern_output);
         try output.md_writer.writer.writeAll(" = ");
         try output.md_writer.writer.writeAll(emitter.getOutput());
         try output.md_writer.writer.writeAll("\n");

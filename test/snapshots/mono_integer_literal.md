@@ -9,7 +9,8 @@ answer = 42
 ~~~
 # MONO
 ~~~roc
-answer : Dec = 42
+answer : Dec
+answer = 42
 ~~~
 # FORMATTED
 ~~~roc
