@@ -2667,7 +2667,8 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                             .qualifiers = qual_result.qualifiers,
                         } });
 
-                    const ident_suffixed = try self.parseExprSuffix(s, expr_node);
+                    // Only parse function applications on the right side, not ? suffix
+                    const ident_suffixed = try self.parseExprApplicationSuffix(s, expr_node);
                     expression = try self.store.addExpr(.{ .local_dispatch = .{
                         .region = .{ .start = start, .end = self.pos },
                         .operator = s,
@@ -2686,12 +2687,24 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                     .token = s,
                     .qualifiers = empty_qualifiers,
                 } });
-                const ident_suffixed = try self.parseExprSuffix(s, ident);
+                // Only parse function applications on the right side, not ? suffix
+                const ident_suffixed = try self.parseExprApplicationSuffix(s, ident);
                 expression = try self.store.addExpr(.{ .field_access = .{
                     .region = .{ .start = start, .end = self.pos },
                     .operator = start,
                     .left = expression,
                     .right = ident_suffixed,
+                } });
+            }
+
+            // Handle ? suffix on the entire field access / local dispatch expression.
+            // This ensures `a.b()?` is parsed as `(a.b())?` rather than `a.(b()?)`.
+            while (self.peek() == .NoSpaceOpQuestion) {
+                self.advance();
+                expression = try self.store.addExpr(.{ .suffix_single_question = .{
+                    .expr = expression,
+                    .operator = start,
+                    .region = .{ .start = start, .end = self.pos },
                 } });
             }
         }
@@ -2717,7 +2730,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
     return try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = start, .end = self.pos });
 }
 
-/// todo
+/// Parse suffix operators (function application and question mark) on an expression.
 fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -2765,6 +2778,41 @@ fn parseExprSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Id
             // No more suffixes to parse
             break;
         }
+    }
+    return expression;
+}
+
+/// Parse only function application suffixes (not question mark).
+/// Used for the right side of field access where ? should apply to the whole expression.
+fn parseExprApplicationSuffix(self: *Parser, start: u32, e: AST.Expr.Idx) Error!AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var expression = e;
+
+    // Only handle function applications, not question marks
+    while (self.peek() == .NoSpaceOpenRound) {
+        self.advance();
+        const scratch_top = self.store.scratchExprTop();
+        self.parseCollectionSpan(AST.Expr.Idx, .CloseRound, NodeStore.addScratchExpr, parseExpr) catch |err| {
+            switch (err) {
+                error.ExpectedNotFound => {
+                    self.store.clearScratchExprsFrom(scratch_top);
+                    return try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, start);
+                },
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TooNested => return error.TooNested,
+            }
+        };
+        const args = try self.store.exprSpanFrom(scratch_top);
+
+        expression = try self.store.addExpr(.{
+            .apply = .{
+                .args = args,
+                .@"fn" = expression,
+                .region = .{ .start = start, .end = self.pos },
+            },
+        });
     }
     return expression;
 }

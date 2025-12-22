@@ -2551,6 +2551,22 @@ test "check type - try return with match and error propagation should type-check
     try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
 }
 
+test "check type - try operator on method call should apply to whole expression (#8646)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8646
+    // The `?` suffix on `strings.first()` should apply to the entire method call expression,
+    // not just to the right side of the field access. Previously, the parser was attaching
+    // `?` to `first()` before creating the field_access node, causing a type mismatch error
+    // that expected `{ unknown: _field }`.
+    const source =
+        \\question_fail : List(Str) -> Try(Str, _)
+        \\question_fail = |strings| {
+        \\    first_str = strings.first()?
+        \\    Ok(first_str)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..others])");
+}
+
 // record extension in type annotations //
 
 test "check type - record extension - basic open record annotation" {
