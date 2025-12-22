@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=Mono test: True tag
+description=Mono test: True tag at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-True
+flag = True
 ~~~
 # MONO
 ~~~roc
-True : [True, .._others]
+flag : [True, .._others] = True
 ~~~
 # FORMATTED
 ~~~roc
@@ -21,18 +21,30 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,
+LowerIdent,OpAssign,UpperIdent,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-tag (raw "True"))
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "flag"))
+			(e-tag (raw "True")))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-zero-argument-tag (closure "True") (name "True"))
+(can-ir
+	(d-let
+		(p-assign (ident "flag"))
+		(e-zero-argument-tag (closure "True") (name "True"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[True, .._others]"))
+(inferred-types
+	(defs
+		(patt (type "[True, .._others]")))
+	(expressions
+		(expr (type "[True, .._others]"))))
 ~~~

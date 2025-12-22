@@ -1108,7 +1108,8 @@ fn processSnapshotContent(
 
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
-        .file, .mono => try parse.parse(&module_env.common, allocator), // mono tests are full modules
+        .file => try parse.parse(&module_env.common, allocator),
+        .mono => try parse.parse(&module_env.common, allocator), // mono tests are headerless type modules
         .header => try parse.parseHeader(&module_env.common, allocator),
         .expr => try parse.parseExpr(&module_env.common, allocator),
         .statement => try parse.parseStatement(&module_env.common, allocator),
@@ -2628,15 +2629,12 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
     return getDefaultedTypeString(allocator, can_ir, expr_var);
 }
 
-/// Generate MONO section for mono tests - emits complete monomorphized module
+/// Generate MONO section for mono tests - emits monomorphized type module
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx) !void {
     try output.begin_section("MONO");
     try output.begin_code_block("roc");
 
-    // Emit module header
-    try output.md_writer.writer.writeAll("module []\n\n");
-
-    // Emit all top-level definitions
+    // Emit all top-level definitions (no module header - type modules are headerless)
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
 
@@ -2670,8 +2668,7 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     // HTML MONO section
     if (output.html_writer) |writer| {
         try writer.writer.writeAll(
-            \\                <pre>module []
-
+            \\                <pre>
         );
         // Re-emit for HTML (simplified - just copy the markdown content idea)
         // For now, just show a placeholder

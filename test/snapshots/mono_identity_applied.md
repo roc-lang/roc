@@ -1,25 +1,21 @@
 # META
 ~~~ini
-description=Mono test: identity function applied to integer
+description=Mono test: identity function applied to integer at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-{
-    identity = |x| x
-    identity(42)
-}
+identity = |x| x
+result = identity(42)
 ~~~
 # MONO
 ~~~roc
-42 : Dec
+identity : _a -> _a = |x| x
+result : Dec = 42
 ~~~
 # FORMATTED
 ~~~roc
-{
-	identity = |x| x
-	identity(42)
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -27,15 +23,14 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,
-LowerIdent,NoSpaceOpenRound,Int,CloseRound,
-CloseCurly,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block
+(file
+	(type-module)
 	(statements
 		(s-decl
 			(p-ident (raw "identity"))
@@ -43,15 +38,33 @@ EndOfFile,
 				(args
 					(p-ident (raw "x")))
 				(e-ident (raw "x"))))
-		(e-apply
-			(e-ident (raw "identity"))
-			(e-int (raw "42")))))
+		(s-decl
+			(p-ident (raw "result"))
+			(e-apply
+				(e-ident (raw "identity"))
+				(e-int (raw "42"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "42"))
+(can-ir
+	(d-let
+		(p-assign (ident "identity"))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x")))))
+	(d-let
+		(p-assign (ident "result"))
+		(e-num (value "42"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs
+		(patt (type "a -> a"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+	(expressions
+		(expr (type "a -> a"))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=Mono test: integer literal
+description=Mono test: integer literal at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-42
+answer = 42
 ~~~
 # MONO
 ~~~roc
-42 : Dec
+answer : Dec = 42
 ~~~
 # FORMATTED
 ~~~roc
@@ -21,18 +21,30 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int,
+LowerIdent,OpAssign,Int,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-int (raw "42"))
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "answer"))
+			(e-int (raw "42")))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "42"))
+(can-ir
+	(d-let
+		(p-assign (ident "answer"))
+		(e-num (value "42"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+	(expressions
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

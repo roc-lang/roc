@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=Mono test: arithmetic expression
+description=Mono test: arithmetic expression at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-1 + 2
+sum = 1 + 2
 ~~~
 # MONO
 ~~~roc
-3 : Dec
+sum : Dec = 3
 ~~~
 # FORMATTED
 ~~~roc
@@ -21,20 +21,32 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-Int,OpPlus,Int,
+LowerIdent,OpAssign,Int,OpPlus,Int,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop (op "+")
-	(e-int (raw "1"))
-	(e-int (raw "2")))
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "sum"))
+			(e-binop (op "+")
+				(e-int (raw "1"))
+				(e-int (raw "2"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "3"))
+(can-ir
+	(d-let
+		(p-assign (ident "sum"))
+		(e-num (value "3"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+	(expressions
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

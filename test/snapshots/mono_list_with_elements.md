@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=Mono test: list with elements
+description=Mono test: list with elements at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-[1, 2, 3]
+numbers = [1, 2, 3]
 ~~~
 # MONO
 ~~~roc
-[1, 2, 3] : List(Dec)
+numbers : List(Dec) = [1, 2, 3]
 ~~~
 # FORMATTED
 ~~~roc
@@ -21,25 +21,37 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,
+LowerIdent,OpAssign,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list
-	(e-int (raw "1"))
-	(e-int (raw "2"))
-	(e-int (raw "3")))
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "numbers"))
+			(e-list
+				(e-int (raw "1"))
+				(e-int (raw "2"))
+				(e-int (raw "3"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-list
-	(elems
-		(e-num (value "1"))
-		(e-num (value "2"))
-		(e-num (value "3"))))
+(can-ir
+	(d-let
+		(p-assign (ident "numbers"))
+		(e-list
+			(elems
+				(e-num (value "1"))
+				(e-num (value "2"))
+				(e-num (value "3"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs
+		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+	(expressions
+		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

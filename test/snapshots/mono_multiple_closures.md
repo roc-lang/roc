@@ -1,37 +1,29 @@
 # META
 ~~~ini
-description=Mono test: multiple different closures in single expression
+description=Mono test: multiple different closures at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-{
-    x = 10
-    y = 20
-    addX = |a| a + x
-    addY = |b| b + y
-    (addX, addY)
-}
+x = 10
+y = 20
+add_x = |a| a + x
+add_y = |b| b + y
+result1 = add_x(5)
+result2 = add_y(5)
 ~~~
 # MONO
 ~~~roc
-{
-    x = 10
-    y = 20
-    addX = |x0, a| a + x0
-    addY = |y1, b| b + y1
-    (addX, addY)
-} : (Dec -> Dec, Dec -> Dec)
+x : Dec = 10
+y : Dec = 20
+add_x : Dec, Dec -> Dec = |x, a| a + x
+add_y : Dec, Dec -> Dec = |y, b| b + y
+result1 : Dec = 15
+result2 : Dec = 25
 ~~~
 # FORMATTED
 ~~~roc
-{
-	x = 10
-	y = 20
-	addX = |a| a + x
-	addY = |b| b + y
-	(addX, addY)
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -39,18 +31,18 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
-OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
-CloseCurly,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block
+(file
+	(type-module)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -59,7 +51,7 @@ EndOfFile,
 			(p-ident (raw "y"))
 			(e-int (raw "20")))
 		(s-decl
-			(p-ident (raw "addX"))
+			(p-ident (raw "add_x"))
 			(e-lambda
 				(args
 					(p-ident (raw "a")))
@@ -67,28 +59,35 @@ EndOfFile,
 					(e-ident (raw "a"))
 					(e-ident (raw "x")))))
 		(s-decl
-			(p-ident (raw "addY"))
+			(p-ident (raw "add_y"))
 			(e-lambda
 				(args
 					(p-ident (raw "b")))
 				(e-binop (op "+")
 					(e-ident (raw "b"))
 					(e-ident (raw "y")))))
-		(e-tuple
-			(e-ident (raw "addX"))
-			(e-ident (raw "addY")))))
+		(s-decl
+			(p-ident (raw "result1"))
+			(e-apply
+				(e-ident (raw "add_x"))
+				(e-int (raw "5"))))
+		(s-decl
+			(p-ident (raw "result2"))
+			(e-apply
+				(e-ident (raw "add_y"))
+				(e-int (raw "5"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-block
-	(s-let
+(can-ir
+	(d-let
 		(p-assign (ident "x"))
 		(e-num (value "10")))
-	(s-let
+	(d-let
 		(p-assign (ident "y"))
 		(e-num (value "20")))
-	(s-let
-		(p-assign (ident "addX"))
+	(d-let
+		(p-assign (ident "add_x"))
 		(e-closure
 			(captures
 				(capture (ident "x")))
@@ -100,8 +99,8 @@ EndOfFile,
 						(p-assign (ident "a")))
 					(e-lookup-local
 						(p-assign (ident "x")))))))
-	(s-let
-		(p-assign (ident "addY"))
+	(d-let
+		(p-assign (ident "add_y"))
 		(e-closure
 			(captures
 				(capture (ident "y")))
@@ -113,14 +112,28 @@ EndOfFile,
 						(p-assign (ident "b")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-tuple
-		(elems
-			(e-lookup-local
-				(p-assign (ident "addX")))
-			(e-lookup-local
-				(p-assign (ident "addY"))))))
+	(d-let
+		(p-assign (ident "result1"))
+		(e-num (value "15")))
+	(d-let
+		(p-assign (ident "result2"))
+		(e-num (value "25"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(c -> c, d -> d) where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]")))
+	(expressions
+		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
 ~~~

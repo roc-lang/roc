@@ -1,15 +1,15 @@
 # META
 ~~~ini
-description=Mono test: empty list
+description=Mono test: empty list at top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-[]
+items = []
 ~~~
 # MONO
 ~~~roc
-[] : List(_a)
+items : List(_a) = []
 ~~~
 # FORMATTED
 ~~~roc
@@ -21,18 +21,30 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenSquare,CloseSquare,
+LowerIdent,OpAssign,OpenSquare,CloseSquare,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-list)
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "items"))
+			(e-list))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-empty_list)
+(can-ir
+	(d-let
+		(p-assign (ident "items"))
+		(e-empty_list)))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(_a)"))
+(inferred-types
+	(defs
+		(patt (type "List(_a)")))
+	(expressions
+		(expr (type "List(_a)"))))
 ~~~

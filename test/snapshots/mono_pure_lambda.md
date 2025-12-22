@@ -1,15 +1,17 @@
 # META
 ~~~ini
-description=Mono test: pure lambda (no captures) transforms to tag with empty record
+description=Mono test: pure lambda (no captures) assigned to top-level
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-|x| x + 1
+add_one = |x| x + 1
+result = add_one(5)
 ~~~
 # MONO
 ~~~roc
-|x| x + 1 : Dec -> Dec
+add_one : Dec -> Dec = |x| x + 1
+result : Dec = 6
 ~~~
 # FORMATTED
 ~~~roc
@@ -21,29 +23,52 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
+LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-lambda
-	(args
-		(p-ident (raw "x")))
-	(e-binop (op "+")
-		(e-ident (raw "x"))
-		(e-int (raw "1"))))
+(file
+	(type-module)
+	(statements
+		(s-decl
+			(p-ident (raw "add_one"))
+			(e-lambda
+				(args
+					(p-ident (raw "x")))
+				(e-binop (op "+")
+					(e-ident (raw "x"))
+					(e-int (raw "1")))))
+		(s-decl
+			(p-ident (raw "result"))
+			(e-apply
+				(e-ident (raw "add_one"))
+				(e-int (raw "5"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-lambda
-	(args
-		(p-assign (ident "x")))
-	(e-binop (op "add")
-		(e-lookup-local
-			(p-assign (ident "x")))
-		(e-num (value "1"))))
+(can-ir
+	(d-let
+		(p-assign (ident "add_one"))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-num (value "1")))))
+	(d-let
+		(p-assign (ident "result"))
+		(e-num (value "6"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(inferred-types
+	(defs
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+	(expressions
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~
