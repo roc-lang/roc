@@ -178,6 +178,8 @@ test "NodeStore round trip - Statements" {
         .diagnostic = rand_idx(CIR.Diagnostic.Idx),
     } });
 
+    try statements.append(gpa, CIR.Statement{ .s_break = .{} });
+
     for (statements.items, 0..) |stmt, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
         const idx = try store.addStatement(stmt, region);

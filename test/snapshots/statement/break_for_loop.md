@@ -1,22 +1,22 @@
 # META
 ~~~ini
-description=For loop with break
+description=Use break in for loop
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
 result : Bool
 result = {
-	var allTrue_ = True
+	var $allTrue = True
 	for b in [True, True, False, True, True, True] {
 		if b == False {
-			allTrue_ = False
+			$allTrue = False
 			break
 		} else {
 			{}
 		}
 	}
-	allTrue_
+	$allTrue
 }
 
 expect result == False
@@ -54,7 +54,7 @@ EndOfFile,
 			(p-ident (raw "result"))
 			(e-block
 				(statements
-					(s-var (name "allTrue_")
+					(s-var (name "$allTrue")
 						(e-tag (raw "True")))
 					(s-for
 						(p-ident (raw "b"))
@@ -74,13 +74,13 @@ EndOfFile,
 									(e-block
 										(statements
 											(s-decl
-												(p-ident (raw "allTrue_"))
+												(p-ident (raw "$allTrue"))
 												(e-tag (raw "False")))
 											(s-break)))
 									(e-block
 										(statements
 											(e-record)))))))
-					(e-ident (raw "allTrue_")))))
+					(e-ident (raw "$allTrue")))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "result"))
@@ -97,7 +97,7 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "allTrue_"))
+				(p-assign (ident "$allTrue"))
 				(e-tag (name "True")))
 			(s-for
 				(p-assign (ident "b"))
@@ -119,7 +119,7 @@ NO CHANGE
 									(e-tag (name "False")))
 								(e-block
 									(s-reassign
-										(p-assign (ident "allTrue_"))
+										(p-assign (ident "$allTrue"))
 										(e-tag (name "False")))
 									(s-break)
 									(e-empty_record))))
@@ -127,7 +127,7 @@ NO CHANGE
 							(e-block
 								(e-empty_record))))))
 			(e-lookup-local
-				(p-assign (ident "allTrue_"))))
+				(p-assign (ident "$allTrue"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect

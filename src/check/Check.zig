@@ -128,6 +128,9 @@ enclosing_func_return_type: ?Var,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
+/// The current depth of nested loops (for/while).
+/// Used to validate that break statements only appear inside loops.
+loop_depth: u8,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
 
@@ -218,6 +221,7 @@ pub fn init(
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
         .enclosing_func_name = null,
+        .loop_depth = 0,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
     };
@@ -3792,6 +3796,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(list_var, for_expr_var, env);
 
             // Check the body
+            self.loop_depth += 1;
+            defer self.loop_depth -= 1;
             does_fx = try self.checkExpr(for_expr.body, env, .no_expectation) or does_fx;
             const for_body_var: Var = ModuleEnv.varFrom(for_expr.body);
 
@@ -4127,6 +4133,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const list_var = try self.freshFromContent(list_content, env, for_expr_region);
                 _ = try self.unify(list_var, for_expr_var, env);
 
+                self.loop_depth += 1;
+                defer self.loop_depth -= 1;
+
                 // Check the body
                 // for item in [1,2,3] {
                 //     print!(item.toStr())  <<<<
@@ -4140,9 +4149,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, for_body_var, env);
             },
-            .s_break => |_| {
-                // TODO break statement checking (ensure inside loop??)
-            },
             .s_while => |while_stmt| {
                 // Check the condition
                 // while $count < 10 {
@@ -4154,6 +4160,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check that condition is Bool
                 const bool_var = try self.freshBool(env, cond_region);
                 _ = try self.unify(bool_var, cond_var, env);
+
+                self.loop_depth += 1;
+                defer self.loop_depth -= 1;
 
                 // Check the body
                 // while $count < 10 {
@@ -4168,6 +4177,14 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 _ = try self.unify(body_ret, while_body_var, env);
 
                 _ = try self.unify(stmt_var, while_body_var, env);
+            },
+            .s_break => |_| {
+                if (self.loop_depth == 0) {
+                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .break_outside_loop = .{
+                        .region = stmt_region,
+                    } });
+                }
+                try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
             .s_expr => |expr| {
                 does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;
