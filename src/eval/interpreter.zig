@@ -17423,12 +17423,14 @@ pub const Interpreter = struct {
                     work = foo orelse return error.Crash;
                 }
                 if (work.apply_continuation == .for_body_done) {
-                    // Break in for loop - not implemented yet
-                    return error.NotImplemented;
+                    const fl = work.apply_continuation.for_body_done;
+                    // For loop aborted, handle completion
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
+                    return true;
                 } else {
                     // While loop aborted, continue with remaining statements
                     const wl = work.apply_continuation.while_loop_body_done;
-                    // TODO do we need to clean up something?
                     if (wl.remaining_stmts.len == 0) {
                         try work_stack.push(.{ .eval_expr = .{
                             .expr_idx = wl.final_expr,
