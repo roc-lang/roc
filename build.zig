@@ -1381,7 +1381,7 @@ fn createTestPlatformHostLib(
 }
 
 /// Builds a test platform host library and sets up a step to copy it to the target-specific directory.
-/// Returns the copy step for dependency wiring.
+/// Returns the final step for dependency wiring.
 fn buildAndCopyTestPlatformHostLib(
     b: *std.Build,
     platform_dir: []const u8,
@@ -1391,7 +1391,7 @@ fn buildAndCopyTestPlatformHostLib(
     roc_modules: modules.RocModules,
     strip: bool,
     omit_frame_pointer: ?bool,
-) *Step.UpdateSourceFiles {
+) *Step {
     const lib = createTestPlatformHostLib(
         b,
         b.fmt("test_platform_{s}_host_{s}", .{ platform_dir, target_name }),
@@ -1405,14 +1405,64 @@ fn buildAndCopyTestPlatformHostLib(
 
     // Use correct filename for target platform
     const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
+    const archive_path = b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename });
 
     const copy_step = b.addUpdateSourceFiles();
-    copy_step.addCopyFileToSource(
-        lib.getEmittedBin(),
-        b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename }),
-    );
-    return copy_step;
+    copy_step.addCopyFileToSource(lib.getEmittedBin(), archive_path);
+
+    // Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
+    // Zig's archive generator doesn't add the required padding byte after odd-sized
+    // members, causing lld to reject the archive with:
+    //   "Archive::children failed: truncated or malformed archive"
+    if (target.result.os.tag != .windows) {
+        const fix_step = FixArchivePaddingStep.create(b, archive_path);
+        fix_step.step.dependOn(&copy_step.step);
+        return &fix_step.step;
+    }
+
+    return &copy_step.step;
 }
+
+// Workaround for Zig bug https://codeberg.org/ziglang/zig/issues/30572
+const FixArchivePaddingStep = struct {
+    step: Step,
+    archive_path: []const u8,
+
+    fn create(b: *std.Build, archive_path: []const u8) *FixArchivePaddingStep {
+        const self = b.allocator.create(FixArchivePaddingStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "fix-archive-padding",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .archive_path = archive_path,
+        };
+        return self;
+    }
+
+    fn make(step: *Step, options: Step.MakeOptions) !void {
+        _ = options;
+        const self: *FixArchivePaddingStep = @fieldParentPtr("step", step);
+
+        const file = std.fs.cwd().openFile(self.archive_path, .{ .mode = .read_write }) catch |err| {
+            std.debug.print("Warning: Could not open archive {s}: {s}\n", .{ self.archive_path, @errorName(err) });
+            return;
+        };
+        defer file.close();
+
+        const stat = try file.stat();
+        const file_size = stat.size;
+
+        // AR format requires archives to end on an even byte boundary.
+        // If file size is odd, append a newline padding byte.
+        if (file_size % 2 == 1) {
+            try file.seekTo(file_size);
+            try file.writeAll("\n");
+        }
+    }
+};
 
 /// Custom build step that clears the Roc cache directory.
 /// Uses Zig's native filesystem APIs for cross-platform support.
@@ -1548,7 +1598,7 @@ fn setupTestPlatforms(
             strip,
             omit_frame_pointer,
         );
-        clear_cache_step.dependOn(&copy_step.step);
+        clear_cache_step.dependOn(copy_step);
     }
 
     // Cross-compile for musl targets (glibc not needed for test-platforms step)
@@ -1566,7 +1616,7 @@ fn setupTestPlatforms(
                 strip,
                 omit_frame_pointer,
             );
-            clear_cache_step.dependOn(&copy_step.step);
+            clear_cache_step.dependOn(copy_step);
         }
     }
 
@@ -1585,7 +1635,7 @@ fn setupTestPlatforms(
                 strip,
                 omit_frame_pointer,
             );
-            clear_cache_step.dependOn(&copy_step.step);
+            clear_cache_step.dependOn(copy_step);
         }
     }
 
@@ -1602,7 +1652,7 @@ fn setupTestPlatforms(
             strip,
             omit_frame_pointer,
         );
-        clear_cache_step.dependOn(&copy_step.step);
+        clear_cache_step.dependOn(copy_step);
     }
 
     b.getInstallStep().dependOn(clear_cache_step);
@@ -2478,7 +2528,7 @@ fn addMainExe(
             strip,
             omit_frame_pointer,
         );
-        b.getInstallStep().dependOn(&copy_step.step);
+        b.getInstallStep().dependOn(copy_step);
     }
 
     // Cross-compile for all Linux targets (musl + glibc)
@@ -2496,7 +2546,7 @@ fn addMainExe(
                 strip,
                 omit_frame_pointer,
             );
-            b.getInstallStep().dependOn(&copy_step.step);
+            b.getInstallStep().dependOn(copy_step);
         }
 
         // Generate glibc stubs for gnu targets

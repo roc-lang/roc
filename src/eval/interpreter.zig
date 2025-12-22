@@ -7008,8 +7008,8 @@ pub const Interpreter = struct {
         defer tag_list.deinit();
         try self.appendUnionTags(union_var, &tag_list);
 
-        const lhs_data = try self.extractTagValue(lhs, union_var, roc_ops);
-        const rhs_data = try self.extractTagValue(rhs, union_var, roc_ops);
+        const lhs_data = try self.extractTagValue(lhs, union_var);
+        const rhs_data = try self.extractTagValue(rhs, union_var);
 
         if (lhs_data.index >= tag_list.items.len or rhs_data.index >= tag_list.items.len) {
             return error.TypeMismatch;
@@ -7378,7 +7378,7 @@ pub const Interpreter = struct {
         payload: ?StackValue,
     };
 
-    fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var, roc_ops: *RocOps) !TagValue {
+    fn extractTagValue(self: *Interpreter, value: StackValue, union_rt_var: types.Var) !TagValue {
         switch (value.layout.tag) {
             .scalar => switch (value.layout.data.scalar.tag) {
                 .int => {
@@ -7526,7 +7526,7 @@ pub const Interpreter = struct {
             .tag_union => {
                 // New proper tag_union layout: payload at offset 0, discriminant at discriminant_offset
                 var acc = try value.asTagUnion(&self.runtime_layout_store);
-                const tag_index = acc.getDiscriminant(roc_ops);
+                const tag_index = acc.getDiscriminant();
 
                 var payload_value: ?StackValue = null;
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
@@ -8229,7 +8229,7 @@ pub const Interpreter = struct {
                 defer value_tag_list.deinit();
                 try self.appendUnionTags(value.rt_var, &value_tag_list);
 
-                const tag_data = try self.extractTagValue(value, value_rt_var, roc_ops);
+                const tag_data = try self.extractTagValue(value, value_rt_var);
 
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
