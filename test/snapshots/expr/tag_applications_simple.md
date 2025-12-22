@@ -31,8 +31,8 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _[Ok([Just(a), .._others]), .._others2] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
-
+    [Ok([Just(a), .._others]), .._others2]
+      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig

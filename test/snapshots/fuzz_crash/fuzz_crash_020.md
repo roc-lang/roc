@@ -889,7 +889,6 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
-
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
 **fuzz_crash_020.md:39:2:39:3:**
@@ -899,7 +898,8 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    _f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]_
+
+    f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -927,14 +927,14 @@ The pattern in the fourth branch of this `match` differs from previous ones:
      ^^^^^
 
 The fourth pattern has this type:
-    _Str_
+
+    Str
 
 But all the previous patterns have this type: 
-    _[Blue, .._others]_
+
+    [Blue, .._others]
 
 All patterns in an `match` must have compatible types.
-
-
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -945,7 +945,8 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __f_
+
+    _f
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -956,7 +957,8 @@ This expression produces a value, but it's not being used:
 	         ^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -968,7 +970,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -986,7 +988,12 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(f, Str, Error, [O, .._others], (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]_
+
+    (f, Str, Error, [O, .._others], (Error, Error), List(j))
+      where [
+        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+        j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
+      ]
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -997,7 +1004,8 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Bool_
+
+    Bool
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1008,7 +1016,8 @@ This expression produces a value, but it's not being used:
 	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __f_
+
+    _f
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1019,7 +1028,8 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^
 
 It has the type:
-    __f_
+
+    _f
 
 # TOKENS
 ~~~zig

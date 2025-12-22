@@ -27,7 +27,8 @@ main = swap(1, 2)
        ^^^^^^^^^^
 
 The function has the signature:
-    _(a, b) -> (b, a)_
+
+    (a, b) -> (b, a)
 
 # TOKENS
 ~~~zig
