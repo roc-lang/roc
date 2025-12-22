@@ -1,3 +1,5 @@
+//! Build system utilities for configuring Zig modules with test filtering and dependency management.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const Build = std.Build;
@@ -303,19 +305,19 @@ pub const ModuleType = enum {
     pub fn getDependencies(self: ModuleType) []const ModuleType {
         return switch (self) {
             .build_options => &.{},
-            .builtins => &.{},
+            .builtins => &.{.tracy},
             .fs => &.{},
-            .tracy => &.{ .build_options, .builtins },
+            .tracy => &.{.build_options},
             .collections => &.{},
             .base => &.{ .collections, .builtins },
             .roc_src => &.{},
-            .types => &.{ .base, .collections },
+            .types => &.{ .tracy, .base, .collections },
             .reporting => &.{ .collections, .base },
             .parse => &.{ .tracy, .collections, .base, .reporting },
-            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting },
+            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
-            .layout => &.{ .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
+            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },

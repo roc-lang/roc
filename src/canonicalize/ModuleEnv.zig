@@ -169,6 +169,9 @@ pub const CommonIdents = extern struct {
     digits_after_pt: Ident.Idx,
     box_method: Ident.Idx,
     unbox_method: Ident.Idx,
+    // Fully qualified Box intrinsic method names
+    builtin_box_box: Ident.Idx,
+    builtin_box_unbox: Ident.Idx,
     to_inspect: Ident.Idx,
     ok: Ident.Idx,
     err: Ident.Idx,
@@ -255,6 +258,9 @@ pub const CommonIdents = extern struct {
             .digits_after_pt = try common.insertIdent(gpa, Ident.for_text("digits_after_pt")),
             .box_method = try common.insertIdent(gpa, Ident.for_text("box")),
             .unbox_method = try common.insertIdent(gpa, Ident.for_text("unbox")),
+            // Fully qualified Box intrinsic method names
+            .builtin_box_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box.box")),
+            .builtin_box_unbox = try common.insertIdent(gpa, Ident.for_text("Builtin.Box.unbox")),
             .to_inspect = try common.insertIdent(gpa, Ident.for_text("to_inspect")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
@@ -344,6 +350,9 @@ pub const CommonIdents = extern struct {
             .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
             .box_method = common.findIdent("box") orelse unreachable,
             .unbox_method = common.findIdent("unbox") orelse unreachable,
+            // Fully qualified Box intrinsic method names
+            .builtin_box_box = common.findIdent("Builtin.Box.box") orelse unreachable,
+            .builtin_box_unbox = common.findIdent("Builtin.Box.unbox") orelse unreachable,
             .to_inspect = common.findIdent("to_inspect") orelse unreachable,
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
@@ -394,10 +403,17 @@ all_defs: CIR.Def.Span,
 all_statements: CIR.Statement.Span,
 /// Definitions that are exported by this module (populated by canonicalization)
 exports: CIR.Def.Span,
-/// Required type signatures for platform modules (from `requires {} { main! : () => {} }`)
+/// Required type signatures for platform modules (from `requires { main! : () => {} }`)
 /// Maps identifier names to their expected type annotations.
 /// Empty for non-platform modules.
 requires_types: RequiredType.SafeList,
+/// Type alias mappings from for-clauses in requires declarations.
+/// Stores (alias_name, rigid_name) pairs like (Model, model).
+for_clause_aliases: ForClauseAlias.SafeList,
+/// Rigid type variable mappings from platform for-clause after unification.
+/// Maps rigid names (e.g., "model") to their resolved type variables in the app's type store.
+/// Populated during checkPlatformRequirements when the platform has a for-clause.
+rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, TypeVar),
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
@@ -448,6 +464,19 @@ pub const DeferredNumericLiteral = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A type alias mapping from a for-clause: [Model : model]
+/// Maps an alias name (Model) to a rigid variable name (model)
+pub const ForClauseAlias = struct {
+    /// The alias name (e.g., "Model") - to be looked up in the app
+    alias_name: Ident.Idx,
+    /// The rigid variable name (e.g., "model") - the rigid in the required type
+    rigid_name: Ident.Idx,
+    /// The type annotation of this alias stmt
+    alias_stmt_idx: CIR.Statement.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Required type for platform modules - maps an identifier to its expected type annotation.
 /// Used to enforce that apps provide values matching the platform's required types.
 pub const RequiredType = struct {
@@ -457,6 +486,9 @@ pub const RequiredType = struct {
     type_anno: CIR.TypeAnno.Idx,
     /// Region of the requirement for error reporting
     region: Region,
+    /// Type alias mappings from the for-clause (e.g., [Model : model])
+    /// These specify which app type aliases should be substituted for which rigids
+    type_aliases: ForClauseAlias.SafeList.Range,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -469,6 +501,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.types.relocate(offset);
     self.external_decls.relocate(offset);
     self.requires_types.relocate(offset);
+    self.for_clause_aliases.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.deferred_numeric_literals.relocate(offset);
@@ -525,6 +558,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .exports = .{ .span = .{ .start = 0, .len = 0 } },
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
+        .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
+        .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
@@ -546,6 +581,8 @@ pub fn deinit(self: *Self) void {
     self.types.deinit();
     self.external_decls.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
+    self.for_clause_aliases.deinit(self.gpa);
+    self.rigid_vars.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.deferred_numeric_literals.deinit(self.gpa);
     self.import_mapping.deinit();
@@ -595,7 +632,6 @@ pub const castIdx = CIR.castIdx;
 
 /// Retrieve all diagnostics collected during canonicalization.
 pub fn getDiagnostics(self: *Self) std.mem.Allocator.Error![]CIR.Diagnostic {
-    // Get all diagnostics from the store, not just the ones in self.diagnostics span
     const all_diagnostics = try self.store.diagnosticSpanFrom(0);
     const diagnostic_indices = self.store.sliceDiagnostics(all_diagnostics);
     const diagnostics = try self.gpa.alloc(CIR.Diagnostic, diagnostic_indices.len);
@@ -1092,7 +1128,18 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addAnnotatedText(owned_feature, .emphasized);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            const region_info = self.calcRegionInfo(data.region);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
             try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
+            try report.document.addLineBreak();
             break :blk report;
         },
         .malformed_type_annotation => |data| blk: {
@@ -1937,13 +1984,17 @@ pub fn getSourceLine(self: *const Self, region: Region) ![]const u8 {
 /// Serialized representation of ModuleEnv.
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
 pub const Serialized = extern struct {
+    // Field order must match the runtime ModuleEnv struct exactly for in-place deserialization
     gpa: [2]u64, // Reserve space for allocator (vtable ptr + context ptr), provided during deserialization
     common: CommonEnv.Serialized,
     types: TypeStore.Serialized,
+    module_kind: ModuleKind.Serialized,
     all_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     exports: CIR.Def.Span,
     requires_types: RequiredType.SafeList.Serialized,
+    for_clause_aliases: ForClauseAlias.SafeList.Serialized,
+    rigid_vars_reserved: [4]u64, // Reserved space for rigid_vars (AutoHashMapUnmanaged is ~32 bytes), initialized at runtime
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
@@ -1951,7 +2002,6 @@ pub const Serialized = extern struct {
     module_name_idx_reserved: u32, // Reserved space for module_name_idx field (interned during deserialization)
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    module_kind: ModuleKind.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
@@ -1977,6 +2027,7 @@ pub const Serialized = extern struct {
         self.builtin_statements = env.builtin_statements;
 
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
+        try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -1994,6 +2045,8 @@ pub const Serialized = extern struct {
         self.module_name = .{ 0, 0 };
         self.module_name_idx_reserved = 0;
         self.evaluation_order_reserved = 0;
+        // rigid_vars is runtime-only and initialized fresh during deserialization
+        self.rigid_vars_reserved = .{ 0, 0, 0, 0 };
 
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
@@ -2036,6 +2089,7 @@ pub const Serialized = extern struct {
             .all_statements = self.all_statements,
             .exports = self.exports,
             .requires_types = self.requires_types.deserialize(offset).*,
+            .for_clause_aliases = self.for_clause_aliases.deserialize(offset).*,
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserialize(offset).*,
             .imports = (try self.imports.deserialize(offset, gpa)).*,
@@ -2048,6 +2102,7 @@ pub const Serialized = extern struct {
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserialize(offset).*,
+            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
         return env;

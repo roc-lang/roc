@@ -119,10 +119,11 @@ pub fn peekN(self: *Parser, n: u32) Token.Tag {
 }
 
 /// Check if the token at the given position is a var identifier (starts with '$')
-fn isVarIdent(self: *Parser, token_pos: Token.Idx) bool {
-    const region = self.tok_buf.resolve(token_pos);
-    const text = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
-    return text.len > 0 and text[0] == '$';
+fn isVarIdent(self: *Parser, token: Token.Idx) bool {
+    if (self.tok_buf.resolveIdentifier(token)) |ident| {
+        return ident.attributes.reassignable;
+    }
+    return false;
 }
 
 /// Check if the current position looks like a type declaration with a valid type following.
@@ -362,7 +363,7 @@ pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
 /// e.g:
 /// ```roc
 /// platform
-///     requires {} { main! : List(Str) => {} }
+///     requires { main! : List(Str) => {} }
 ///     exposes []
 ///     packages { foo: "../foo.roc" }
 ///     imports []
@@ -406,8 +407,10 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
             self.pos,
         );
     };
-    // Get requires rigids
-    const rigids_start = self.pos;
+
+    // Parse requires entries with for-clause syntax:
+    // requires { [Model : model] for main : () -> { init : ... } }
+    const requires_start = self.pos;
     self.expect(.OpenCurly) catch {
         return try self.pushMalformed(
             AST.Header.Idx,
@@ -415,75 +418,172 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
             self.pos,
         );
     };
-    const rigids_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(
-        AST.ExposedItem.Idx,
-        .CloseCurly,
-        NodeStore.addScratchExposedItem,
-        Parser.parseExposedItem,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchExposedItemsFrom(rigids_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_requires_rigids_close_curly,
-                    rigids_start,
-                );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TooNested => return error.TooNested,
-        }
-    };
-    const rigids_span = try self.store.exposedItemSpanFrom(rigids_top);
-    const rigids = try self.store.addCollection(
-        .collection_exposed,
-        .{
-            .span = rigids_span.span,
-            .region = .{
-                .start = rigids_start,
-                .end = self.pos,
-            },
-        },
-    );
 
-    // Get requires signatures
-    const signatures_start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_requires_signatures_open_curly,
-            self.pos,
-        );
-    };
-    const signatures_top = self.store.scratchAnnoRecordFieldTop();
-    self.parseCollectionSpan(
-        AST.AnnoRecordField.Idx,
-        .CloseCurly,
-        NodeStore.addScratchAnnoRecordField,
-        Parser.parseAnnoRecordField,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
+    const requires_entries_top = self.store.scratchRequiresEntryTop();
+
+    // Handle backward compatibility: `requires {} { ... }` (legacy syntax)
+    // If we see CloseCurly followed by OpenCurly, skip the empty rigids block
+    // and parse from the second curly block
+    var already_consumed_close_curly = false;
+    if (self.peek() == .CloseCurly) {
+        self.advance(); // consume first '}'
+        if (self.peek() == .OpenCurly) {
+            self.advance(); // consume second '{'
+            // Continue parsing entries from the second curly block
+        } else {
+            // Empty requires {} with no second block - we already consumed the close curly
+            already_consumed_close_curly = true;
+        }
+    }
+
+    // Parse requires entries (comma-separated)
+    // Supported syntaxes:
+    // 1. Simple: requires { main : Type } - no type aliases
+    // 2. With aliases: requires { [Model : model] for main : Type }
+    while (!already_consumed_close_curly and self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const entry_start = self.pos;
+
+        const type_aliases_top = self.store.scratchForClauseTypeAliasTop();
+
+        // Check if we have type aliases (starts with '[')
+        if (self.peek() == .OpenSquare) {
+            self.advance(); // consume '['
+
+            // Parse type alias mappings: [Model : model, Foo : foo]
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                const alias_start = self.pos;
+
+                // Expect UpperIdent for alias name (e.g., "Model")
+                if (self.peek() != .UpperIdent) {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return try self.pushMalformed(
+                        AST.Header.Idx,
+                        .expected_for_clause_alias_name,
+                        self.pos,
+                    );
+                }
+                const alias_name = self.pos;
+                self.advance();
+
+                // Expect colon
+                self.expect(.OpColon) catch {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return try self.pushMalformed(
+                        AST.Header.Idx,
+                        .expected_for_clause_colon,
+                        self.pos,
+                    );
+                };
+
+                // Expect LowerIdent for rigid name (e.g., "model")
+                if (self.peek() != .LowerIdent) {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return try self.pushMalformed(
+                        AST.Header.Idx,
+                        .expected_for_clause_rigid_name,
+                        self.pos,
+                    );
+                }
+                const rigid_name = self.pos;
+                self.advance();
+
+                const alias_idx = try self.store.addForClauseTypeAlias(.{
+                    .alias_name = alias_name,
+                    .rigid_name = rigid_name,
+                    .region = .{ .start = alias_start, .end = self.pos },
+                });
+                try self.store.addScratchForClauseTypeAlias(alias_idx);
+
+                // Check for comma (more aliases) or close square
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+
+            self.expect(.CloseSquare) catch {
+                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
                 return try self.pushMalformed(
                     AST.Header.Idx,
-                    .expected_requires_signatures_close_curly,
-                    signatures_start,
+                    .expected_for_clause_close_square,
+                    self.pos,
                 );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-            error.TooNested => return error.TooNested,
+            };
+
+            // Expect "for" keyword after type aliases
+            self.expect(.KwFor) catch {
+                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                return try self.pushMalformed(
+                    AST.Header.Idx,
+                    .expected_for_keyword,
+                    self.pos,
+                );
+            };
         }
-    };
-    const signatures_span = try self.store.annoRecordFieldSpanFrom(signatures_top);
-    const signatures = try self.store.addTypeAnno(.{ .record = .{
-        .fields = signatures_span,
-        .ext = null,
-        .region = .{
-            .start = signatures_start,
-            .end = self.pos,
-        },
-    } });
+        // No type aliases - just parse entrypoint directly
+
+        const type_aliases_span = try self.store.forClauseTypeAliasSpanFrom(type_aliases_top);
+
+        // Expect entrypoint name (LowerIdent, e.g., "main")
+        if (self.peek() != .LowerIdent) {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return try self.pushMalformed(
+                AST.Header.Idx,
+                .expected_for_clause_entrypoint_name,
+                self.pos,
+            );
+        }
+        const entrypoint_name = self.pos;
+        self.advance();
+
+        // Expect colon before type annotation
+        self.expect(.OpColon) catch {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return try self.pushMalformed(
+                AST.Header.Idx,
+                .expected_for_clause_type_colon,
+                self.pos,
+            );
+        };
+
+        // Parse the type annotation
+        // Use .not_looking_for_args to properly handle function types like `I64, I64 -> I64`
+        const type_anno = try self.parseTypeAnno(.not_looking_for_args);
+
+        const entry_idx = try self.store.addRequiresEntry(.{
+            .type_aliases = type_aliases_span,
+            .entrypoint_name = entrypoint_name,
+            .type_anno = type_anno,
+            .region = .{ .start = entry_start, .end = self.pos },
+        });
+        try self.store.addScratchRequiresEntry(entry_idx);
+
+        // Check for comma (more entries) or close curly
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+
+    if (!already_consumed_close_curly) {
+        self.expect(.CloseCurly) catch {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return try self.pushMalformed(
+                AST.Header.Idx,
+                .expected_requires_signatures_close_curly,
+                requires_start,
+            );
+        };
+    }
+
+    const requires_entries = try self.store.requiresEntrySpanFrom(requires_entries_top);
 
     // Get exposes
     self.expect(.KwExposes) catch {
@@ -629,8 +729,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
 
     return self.store.addHeader(.{ .platform = .{
         .name = name,
-        .requires_rigids = rigids,
-        .requires_signatures = signatures,
+        .requires_entries = requires_entries,
         .exposes = exposes,
         .packages = packages,
         .provides = provides,

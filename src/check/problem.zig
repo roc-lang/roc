@@ -57,13 +57,27 @@ pub const Problem = union(enum) {
     invalid_number_type: VarWithSnapshot,
     invalid_record_ext: VarWithSnapshot,
     invalid_tag_union_ext: VarWithSnapshot,
-    bug: Bug,
+    platform_def_not_found: PlatformDefNotFound,
+    platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
+    bug: Bug,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
+};
+
+/// Error for when a platform expects an alias to be defined, but it's not there
+pub const PlatformAliasNotFound = struct {
+    expected_alias_ident: Ident.Idx,
+    ctx: enum { not_found, found_but_not_alias },
+};
+
+/// Error for when a platform expects an alias to be defined, but it's not there
+pub const PlatformDefNotFound = struct {
+    expected_def_ident: Ident.Idx,
+    ctx: enum { not_found, found_but_not_exported },
 };
 
 /// A crash that occurred during compile-time evaluation
@@ -501,10 +515,16 @@ pub const ReportBuilder = struct {
             .invalid_number_type => |_| return self.buildUnimplementedReport("invalid_number_type"),
             .invalid_record_ext => |_| return self.buildUnimplementedReport("invalid_record_ext"),
             .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
-            .bug => |_| return self.buildUnimplementedReport("bug"),
+            .platform_alias_not_found => |data| {
+                return self.buildPlatformAliasNotFound(data);
+            },
+            .platform_def_not_found => |data| {
+                return self.buildPlatformDefNotFound(data);
+            },
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
 
@@ -2691,6 +2711,69 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "UNIMPLEMENTED: ", .runtime_error);
         const owned_bytes = try report.addOwnedString(bytes);
         try report.document.addText(owned_bytes);
+        return report;
+    }
+
+    fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) !Report {
+        var report = Report.init(self.gpa, "PLATFORM EXPECTED ALIAS: ", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_name = try report.addOwnedString(self.can_ir.getIdentText(data.expected_alias_ident));
+
+        try report.document.addReflowingText("The platform expected your ");
+        try report.document.addAnnotated("app", .inline_code);
+        try report.document.addReflowingText(" module to have a type alias named:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_name, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("But I could not find it.");
+
+        switch (data.ctx) {
+            .not_found => {},
+            .found_but_not_alias => {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addAnnotated("Hint:", .emphasized);
+                try report.document.addReflowingText(" You have a type with the name ");
+                try report.document.addAnnotated(owned_name, .type_variable);
+                try report.document.addReflowingText(", but it's not an alias.");
+            },
+        }
+
+        return report;
+    }
+
+    fn buildPlatformDefNotFound(self: *Self, data: PlatformDefNotFound) !Report {
+        var report = Report.init(self.gpa, "PLATFORM EXPECTED DEFINITION: ", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_name = try report.addOwnedString(self.can_ir.getIdentText(data.expected_def_ident));
+
+        try report.document.addReflowingText("The platform expected your ");
+        try report.document.addAnnotated("app", .inline_code);
+        try report.document.addReflowingText(" module to have a exported definition named:");
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(owned_name, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("But I could not find it.");
+
+        switch (data.ctx) {
+            .not_found => {},
+            .found_but_not_exported => {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addAnnotated("Hint:", .emphasized);
+                try report.document.addReflowingText(" You have a definition with the name ");
+                try report.document.addAnnotated(owned_name, .type_variable);
+                try report.document.addReflowingText(", but it's not exported. Maybe add it to the export list?");
+            },
+        }
+
         return report;
     }
 

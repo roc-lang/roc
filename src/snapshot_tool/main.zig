@@ -21,6 +21,7 @@ const repl = @import("repl");
 const eval_mod = @import("eval");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -655,10 +656,17 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
-    const gpa = debug_allocator.allocator();
+    var gpa_tracy: tracy.TracyAllocator(null) = undefined;
+    var gpa = debug_allocator.allocator();
     defer {
         const mem_state = debug_allocator.deinit();
         std.debug.assert(mem_state == .ok);
+    }
+
+    // Wrap with Tracy for allocation profiling when enabled
+    if (tracy.enable_allocation) {
+        gpa_tracy = tracy.tracyAllocator(gpa);
+        gpa = gpa_tracy.allocator();
     }
 
     const args = try std.process.argsAlloc(gpa);

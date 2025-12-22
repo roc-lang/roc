@@ -1,3 +1,5 @@
+//! Maps of common syntax mistakes and misspellings to helpful error messages.
+
 const std = @import("std");
 
 /// A static map of common misspellings and mistakes in Roc code.

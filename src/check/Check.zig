@@ -41,6 +41,8 @@ const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = @import("snapshot.zig").Store;
 const ProblemStore = @import("problem.zig").Store;
 
+const is_freestanding = builtin.os.tag == .freestanding;
+
 /// Deferred numeric literal for compile-time validation
 /// These are collected during type checking and validated during comptime evaluation
 pub const DeferredNumericLiteral = struct {
@@ -72,7 +74,6 @@ imported_modules: []const *const ModuleEnv,
 auto_imported_types: ?*const std.AutoHashMap(Ident.Idx, can.Can.AutoImportedType),
 /// Builtin type context for the module being type-checked
 builtin_ctx: BuiltinContext,
-
 /// type snapshots used in error messages
 snapshots: SnapshotStore,
 /// type problems
@@ -905,7 +906,7 @@ fn unifyWith(self: *Self, target_var: Var, content: types_mod.Content, env: *Env
         // directly, saving a typeslot and unifcation run
         var desc = resolved_target.desc;
         desc.content = content;
-        try self.types.setVarDesc(target_var, desc);
+        try self.types.dangerousSetVarDesc(target_var, desc);
     } else {
         const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
         if (builtin.mode == .Debug) {
@@ -984,6 +985,10 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         // The resulting generalized type is saved at the type var slot at `stmt_idx`
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
+
+    // Process requires_types annotations for platforms
+    // This ensures the type store has the actual types for platform requirements
+    try self.processRequiresTypes(&env);
 
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
 
@@ -1067,26 +1072,97 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // because anonymous static dispatch makes function order not knowable
     // before type inference
 
-    // Process requires_types annotations for platforms
-    // This ensures the type store has the actual types for platform requirements
-    try self.processRequiresTypes(&env);
 }
 
-/// Process the requires_types annotations for platform modules.
-/// This generates the actual types from the type annotations stored in requires_types.
+/// Process the requires_types annotations for platform modules, like:
+///
+///   { [Model : model] for main : { init : model, ... } }
+///
+/// For each required type, we first process the introduced alias variables:
+///   { [Model : model] for main : { init : model, ... } }
+///     ^^^^^^^^^^^^^^
+/// Here, we create `model` as a *rigid* var, and a type alias `Model` pointing to
+/// that exact rigid var.
+///
+/// We create this variable at the `.generalized` rank, but we have special
+/// logic in `generateAnnoTypeInPlace` so places that reference `Model`
+/// directly reference the underlying *uninstantiated* rigid var
+///
+/// Then, we generate the type for the actual required type
+///   { [Model : model] for main : { init : model, ... } }
+///                                ^^^^^^^^^^^^^^^^^^^^^^
+///
+/// Note on scoping: Type scopes are defined in czer. So in the example above,
+///   { [Model : model] for main : { init : model, ... } }
+///             a^^^^^                     b^^^^^
+/// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
+/// So `b` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
+/// Then, any reference to `b` replaced with `a` in `generateAnnoTypeInPlace`.
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    // Ensure we are generalized
+    // This is because we do not want the type checking we do here to be let-polymorphic
+    std.debug.assert(env.rank() == .generalized);
+
     const requires_types_slice = self.cir.requires_types.items.items;
     for (requires_types_slice) |required_type| {
-        // Generate the type from the annotation
+
+        // First, processes the required type aliases
+        //   { [Model : model] for main : { init : model, ... } }
+        //     ^^^^^^^^^^^^^^
+        const required_type_aliases_slice = self.cir.for_clause_aliases.sliceRange(required_type.type_aliases);
+        for (required_type_aliases_slice) |type_alias| {
+            const stmt = self.cir.store.getStatement(type_alias.alias_stmt_idx);
+            const stmt_var = ModuleEnv.varFrom(type_alias.alias_stmt_idx);
+
+            // We should only ever have alias decls here
+            std.debug.assert(stmt == .s_alias_decl);
+            const alias = stmt.s_alias_decl;
+
+            // Assert that this alias header is well formed
+            const alias_lhs = self.cir.store.getTypeHeader(alias.header);
+            std.debug.assert(alias_lhs.name == alias_lhs.relative_name);
+            std.debug.assert(alias_lhs.args.span.len == 0);
+
+            // Assert that this alias body is well formed
+            const alias_rhs_var = ModuleEnv.varFrom(alias.anno);
+            const alias_rhs = self.cir.store.getTypeAnno(alias.anno);
+            std.debug.assert(alias_rhs == .rigid_var);
+
+            // Set ranks to generalized
+            try self.setVarRank(stmt_var, env);
+            try self.setVarRank(alias_rhs_var, env);
+
+            // Set the rhs of the expr to be a rigid var
+            try self.unifyWith(alias_rhs_var, .{
+                .rigid = Rigid.init(type_alias.rigid_name),
+            }, env);
+
+            // IMPORTANT!
+            // We *do not* create a real alias here. Instead, we unify the alias
+            // stmt directly with the backing variable not the alias wrapper,
+            // so that it can be substituted with the app's concrete type during
+            // checkPlatformRequirements.
+            _ = try self.unify(stmt_var, alias_rhs_var, env);
+        }
+
+        // Then, generate the type for the actual required type
+        //   { [Model : model] for main : { init : model, ... } }
+        //                                ^^^^^^^^^^^^^^^^^^^^^^
         try self.generateAnnoTypeInPlace(required_type.type_anno, env, .annotation);
     }
 }
 
 /// Check that the app's exported values match the platform's required types.
+///
 /// This should be called after checkFile() to verify that app exports conform
 /// to the platform's requirements.
+///
 /// The `platform_to_app_idents` map translates platform ident indices to app ident indices,
 /// built by the caller to avoid string lookups during type checking.
+///
+/// TODO: There are some non-type errors that this function produces (like
+/// if the required alias or definition) are not found These errors could be
+/// reporter in czer.
 pub fn checkPlatformRequirements(
     self: *Self,
     platform_env: *const ModuleEnv,
@@ -1135,15 +1211,200 @@ pub fn checkPlatformRequirements(
             const copied_required_var = try self.copyVar(required_type_var, platform_env, required_type.region);
 
             // Instantiate the copied variable before unifying (to avoid poisoning the cached copy)
+            // IMPORTANT: When we instantiate this rigid here, it is instantiated as a flex
             const instantiated_required_var = try self.instantiateVar(copied_required_var, &env, .{ .explicit = required_type.region });
+
+            // Get the type aliases (eg [Model : model]) for this required type
+            const type_aliases_range = required_type.type_aliases;
+            const all_aliases = platform_env.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
+
+            // Extract flex name -> instantiated var mappings from the var_map.
+            var var_map_iter = self.var_map.iterator();
+            while (var_map_iter.next()) |entry| {
+                const fresh_var = entry.value_ptr.*;
+                const resolved = self.types.resolveVar(fresh_var);
+                switch (resolved.desc.content) {
+                    // Note that here we match on a flex var. Because the
+                    // type is instantiated any rigid in the platform
+                    // required type become flex
+                    .flex => |flex| {
+                        // Assert flex has name (flex var should come from platform rigid vars)
+                        std.debug.assert(flex.name != null);
+                        const flex_name = flex.name.?;
+
+                        // Assert that this flex var ident is in the list of
+                        // rigid vars declared by the platform.
+                        if (builtin.mode == .Debug) {
+                            var found_in_required_aliases = false;
+                            for (type_aliases_slice) |alias| {
+                                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
+                                if (app_rigid_name == flex_name) {
+                                    found_in_required_aliases = true;
+                                    break;
+                                }
+                            }
+                            if (!found_in_required_aliases) {
+                                std.debug.panic("Expected type var with name {s} to be declared in platform required type aliases", .{
+                                    self.cir.getIdentText(flex_name),
+                                });
+                            }
+                        }
+
+                        // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
+                        try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                    },
+                    else => {},
+                }
+            }
+
+            // For each for-clause type alias (e.g., [Model : model]), look up the app's
+            // corresponding type alias and unify it with the rigid type variable.
+            // This substitutes concrete app types for platform rigid type variables.
+            for (type_aliases_slice) |alias| {
+                // Translate the platform's alias name to the app's namespace
+                const app_alias_name = platform_to_app_idents.get(alias.alias_name) orelse {
+                    const expected_alias_ident = try self.cir.insertIdent(
+                        Ident.for_text(platform_env.getIdentText(alias.alias_name)),
+                    );
+                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                        .expected_alias_ident = expected_alias_ident,
+                        .ctx = .not_found,
+                    } });
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
+
+                // Look up the rigid var we stored earlier.
+                // rigid_vars is keyed by the APP's ident index (the rigid name was translated when copied),
+                // so we translate the platform's rigid_name to the app's ident space using the pre-built map.
+                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Expected to find platform alias rigid var ident {s} in module", .{
+                            platform_env.getIdentText(alias.rigid_name),
+                        });
+                    }
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
+                const rigid_var = self.cir.rigid_vars.get(app_rigid_name) orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Expected to find rigid var in map {s} in instantiate platform required type", .{
+                            platform_env.getIdentText(alias.rigid_name),
+                        });
+                    }
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
+
+                // Look up the app's type alias's (eg Model) body (the underlying type, not the alias wrapper)
+                const app_type_var = self.findTypeAliasBodyVar(app_alias_name) orelse {
+                    const expected_alias_ident = try self.cir.insertIdent(
+                        Ident.for_text(platform_env.getIdentText(alias.alias_name)),
+                    );
+                    _ = try self.problems.appendProblem(self.gpa, .{ .platform_alias_not_found = .{
+                        .expected_alias_ident = expected_alias_ident,
+                        .ctx = .found_but_not_alias,
+                    } });
+                    _ = try self.unifyWith(instantiated_required_var, .err, &env);
+                    _ = try self.unifyWith(export_var, .err, &env);
+                    return;
+                };
+
+                // Now unify the (now-flex) var with the app's type alias body.
+                // This properly handles rank propagation (unlike dangerousSetVarRedirect).
+                _ = try self.unify(rigid_var, app_type_var, &env);
+            }
 
             // Unify the platform's required type with the app's export type.
             // This constrains type variables in the export (e.g., closure params)
-            // to match the platform's expected types.
+            // to match the platform's expected types. After this, the fresh vars
+            // stored in rigid_vars will redirect to the concrete app types.
             _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+        } else {
+            // If we got here, it means that the the definition was not found in
+            // the module's *export* list
+            const expected_def_ident = try self.cir.insertIdent(
+                Ident.for_text(platform_env.getIdentText(required_type.ident)),
+            );
+            _ = try self.problems.appendProblem(self.gpa, .{
+                .platform_def_not_found = .{
+                    .expected_def_ident = expected_def_ident,
+                    .ctx = blk: {
+                        // We know the def is not exported, but here we check
+                        // if it's defined *but not exported* in the module so
+                        // we can show a nicer error message
+
+                        var found_def: ?CIR.Def.Idx = null;
+
+                        // Check all defs in the module
+                        const app_defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
+                        for (app_defs_slice) |def_idx| {
+                            const def = self.cir.store.getDef(def_idx);
+                            const pattern = self.cir.store.getPattern(def.pattern);
+
+                            if (pattern == .assign) {
+                                // Compare ident indices - if app_required_ident is null, there's no match
+                                if (app_required_ident != null and pattern.assign.ident == app_required_ident.?) {
+                                    found_def = def_idx;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Break with more specific context
+                        if (found_def == null) {
+                            break :blk .not_found;
+                        } else {
+                            break :blk .found_but_not_exported;
+                        }
+                    },
+                },
+            });
         }
         // Note: If the export is not found, the canonicalizer should have already reported an error
     }
+}
+
+/// Find a type alias declaration by name and return the var for its underlying type.
+/// This returns the var for the alias's body (e.g., for `Model : { value: I64 }` returns the var for `{ value: I64 }`),
+/// not the var for the alias declaration itself.
+/// Returns null if no type alias declaration with the given name is found.
+fn findTypeAliasBodyVar(self: *Self, name: Ident.Idx) ?Var {
+    const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
+    for (stmts_slice) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_alias_decl => |alias| {
+                const header = self.cir.store.getTypeHeader(alias.header);
+                if (header.relative_name == name) {
+                    // Return the var for the alias body annotation, not the statement
+                    return ModuleEnv.varFrom(alias.anno);
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// Check if a statement index is a for-clause alias statement.
+/// For-clause alias statements are created during platform header processing
+/// for type aliases like [Model : model] in the requires clause.
+///
+/// When these are looked up, we need to *not* instantiate the alias, so all
+/// references in the module Point to the same var.
+fn isForClauseAliasStatement(self: *Self, stmt_idx: CIR.Statement.Idx) bool {
+    // Slice the for-clause alias statements and check if stmt_idx is in the list
+    for (self.cir.for_clause_aliases.items.items) |for_clause| {
+        if (stmt_idx == for_clause.alias_stmt_idx) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // repl //
@@ -1258,7 +1519,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
             _ = try self.checkExpr(def.expr, env, .no_expectation);
         }
 
-        // Now that we are existing the scope, we must generalize then pop this rank
+        // Now that we are exiting the scope, we must generalize then pop this rank
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
 
         // Check any accumulated static dispatch constraints
@@ -1480,6 +1741,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    const annotation_var = ModuleEnv.varFrom(annotation_idx);
+    try self.setVarRank(annotation_var, env);
+
     const annotation = self.cir.store.getAnnotation(annotation_idx);
 
     // Reset seen type annos
@@ -1501,7 +1765,7 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     try self.generateAnnoTypeInPlace(annotation.anno, env, .annotation);
 
     // Redirect the root annotation to inner annotation
-    _ = try self.unify(ModuleEnv.varFrom(annotation_idx), ModuleEnv.varFrom(annotation.anno), env);
+    _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
 }
 
 /// Given a where clause, generate static dispatch constraints and add to scratch_static_dispatch_constraints
@@ -1559,6 +1823,14 @@ fn generateStaticDispatchConstraintFromWhere(self: *Self, where_idx: CIR.WhereCl
 /// This is used both for generation annotation types and type declaration types
 ///
 /// This function will write the type into the type var node at `anno_idx`
+///
+/// Note on scoping for type decls: Type scopes are defined in czer
+///   Point(x) : [Point(x, x)]
+///        a^          b^  ^c
+///
+/// So `a` get the node CIR.TypeAnno.rigid_var{ .. }
+/// And `b` & `c` get the node CIR.TypeAnno.rigid_var_lookup{ .ref = <a_id> }
+/// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
 fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1667,12 +1939,19 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         },
                     }
 
-                    const instantiated_var = try self.instantiateVar(
-                        ModuleEnv.varFrom(local.decl_idx),
-                        env,
-                        .{ .explicit = anno_region },
-                    );
-                    _ = try self.unify(anno_var, instantiated_var, env);
+                    const local_decl_var = ModuleEnv.varFrom(local.decl_idx);
+
+                    // Check if this is a for-clause alias (eg Model [Model : model]).
+                    // For for-clause aliases, we do not want to instantiate the
+                    // variable - each place that references it should reference
+                    // the same var.
+                    const is_for_clause_alias = self.isForClauseAliasStatement(local.decl_idx);
+                    if (is_for_clause_alias) {
+                        _ = try self.unify(anno_var, local_decl_var, env);
+                    } else {
+                        const instantiated_var = try self.instantiateVar(local_decl_var, env, .{ .explicit = anno_region });
+                        _ = try self.unify(anno_var, instantiated_var, env);
+                    }
                 },
                 .external => |ext| {
                     if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
@@ -2898,9 +3177,28 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
-            const resolved_pat = self.types.resolveVar(pat_var).desc;
+            const resolved_pat = self.types.resolveVar(pat_var);
 
-            if (resolved_pat.rank == Rank.generalized) {
+            // Check if this is a generalized var that should NOT be instantiated.
+            // Numeric literals with from_numeral constraints should unify directly
+            // so that the concrete type propagates back to the definition site.
+            // This fixes GitHub issue #8666 where polymorphic numerics defaulted to Dec.
+            const should_instantiate = blk: {
+                if (resolved_pat.desc.rank != Rank.generalized) break :blk false;
+                // Don't instantiate if this has a from_numeral constraint
+                if (resolved_pat.desc.content == .flex) {
+                    const flex = resolved_pat.desc.content.flex;
+                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                    for (constraints) |constraint| {
+                        if (constraint.origin == .from_numeral) {
+                            break :blk false;
+                        }
+                    }
+                }
+                break :blk true;
+            };
+
+            if (should_instantiate) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
@@ -3518,7 +3816,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |expected_type| {
                     // Redirect expr_var to the annotation var so that lookups get the correct type
-                    try self.types.setVarRedirect(expr_var, expected_type.var_);
+                    _ = try self.unify(expr_var, expected_type.var_, env);
                 },
             }
         },
@@ -3551,7 +3849,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |expected_type| {
                     // Redirect expr_var to the annotation var so that lookups get the correct type
-                    try self.types.setVarRedirect(expr_var, expected_type.var_);
+                    _ = try self.unify(expr_var, expected_type.var_, env);
                 },
             }
         },
@@ -3685,6 +3983,10 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
+                    // Enter a new rank
+                    try env.var_pool.pushRank();
+                    defer env.var_pool.popRank();
+
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
@@ -3708,10 +4010,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                             break :blk Expected.no_expectation;
                         }
                     };
-
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
@@ -3744,10 +4042,13 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     }
                 };
                 defer self.enclosing_func_name = saved_func_name;
-
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 {
+                    // Enter a new rank
+                    try env.var_pool.pushRank();
+                    defer env.var_pool.popRank();
+
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
@@ -3763,10 +4064,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                             break :blk Expected.no_expectation;
                         }
                     };
-
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
@@ -4294,7 +4591,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     _ = try self.unify(constrained_var, operand_var, env);
 
     // Set the expression to redirect to the return type
-    try self.types.setVarRedirect(expr_var, ret_var);
+    _ = try self.unify(expr_var, ret_var, env);
 
     return does_fx;
 }
@@ -4405,7 +4702,7 @@ fn checkBinopExpr(
                 _ = try self.unify(constrained_var, lhs_var, env);
 
                 // Set the expression to redirect to the return type
-                try self.types.setVarRedirect(expr_var, ret_var);
+                _ = try self.unify(expr_var, ret_var, env);
             } else {
                 // Builtin numeric type: use standard numeric constraints
                 // This is the same as the other arithmetic operators
@@ -4439,7 +4736,7 @@ fn checkBinopExpr(
 
                 // Set root expr. If unifications succeeded this will the the
                 // num, otherwise the propgate error
-                try self.types.setVarRedirect(expr_var, lhs_var);
+                _ = try self.unify(expr_var, lhs_var, env);
             }
         },
         .sub, .mul, .div, .rem, .div_trunc => {
@@ -4928,7 +5225,7 @@ fn handleRecursiveConstraint(
 
     // Create a new type variable to represent the recursion point
     // Use the current environment's rank for the recursion var
-    const recursion_var = try self.types.freshFromContentWithRank(rec_var_content, env.rank());
+    const recursion_var = try self.freshFromContent(rec_var_content, env, self.getRegionAt(var_));
 
     // Create RecursionInfo to track the recursion metadata
     _ = types_mod.RecursionInfo{

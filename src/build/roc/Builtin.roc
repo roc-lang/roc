@@ -90,10 +90,14 @@ Builtin :: [].{
 		}
 
 		map : List(a), (a -> b) -> List(b)
-		map = |list, transform|
-		# Implement using fold + concat for now
-		# TODO: Optimize with in-place update when list is unique and element sizes match
-			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
+		map = |list, transform| {
+			# TODO: Optimize with in-place update when list is unique and element sizes match
+			var $new_list = List.with_capacity(list.len())
+			for item in list {
+				$new_list = list_append_unsafe($new_list, transform(item))
+			}
+			$new_list
+		}
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate|
@@ -229,6 +233,18 @@ Builtin :: [].{
 			Item : item
 			Item.join_with(list, joiner)
 		}
+
+		repeat : a, U64 -> List(a)
+		repeat = |item, n| {
+			var $list = List.with_capacity(n)
+			var $count = 0
+			while $count < n {
+				$list = List.append($list, item)
+				$count = $count + 1
+			}
+			$list
+		}
+
 	}
 
 	Bool := [False, True].{
@@ -247,7 +263,10 @@ Builtin :: [].{
 		# Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 	}
 
-	Box(item) :: [ProvidedByCompiler].{}
+	Box(item) :: [ProvidedByCompiler].{
+		box : item -> Box(item)
+		unbox : Box(item) -> item
+	}
 
 	Try(ok, err) := [Ok(ok), Err(err)].{
 		is_ok : Try(_ok, _err) -> Bool
@@ -272,6 +291,18 @@ Builtin :: [].{
 		err_or = |try, fallback| match try {
 			Err(val) => val
 			Ok(_) => fallback
+		}
+
+		map_ok : Try(a, err), (a -> b) -> Try(b, err)
+		map_ok = |try, transform| match try {
+			Err(err) => Err(err)
+			Ok(a) => Ok(transform(a))
+		}
+
+		map_err : Try(ok, a), (a -> b) -> Try(ok, b)
+		map_err = |try, transform| match try {
+			Err(a) => Err(transform(a))
+			Ok(ok) => Ok(ok)
 		}
 
 		is_eq : Try(ok, err), Try(ok, err) -> Bool
@@ -349,6 +380,10 @@ Builtin :: [].{
 			mod_by : U8, U8 -> U8
 			abs_diff : U8, U8 -> U8
 
+			shift_left_by : U8, U8 -> U8
+			shift_right_by : U8, U8 -> U8
+			shift_right_zf_by : U8, U8 -> U8
+
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(U8, [BadNumStr, ..others])
@@ -407,6 +442,10 @@ Builtin :: [].{
 			mod_by : I8, I8 -> I8
 			abs_diff : I8, I8 -> U8
 
+			shift_left_by : I8, U8 -> I8
+			shift_right_by : I8, U8 -> I8
+			shift_right_zf_by : I8, U8 -> I8
+
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I8, [BadNumStr, ..others])
@@ -452,6 +491,10 @@ Builtin :: [].{
 			rem_by : U16, U16 -> U16
 			mod_by : U16, U16 -> U16
 			abs_diff : U16, U16 -> U16
+
+			shift_left_by : U16, U8 -> U16
+			shift_right_by : U16, U8 -> U16
+			shift_right_zf_by : U16, U8 -> U16
 
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..others])
@@ -501,6 +544,10 @@ Builtin :: [].{
 			mod_by : I16, I16 -> I16
 			abs_diff : I16, I16 -> U16
 
+			shift_left_by : I16, U8 -> I16
+			shift_right_by : I16, U8 -> I16
+			shift_right_zf_by : I16, U8 -> I16
+
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I16, [BadNumStr, ..others])
@@ -547,6 +594,10 @@ Builtin :: [].{
 			rem_by : U32, U32 -> U32
 			mod_by : U32, U32 -> U32
 			abs_diff : U32, U32 -> U32
+
+			shift_left_by : U32, U8 -> U32
+			shift_right_by : U32, U8 -> U32
+			shift_right_zf_by : U32, U8 -> U32
 
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..others])
@@ -598,6 +649,10 @@ Builtin :: [].{
 			mod_by : I32, I32 -> I32
 			abs_diff : I32, I32 -> U32
 
+			shift_left_by : I32, U8 -> I32
+			shift_right_by : I32, U8 -> I32
+			shift_right_zf_by : I32, U8 -> I32
+
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I32, [BadNumStr, ..others])
@@ -645,6 +700,10 @@ Builtin :: [].{
 			rem_by : U64, U64 -> U64
 			mod_by : U64, U64 -> U64
 			abs_diff : U64, U64 -> U64
+
+			shift_left_by : U64, U8 -> U64
+			shift_right_by : U64, U8 -> U64
+			shift_right_zf_by : U64, U8 -> U64
 
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..others])
@@ -698,6 +757,10 @@ Builtin :: [].{
 			mod_by : I64, I64 -> I64
 			abs_diff : I64, I64 -> U64
 
+			shift_left_by : I64, U8 -> I64
+			shift_right_by : I64, U8 -> I64
+			shift_right_zf_by : I64, U8 -> I64
+
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(I64, [BadNumStr, ..others])
@@ -746,6 +809,10 @@ Builtin :: [].{
 			rem_by : U128, U128 -> U128
 			mod_by : U128, U128 -> U128
 			abs_diff : U128, U128 -> U128
+
+			shift_left_by : U128, U8 -> U128
+			shift_right_by : U128, U8 -> U128
+			shift_right_zf_by : U128, U8 -> U128
 
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..others])
@@ -802,6 +869,10 @@ Builtin :: [].{
 			rem_by : I128, I128 -> I128
 			mod_by : I128, I128 -> I128
 			abs_diff : I128, I128 -> U128
+
+			shift_left_by : I128, U8 -> I128
+			shift_right_by : I128, U8 -> I128
+			shift_right_zf_by : I128, U8 -> I128
 
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..others])
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..others])
@@ -1035,6 +1106,9 @@ range_until = |var $current, end| {
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler, does not perform bounds checks
+list_append_unsafe : List(item), item -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler

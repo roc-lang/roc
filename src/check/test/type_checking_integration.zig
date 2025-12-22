@@ -1353,10 +1353,10 @@ test "check type - expect" {
         \\  x
         \\}
     ;
-    // Inside lambdas, numeric flex vars ARE generalized (to support polymorphic functions).
-    // Each use of `x` gets a fresh instance, so constraints from `x == 1` don't
-    // propagate to the generalized type. Only `from_numeral` from the def is captured.
-    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    // Numeric literals with from_numeral constraints are NOT generalized (GitHub #8666).
+    // This means constraints from `x == 1` (the is_eq constraint) DO propagate back
+    // to the definition of x, along with the original from_numeral constraint.
+    try checkTypesModule(source, .{ .pass = .last_def }, "a where [a.is_eq : a, a -> Bool, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
 }
 
 test "check type - expect not bool" {
@@ -2129,6 +2129,53 @@ test "check type - scoped type variables - fail" {
         source,
         .fail,
         "TYPE MISMATCH",
+    );
+}
+
+test "check type - scoped type variables - bigger example 1" {
+    const source =
+        \\test_scoped : a, b -> a
+        \\test_scoped = |a, b| {
+        \\  f : a -> a
+        \\  f = |z| z
+        \\
+        \\  # No err because we correctly provide `a` as the arg
+        \\  result : a
+        \\  result = f(a)
+        \\  
+        \\  # Err because we incorrectly provide `b` as the arg
+        \\  _result2 : b
+        \\  _result2 = f(b)
+        \\  
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+
+test "check type - scoped type variables - bigger example 2" {
+    const source =
+        \\test : val -> val
+        \\test = |a| {
+        \\  b : other_val -> other_val
+        \\  b = |c| {
+        \\    d : other_val
+        \\    d = c
+        \\
+        \\    d
+        \\  }
+        \\
+        \\  b(a)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "test" } },
+        "val -> val",
     );
 }
 

@@ -193,14 +193,14 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
 UNUSED VARIABLE - fuzz_crash_027.md:64:11:64:14
 UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
 UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:88:4:88:6
+NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
 UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
@@ -212,7 +212,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_027.md:141:10:141:24
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:10:142:17
 UNDEFINED VARIABLE - fuzz_crash_027.md:142:18:142:22
 DOES NOT EXIST - fuzz_crash_027.md:145:4:145:13
@@ -544,7 +544,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_027.md:74:7:74:12:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -573,7 +580,14 @@ ist
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_027.md:81:7:81:12:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `add` in this scope.
@@ -601,12 +615,26 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: report an error when unable to resolve field identifier
 
+**fuzz_crash_027.md:88:4:88:6:**
+```roc
+			..} => 12
+```
+			^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**fuzz_crash_027.md:89:18:89:23:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		               ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -733,7 +761,14 @@ Is there an `import` or `exposing` missing up-top?
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**fuzz_crash_027.md:141:10:141:24:**
+```roc
+	bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	        ^^^^^^^^^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.

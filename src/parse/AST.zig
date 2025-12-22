@@ -666,6 +666,14 @@ pub const Diagnostic = struct {
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
         expected_requires_signatures_open_curly,
+        expected_for_clause_open_square,
+        expected_for_clause_close_square,
+        expected_for_clause_alias_name,
+        expected_for_clause_colon,
+        expected_for_clause_rigid_name,
+        expected_for_keyword,
+        expected_for_clause_entrypoint_name,
+        expected_for_clause_type_colon,
         header_expected_open_square,
         header_expected_close_square,
         pattern_unexpected_token,
@@ -1625,8 +1633,7 @@ pub const Header = union(enum) {
     },
     platform: struct {
         name: Token.Idx,
-        requires_rigids: Collection.Idx,
-        requires_signatures: TypeAnno.Idx,
+        requires_entries: RequiresEntry.Span, // [Model : model] for main : () -> { ... }
         exposes: Collection.Idx,
         packages: Collection.Idx,
         provides: Collection.Idx,
@@ -1755,22 +1762,42 @@ pub const Header = union(enum) {
                 try tree.pushStringPair("name", ast.resolve(a.name));
                 const attrs = tree.beginNode();
 
-                // Requires Rigids
-                const rigids = ast.store.getCollection(a.requires_rigids);
-                const rigids_begin = tree.beginNode();
-                try tree.pushStaticAtom("rigids");
-                try ast.appendRegionInfoToSexprTree(env, tree, rigids.region);
+                // Requires Entries (for-clause syntax)
+                const requires_begin = tree.beginNode();
+                try tree.pushStaticAtom("requires");
                 const attrs3 = tree.beginNode();
-                // Could push region info for rigids here if desired
-                for (ast.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
-                    const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(env, ast, tree);
-                }
-                try tree.endNode(rigids_begin, attrs3);
+                for (ast.store.requiresEntrySlice(a.requires_entries)) |entry_idx| {
+                    const entry = ast.store.getRequiresEntry(entry_idx);
+                    const entry_begin = tree.beginNode();
+                    try tree.pushStaticAtom("requires-entry");
+                    try ast.appendRegionInfoToSexprTree(env, tree, entry.region);
+                    const entry_attrs = tree.beginNode();
 
-                // Requires Signatures
-                const signatures = ast.store.getTypeAnno(a.requires_signatures);
-                try signatures.pushToSExprTree(gpa, env, ast, tree);
+                    // Type aliases
+                    const aliases_begin = tree.beginNode();
+                    try tree.pushStaticAtom("type-aliases");
+                    const aliases_attrs = tree.beginNode();
+                    for (ast.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
+                        const alias = ast.store.getForClauseTypeAlias(alias_idx);
+                        const alias_begin = tree.beginNode();
+                        try tree.pushStaticAtom("alias");
+                        try tree.pushStringPair("name", ast.resolve(alias.alias_name));
+                        try tree.pushStringPair("rigid", ast.resolve(alias.rigid_name));
+                        const alias_attrs = tree.beginNode();
+                        try tree.endNode(alias_begin, alias_attrs);
+                    }
+                    try tree.endNode(aliases_begin, aliases_attrs);
+
+                    // Entrypoint name
+                    try tree.pushStringPair("entrypoint", ast.resolve(entry.entrypoint_name));
+
+                    // Type annotation
+                    const type_anno = ast.store.getTypeAnno(entry.type_anno);
+                    try type_anno.pushToSExprTree(gpa, env, ast, tree);
+
+                    try tree.endNode(entry_begin, entry_attrs);
+                }
+                try tree.endNode(requires_begin, attrs3);
 
                 // Exposes
                 const exposes = ast.store.getCollection(a.exposes);
@@ -2034,6 +2061,33 @@ pub const TargetFile = union(enum) {
     string_literal: Token.Idx, // "crt1.o"
     special_ident: Token.Idx, // app, win_gui
     malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// A type alias mapping in a for-clause: Model : model
+/// Maps an uppercase alias (Model) to a lowercase rigid variable (model)
+pub const ForClauseTypeAlias = struct {
+    /// The alias name token (e.g., "Model") - UpperIdent
+    alias_name: Token.Idx,
+    /// The rigid variable name token (e.g., "model") - LowerIdent
+    rigid_name: Token.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// A requires entry with for-clause: [Model : model] for main : () -> { ... }
+pub const RequiresEntry = struct {
+    /// Type aliases: [Model : model, Foo : foo]
+    type_aliases: ForClauseTypeAlias.Span,
+    /// The entrypoint name token (e.g., "main") - LowerIdent
+    entrypoint_name: Token.Idx,
+    /// The type annotation for this entrypoint
+    type_anno: TypeAnno.Idx,
+    region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };

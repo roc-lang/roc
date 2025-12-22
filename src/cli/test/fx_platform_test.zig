@@ -210,8 +210,8 @@ test "fx platform expect with main" {
 
     try checkSuccess(run_result);
 
-    // When all tests pass without --verbose, roc test produces no output
-    try testing.expectEqualStrings("", run_result.stdout);
+    // When all tests pass produce short output message
+    try testing.expectStringStartsWith(run_result.stdout, "All (1) tests passed in ");
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
@@ -226,8 +226,8 @@ test "fx platform expect with numeric literal" {
 
     try checkSuccess(run_result);
 
-    // When all tests pass without --verbose, roc test produces no output
-    try testing.expectEqualStrings("", run_result.stdout);
+    // When all tests pass produce short output message
+    try testing.expectStringStartsWith(run_result.stdout, "All (1) tests passed in ");
     try testing.expectEqualStrings("", run_result.stderr);
 }
 
@@ -246,6 +246,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "{ diff: 5, div: 2, div_trunc: 2, eq: False, gt: True, gteq: True, lt: False, lteq: False, neg: -10, neq: True, prod: 50, rem: 0, sum: 15 }\n" ++
         "{ bool_and_keyword: False, bool_or_keyword: True, not_a: False }\n" ++
         "\"One Two\"\n" ++
+        "\"Three Four\"\n" ++
         "The color is red.\n" ++
         "78\n" ++
         "Success\n" ++
@@ -256,13 +257,16 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "This is an effectful function!\n" ++
         "15\n" ++
         "42\n" ++
-        "NotOneTwo\n" ++
+        "NotOneTwoNotFive\n" ++
         "(\"Roc\", 1)\n" ++
         "Builtin.List.[\"a\", \"b\"]\n" ++
+        "(\"Roc\", 1, 1, \"Roc\")\n" ++
+        "10\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
         "{ binary: 5, explicit_dec: 5, explicit_f32: 5, explicit_f64: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
         "False\n" ++
-        "99\n";
+        "99\n" ++
+        "\"12345.0\"\n";
 
     try testing.expectEqualStrings(expected_stdout, run_result.stdout);
     try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);

@@ -1,3 +1,5 @@
+//! Tests for LSP protocol types including JSON-RPC identifiers and initialization parameters.
+
 const std = @import("std");
 const protocol = @import("../protocol.zig");
 

@@ -47,6 +47,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void 
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
+
     const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
     const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
     const align_enum: std.mem.Alignment = @enumFromInt(log2_align);

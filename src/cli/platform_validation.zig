@@ -73,7 +73,11 @@ pub fn isPlatformFile(
     source_path: []const u8,
 ) ?bool {
     // Read source file
-    const source = std.fs.cwd().readFileAlloc(allocator, source_path, std.math.maxInt(usize)) catch {
+    var source = std.fs.cwd().readFileAlloc(allocator, source_path, std.math.maxInt(usize)) catch {
+        return null;
+    };
+    source = base.source_utils.normalizeLineEndingsRealloc(allocator, source) catch {
+        allocator.free(source);
         return null;
     };
     defer allocator.free(source);
@@ -105,9 +109,13 @@ pub fn validatePlatformHeader(
     platform_source_path: []const u8,
 ) ValidationError!PlatformValidation {
     // Read platform source
-    const source = std.fs.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
+    var source = std.fs.cwd().readFileAlloc(allocator, platform_source_path, std.math.maxInt(usize)) catch {
         renderFileReadError(allocator, platform_source_path);
         return error.FileReadError;
+    };
+    source = base.source_utils.normalizeLineEndingsRealloc(allocator, source) catch {
+        allocator.free(source);
+        return error.OutOfMemory;
     };
 
     // Parse platform header

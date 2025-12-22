@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Numeric without annotation, multiple uses with different types (each use gets fresh type)
+description=Numeric without annotation, later use gives type error (no let-generalization for non-lambdas)
 type=repl
 ~~~
 # SOURCE
@@ -17,6 +17,6 @@ assigned `a`
 ---
 assigned `b`
 ---
-"4242.0"
+TYPE MISMATCH
 # PROBLEMS
 NIL

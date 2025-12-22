@@ -455,6 +455,9 @@ test "roc build creates executable from test/int/app.roc" {
 
     // Verify that:
     // 1. Command succeeded (zero exit code)
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ result.term, result.stdout, result.stderr });
+    }
     try testing.expect(result.term == .Exited and result.term.Exited == 0);
 
     // 2. Output file was created
@@ -465,6 +468,10 @@ test "roc build creates executable from test/int/app.roc" {
 
     // 3. Output file is executable (non-zero size)
     try testing.expect(stat.size > 0);
+
+    // 4. Stdout contains success message
+    try testing.expect(result.stdout.len > 5);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
 }
 
 test "roc build executable runs correctly" {
@@ -492,6 +499,9 @@ test "roc build executable runs correctly" {
     defer gpa.free(build_result.stdout);
     defer gpa.free(build_result.stderr);
 
+    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+        std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ build_result.term, build_result.stdout, build_result.stderr });
+    }
     try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
 
     // Run the built executable
@@ -528,6 +538,7 @@ test "roc build fails with file not found error" {
     // 2. Stderr contains file not found error
     const has_error = std.mem.indexOf(u8, result.stderr, "FileNotFound") != null or
         std.mem.indexOf(u8, result.stderr, "not found") != null or
+        std.mem.indexOf(u8, result.stderr, "NOT FOUND") != null or
         std.mem.indexOf(u8, result.stderr, "Failed") != null;
     try testing.expect(has_error);
 }
@@ -575,4 +586,29 @@ test "roc build glibc target gives helpful error on non-Linux" {
     // 3. Stderr suggests using musl instead
     const suggests_musl = std.mem.indexOf(u8, result.stderr, "musl") != null;
     try testing.expect(suggests_musl);
+}
+
+test "roc test with nested list chunks does not panic on layout upgrade" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // This test verifies that nested list operations with layout upgrades
+    // (from list_of_zst to concrete list types) don't cause integer overflow panics.
+    // The expect in the test file is designed to fail, but execution should not panic.
+    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/issue8699.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed with exit code 1 (test failure, not panic)
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // 2. Stderr contains "FAIL" indicating a test failure (not a panic/crash)
+    const has_fail = std.mem.indexOf(u8, result.stderr, "FAIL") != null;
+    try testing.expect(has_fail);
+
+    // 3. Stderr should not contain "panic" or "overflow" (no crash occurred)
+    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    try testing.expect(!has_panic);
 }

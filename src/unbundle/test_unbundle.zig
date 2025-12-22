@@ -349,3 +349,22 @@ test "ErrorContext population" {
         try testing.expect(false); // Should have failed
     }
 }
+
+const download = @import("download.zig");
+
+test "downloadAndExtract with unreachable URL returns error without crash" {
+    // Regression test: downloading from an unreachable URL should return an error,
+    // not crash due to double-close of file handle.
+    var allocator: std.mem.Allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Port 1 on localhost will fail to connect, triggering error handling path
+    const result = download.downloadAndExtract(
+        &allocator,
+        "https://127.0.0.1:1/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst",
+        tmp.dir,
+    );
+
+    try testing.expectError(download.DownloadError.HttpError, result);
+}

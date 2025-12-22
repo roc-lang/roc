@@ -78,6 +78,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
         .requires_types = serialized_ptr.requires_types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(base_ptr))).*,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
@@ -90,6 +91,7 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
         .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
     return LoadedModule{

@@ -9,7 +9,7 @@ get_name!({}) ?? "Bob"
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - double_question_binop.md:1:1:1:10
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - double_question_binop.md:1:1:1:23
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `get_name!` in this scope.
@@ -25,7 +25,14 @@ get_name!({}) ?? "Bob"
 **NOT IMPLEMENTED**
 This feature is not yet implemented: unsupported operator
 
+**double_question_binop.md:1:1:1:23:**
+```roc
+get_name!({}) ?? "Bob"
+```
+^^^^^^^^^^^^^^^^^^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 # TOKENS
 ~~~zig

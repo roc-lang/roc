@@ -1,3 +1,5 @@
+//! LSP server implementation that routes requests and notifications to handlers.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("protocol.zig");

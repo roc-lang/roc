@@ -172,6 +172,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
+    if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
+        try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
+    }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);
     }
@@ -413,6 +416,29 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const abs_diff = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.abs_diff", .{num_type});
         if (env.common.findIdent(abs_diff)) |ident| {
             try low_level_map.put(ident, .num_abs_diff);
+        }
+    }
+
+    // Bitwise shift operations (integer types only);
+    for (integer_types) |num_type| {
+        var buf: [256]u8 = undefined;
+
+        // shift_left_by
+        const shift_left_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_left_by", .{num_type});
+        if (env.common.findIdent(shift_left_by)) |ident| {
+            try low_level_map.put(ident, .num_shift_left_by);
+        }
+
+        // shift_right_by
+        const shift_right_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_by", .{num_type});
+        if (env.common.findIdent(shift_right_by)) |ident| {
+            try low_level_map.put(ident, .num_shift_right_by);
+        }
+
+        // shift_right_zf_by
+        const shift_right_zf_by = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.shift_right_zf_by", .{num_type});
+        if (env.common.findIdent(shift_right_zf_by)) |ident| {
+            try low_level_map.put(ident, .num_shift_right_zf_by);
         }
     }
 

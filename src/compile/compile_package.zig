@@ -627,12 +627,17 @@ pub const PackageEnv = struct {
     }
 
     fn readModuleSource(self: *PackageEnv, path: []const u8) ![]u8 {
-        if (self.file_provider) |fp| {
-            if (try fp.read(fp.ctx, path, self.gpa)) |data| {
-                return data;
-            }
-        }
-        return std.fs.cwd().readFileAlloc(self.gpa, path, std.math.maxInt(usize));
+        const raw_data = if (self.file_provider) |fp|
+            if (try fp.read(fp.ctx, path, self.gpa)) |data| data else null
+        else
+            null;
+
+        const data = raw_data orelse try std.fs.cwd().readFileAlloc(self.gpa, path, std.math.maxInt(usize));
+
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        // This reallocates to the correct size if normalization occurs, ensuring
+        // proper memory management when the buffer is freed later.
+        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
     }
 
     fn doCanonicalize(self: *PackageEnv, module_id: ModuleId) !void {
@@ -978,6 +983,10 @@ pub const PackageEnv = struct {
 
             // Extract module name without .roc extension
             const module_name = entry.name[0 .. entry.name.len - 4];
+
+            // Skip the current module to avoid TYPE REDECLARED errors when a type module
+            // defines a type with the same name as the module (e.g., Simple.roc with type Simple)
+            if (std.mem.eql(u8, module_name, env.module_name)) continue;
 
             // Add to module_envs with a placeholder env (just to pass the "contains" check)
             // We use builtin_module_env as a placeholder - the actual env will be loaded later
