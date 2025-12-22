@@ -10205,6 +10205,9 @@ pub const Interpreter = struct {
         /// Negate boolean result on value stack (for != operator).
         negate_bool: void,
 
+        // Break from loop - handle break statement inside loops.
+        break_from_loop: void,
+
         /// Wrap backing expression result with nominal type's rt_var.
         /// This ensures method dispatch finds the nominal type info.
         nominal_wrap: NominalWrap,
@@ -13795,6 +13798,9 @@ pub const Interpreter = struct {
                     .expr_idx = while_stmt.cond,
                     .expected_rt_var = cond_rt_var,
                 } });
+            },
+            .s_break => {
+                try work_stack.push(.{ .apply_continuation = .{ .break_from_loop = {} } });
             },
             .s_type_var_alias => {
                 // Type var alias is a compile-time construct, no runtime effect
@@ -17403,6 +17409,36 @@ pub const Interpreter = struct {
                     .expr_idx = wl.cond,
                     .expected_rt_var = cond_rt_var,
                 } });
+                return true;
+            },
+            .break_from_loop => {
+                const cont_trace = tracy.traceNamed(@src(), "cont.break_from_loop");
+                defer cont_trace.end();
+
+                // Pop work stack until we find while_loop_body_done or for_body_done
+                var work = work_stack.pop() orelse return error.Crash;
+                while (work != .apply_continuation or (work.apply_continuation != .while_loop_body_done and work.apply_continuation != .for_body_done)) {
+                    const foo = work_stack.pop();
+                    std.debug.assert(foo != null);
+                    work = foo orelse return error.Crash;
+                }
+                if (work.apply_continuation == .for_body_done) {
+                    // Break in for loop - not implemented yet
+                    return error.NotImplemented;
+                } else {
+                    // While loop aborted, continue with remaining statements
+                    const wl = work.apply_continuation.while_loop_body_done;
+                    // TODO do we need to clean up something?
+                    if (wl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = wl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(wl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, wl.remaining_stmts[1..], wl.final_expr, wl.bindings_start, null, roc_ops);
+                    }
+                }
                 return true;
             },
             .expect_check_stmt => |ec| {
