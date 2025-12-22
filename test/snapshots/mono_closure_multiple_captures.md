@@ -8,21 +8,23 @@ type=mono
 {
     a = 1
     b = 2
-    f = |x| a + b + x
-    f(3)
+    |x| a + b + x
 }
 ~~~
 # MONO
 ~~~roc
-6 : Dec
+{
+    a = 1
+    b = 2
+    #1({a: a, b: b})
+} : c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc
 {
 	a = 1
 	b = 2
-	f = |x| a + b + x
-	f(3)
+	|x| a + b + x
 }
 ~~~
 # EXPECTED
@@ -34,8 +36,7 @@ NIL
 OpenCurly,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpAssign,Int,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,OpPlus,LowerIdent,
-LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,OpPlus,LowerIdent,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -49,25 +50,41 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "b"))
 			(e-int (raw "2")))
-		(s-decl
-			(p-ident (raw "f"))
-			(e-lambda
-				(args
-					(p-ident (raw "x")))
+		(e-lambda
+			(args
+				(p-ident (raw "x")))
+			(e-binop (op "+")
 				(e-binop (op "+")
-					(e-binop (op "+")
-						(e-ident (raw "a"))
-						(e-ident (raw "b")))
-					(e-ident (raw "x")))))
-		(e-apply
-			(e-ident (raw "f"))
-			(e-int (raw "3")))))
+					(e-ident (raw "a"))
+					(e-ident (raw "b")))
+				(e-ident (raw "x"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "6"))
+(e-block
+	(s-let
+		(p-assign (ident "a"))
+		(e-num (value "1")))
+	(s-let
+		(p-assign (ident "b"))
+		(e-num (value "2")))
+	(e-closure
+		(captures
+			(capture (ident "a"))
+			(capture (ident "b")))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-binop (op "add")
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "a")))
+					(e-lookup-local
+						(p-assign (ident "b"))))
+				(e-lookup-local
+					(p-assign (ident "x")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 ~~~

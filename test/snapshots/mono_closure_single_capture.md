@@ -7,20 +7,21 @@ type=mono
 ~~~roc
 {
     x = 42
-    f = |y| x + y
-    f(10)
+    |y| x + y
 }
 ~~~
 # MONO
 ~~~roc
-52 : Dec
+{
+    x = 42
+    #1({x: x})
+} : a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc
 {
 	x = 42
-	f = |y| x + y
-	f(10)
+	|y| x + y
 }
 ~~~
 # EXPECTED
@@ -31,8 +32,7 @@ NIL
 ~~~zig
 OpenCurly,
 LowerIdent,OpAssign,Int,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
-LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -43,23 +43,32 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "x"))
 			(e-int (raw "42")))
-		(s-decl
-			(p-ident (raw "f"))
-			(e-lambda
-				(args
-					(p-ident (raw "y")))
-				(e-binop (op "+")
-					(e-ident (raw "x"))
-					(e-ident (raw "y")))))
-		(e-apply
-			(e-ident (raw "f"))
-			(e-int (raw "10")))))
+		(e-lambda
+			(args
+				(p-ident (raw "y")))
+			(e-binop (op "+")
+				(e-ident (raw "x"))
+				(e-ident (raw "y"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "52"))
+(e-block
+	(s-let
+		(p-assign (ident "x"))
+		(e-num (value "42")))
+	(e-closure
+		(captures
+			(capture (ident "x")))
+		(e-lambda
+			(args
+				(p-assign (ident "y")))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-lookup-local
+					(p-assign (ident "y")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

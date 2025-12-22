@@ -5,21 +5,15 @@ type=mono
 ~~~
 # SOURCE
 ~~~roc
-{
-    f = |x| x + 1
-    f(41)
-}
+|x| x + 1
 ~~~
 # MONO
 ~~~roc
-42 : Dec
+#1({}) : a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc
-{
-	f = |x| x + 1
-	f(41)
-}
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
@@ -27,33 +21,29 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-OpenCurly,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
-LowerIdent,NoSpaceOpenRound,Int,CloseRound,
-CloseCurly,
+OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-block
-	(statements
-		(s-decl
-			(p-ident (raw "f"))
-			(e-lambda
-				(args
-					(p-ident (raw "x")))
-				(e-binop (op "+")
-					(e-ident (raw "x"))
-					(e-int (raw "1")))))
-		(e-apply
-			(e-ident (raw "f"))
-			(e-int (raw "41")))))
+(e-lambda
+	(args
+		(p-ident (raw "x")))
+	(e-binop (op "+")
+		(e-ident (raw "x"))
+		(e-int (raw "1"))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "42"))
+(e-lambda
+	(args
+		(p-assign (ident "x")))
+	(e-binop (op "add")
+		(e-lookup-local
+			(p-assign (ident "x")))
+		(e-num (value "1"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

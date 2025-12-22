@@ -7,22 +7,21 @@ type=mono
 ~~~roc
 {
     x = 10
-    makeAdder = |y| |z| x + y + z
-    addFive = makeAdder(5)
-    addFive(3)
+    |y| |z| x + y + z
 }
 ~~~
 # MONO
 ~~~roc
-18 : Dec
+{
+    x = 10
+    #1({x: x})
+} : a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc
 {
 	x = 10
-	makeAdder = |y| |z| x + y + z
-	addFive = makeAdder(5)
-	addFive(3)
+	|y| |z| x + y + z
 }
 ~~~
 # EXPECTED
@@ -33,9 +32,7 @@ NIL
 ~~~zig
 OpenCurly,
 LowerIdent,OpAssign,Int,
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,OpPlus,LowerIdent,
-LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
-LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+OpBar,LowerIdent,OpBar,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,OpPlus,LowerIdent,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -46,33 +43,47 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "x"))
 			(e-int (raw "10")))
-		(s-decl
-			(p-ident (raw "makeAdder"))
+		(e-lambda
+			(args
+				(p-ident (raw "y")))
 			(e-lambda
 				(args
-					(p-ident (raw "y")))
-				(e-lambda
-					(args
-						(p-ident (raw "z")))
+					(p-ident (raw "z")))
+				(e-binop (op "+")
 					(e-binop (op "+")
-						(e-binop (op "+")
-							(e-ident (raw "x"))
-							(e-ident (raw "y")))
-						(e-ident (raw "z"))))))
-		(s-decl
-			(p-ident (raw "addFive"))
-			(e-apply
-				(e-ident (raw "makeAdder"))
-				(e-int (raw "5"))))
-		(e-apply
-			(e-ident (raw "addFive"))
-			(e-int (raw "3")))))
+						(e-ident (raw "x"))
+						(e-ident (raw "y")))
+					(e-ident (raw "z")))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "18"))
+(e-block
+	(s-let
+		(p-assign (ident "x"))
+		(e-num (value "10")))
+	(e-closure
+		(captures
+			(capture (ident "x")))
+		(e-lambda
+			(args
+				(p-assign (ident "y")))
+			(e-closure
+				(captures
+					(capture (ident "x"))
+					(capture (ident "y")))
+				(e-lambda
+					(args
+						(p-assign (ident "z")))
+					(e-binop (op "add")
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))
+						(e-lookup-local
+							(p-assign (ident "z")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

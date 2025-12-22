@@ -10,12 +10,18 @@ type=mono
     y = 20
     addX = |a| a + x
     addY = |b| b + y
-    addX(1) + addY(2)
+    (addX, addY)
 }
 ~~~
 # MONO
 ~~~roc
-33 : Dec
+{
+    x = 10
+    y = 20
+    addX = #addX({x: x})
+    addY = #addY({y: y})
+    (addX, addY)
+} : (c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])], c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])])
 ~~~
 # FORMATTED
 ~~~roc
@@ -24,7 +30,7 @@ type=mono
 	y = 20
 	addX = |a| a + x
 	addY = |b| b + y
-	addX(1) + addY(2)
+	(addX, addY)
 }
 ~~~
 # EXPECTED
@@ -38,7 +44,7 @@ LowerIdent,OpAssign,Int,
 LowerIdent,OpAssign,Int,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
-LowerIdent,NoSpaceOpenRound,Int,CloseRound,OpPlus,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -68,19 +74,53 @@ EndOfFile,
 				(e-binop (op "+")
 					(e-ident (raw "b"))
 					(e-ident (raw "y")))))
-		(e-binop (op "+")
-			(e-apply
-				(e-ident (raw "addX"))
-				(e-int (raw "1")))
-			(e-apply
-				(e-ident (raw "addY"))
-				(e-int (raw "2"))))))
+		(e-tuple
+			(e-ident (raw "addX"))
+			(e-ident (raw "addY")))))
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "33"))
+(e-block
+	(s-let
+		(p-assign (ident "x"))
+		(e-num (value "10")))
+	(s-let
+		(p-assign (ident "y"))
+		(e-num (value "20")))
+	(s-let
+		(p-assign (ident "addX"))
+		(e-closure
+			(captures
+				(capture (ident "x")))
+			(e-lambda
+				(args
+					(p-assign (ident "a")))
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "a")))
+					(e-lookup-local
+						(p-assign (ident "x")))))))
+	(s-let
+		(p-assign (ident "addY"))
+		(e-closure
+			(captures
+				(capture (ident "y")))
+			(e-lambda
+				(args
+					(p-assign (ident "b")))
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "b")))
+					(e-lookup-local
+						(p-assign (ident "y")))))))
+	(e-tuple
+		(elems
+			(e-lookup-local
+				(p-assign (ident "addX")))
+			(e-lookup-local
+				(p-assign (ident "addY"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+(expr (type "(c -> c, d -> d) where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 ~~~
