@@ -181,9 +181,18 @@ pub fn reset(self: *TypeWriter) void {
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
 }
 
+fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
+    for (self.seen.items) |seen| {
+        if (seen == var_) return true;
+    }
+    return false;
+}
+
+pub const Format = enum { one_line, wrap };
+
 /// Writes the current var into the the writers buffer and returns a bytes slice
-pub fn writeGet(self: *TypeWriter, var_: Var) std.mem.Allocator.Error![]const u8 {
-    try self.write(var_);
+pub fn writeGet(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Error![]const u8 {
+    try self.write(var_, format);
     return self.get();
 }
 
@@ -195,14 +204,14 @@ pub fn get(self: *const TypeWriter) []const u8 {
 
 /// Writes a type variable to the buffer, formatting it as a human-readable string.
 /// This clears any existing content in the buffer before writing.
-pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
+pub fn write(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Error!void {
     self.reset();
 
     var writer = self.buf.writer();
     try self.writeVar(&writer, var_, var_);
 
     if (self.static_dispatch_constraints.items.len > 0) {
-        try self.writeWhereClause(&writer, var_);
+        try self.writeWhereClause(&writer, var_, format);
     }
 }
 
@@ -211,7 +220,7 @@ pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
 /// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
 /// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
 /// 3. One per line: "\n  where [\n    a.plus : a -> a,\n    b.minus : b -> b,\n  ]"
-fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var) std.mem.Allocator.Error!void {
+fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, format: Format) std.mem.Allocator.Error!void {
     const var_len = self.buf.items.len;
     var tmp_writer = self.buf_tmp.writer();
 
@@ -287,7 +296,7 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var) std.me
     const line_len_if_all_on_next_line = 8 + constraints_len_if_on_same_line; // "  where " = 8 chars
 
     // Choose formatting style based on line length
-    if (line_len_if_all_on_same_line <= 80) {
+    if (line_len_if_all_on_same_line <= 80 or format == .one_line) {
         // All constraints fit on the same line as the type
         // Example: MyType where [plus : a, a -> a, minus : a, a -> a]
         _ = try writer.write(" where [");
@@ -320,116 +329,6 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var) std.me
         }
         _ = try writer.write(",\n  ]");
     }
-}
-
-fn generateNextName(self: *TypeWriter, writer: *ByteWrite) !void {
-    // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
-    // Skip any names that already exist in the identifier store
-    // We need at most one more name than the number of existing identifiers
-    const max_attempts = self.idents.interner.entry_count + 1;
-    var attempts: usize = 0;
-    while (attempts < max_attempts) : (attempts += 1) {
-        var n = self.next_name_index;
-        self.next_name_index += 1;
-
-        var name_buf: [8]u8 = undefined;
-        var name_len: usize = 0;
-
-        // Generate name in base-26: a, b, ..., z, aa, ab, ..., az, ba, ...
-        while (name_len < name_buf.len) {
-            name_buf[name_len] = @intCast('a' + (n % 26));
-            name_len += 1;
-            n = n / 26;
-            if (n == 0) break;
-            n -= 1;
-        }
-
-        // Names are generated in reverse order, so reverse the buffer
-        std.mem.reverse(u8, name_buf[0..name_len]);
-
-        // Check if this name already exists in the identifier store
-        const candidate_name = name_buf[0..name_len];
-        const exists = self.idents.interner.contains(candidate_name);
-
-        if (!exists) {
-            // This name is available, use it
-            _ = try writer.write(candidate_name);
-            break;
-        }
-        // Name already exists, try the next one
-    }
-
-    // This should never happen in practice, but let's handle it gracefully
-    if (attempts >= max_attempts) {
-        _ = try writer.write("var");
-        try writer.print("{}", .{self.next_name_index});
-    }
-}
-
-fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) std.mem.Allocator.Error!void {
-    const base_name = switch (context) {
-        .NumContent => "size",
-        .ListContent => "elem",
-        .RecordExtension => "others",
-        .TagUnionExtension => "others",
-        .RecordFieldContent => "field",
-        .TupleFieldContent => "field",
-        .FunctionArgument => "arg",
-        .FunctionReturn => "ret",
-        .General => {
-            // Fall back to generic name generation
-            try self.generateNextName(writer);
-            return;
-        },
-    };
-
-    // Try to generate a name with increasing counters until we find one that doesn't collide
-    var counter = self.name_counters.get(context) orelse 0;
-    var found = false;
-
-    // We need at most as many attempts as there are existing identifiers
-    const max_attempts = self.idents.interner.entry_count;
-    var attempts: usize = 0;
-    while (!found and attempts < max_attempts) : (attempts += 1) {
-        var buf: [32]u8 = undefined;
-        const candidate_name = if (counter == 0)
-            base_name
-        else blk: {
-            const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
-                // Buffer too small, fall back to generic name
-                try self.generateNextName(writer);
-                return;
-            };
-            break :blk name;
-        };
-
-        // Check if this name already exists in the identifier store
-        const exists = self.idents.interner.contains(candidate_name);
-
-        if (!exists) {
-            // This name is available, write it to the buffer
-            _ = try writer.write(candidate_name);
-            found = true;
-        } else {
-            // Try next counter
-            counter += 1;
-        }
-    }
-
-    // If we couldn't find a unique contextual name, fall back to generic names
-    if (!found) {
-        try self.generateNextName(writer);
-        return;
-    }
-
-    self.name_counters.put(context, counter + 1);
-}
-
-fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
-    for (self.seen.items) |seen| {
-        if (seen == var_) return true;
-    }
-    return false;
 }
 
 /// Convert a var to a type string
@@ -1090,4 +989,107 @@ fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
     }
 
     return name;
+}
+
+fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) std.mem.Allocator.Error!void {
+    const base_name = switch (context) {
+        .NumContent => "size",
+        .ListContent => "elem",
+        .RecordExtension => "others",
+        .TagUnionExtension => "others",
+        .RecordFieldContent => "field",
+        .TupleFieldContent => "field",
+        .FunctionArgument => "arg",
+        .FunctionReturn => "ret",
+        .General => {
+            // Fall back to generic name generation
+            try self.generateNextName(writer);
+            return;
+        },
+    };
+
+    // Try to generate a name with increasing counters until we find one that doesn't collide
+    var counter = self.name_counters.get(context) orelse 0;
+    var found = false;
+
+    // We need at most as many attempts as there are existing identifiers
+    const max_attempts = self.idents.interner.entry_count;
+    var attempts: usize = 0;
+    while (!found and attempts < max_attempts) : (attempts += 1) {
+        var buf: [32]u8 = undefined;
+        const candidate_name = if (counter == 0)
+            base_name
+        else blk: {
+            const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
+                // Buffer too small, fall back to generic name
+                try self.generateNextName(writer);
+                return;
+            };
+            break :blk name;
+        };
+
+        // Check if this name already exists in the identifier store
+        const exists = self.idents.interner.contains(candidate_name);
+
+        if (!exists) {
+            // This name is available, write it to the buffer
+            _ = try writer.write(candidate_name);
+            found = true;
+        } else {
+            // Try next counter
+            counter += 1;
+        }
+    }
+
+    // If we couldn't find a unique contextual name, fall back to generic names
+    if (!found) {
+        try self.generateNextName(writer);
+        return;
+    }
+
+    self.name_counters.put(context, counter + 1);
+}
+
+fn generateNextName(self: *TypeWriter, writer: *ByteWrite) !void {
+    // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
+    // Skip any names that already exist in the identifier store
+    // We need at most one more name than the number of existing identifiers
+    const max_attempts = self.idents.interner.entry_count + 1;
+    var attempts: usize = 0;
+    while (attempts < max_attempts) : (attempts += 1) {
+        var n = self.next_name_index;
+        self.next_name_index += 1;
+
+        var name_buf: [8]u8 = undefined;
+        var name_len: usize = 0;
+
+        // Generate name in base-26: a, b, ..., z, aa, ab, ..., az, ba, ...
+        while (name_len < name_buf.len) {
+            name_buf[name_len] = @intCast('a' + (n % 26));
+            name_len += 1;
+            n = n / 26;
+            if (n == 0) break;
+            n -= 1;
+        }
+
+        // Names are generated in reverse order, so reverse the buffer
+        std.mem.reverse(u8, name_buf[0..name_len]);
+
+        // Check if this name already exists in the identifier store
+        const candidate_name = name_buf[0..name_len];
+        const exists = self.idents.interner.contains(candidate_name);
+
+        if (!exists) {
+            // This name is available, use it
+            _ = try writer.write(candidate_name);
+            break;
+        }
+        // Name already exists, try the next one
+    }
+
+    // This should never happen in practice, but let's handle it gracefully
+    if (attempts >= max_attempts) {
+        _ = try writer.write("var");
+        try writer.print("{}", .{self.next_name_index});
+    }
 }

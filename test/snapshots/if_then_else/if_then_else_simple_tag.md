@@ -49,9 +49,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[Ok(a), Err(b), .._others]
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]"))
+(expr (type "[Ok(a), Err(b), .._others] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

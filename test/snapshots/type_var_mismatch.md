@@ -35,7 +35,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _item_
+    item
 
 **Hint:** Did you forget to specify **from_numeral** in the type annotation?
 

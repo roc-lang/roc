@@ -27,10 +27,12 @@ This expression is used in an unexpected way:
                                                   ^
 
 It has the type:
-    _{ c: Str }_
+
+    { c: Str }
 
 But I expected it to be:
-    _Str_
+
+    Str
 
 # TOKENS
 ~~~zig

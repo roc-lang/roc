@@ -63,7 +63,7 @@ updated_mismatch = update_data(str_container, 99)
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -76,7 +76,8 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ ..a, data: b }, b -> { ..a, data: b }_
+
+    { ..a, data: b }, b -> { ..a, data: b }
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -88,8 +89,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _{ ..a, data: b }, b -> { ..a, data: b }_
-
+    { ..a, data: b }, b -> { ..a, data: b }
 
 # TOKENS
 ~~~zig
@@ -418,32 +418,18 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "List(_a)"))
 		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a -> { count: b, data: a }
-  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: b }
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]"))
-		(patt (type "{ count: a, data: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: List(_b) }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, data: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(patt (type "{ count: a, data: b }
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]"))
-		(patt (type "{ count: a, data: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, data: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a -> { value: a }"))
 		(patt (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "{ value: Str }"))
-		(patt (type "{ value: List(a) }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
@@ -451,31 +437,17 @@ NO CHANGE
 		(expr (type "Str"))
 		(expr (type "List(_a)"))
 		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> { count: b, data: a }
-  where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: b }
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]"))
-		(expr (type "{ count: a, data: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: List(_b) }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, data: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "{ ..a, data: b }, b -> { ..a, data: b }"))
-		(expr (type "{ count: a, data: b }
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]"))
-		(expr (type "{ count: a, data: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, data: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, data: b } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, data: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a -> { value: a }"))
 		(expr (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "{ value: Str }"))
-		(expr (type "{ value: List(a) }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

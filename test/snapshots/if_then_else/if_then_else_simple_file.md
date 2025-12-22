@@ -28,10 +28,12 @@ foo = if 1 A
  ^^^^^^^
 
 The `else` branch has the type:
-    _Str_
+
+    Str
 
 But the `then` branch has the type:
-    _[A, .._others]_
+
+    [A, .._others]
 
 All branches in an `if` must have compatible types.
 
@@ -48,7 +50,7 @@ foo = if 1 A
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Bool_
+    Bool
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

@@ -32,10 +32,12 @@ composed = |n| get_value(make_record(n))
                ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _List(a)_
+
+    List(a)
 
 But the type annotation says it should have the type:
-    _Str_
+
+    Str
 
 # TOKENS
 ~~~zig

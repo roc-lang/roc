@@ -27,10 +27,12 @@ The first argument being passed to this function has the wrong type:
                          ^^^^^^^^^
 
 This argument has the type:
-    _List(Str)_
+
+    List(Str)
 
 But `f` needs the first argument to be:
-    _Str_
+
+    Str
 
 # TOKENS
 ~~~zig
