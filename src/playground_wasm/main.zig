@@ -1751,7 +1751,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                         defer type_writer.deinit();
 
                         const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
-                        try type_writer.write(def_var);
+                        try type_writer.write(def_var, .wrap);
                         const type_str_from_writer = type_writer.get();
                         const owned_type_str = try local_allocator.dupe(u8, type_str_from_writer);
 

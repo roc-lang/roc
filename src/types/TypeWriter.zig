@@ -188,7 +188,7 @@ fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
     return false;
 }
 
-pub const Format = enum { one_line, wrap };
+const Format = enum { one_line, wrap };
 
 /// Writes the current var into the the writers buffer and returns a bytes slice
 pub fn writeGet(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Error![]const u8 {
