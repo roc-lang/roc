@@ -2848,22 +2848,57 @@ pub const Interpreter = struct {
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
                 std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
 
+                // Determine the output list's rt_var. If the input list has a generic element type
+                // (rigid/flex), we need to create a new list type with the concrete element type
+                // from the appended element. This ensures pattern matching works correctly on
+                // elements retrieved from the list.
+                const la_output_rt_var: types.Var = blk: {
+                    // Try to extract element type from the list's rt_var
+                    const list_resolved = self.runtime_types.resolveVar(roc_list_arg.rt_var);
+                    if (list_resolved.desc.content == .structure and
+                        list_resolved.desc.content.structure == .nominal_type)
+                    {
+                        const nom = list_resolved.desc.content.structure.nominal_type;
+                        const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                        // For List(elem), vars[0] is backing, vars[1] is element type
+                        if (vars.len == 2) {
+                            const list_elem_var = vars[1];
+                            const list_elem_resolved = self.runtime_types.resolveVar(list_elem_var);
+                            // Check if the list's element type is non-concrete (rigid or flex)
+                            const is_generic = list_elem_resolved.desc.content == .rigid or
+                                list_elem_resolved.desc.content == .flex;
+                            if (is_generic) {
+                                // Check if the appended element has a concrete type
+                                const elt_resolved = self.runtime_types.resolveVar(elt_arg.rt_var);
+                                const elt_is_concrete = elt_resolved.desc.content == .structure or
+                                    elt_resolved.desc.content == .alias;
+                                if (elt_is_concrete) {
+                                    // Create a new list type with the concrete element type
+                                    break :blk try self.createListTypeWithElement(elt_arg.rt_var);
+                                }
+                            }
+                        }
+                    }
+                    // Default: keep the original list's rt_var
+                    break :blk roc_list_arg.rt_var;
+                };
+
                 // Extract element layout from List(a)
                 std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
 
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    const la_zst_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
 
                     // If the element is also ZST, just bump the length
                     if (elt_arg.layout.tag == .zst) {
-                        var result_list = roc_list.*;
-                        result_list.length += 1;
-                        var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
+                        var la_zst_result = la_zst_list.*;
+                        la_zst_result.length += 1;
+                        var out = try self.pushRaw(roc_list_arg.layout, 0, la_output_rt_var);
                         out.is_initialized = false;
-                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                        result_ptr.* = result_list;
+                        const la_zst_result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                        la_zst_result_ptr.* = la_zst_result;
                         out.is_initialized = true;
                         return out;
                     }
@@ -2872,37 +2907,37 @@ pub const Interpreter = struct {
                     // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
                     // The original list_of_zst should be empty (or contain only ZST elements that we can discard).
                     // Create a new list with the element's layout and append to it.
-                    const elem_layout = elt_arg.layout;
-                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                    var new_list_layout = roc_list_arg.layout;
-                    new_list_layout.tag = .list;
-                    new_list_layout.data = .{ .list = elem_layout_idx };
+                    const la_upgrade_elem_layout = elt_arg.layout;
+                    const la_upgrade_elem_layout_idx = try self.runtime_layout_store.insertLayout(la_upgrade_elem_layout);
+                    var la_upgrade_new_list_layout = roc_list_arg.layout;
+                    la_upgrade_new_list_layout.tag = .list;
+                    la_upgrade_new_list_layout.data = .{ .list = la_upgrade_elem_layout_idx };
 
                     // Create new empty list with correct element layout
-                    const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                    const append_elt: builtins.list.Opaque = non_null_bytes;
-                    const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
-                    const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                    const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                    const la_upgrade_non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                    const la_upgrade_append_elt: builtins.list.Opaque = la_upgrade_non_null_bytes;
+                    const la_upgrade_elem_size: u32 = self.runtime_layout_store.layoutSize(la_upgrade_elem_layout);
+                    const la_upgrade_elem_alignment = la_upgrade_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                    const la_upgrade_elem_alignment_u32: u32 = @intCast(la_upgrade_elem_alignment);
 
                     // Determine if elements contain refcounted data
-                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                    const la_upgrade_elements_refcounted = layoutContainsRefcounted(la_upgrade_elem_layout, &self.runtime_layout_store);
 
                     // Set up context for refcount callbacks
-                    const elem_rt_var = try self.runtime_types.fresh();
-                    var refcount_context = RefcountContext{
+                    const la_upgrade_elem_rt_var = try self.runtime_types.fresh();
+                    var la_upgrade_refcount_context = RefcountContext{
                         .layout_store = &self.runtime_layout_store,
-                        .elem_layout = elem_layout,
-                        .elem_rt_var = elem_rt_var,
+                        .elem_layout = la_upgrade_elem_layout,
+                        .elem_rt_var = la_upgrade_elem_rt_var,
                         .roc_ops = roc_ops,
                     };
 
-                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
+                    const la_upgrade_copy_fn: builtins.list.CopyFallbackFn = copy: switch (la_upgrade_elem_layout.tag) {
                         .scalar => {
-                            switch (elem_layout.data.scalar.tag) {
+                            switch (la_upgrade_elem_layout.data.scalar.tag) {
                                 .str => break :copy &builtins.list.copy_str,
                                 .int => {
-                                    switch (elem_layout.data.scalar.data.int) {
+                                    switch (la_upgrade_elem_layout.data.scalar.data.int) {
                                         .u8 => break :copy &builtins.list.copy_u8,
                                         .u16 => break :copy &builtins.list.copy_u16,
                                         .u32 => break :copy &builtins.list.copy_u32,
@@ -2926,22 +2961,22 @@ pub const Interpreter = struct {
                     };
 
                     // Increment refcount of the element being appended
-                    if (elements_refcounted) {
+                    if (la_upgrade_elements_refcounted) {
                         elt_arg.incref(&self.runtime_layout_store, roc_ops);
                     }
 
                     // Append to an empty list (ignoring the old list_of_zst content)
-                    const empty_list = builtins.list.RocList.empty();
-                    const result_list = builtins.list.listAppend(
-                        empty_list,
-                        elem_alignment_u32,
-                        append_elt,
-                        elem_size,
-                        elements_refcounted,
-                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    const la_upgrade_empty_list = builtins.list.RocList.empty();
+                    const la_upgrade_result_list = builtins.list.listAppend(
+                        la_upgrade_empty_list,
+                        la_upgrade_elem_alignment_u32,
+                        la_upgrade_append_elt,
+                        la_upgrade_elem_size,
+                        la_upgrade_elements_refcounted,
+                        if (la_upgrade_elements_refcounted) @ptrCast(&la_upgrade_refcount_context) else null,
+                        if (la_upgrade_elements_refcounted) &listElementInc else &builtins.list.rcNone,
                         builtins.utils.UpdateMode.Immutable,
-                        copy_fn,
+                        la_upgrade_copy_fn,
                         roc_ops,
                     );
 
@@ -2949,64 +2984,64 @@ pub const Interpreter = struct {
                     roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
 
                     // Push result with upgraded layout
-                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    var out = try self.pushRaw(la_upgrade_new_list_layout, 0, la_output_rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = result_list;
+                    const la_upgrade_result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                    la_upgrade_result_ptr.* = la_upgrade_result_list;
                     out.is_initialized = true;
                     return out;
                 }
 
-                // Format arguments into proper types
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
-                const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                const append_elt: builtins.list.Opaque = non_null_bytes;
+                // Format arguments into proper types (normal non-ZST list case)
+                const la_normal_roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const la_normal_non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                const la_normal_append_elt: builtins.list.Opaque = la_normal_non_null_bytes;
 
                 // Get element layout from the list's stored layout
-                const stored_elem_layout_idx = roc_list_arg.layout.data.list;
-                const stored_elem_layout = self.runtime_layout_store.getLayout(stored_elem_layout_idx);
+                const la_stored_elem_layout_idx = roc_list_arg.layout.data.list;
+                const la_stored_elem_layout = self.runtime_layout_store.getLayout(la_stored_elem_layout_idx);
 
                 // Check if the stored element layout needs to be upgraded.
                 // This handles the case where the list was created with an unknown element type
                 // (e.g., List(List(?)) where the inner list type was inferred as list_of_zst),
                 // but we're now appending an element with a more specific layout.
                 // We should use the element's actual layout to ensure correct behavior.
-                const needs_element_layout_upgrade = stored_elem_layout.tag == .list_of_zst and
+                const la_needs_element_layout_upgrade = la_stored_elem_layout.tag == .list_of_zst and
                     elt_arg.layout.tag != .zst and elt_arg.layout.tag != .list_of_zst;
 
-                const elem_layout: Layout = if (needs_element_layout_upgrade) elt_arg.layout else stored_elem_layout;
-                const elem_layout_idx = if (needs_element_layout_upgrade)
+                const la_elem_layout: Layout = if (la_needs_element_layout_upgrade) elt_arg.layout else la_stored_elem_layout;
+                const la_elem_layout_idx = if (la_needs_element_layout_upgrade)
                     try self.runtime_layout_store.insertLayout(elt_arg.layout)
                 else
-                    stored_elem_layout_idx;
+                    la_stored_elem_layout_idx;
 
-                const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
-                const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                const la_elem_size: u32 = self.runtime_layout_store.layoutSize(la_elem_layout);
+                const la_elem_alignment = la_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                const la_elem_alignment_u32: u32 = @intCast(la_elem_alignment);
 
                 // Determine if elements contain refcounted data (directly or transitively).
                 // This is more comprehensive than isRefcounted() - it also catches tuples/records
                 // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                const la_elements_refcounted = layoutContainsRefcounted(la_elem_layout, &self.runtime_layout_store);
 
                 // Determine if list can be mutated in place
-                const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+                const la_update_mode = if (la_normal_roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
 
                 // Set up context for refcount callbacks
-                const elem_rt_var = try self.runtime_types.fresh();
-                var refcount_context = RefcountContext{
+                const la_elem_rt_var = try self.runtime_types.fresh();
+                var la_refcount_context = RefcountContext{
                     .layout_store = &self.runtime_layout_store,
-                    .elem_layout = elem_layout,
-                    .elem_rt_var = elem_rt_var,
+                    .elem_layout = la_elem_layout,
+                    .elem_rt_var = la_elem_rt_var,
                     .roc_ops = roc_ops,
                 };
 
-                const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
+                const la_copy_fn: builtins.list.CopyFallbackFn = copy: switch (la_elem_layout.tag) {
                     .scalar => {
-                        switch (elem_layout.data.scalar.tag) {
+                        switch (la_elem_layout.data.scalar.tag) {
                             .str => break :copy &builtins.list.copy_str,
                             .int => {
-                                switch (elem_layout.data.scalar.data.int) {
+                                switch (la_elem_layout.data.scalar.data.int) {
                                     .u8 => break :copy &builtins.list.copy_u8,
                                     .u16 => break :copy &builtins.list.copy_u16,
                                     .u32 => break :copy &builtins.list.copy_u32,
@@ -3034,24 +3069,24 @@ pub const Interpreter = struct {
                 // so we need to increment its refcount before the copy.
                 // Without this, when the original element is freed, the list would
                 // hold a dangling reference (use-after-free bug).
-                if (elements_refcounted) {
+                if (la_elements_refcounted) {
                     elt_arg.incref(&self.runtime_layout_store, roc_ops);
                 }
 
-                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
+                const la_normal_result_list = builtins.list.listAppend(la_normal_roc_list.*, la_elem_alignment_u32, la_normal_append_elt, la_elem_size, la_elements_refcounted, if (la_elements_refcounted) @ptrCast(&la_refcount_context) else null, if (la_elements_refcounted) &listElementInc else &builtins.list.rcNone, la_update_mode, la_copy_fn, roc_ops);
 
                 // Allocate space for the result list
                 // If we upgraded the element layout, create a new list layout with the upgraded element
-                const result_layout: Layout = if (needs_element_layout_upgrade)
-                    Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
+                const la_result_layout: Layout = if (la_needs_element_layout_upgrade)
+                    Layout{ .tag = .list, .data = .{ .list = la_elem_layout_idx } }
                 else
                     roc_list_arg.layout; // Same layout as input
-                var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
+                var out = try self.pushRaw(la_result_layout, 0, la_output_rt_var);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                const la_normal_result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                la_normal_result_ptr.* = la_normal_result_list;
 
                 out.is_initialized = true;
                 return out;
@@ -3066,22 +3101,64 @@ pub const Interpreter = struct {
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
                 std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
 
+                if (comptime trace_modules) {
+                    const list_type_str = self.type_writer.writeGet(roc_list_arg.rt_var) catch "<type err>";
+                    traceDbg(roc_ops, "list_append_unsafe: list_rt_var={s}", .{list_type_str});
+                    const elem_type_str = self.type_writer.writeGet(elt_arg.rt_var) catch "<type err>";
+                    traceDbg(roc_ops, "list_append_unsafe: elem_rt_var={s}", .{elem_type_str});
+                }
+
+                // Determine the output list's rt_var. If the input list has a generic element type
+                // (rigid/flex), we need to create a new list type with the concrete element type
+                // from the appended element. This ensures pattern matching works correctly on
+                // elements retrieved from the list.
+                const output_rt_var: types.Var = blk: {
+                    // Try to extract element type from the list's rt_var
+                    const list_resolved = self.runtime_types.resolveVar(roc_list_arg.rt_var);
+                    if (list_resolved.desc.content == .structure and
+                        list_resolved.desc.content.structure == .nominal_type)
+                    {
+                        const nom = list_resolved.desc.content.structure.nominal_type;
+                        const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                        // For List(elem), vars[0] is backing, vars[1] is element type
+                        if (vars.len == 2) {
+                            const list_elem_var = vars[1];
+                            const list_elem_resolved = self.runtime_types.resolveVar(list_elem_var);
+                            // Check if the list's element type is non-concrete (rigid or flex)
+                            const is_generic = list_elem_resolved.desc.content == .rigid or
+                                list_elem_resolved.desc.content == .flex;
+                            if (is_generic) {
+                                // Check if the appended element has a concrete type
+                                const elt_resolved = self.runtime_types.resolveVar(elt_arg.rt_var);
+                                const elt_is_concrete = elt_resolved.desc.content == .structure or
+                                    elt_resolved.desc.content == .alias;
+                                if (elt_is_concrete) {
+                                    // Create a new list type with the concrete element type
+                                    break :blk try self.createListTypeWithElement(elt_arg.rt_var);
+                                }
+                            }
+                        }
+                    }
+                    // Default: keep the original list's rt_var
+                    break :blk roc_list_arg.rt_var;
+                };
+
                 // Extract element layout from List(a)
                 std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
 
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    const zst_list_header: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
 
                     // If the element is also ZST, just bump the length
                     if (elt_arg.layout.tag == .zst) {
-                        var result_list = roc_list.*;
-                        result_list.length += 1;
-                        var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
+                        var zst_result_list = zst_list_header.*;
+                        zst_result_list.length += 1;
+                        var out = try self.pushRaw(roc_list_arg.layout, 0, output_rt_var);
                         out.is_initialized = false;
-                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                        result_ptr.* = result_list;
+                        const zst_result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                        zst_result_ptr.* = zst_result_list;
                         out.is_initialized = true;
                         return out;
                     }
@@ -3090,37 +3167,37 @@ pub const Interpreter = struct {
                     // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
                     // The original list_of_zst should be empty (or contain only ZST elements that we can discard).
                     // Create a new list with the element's layout and append to it.
-                    const elem_layout = elt_arg.layout;
-                    const elem_layout_idx = try self.runtime_layout_store.insertLayout(elem_layout);
-                    var new_list_layout = roc_list_arg.layout;
-                    new_list_layout.tag = .list;
-                    new_list_layout.data = .{ .list = elem_layout_idx };
+                    const upgrade_elem_layout = elt_arg.layout;
+                    const upgrade_elem_layout_idx = try self.runtime_layout_store.insertLayout(upgrade_elem_layout);
+                    var upgrade_new_list_layout = roc_list_arg.layout;
+                    upgrade_new_list_layout.tag = .list;
+                    upgrade_new_list_layout.data = .{ .list = upgrade_elem_layout_idx };
 
                     // Create new empty list with correct element layout
-                    const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                    const append_elt: builtins.list.Opaque = non_null_bytes;
-                    const elem_size: u32 = self.runtime_layout_store.layoutSize(elem_layout);
-                    const elem_alignment = elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
-                    const elem_alignment_u32: u32 = @intCast(elem_alignment);
+                    const upgrade_non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                    const upgrade_append_elt: builtins.list.Opaque = upgrade_non_null_bytes;
+                    const upgrade_elem_size: u32 = self.runtime_layout_store.layoutSize(upgrade_elem_layout);
+                    const upgrade_elem_alignment = upgrade_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                    const upgrade_elem_alignment_u32: u32 = @intCast(upgrade_elem_alignment);
 
                     // Determine if elements contain refcounted data
-                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                    const upgrade_elements_refcounted = layoutContainsRefcounted(upgrade_elem_layout, &self.runtime_layout_store);
 
                     // Set up context for refcount callbacks
-                    const elem_rt_var = try self.runtime_types.fresh();
-                    var refcount_context = RefcountContext{
+                    const upgrade_elem_rt_var = try self.runtime_types.fresh();
+                    var upgrade_refcount_context = RefcountContext{
                         .layout_store = &self.runtime_layout_store,
-                        .elem_layout = elem_layout,
-                        .elem_rt_var = elem_rt_var,
+                        .elem_layout = upgrade_elem_layout,
+                        .elem_rt_var = upgrade_elem_rt_var,
                         .roc_ops = roc_ops,
                     };
 
-                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
+                    const upgrade_copy_fn: builtins.list.CopyFallbackFn = copy: switch (upgrade_elem_layout.tag) {
                         .scalar => {
-                            switch (elem_layout.data.scalar.tag) {
+                            switch (upgrade_elem_layout.data.scalar.tag) {
                                 .str => break :copy &builtins.list.copy_str,
                                 .int => {
-                                    switch (elem_layout.data.scalar.data.int) {
+                                    switch (upgrade_elem_layout.data.scalar.data.int) {
                                         .u8 => break :copy &builtins.list.copy_u8,
                                         .u16 => break :copy &builtins.list.copy_u16,
                                         .u32 => break :copy &builtins.list.copy_u32,
@@ -3144,22 +3221,22 @@ pub const Interpreter = struct {
                     };
 
                     // Increment refcount of the element being appended
-                    if (elements_refcounted) {
+                    if (upgrade_elements_refcounted) {
                         elt_arg.incref(&self.runtime_layout_store, roc_ops);
                     }
 
                     // Append to an empty list (ignoring the old list_of_zst content)
-                    const empty_list = builtins.list.RocList.empty();
-                    const result_list = builtins.list.listAppend(
-                        empty_list,
-                        elem_alignment_u32,
-                        append_elt,
-                        elem_size,
-                        elements_refcounted,
-                        if (elements_refcounted) @ptrCast(&refcount_context) else null,
-                        if (elements_refcounted) &listElementInc else &builtins.list.rcNone,
+                    const upgrade_empty_list = builtins.list.RocList.empty();
+                    const upgrade_result_list = builtins.list.listAppend(
+                        upgrade_empty_list,
+                        upgrade_elem_alignment_u32,
+                        upgrade_append_elt,
+                        upgrade_elem_size,
+                        upgrade_elements_refcounted,
+                        if (upgrade_elements_refcounted) @ptrCast(&upgrade_refcount_context) else null,
+                        if (upgrade_elements_refcounted) &listElementInc else &builtins.list.rcNone,
                         builtins.utils.UpdateMode.Immutable,
-                        copy_fn,
+                        upgrade_copy_fn,
                         roc_ops,
                     );
 
@@ -3167,18 +3244,18 @@ pub const Interpreter = struct {
                     roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
 
                     // Push result with upgraded layout
-                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    var out = try self.pushRaw(upgrade_new_list_layout, 0, output_rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = result_list;
+                    const upgrade_result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                    upgrade_result_ptr.* = upgrade_result_list;
                     out.is_initialized = true;
                     return out;
                 }
 
-                // Format arguments into proper types
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
-                const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
-                const append_elt: builtins.list.Opaque = non_null_bytes;
+                // Format arguments into proper types (normal non-ZST list case)
+                const normal_roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const normal_non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
+                const normal_append_elt: builtins.list.Opaque = normal_non_null_bytes;
 
                 // Get element layout from the list's stored layout
                 const stored_elem_layout_idx = roc_list_arg.layout.data.list;
@@ -3208,7 +3285,7 @@ pub const Interpreter = struct {
                 const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
 
                 // Determine if list can be mutated in place
-                const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+                const update_mode = if (normal_roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -3256,7 +3333,7 @@ pub const Interpreter = struct {
                     elt_arg.incref(&self.runtime_layout_store, roc_ops);
                 }
 
-                const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
+                const normal_result_list = builtins.list.listAppend(normal_roc_list.*, elem_alignment_u32, normal_append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
                 // Allocate space for the result list
                 // If we upgraded the element layout, create a new list layout with the upgraded element
@@ -3264,12 +3341,12 @@ pub const Interpreter = struct {
                     Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
                 else
                     roc_list_arg.layout; // Same layout as input
-                var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
+                var out = try self.pushRaw(result_layout, 0, output_rt_var);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                const normal_result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
+                normal_result_ptr.* = normal_result_list;
 
                 out.is_initialized = true;
                 return out;
@@ -8214,7 +8291,17 @@ pub const Interpreter = struct {
             },
             .applied_tag => |tag_pat| {
                 const union_resolved = self.resolveBaseVar(value_rt_var);
-                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
+                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) {
+                    if (comptime trace_modules) {
+                        const type_str = self.type_writer.writeGet(value_rt_var) catch "<type err>";
+                        traceDbg(
+                            roc_ops,
+                            "patternMatchesBind.applied_tag: rt_var not tag_union content={s} type={s} layout={s}",
+                            .{ @tagName(union_resolved.desc.content), type_str, @tagName(value.layout.tag) },
+                        );
+                    }
+                    return false;
+                }
 
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
@@ -8244,7 +8331,19 @@ pub const Interpreter = struct {
                 // Compare tag names directly instead of comparing discriminant indices.
                 // This handles the case where a value's discriminant was set based on a narrower
                 // type and needs to match a pattern from a wider type.
-                if (actual_tag_name != expected_ident) return false;
+                if (actual_tag_name != expected_ident) {
+                    if (comptime trace_modules) {
+                        const actual_name_str = self.runtime_layout_store.env.getIdent(actual_tag_name);
+                        const expected_rt_name_str = self.runtime_layout_store.env.getIdent(expected_ident);
+                        const value_type_str = self.type_writer.writeGet(value_rt_var) catch "<type err>";
+                        traceDbg(
+                            roc_ops,
+                            "patternMatchesBind.applied_tag: tag mismatch expected={s} actual={s} idx={d} type={s}",
+                            .{ expected_rt_name_str, actual_name_str, tag_data.index, value_type_str },
+                        );
+                    }
+                    return false;
+                }
 
                 // Find the expected tag's index in the expected type's tag list for payload access
                 var expected_index: ?usize = null;
