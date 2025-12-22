@@ -39,7 +39,7 @@ test "where clause - basic method constraint infers correctly" {
     defer test_env_b.deinit();
     try test_env_b.assertDefType(
         "helper",
-        "a -> Str where [a.to_str : a -> Str]",
+        "a -> Str where [a.to_str : a -> Str ]",
     );
     try test_env_b.assertDefType("main", "Str");
 }
@@ -67,7 +67,7 @@ test "where clause - polymorphic return type" {
     defer test_env_b.deinit();
     try test_env_b.assertDefType(
         "helper",
-        "a -> b where [a.to_str : a -> b]",
+        "a -> b where [a.to_str : a -> b ]",
     );
     try test_env_b.assertDefType("main", "Str");
 }
@@ -95,7 +95,7 @@ test "where clause - constraint with multiple args" {
     defer test_env_b.deinit();
     try test_env_b.assertDefType(
         "modify",
-        "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]",
+        "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a ]",
     );
     try test_env_b.assertDefType("main", "A");
 }
@@ -128,7 +128,7 @@ test "where clause - multiple constraints on same variable" {
     defer test_env_b.deinit();
     try test_env_b.assertDefType(
         "both",
-        "a -> (Str, U64) where [a.to_str : a -> Str, a.to_u64 : a -> U64]",
+        "a -> (Str, U64) where [a.to_str : a -> Str, a.to_u64 : a -> U64 ]",
     );
     try test_env_b.assertDefType("main", "(Str, U64)");
 }
@@ -159,7 +159,7 @@ test "where clause - cross-module constraint satisfaction" {
     defer test_env_b.deinit();
     try test_env_b.assertDefType(
         "helper",
-        "a -> Str where [a.to_str : a -> Str]",
+        "a -> Str where [a.to_str : a -> Str ]",
     );
     try test_env_b.assertDefType("main", "Str");
 }
@@ -176,7 +176,7 @@ test "where clause - cross-module polymorphic constraint" {
     try test_env_a.assertDefType("A.to_str", "A -> Str");
     try test_env_a.assertDefType(
         "A.to_str2",
-        "a -> b where [a.to_str : a -> b]",
+        "a -> b where [a.to_str : a -> b ]",
     );
 
     const source_b =
@@ -314,7 +314,7 @@ test "where clause - inferred from method call without annotation" {
     defer test_env_b.deinit();
     try test_env_b.assertDefType(
         "helper",
-        "a -> b where [a.to_str : a -> b]",
+        "a -> b where [a.to_str : a -> b ]",
     );
     try test_env_b.assertDefType("main", "Str");
 }

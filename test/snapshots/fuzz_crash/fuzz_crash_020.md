@@ -986,7 +986,11 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(f, Str, Error, [O, .._others], (Error, Error), List(j)) where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]_
+    _(f, Str, Error, [O, .._others], (Error, Error), List(j))
+  where [
+    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
+  ]_
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

@@ -158,7 +158,8 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+    _{ field: Str, other: a }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
 
 But the type annotation says it should have the type:
     _BadRecord_

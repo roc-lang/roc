@@ -1066,22 +1066,52 @@ main = |_| {
 		(patt (type "List([True, False, .._others])"))
 		(patt (type "List(List(_a))"))
 		(patt (type "List(List(a)) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, items: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, items: List(b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "{ count: a, items: List(Str) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ data: List(_a), metadata: { description: Str, ratio: b, version: c } } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "{ data: List(a), metadata: { description: Str, ratio: b, version: c }, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "{ data: List(Str), metadata: { description: Str, ratio: a, version: b }, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, items: List(_b) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ count: a, items: List(b) }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]"))
+		(patt (type "{ count: a, items: List(Str) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ data: List(_a), metadata: { description: Str, ratio: b, version: c } }
+  where [
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+  ]"))
+		(patt (type "{ data: List(a), metadata: { description: Str, ratio: b, version: c }, name: Str }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+  ]"))
+		(patt (type "{ data: List(Str), metadata: { description: Str, ratio: a, version: b }, name: Str }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]"))
 		(patt (type "a -> { value: a, wrapper: List(a) }"))
-		(patt (type "{ value: a, wrapper: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ value: a, wrapper: List(a) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "{ value: Str, wrapper: List(Str) }"))
-		(patt (type "{ value: a, wrapper: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ level1: { collection: List(_a), level2: { items: List(b), level3: { data: List(_c), value: b } } }, results: List({ data: List(d), tag: Str }) } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "{ value: a, wrapper: List(a) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ level1: { collection: List(_a), level2: { items: List(b), level3: { data: List(_c), value: b } } }, results: List({ data: List(d), tag: Str }) }
+  where [
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+  ]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ base: a, derived: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "{ computations: { from_frac: a, from_num: b, list_from_num: List(b) }, empty_lists: { in_list: List(List(_c)), in_record: { data: List(_d) }, raw: List(_e) }, numbers: { float: a, list: List(b), value: b }, strings: { list: List(Str), value: Str } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "{ base: a, derived: List(a) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "{ computations: { from_frac: a, from_num: b, list_from_num: List(b) }, empty_lists: { in_list: List(List(_c)), in_record: { data: List(_d) }, raw: List(_e) }, numbers: { float: a, list: List(b), value: b }, strings: { list: List(Str), value: Str } }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]"))
 		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
@@ -1095,21 +1125,51 @@ main = |_| {
 		(expr (type "List([True, False, .._others])"))
 		(expr (type "List(List(_a))"))
 		(expr (type "List(List(a)) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, items: List(_b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, items: List(b) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "{ count: a, items: List(Str) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ data: List(_a), metadata: { description: Str, ratio: b, version: c } } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "{ data: List(a), metadata: { description: Str, ratio: b, version: c }, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "{ data: List(Str), metadata: { description: Str, ratio: a, version: b }, name: Str } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, items: List(_b) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ count: a, items: List(b) }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]"))
+		(expr (type "{ count: a, items: List(Str) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ data: List(_a), metadata: { description: Str, ratio: b, version: c } }
+  where [
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+  ]"))
+		(expr (type "{ data: List(a), metadata: { description: Str, ratio: b, version: c }, name: Str }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+  ]"))
+		(expr (type "{ data: List(Str), metadata: { description: Str, ratio: a, version: b }, name: Str }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]"))
 		(expr (type "a -> { value: a, wrapper: List(a) }"))
-		(expr (type "{ value: a, wrapper: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ value: a, wrapper: List(a) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "{ value: Str, wrapper: List(Str) }"))
-		(expr (type "{ value: a, wrapper: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ level1: { collection: List(_a), level2: { items: List(b), level3: { data: List(_c), value: b } } }, results: List({ data: List(d), tag: Str }) } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "{ value: a, wrapper: List(a) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ level1: { collection: List(_a), level2: { items: List(b), level3: { data: List(_c), value: b } } }, results: List({ data: List(d), tag: Str }) }
+  where [
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+  ]"))
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ base: a, derived: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "{ computations: { from_frac: a, from_num: b, list_from_num: List(b) }, empty_lists: { in_list: List(List(_c)), in_record: { data: List(_d) }, raw: List(_e) }, numbers: { float: a, list: List(b), value: b }, strings: { list: List(Str), value: Str } } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(expr (type "{ base: a, derived: List(a) }
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "{ computations: { from_frac: a, from_num: b, list_from_num: List(b) }, empty_lists: { in_list: List(List(_c)), in_record: { data: List(_d) }, raw: List(_e) }, numbers: { float: a, list: List(b), value: b }, strings: { list: List(Str), value: Str } }
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]"))
 		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~
