@@ -24,28 +24,7 @@ expect result == False
 # EXPECTED
 NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **break** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**for_loop_break.md:7:4:7:9:**
-```roc
-			break
-```
-			^^^^^
-
-
-**UNRECOGNIZED SYNTAX**
-I don't recognize this syntax.
-
-**for_loop_break.md:7:4:7:9:**
-```roc
-			break
-```
-			^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
@@ -97,7 +76,7 @@ EndOfFile,
 											(s-decl
 												(p-ident (raw "allTrue_"))
 												(e-tag (raw "False")))
-											(e-malformed (reason "expr_unexpected_token"))))
+											(s-break)))
 									(e-block
 										(statements
 											(e-record)))))))
@@ -109,21 +88,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-result : Bool
-result = {
-	var allTrue_ = True
-	for b in [True, True, False, True, True, True] {
-		if b == False {
-			allTrue_ = False
-			
-		} else {
-			{}
-		}
-	}
-	allTrue_
-}
-
-expect result == False
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -156,7 +121,7 @@ expect result == False
 									(s-reassign
 										(p-assign (ident "allTrue_"))
 										(e-tag (name "False")))
-									(e-runtime-error (tag "expr_not_canonicalized")))))
+									(e-empty_record))))
 						(if-else
 							(e-block
 								(e-empty_record))))))

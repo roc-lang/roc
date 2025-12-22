@@ -2114,6 +2114,15 @@ pub fn canonicalizeFile(
                     .region = region,
                 } });
             },
+            .@"break" => |break_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("break");
+                const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
             .type_decl => {
                 // Already processed in first pass, skip
             },
@@ -9592,6 +9601,10 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .@"break" => |break_stmt| {
+            _ = break_stmt;
+            // TODO break
         },
         .malformed => |_| {
             // Stmt was malformed, parse reports this error, so do nothing here
