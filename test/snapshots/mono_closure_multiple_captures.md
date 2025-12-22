@@ -16,7 +16,7 @@ a : Dec
 a = 1
 b : Dec
 b = 2
-add_ab : Dec, Dec, Dec -> Dec
+add_ab : Dec -> Dec
 add_ab = |x| a + b + x
 result : Dec
 result = 13

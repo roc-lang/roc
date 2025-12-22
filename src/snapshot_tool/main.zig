@@ -2547,6 +2547,19 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
     return allocator.dupe(u8, type_writer.get());
 }
 
+/// Check if a pattern is a top-level definition.
+/// Top-level captures are always in scope and should not be lifted as closure parameters.
+fn isTopLevelPattern(can_ir: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
+    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+    for (defs) |def_idx| {
+        const def = can_ir.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Get the monomorphized type string for an expression.
 /// For closures, this includes capture types as leading function arguments.
 fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx: CIR.Expr.Idx) ![]const u8 {
@@ -2580,10 +2593,17 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
                 var result = std.array_list.Managed(u8).init(allocator);
                 errdefer result.deinit();
 
-                // First, add capture types
-                for (captures, 0..) |capture_idx, i| {
-                    if (i > 0) try result.appendSlice(", ");
+                // First, add non-top-level capture types (top-level captures are always in scope)
+                var emitted_captures: u32 = 0;
+                for (captures) |capture_idx| {
                     const capture = can_ir.store.getCapture(capture_idx);
+
+                    // Skip top-level captures - they're always in scope
+                    if (isTopLevelPattern(can_ir, capture.pattern_idx)) continue;
+
+                    if (emitted_captures > 0) try result.appendSlice(", ");
+                    emitted_captures += 1;
+
                     const capture_var = ModuleEnv.varFrom(capture.pattern_idx);
                     const capture_type = try getDefaultedTypeString(allocator, can_ir, capture_var);
                     defer allocator.free(capture_type);
@@ -2593,7 +2613,7 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
                 // Then add the lambda's own argument types
                 const arg_vars = can_ir.types.sliceVars(func.args);
                 for (arg_vars, 0..) |arg_var, i| {
-                    if (captures.len > 0 or i > 0) try result.appendSlice(", ");
+                    if (emitted_captures > 0 or i > 0) try result.appendSlice(", ");
                     const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
                     defer allocator.free(arg_type);
                     try result.appendSlice(arg_type);

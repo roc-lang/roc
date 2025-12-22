@@ -14,7 +14,7 @@ result = add_five(3)
 ~~~roc
 x : Dec
 x = 10
-make_adder : Dec, Dec -> (Dec, Dec, Dec -> Dec)
+make_adder : Dec -> (Dec, Dec -> Dec)
 make_adder = |y| |y0, z| x + y0 + z
 add_five : Dec -> Dec
 add_five = make_adder(5)
