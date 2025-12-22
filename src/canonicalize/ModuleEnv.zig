@@ -98,8 +98,6 @@ pub const ModuleKind = union(enum) {
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
 pub const CommonIdents = extern struct {
     // Method names for operator desugaring
-    from_int_digits: Ident.Idx,
-    from_dec_digits: Ident.Idx,
     plus: Ident.Idx,
     minus: Ident.Idx,
     times: Ident.Idx,
@@ -194,8 +192,6 @@ pub const CommonIdents = extern struct {
     /// Use this when creating a fresh ModuleEnv from scratch.
     pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
         return .{
-            .from_int_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
-            .from_dec_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
             .plus = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME)),
             .minus = try common.insertIdent(gpa, Ident.for_text("minus")),
             .times = try common.insertIdent(gpa, Ident.for_text("times")),
@@ -286,8 +282,6 @@ pub const CommonIdents = extern struct {
     /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
     pub fn find(common: *const CommonEnv) CommonIdents {
         return .{
-            .from_int_digits = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
             .plus = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
             .minus = common.findIdent("minus") orelse unreachable,
             .times = common.findIdent("times") orelse unreachable,
