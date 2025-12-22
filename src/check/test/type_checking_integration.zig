@@ -2132,6 +2132,53 @@ test "check type - scoped type variables - fail" {
     );
 }
 
+test "check type - scoped type variables - bigger example 1" {
+    const source =
+        \\test_scoped : a, b -> a
+        \\test_scoped = |a, b| {
+        \\  f : a -> a
+        \\  f = |z| z
+        \\
+        \\  # No err because we correctly provide `a` as the arg
+        \\  result : a
+        \\  result = f(a)
+        \\  
+        \\  # Err because we incorrectly provide `b` as the arg
+        \\  _result2 : b
+        \\  _result2 = f(b)
+        \\  
+        \\  result
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+
+test "check type - scoped type variables - bigger example 2" {
+    const source =
+        \\test : val -> val
+        \\test = |a| {
+        \\  b : other_val -> other_val
+        \\  b = |c| {
+        \\    d : other_val
+        \\    d = c
+        \\
+        \\    d
+        \\  }
+        \\
+        \\  b(a)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "test" } },
+        "val -> val",
+    );
+}
+
 // Associated items referencing each other
 
 test "associated item can reference another associated item from same type" {

@@ -98,7 +98,6 @@ MISSING METHOD - Color.md:40:23:40:43
 MISSING METHOD - Color.md:62:12:62:26
 MISSING METHOD - Color.md:56:26:56:32
 MISSING METHOD - Color.md:57:32:57:38
-MISSING METHOD - Color.md:58:23:58:29
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -353,20 +352,6 @@ The value's type, which does not have a method named **to_str**, is:
     _Color_
 
 **Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **map_ok** method is being called on a value whose type doesn't have that method:
-**Color.md:58:23:58:29:**
-```roc
-expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
-```
-                      ^^^^^^
-
-The value's type, which does not have a method named **map_ok**, is:
-
-    _Try(Color, [InvalidHex(Str)])_
-
-**Hint:** For this to work, the type would need to have a method named **map_ok** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
