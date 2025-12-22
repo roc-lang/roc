@@ -218,4 +218,5 @@ pub const Tag = enum {
     diagnostic_exposed_but_not_implemented,
     diag_redundant_exposed,
     diag_if_expr_without_else,
+    diag_break_outside_loop,
 };

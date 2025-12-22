@@ -14,17 +14,17 @@ result = {
 }
 ~~~
 # EXPECTED
-INVALID BREAK STATEMENT - break_outside_loop.md:4:2:4:7
+BREAK OUTSIDE LOOP - break_outside_loop.md:4:2:4:7
 # PROBLEMS
-**INVALID BREAK STATEMENT**
-The `break` statement is used outside of a loop:
+**BREAK OUTSIDE LOOP**
+The `break` statement can only be used inside loops like `while` or `for` to exit the loop early.
+
 **break_outside_loop.md:4:2:4:7:**
 ```roc
 	break
 ```
 	^^^^^
 
-The `break` statement can only be used inside loops like `while` or `for` to exit the loop early.
 
 # TOKENS
 ~~~zig

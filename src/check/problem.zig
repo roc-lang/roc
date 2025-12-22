@@ -57,7 +57,6 @@ pub const Problem = union(enum) {
     invalid_number_type: VarWithSnapshot,
     invalid_record_ext: VarWithSnapshot,
     invalid_tag_union_ext: VarWithSnapshot,
-    break_outside_loop: BreakOutsideLoop,
     platform_def_not_found: PlatformDefNotFound,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
@@ -516,7 +515,6 @@ pub const ReportBuilder = struct {
             .unsupported_alias_where_clause => |data| {
                 return self.buildUnsupportedAliasWhereClauseReport(data);
             },
-            .break_outside_loop => |data| return self.buildBreakOutsideLoopReport(data),
             .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
             .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
             .invalid_number_type => |_| return self.buildUnimplementedReport("invalid_number_type"),
@@ -1874,42 +1872,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("    ");
         try report.document.addAnnotated(fn_type, .type_variable);
-
-        return report;
-    }
-
-    /// Build a report for when a break statement is used outside of a loop
-    fn buildBreakOutsideLoopReport(
-        self: *Self,
-        data: BreakOutsideLoop,
-    ) !Report {
-        var report = Report.init(self.gpa, "INVALID BREAK STATEMENT", .runtime_error);
-        errdefer report.deinit();
-
-        // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-
-        try report.document.addReflowingText("The ");
-        try report.document.addAnnotated("break", .inline_code);
-        try report.document.addReflowingText(" statement is used outside of a loop:");
-        try report.document.addLineBreak();
-
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("The ");
-        try report.document.addAnnotated("break", .inline_code);
-        try report.document.addReflowingText(" statement can only be used inside loops like ");
-        try report.document.addAnnotated("while", .inline_code);
-        try report.document.addReflowingText(" or ");
-        try report.document.addAnnotated("for", .inline_code);
-        try report.document.addReflowingText(" to exit the loop early.");
 
         return report;
     }
