@@ -393,6 +393,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_lookup_external = .{
                 .module_idx = @enumFromInt(node.data_1),
                 .target_node_idx = @intCast(node.data_2),
+                .ident_idx = @bitCast(node.data_3),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -1534,10 +1535,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @intFromEnum(local.pattern_idx);
         },
         .e_lookup_external => |e| {
-            // For external lookups, store the module index and target node index
+            // For external lookups, store the module index, target node index, and ident
             node.tag = .expr_external_lookup;
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = e.target_node_idx;
+            node.data_3 = @bitCast(e.ident_idx);
         },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index

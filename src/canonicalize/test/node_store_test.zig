@@ -247,6 +247,7 @@ test "NodeStore round trip - Expressions" {
         .e_lookup_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
             .target_node_idx = rand.random().int(u16),
+            .ident_idx = rand_ident_idx(),
             .region = rand_region(),
         },
     });

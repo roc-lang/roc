@@ -126,10 +126,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const pattern = self.module_env.store.getPattern(lookup.pattern_idx);
             try self.emitPatternValue(pattern);
         },
-        .e_lookup_external => |_| {
-            // For external lookups, emit the qualified name
-            // TODO: properly resolve and emit the external module.identifier
-            try self.write("<external>");
+        .e_lookup_external => |ext| {
+            // Get the identifier name from the ident_idx
+            const ident_text = self.module_env.getIdent(ext.ident_idx);
+            try self.write(ident_text);
         },
         .e_list => |list| {
             try self.write("[");

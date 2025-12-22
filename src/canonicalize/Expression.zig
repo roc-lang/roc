@@ -126,6 +126,7 @@ pub const Expr = union(enum) {
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
         target_node_idx: u16,
+        ident_idx: Ident.Idx,
         region: Region,
     },
     /// Lookup of a required identifier from the platform's `requires` clause.

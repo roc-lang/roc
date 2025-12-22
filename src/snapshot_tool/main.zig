@@ -2523,10 +2523,15 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     const expr_idx = maybe_expr_idx orelse return;
 
-    // Emit the expression
+    // Apply closure transformation before emitting
+    var transformer = can.ClosureTransformer.init(output.gpa, can_ir);
+    defer transformer.deinit();
+    const transformed_idx = transformer.transformExpr(expr_idx) catch expr_idx;
+
+    // Emit the transformed expression
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
-    try emitter.emitExpr(expr_idx);
+    try emitter.emitExpr(transformed_idx);
 
     // Get the defaulted (monomorphized) type of the expression
     const expr_var = ModuleEnv.varFrom(expr_idx);

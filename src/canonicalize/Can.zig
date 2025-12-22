@@ -4025,6 +4025,7 @@ pub fn canonicalizeExpr(
                                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                                     .module_idx = import_idx,
                                                     .target_node_idx = target_node_idx,
+                                                    .ident_idx = type_qualified_idx,
                                                     .region = region,
                                                 } }, region);
 
@@ -4193,6 +4194,7 @@ pub fn canonicalizeExpr(
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
+                                .ident_idx = ident,
                                 .region = region,
                             } }, region);
                             return CanonicalizedExpr{
@@ -4262,6 +4264,7 @@ pub fn canonicalizeExpr(
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                     .module_idx = import_idx,
                                     .target_node_idx = target_node_idx,
+                                    .ident_idx = exposed_info.original_name,
                                     .region = region,
                                 } }, region);
                                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
@@ -11216,6 +11219,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                             const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = auto_import_idx,
                                 .target_node_idx = method_node_idx,
+                                .ident_idx = qualified_method_name,
                                 .region = region,
                             } }, region);
 
@@ -11272,6 +11276,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                 .module_idx = import_idx,
                 .target_node_idx = target_node_idx,
+                .ident_idx = method_name,
                 .region = region,
             } }, region);
 
@@ -11390,6 +11395,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
+        .ident_idx = field_name,
         .region = region,
     } }, region);
     return expr_idx;
