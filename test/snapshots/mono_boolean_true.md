@@ -9,7 +9,7 @@ True
 ~~~
 # MONO
 ~~~roc
-True : [True, .._others]
+True : Bool
 ~~~
 # FORMATTED
 ~~~roc

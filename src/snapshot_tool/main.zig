@@ -2421,6 +2421,102 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
     try output.end_section();
 }
 
+/// Get the defaulted (monomorphized) type string for an expression.
+/// This defaults:
+/// - Flex vars with from_numeral constraint → Dec
+/// - Tag unions matching [True, False] or [True, .._] or [False, .._] → Bool
+/// - Recursively defaults element types in containers (List, Tuple)
+fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
+    const resolved = can_ir.types.resolveVar(type_var);
+
+    switch (resolved.desc.content) {
+        .flex => |flex| {
+            // Check if this flex var has a from_numeral constraint
+            const constraints = can_ir.types.sliceStaticDispatchConstraints(flex.constraints);
+            for (constraints) |constraint| {
+                if (constraint.origin == .from_numeral) {
+                    return allocator.dupe(u8, "Dec");
+                }
+            }
+            // No numeral constraint - fall through to TypeWriter
+        },
+        .structure => |flat_type| {
+            switch (flat_type) {
+                .tag_union => |tag_union| {
+                    // Check if this matches Bool pattern: [True, False] or open variant
+                    const tag_slice = can_ir.types.getTagsSlice(tag_union.tags);
+                    var has_true = false;
+                    var has_false = false;
+                    var only_bool_tags = true;
+
+                    for (tag_slice.items(.name)) |tag_name| {
+                        const name_str = can_ir.getIdent(tag_name);
+                        if (std.mem.eql(u8, name_str, "True")) {
+                            has_true = true;
+                        } else if (std.mem.eql(u8, name_str, "False")) {
+                            has_false = true;
+                        } else {
+                            only_bool_tags = false;
+                        }
+                    }
+
+                    // Check extension - if open with _others, still could be Bool
+                    const is_open = switch (can_ir.types.resolveVar(tag_union.ext).desc.content) {
+                        .flex => true,
+                        else => false,
+                    };
+
+                    if (only_bool_tags and (has_true or has_false) and (is_open or (has_true and has_false))) {
+                        return allocator.dupe(u8, "Bool");
+                    }
+                },
+                .tuple => |tuple| {
+                    // Recursively default tuple element types
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    try result.append('(');
+                    const elem_vars = can_ir.types.sliceVars(tuple.elems);
+                    for (elem_vars, 0..) |elem_var, i| {
+                        if (i > 0) try result.appendSlice(", ");
+                        const elem_type = try getDefaultedTypeString(allocator, can_ir, elem_var);
+                        try result.appendSlice(elem_type);
+                    }
+                    try result.append(')');
+                    return result.toOwnedSlice();
+                },
+                .nominal_type => |nominal| {
+                    // Check if this is List and default the element type
+                    const type_name = can_ir.getIdent(nominal.ident.ident_idx);
+                    if (std.mem.eql(u8, type_name, "List")) {
+                        var args_iter = can_ir.types.iterNominalArgs(nominal);
+                        if (args_iter.next()) |elem_var| {
+                            const elem_type = try getDefaultedTypeString(allocator, can_ir, elem_var);
+                            var result = std.array_list.Managed(u8).init(allocator);
+                            errdefer result.deinit();
+                            try result.appendSlice("List(");
+                            try result.appendSlice(elem_type);
+                            try result.append(')');
+                            return result.toOwnedSlice();
+                        }
+                    }
+                    // Fall through for other nominal types
+                },
+                else => {},
+            }
+        },
+        else => {},
+    }
+
+    // Fall back to TypeWriter for other cases
+    var type_writer = try can_ir.initTypeWriter();
+    defer type_writer.deinit();
+    try type_writer.write(type_var);
+
+    // Copy the result since type_writer will be deinitialized
+    return allocator.dupe(u8, type_writer.get());
+}
+
 /// Generate MONO section for mono tests - emits monomorphized Roc code with type annotation
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     const expr_idx = maybe_expr_idx orelse return;
@@ -2430,12 +2526,10 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: 
     defer emitter.deinit();
     try emitter.emitExpr(expr_idx);
 
-    // Get the type of the expression
+    // Get the defaulted (monomorphized) type of the expression
     const expr_var = ModuleEnv.varFrom(expr_idx);
-    var type_writer = try can_ir.initTypeWriter();
-    defer type_writer.deinit();
-    try type_writer.write(expr_var);
-    const type_str = type_writer.get();
+    const type_str = try getDefaultedTypeString(output.gpa, can_ir, expr_var);
+    defer output.gpa.free(type_str);
 
     try output.begin_section("MONO");
     try output.begin_code_block("roc");

@@ -9,7 +9,7 @@ type=mono
 ~~~
 # MONO
 ~~~roc
-(1 + 2) : a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+(1 + 2) : Dec
 ~~~
 # FORMATTED
 ~~~roc

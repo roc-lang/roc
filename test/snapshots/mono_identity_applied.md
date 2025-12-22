@@ -15,7 +15,7 @@ type=mono
 {
     identity = |x| x
     identity(42)
-} : a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+} : Dec
 ~~~
 # FORMATTED
 ~~~roc
