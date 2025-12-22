@@ -4140,6 +4140,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 _ = try self.unify(stmt_var, for_body_var, env);
             },
+            .s_break => |_| {
+                // TODO break statement checking (ensure inside loop??)
+            },
             .s_while => |while_stmt| {
                 // Check the condition
                 // while $count < 10 {
@@ -4324,7 +4327,7 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
-        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
+        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error, .s_break => {},
     }
 }
 

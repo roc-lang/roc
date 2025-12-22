@@ -9603,8 +9603,13 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
         },
         .@"break" => |break_stmt| {
-            _ = break_stmt;
-            // TODO break
+            const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
+
+            const stmt_idx = try self.env.addStatement(Statement{
+                .s_break = .{},
+            }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
         },
         .malformed => |_| {
             // Stmt was malformed, parse reports this error, so do nothing here

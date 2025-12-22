@@ -121,6 +121,7 @@ NO CHANGE
 									(s-reassign
 										(p-assign (ident "allTrue_"))
 										(e-tag (name "False")))
+									(s-break)
 									(e-empty_record))))
 						(if-else
 							(e-block
