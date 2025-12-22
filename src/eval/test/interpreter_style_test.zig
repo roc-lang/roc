@@ -1782,6 +1782,74 @@ test "interpreter: crash at end of block in if branch" {
     try std.testing.expectEqualStrings("21", rendered);
 }
 
+test "interpreter: simple break inside for loop" {
+    // Test that break works in a simple for loop
+    const roc_src =
+        \\{
+        \\    var $sum = 0
+        \\    for i in [1, 2, 3, 4, 5] {
+        \\        if i == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + i
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // sum of 1 + 2 + 3 = 6 (loop breaks before adding 4)
+    try std.testing.expectEqualStrings("6", rendered);
+}
+
+test "interpreter: simple break inside while loop" {
+    // Test that break works in a simple while loop
+    const roc_src =
+        \\{
+        \\    var $i = 1
+        \\    var $sum = 0
+        \\    while $i <= 5 {
+        \\        if $i == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + $i
+        \\        $i = $i + 1
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // sum of 1 + 2 + 3 = 6 (loop breaks before adding 4)
+    try std.testing.expectEqualStrings("6", rendered);
+}
+
 // Boolean/if support intentionally omitted for now
 
 // Comprehensive dbg tests
