@@ -53,8 +53,8 @@ test "end-to-end: emit arithmetic expression" {
     const output = try emitFromSource(test_allocator, "1 + 2");
     defer test_allocator.free(output);
 
-    // After parsing, the expression becomes a binop
-    try testing.expectEqualStrings("(1 + 2)", output);
+    // After parsing, the expression becomes a binop (no parens needed)
+    try testing.expectEqualStrings("1 + 2", output);
 }
 
 test "end-to-end: emit True tag" {
@@ -103,7 +103,7 @@ test "end-to-end: emit lambda with body" {
     const output = try emitFromSource(test_allocator, "|x| x + 1");
     defer test_allocator.free(output);
 
-    try testing.expectEqualStrings("|x| (x + 1)", output);
+    try testing.expectEqualStrings("|x| x + 1", output);
 }
 
 test "end-to-end: emit if expression" {

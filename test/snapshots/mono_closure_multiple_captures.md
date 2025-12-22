@@ -14,7 +14,7 @@ result = add_ab(10)
 ~~~roc
 a : Dec = 1
 b : Dec = 2
-add_ab : Dec, Dec, Dec -> Dec = |a, b, x| a + b + x
+add_ab : Dec, Dec, Dec -> Dec = |a, b, x| (a + b) + x
 result : Dec = 13
 ~~~
 # FORMATTED

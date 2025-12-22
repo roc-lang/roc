@@ -124,6 +124,18 @@ fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     }
 }
 
+/// Emit a binop operand, wrapping in parens if it's also a binop to preserve precedence
+fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx) !void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    if (expr == .e_binop) {
+        try self.write("(");
+        try self.emitExprValue(expr);
+        try self.write(")");
+    } else {
+        try self.emitExprValue(expr);
+    }
+}
+
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
 
 fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
@@ -349,11 +361,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitExpr(lambda.body);
         },
         .e_binop => |binop| {
-            try self.emitExpr(binop.lhs);
+            // Wrap nested binops in parens to preserve precedence
+            try self.emitBinopOperand(binop.lhs);
             try self.write(" ");
             try self.write(binopToStr(binop.op));
             try self.write(" ");
-            try self.emitExpr(binop.rhs);
+            try self.emitBinopOperand(binop.rhs);
         },
         .e_unary_minus => |unary| {
             try self.write("-");
