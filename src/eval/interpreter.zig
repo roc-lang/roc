@@ -8743,7 +8743,7 @@ pub const Interpreter = struct {
         const fresh_elem_var = try self.runtime_types.freshFromContent(elem_resolved.desc.content);
 
         // List has one type argument (element type)
-        const type_args: [1]types.Var = .{freshq_elem_var};
+        const type_args: [1]types.Var = .{fresh_elem_var};
         const list_content = try self.runtime_types.mkNominal(list_type_ident, list_backing_var, &type_args, origin_module_id, false);
         return try self.runtime_types.freshFromContent(list_content);
     }
