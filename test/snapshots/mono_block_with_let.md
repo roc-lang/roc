@@ -15,7 +15,7 @@ type=mono
 {
     x = 42
     x
-}
+} : a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc

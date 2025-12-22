@@ -9,7 +9,7 @@ type=mono
 ~~~
 # MONO
 ~~~roc
-[1, 2, 3]
+[1, 2, 3] : List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc

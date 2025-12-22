@@ -2421,18 +2421,29 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
     try output.end_section();
 }
 
-/// Generate MONO section for mono tests - emits monomorphized Roc code
+/// Generate MONO section for mono tests - emits monomorphized Roc code with type annotation
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     const expr_idx = maybe_expr_idx orelse return;
 
+    // Emit the expression
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
-
     try emitter.emitExpr(expr_idx);
+
+    // Get the type of the expression
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    var type_writer = try can_ir.initTypeWriter();
+    defer type_writer.deinit();
+    try type_writer.write(expr_var);
+    const type_str = type_writer.get();
 
     try output.begin_section("MONO");
     try output.begin_code_block("roc");
+
+    // Write expression : Type
     try output.md_writer.writer.writeAll(emitter.getOutput());
+    try output.md_writer.writer.writeAll(" : ");
+    try output.md_writer.writer.writeAll(type_str);
     try output.md_writer.writer.writeAll("\n");
 
     // HTML MONO section
@@ -2442,6 +2453,10 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: 
         );
         // Escape HTML characters in the output
         for (emitter.getOutput()) |char| {
+            try escapeHtmlChar(&writer.writer, char);
+        }
+        try writer.writer.writeAll(" : ");
+        for (type_str) |char| {
             try escapeHtmlChar(&writer.writer, char);
         }
         try writer.writer.writeAll(

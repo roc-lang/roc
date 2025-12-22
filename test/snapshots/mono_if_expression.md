@@ -9,7 +9,7 @@ if True 1 else 2
 ~~~
 # MONO
 ~~~roc
-if True 1 else 2
+if True 1 else 2 : a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 ~~~
 # FORMATTED
 ~~~roc

@@ -9,7 +9,7 @@ type=mono
 ~~~
 # MONO
 ~~~roc
-[]
+[] : List(_a)
 ~~~
 # FORMATTED
 ~~~roc
