@@ -131,7 +131,7 @@ foo = 42
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _BadType_
+    BadType
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -144,10 +144,12 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+    List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But the type annotation says it should have the type:
-    _BadList_
+
+    BadList
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -158,11 +160,13 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: a }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+    { field: Str, other: a }
+      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But the type annotation says it should have the type:
-    _BadRecord_
+
+    BadRecord
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -173,10 +177,12 @@ qux = |x| x
       ^^^^^
 
 It has the type:
-    _a -> a_
+
+    a -> a
 
 But the type annotation says it should have the type:
-    _BadFunction_
+
+    BadFunction
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -187,10 +193,12 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+    (Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But the type annotation says it should have the type:
-    _BadTuple_
+
+    BadTuple
 
 # TOKENS
 ~~~zig

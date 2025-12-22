@@ -87,7 +87,7 @@ test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     var type_writer = try env.initTypeWriter();
     defer type_writer.deinit();
 
-    try type_writer.write(map_result_var.?);
+    try type_writer.write(map_result_var.?, .wrap);
     const type_str = type_writer.get();
 
     // Check that the type contains "Try" and not "Error"

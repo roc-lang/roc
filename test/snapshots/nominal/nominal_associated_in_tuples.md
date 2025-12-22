@@ -58,7 +58,6 @@ boxed : Container(Foo.Bar)
         ^^^^^^^^^^^^^^^^^^
 
 
-
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

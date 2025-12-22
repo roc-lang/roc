@@ -953,7 +953,8 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _U64_
+
+    U64
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -1020,14 +1021,14 @@ The pattern in the fourth branch of this `match` differs from previous ones:
   ^^^^^
 
 The fourth pattern has this type:
-    _Str_
+
+    Str
 
 But all the previous patterns have this type: 
-    _[Red, ..[Blue, Green, .._others2]]_
+
+    [Red, ..[Blue, Green, .._others2]]
 
 All patterns in an `match` must have compatible types.
-
-
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1038,7 +1039,8 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+
+    _d
 
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
@@ -1050,7 +1052,8 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 ```
 
 The function has the signature:
-    _[Red, ..[Blue, Green, .._others2]], _arg -> Error_
+
+    [Red, ..[Blue, Green, .._others2]], _arg -> Error
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1061,10 +1064,12 @@ This expression is used in an unexpected way:
 		                       ^
 
 It has the type:
-    _U64_
+
+    U64
 
 But I expected it to be:
-    _Str_
+
+    Str
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1075,7 +1080,8 @@ This expression produces a value, but it's not being used:
 	                                        ^^^
 
 It has the type:
-    _[Blue, .._others2]_
+
+    [Blue, .._others2]
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1086,7 +1092,8 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __d_
+
+    _d
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1148,10 +1155,12 @@ main! = |_| { # Yeah I can leave a comment here
 ```
 
 It has the type:
-    _List(Error) => Error_
+
+    List(Error) => Error
 
 But the type annotation says it should have the type:
-    _List(Error) -> Error_
+
+    List(Error) -> Error
 
 # TOKENS
 ~~~zig

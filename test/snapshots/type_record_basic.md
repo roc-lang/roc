@@ -24,11 +24,13 @@ main! = |_| getName({namee: "luke", age:21})
                     ^^^^^^^^^^^^^^^^^^^^^^^
 
 This argument has the type:
-    _{ age: a, namee: Str }
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+
+    { age: a, namee: Str }
+      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But `getName` needs the first argument to be:
-    _{ age: U64, name: Str }_
+
+    { age: U64, name: Str }
 
 # TOKENS
 ~~~zig

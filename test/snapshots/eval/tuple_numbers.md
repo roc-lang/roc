@@ -85,21 +85,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec, a, b, c, d, e, f, g, h, i, j, k, l, m, n)
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
-    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-    g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)]),
-    h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]),
-    i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]),
-    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
-    k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
-    l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),
-    m.from_numeral : Numeral -> Try(m, [InvalidNumeral(Str)]),
-    n.from_numeral : Numeral -> Try(n, [InvalidNumeral(Str)]),
-  ]"))
+(expr (type "(U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec, a, b, c, d, e, f, g, h, i, j, k, l, m, n) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]), k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]), l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]), m.from_numeral : Numeral -> Try(m, [InvalidNumeral(Str)]), n.from_numeral : Numeral -> Try(n, [InvalidNumeral(Str)])]"))
 ~~~

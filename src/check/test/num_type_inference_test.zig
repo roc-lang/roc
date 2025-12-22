@@ -177,13 +177,13 @@ test "numeric literal in comparison unifies with typed operand" {
 
                 // Check LHS type (should be I64)
                 const lhs_var = ModuleEnv.varFrom(binop.lhs);
-                try test_env.type_writer.write(lhs_var);
+                try test_env.type_writer.write(lhs_var, .wrap);
                 const lhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", lhs_type);
 
                 // Check RHS type (the literal 42 - should also be I64 after unification)
                 const rhs_var = ModuleEnv.varFrom(binop.rhs);
-                try test_env.type_writer.write(rhs_var);
+                try test_env.type_writer.write(rhs_var, .wrap);
                 const rhs_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("I64", rhs_type);
 
@@ -233,7 +233,7 @@ test "polymorphic numeric in list used as List.get index unifies to U64 - regres
 
                 // Get the type from the expression (the literal 0)
                 const expr_var = ModuleEnv.varFrom(def.expr);
-                try test_env.type_writer.write(expr_var);
+                try test_env.type_writer.write(expr_var, .wrap);
                 const expr_type = test_env.type_writer.get();
 
                 // After unification with List.get's U64 parameter, should be U64
@@ -241,7 +241,7 @@ test "polymorphic numeric in list used as List.get index unifies to U64 - regres
 
                 // Also verify the pattern has the same type
                 const pattern_var = ModuleEnv.varFrom(def.pattern);
-                try test_env.type_writer.write(pattern_var);
+                try test_env.type_writer.write(pattern_var, .wrap);
                 const pattern_type = test_env.type_writer.get();
                 try testing.expectEqualStrings("U64", pattern_type);
 
