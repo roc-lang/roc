@@ -381,13 +381,17 @@ pub const ComptimeEvaluator = struct {
             switch (layout.tag) {
                 .scalar => try self.foldTagUnionScalar(expr_idx, stack_value),
                 .tuple => try self.foldTagUnionTuple(expr_idx, stack_value),
-                else => return error.NotImplemented,
+                .tag_union => try self.foldTagUnionWithPayload(expr_idx, stack_value),
+                // Record, list, closure, box layouts for tag unions can't be constant-folded
+                .record, .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => return,
             }
         } else {
-            // Not a tag union - must be a scalar numeric type
+            // Not a tag union - check layout type
             switch (layout.tag) {
                 .scalar => try self.foldScalar(expr_idx, stack_value, layout),
-                else => return error.NotImplemented,
+                .tuple => try self.foldTuple(expr_idx, stack_value),
+                // These remain as-is - no constant folding needed or possible
+                .closure, .record, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => return,
             }
         }
     }
@@ -431,29 +435,53 @@ pub const ComptimeEvaluator = struct {
                 // Handle fractional/decimal types (Dec, F32, F64)
                 const frac_precision = layout.data.scalar.data.frac;
 
-                // For Dec type, extract the i128 value and fold as Dec
-                if (frac_precision == .dec) {
-                    // Dec is stored as RocDec struct with .num field of type i128
-                    // The value is scaled by 10^18, so we need to unscale it to get the literal value
-                    const dec_value = stack_value.asDec(self.get_ops());
-                    const scaled_value = dec_value.num;
+                switch (frac_precision) {
+                    .dec => {
+                        // Dec is stored as RocDec struct with .num field of type i128
+                        // The value is scaled by 10^18, so we need to unscale it to get the literal value
+                        const dec_value = stack_value.asDec(self.get_ops());
+                        const scaled_value = dec_value.num;
 
-                    // Unscale by dividing by 10^18 to get the original literal value
-                    const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+                        // Unscale by dividing by 10^18 to get the original literal value
+                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
-                    // Create IntValue and fold as Dec
-                    const int_value = CIR.IntValue{
-                        .bytes = @bitCast(unscaled_value),
-                        .kind = .i128,
-                    };
+                        // Create IntValue and fold as Dec
+                        const int_value = CIR.IntValue{
+                            .bytes = @bitCast(unscaled_value),
+                            .kind = .i128,
+                        };
 
-                    try self.env.store.replaceExprWithNum(expr_idx, int_value, .dec);
-                } else {
-                    // For F32/F64, we don't fold yet
-                    return error.NotImplemented;
+                        try self.env.store.replaceExprWithNum(expr_idx, int_value, .dec);
+                    },
+                    .f32 => {
+                        // Extract f32 value and fold to e_frac_f32
+                        const f32_value = stack_value.asF32();
+                        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                        self.env.store.nodes.set(node_idx, .{
+                            .tag = .expr_frac_f32,
+                            .data_1 = @bitCast(f32_value),
+                            .data_2 = 1, // has_suffix = true (explicitly typed)
+                            .data_3 = 0,
+                        });
+                    },
+                    .f64 => {
+                        // Extract f64 value and fold to e_frac_f64
+                        const f64_value = stack_value.asF64();
+                        const f64_bits: u64 = @bitCast(f64_value);
+                        const low: u32 = @truncate(f64_bits);
+                        const high: u32 = @truncate(f64_bits >> 32);
+                        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                        self.env.store.nodes.set(node_idx, .{
+                            .tag = .expr_frac_f64,
+                            .data_1 = low,
+                            .data_2 = high,
+                            .data_3 = 1, // has_suffix = true (explicitly typed)
+                        });
+                    },
                 }
             },
-            else => return error.NotImplemented,
+            // Str and opaque_ptr scalars can't be meaningfully folded to simpler expressions
+            .str, .opaque_ptr => return,
         }
     }
 
@@ -544,9 +572,9 @@ pub const ComptimeEvaluator = struct {
         const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
         const tag_field = try acc.getElement(1, tag_elem_rt_var);
 
-        // Extract tag index
+        // Extract tag index - if not a scalar int, can't fold
         if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
-            return error.NotImplemented;
+            return;
         }
         const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
         const tag_index: usize = @intCast(tmp_sv.asI128());
@@ -559,16 +587,18 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
+        // If tag index is out of range, can't fold
         if (tag_index >= tag_list.items.len) {
-            return error.NotImplemented;
+            return;
         }
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
 
         // Only fold zero-argument tags (like True, False, Ok with no payload variant, etc.)
+        // Tags with payloads can't be folded to e_zero_argument_tag
         if (arg_vars.len != 0) {
-            return error.NotImplemented; // Has payload, can't fold to e_zero_argument_tag
+            return;
         }
 
         // Get variant_var and ext_var from type information
@@ -594,6 +624,70 @@ pub const ComptimeEvaluator = struct {
             ext_var,
             tag_info.name,
         );
+    }
+
+    /// Fold a tag union with explicit tag_union layout
+    /// These have a discriminant and potentially a payload area
+    fn foldTagUnionWithPayload(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        // Get the tag union data from the layout store
+        const tag_union_layout = stack_value.layout.data.tag_union;
+        const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
+
+        // Read the discriminant
+        const base_ptr = stack_value.ptr orelse return;
+        const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
+        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+
+        // Get the runtime type variable from the StackValue
+        const rt_var = stack_value.rt_var;
+
+        // Get the list of tags for this union type
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        // If tag index is out of range, can't fold
+        if (tag_index >= tag_list.items.len) {
+            return;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        // Only fold zero-argument tags for now
+        // Tags with payloads would need recursive folding
+        if (arg_vars.len != 0) {
+            return;
+        }
+
+        // Get variant_var and ext_var from type information
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = undefined;
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        // Replace the expression with e_zero_argument_tag
+        try self.env.store.replaceExprWithZeroArgumentTag(
+            expr_idx,
+            tag_info.name,
+            variant_var,
+            ext_var,
+            tag_info.name,
+        );
+    }
+
+    /// Fold a tuple value - currently not implemented
+    /// Tuples would need recursive folding of each element
+    fn foldTuple(_: *ComptimeEvaluator, _: CIR.Expr.Idx, _: eval_mod.StackValue) !void {
+        // Tuples can't be easily folded to a single CIR expression
+        // We'd need to recursively fold each element and create an e_tuple
+        // For now, just skip folding tuples
+        return;
     }
 
     /// Helper to report a problem and track allocated message

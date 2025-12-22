@@ -16,8 +16,8 @@ type=mono
 {
     a = 1
     b = 2
-    #1({a: a, b: b})
-} : c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]
+    |a0, b1, x| a0 + b1 + x
+} : Dec, Dec, Dec -> Dec
 ~~~
 # FORMATTED
 ~~~roc

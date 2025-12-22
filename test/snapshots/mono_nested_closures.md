@@ -14,8 +14,8 @@ type=mono
 ~~~roc
 {
     x = 10
-    #1({x: x})
-} : a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    |x0, y| |x1, y2, z| x1 + y2 + z
+} : Dec, Dec -> (Dec, Dec, Dec -> Dec)
 ~~~
 # FORMATTED
 ~~~roc

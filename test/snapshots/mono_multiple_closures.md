@@ -18,10 +18,10 @@ type=mono
 {
     x = 10
     y = 20
-    addX = #addX({x: x})
-    addY = #addY({y: y})
+    addX = |x0, a| a + x0
+    addY = |y1, b| b + y1
     (addX, addY)
-} : (c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])], c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])])
+} : (Dec -> Dec, Dec -> Dec)
 ~~~
 # FORMATTED
 ~~~roc

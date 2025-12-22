@@ -2470,6 +2470,27 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
         },
         .structure => |flat_type| {
             switch (flat_type) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    // Recursively default function argument and return types
+                    // Use Roc syntax: a, b -> c (not curried a -> b -> c)
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    const arg_vars = can_ir.types.sliceVars(func.args);
+                    for (arg_vars, 0..) |arg_var, i| {
+                        if (i > 0) try result.appendSlice(", ");
+                        const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
+                        defer allocator.free(arg_type);
+                        try result.appendSlice(arg_type);
+                    }
+
+                    try result.appendSlice(" -> ");
+                    const ret_type = try getDefaultedTypeString(allocator, can_ir, func.ret);
+                    defer allocator.free(ret_type);
+                    try result.appendSlice(ret_type);
+
+                    return result.toOwnedSlice();
+                },
                 .tuple => |tuple| {
                     // Recursively default tuple element types
                     var result = std.array_list.Managed(u8).init(allocator);
@@ -2519,29 +2540,105 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
     return allocator.dupe(u8, type_writer.get());
 }
 
+/// Get the monomorphized type string for an expression.
+/// For closures, this includes capture types as leading function arguments.
+fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx: CIR.Expr.Idx) ![]const u8 {
+    const expr = can_ir.store.getExpr(expr_idx);
+
+    // For blocks, get the type of the final expression (what the block evaluates to)
+    if (expr == .e_block) {
+        return getMonoTypeString(allocator, can_ir, expr.e_block.final_expr);
+    }
+
+    // Handle closures specially - include capture types in the function type
+    if (expr == .e_closure) {
+        const closure = expr.e_closure;
+        const captures = can_ir.store.sliceCaptures(closure.captures);
+
+        // Get the lambda's function type
+        const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
+        const resolved = can_ir.types.resolveVar(lambda_var);
+
+        // Check if this is a function type
+        if (resolved.desc.content == .structure) {
+            const flat_type = resolved.desc.content.structure;
+            if (flat_type == .fn_pure or flat_type == .fn_effectful or flat_type == .fn_unbound) {
+                const func = switch (flat_type) {
+                    .fn_pure => |f| f,
+                    .fn_effectful => |f| f,
+                    .fn_unbound => |f| f,
+                    else => unreachable,
+                };
+
+                var result = std.array_list.Managed(u8).init(allocator);
+                errdefer result.deinit();
+
+                // First, add capture types
+                for (captures, 0..) |capture_idx, i| {
+                    if (i > 0) try result.appendSlice(", ");
+                    const capture = can_ir.store.getCapture(capture_idx);
+                    const capture_var = ModuleEnv.varFrom(capture.pattern_idx);
+                    const capture_type = try getDefaultedTypeString(allocator, can_ir, capture_var);
+                    defer allocator.free(capture_type);
+                    try result.appendSlice(capture_type);
+                }
+
+                // Then add the lambda's own argument types
+                const arg_vars = can_ir.types.sliceVars(func.args);
+                for (arg_vars, 0..) |arg_var, i| {
+                    if (captures.len > 0 or i > 0) try result.appendSlice(", ");
+                    const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
+                    defer allocator.free(arg_type);
+                    try result.appendSlice(arg_type);
+                }
+
+                try result.appendSlice(" -> ");
+
+                // Get the return type - if the body is also a closure, recursively process it
+                const lambda_expr = can_ir.store.getExpr(closure.lambda_idx);
+                std.debug.assert(lambda_expr == .e_lambda);
+                const body_expr = can_ir.store.getExpr(lambda_expr.e_lambda.body);
+
+                const is_nested_function = body_expr == .e_closure;
+                const ret_type = if (is_nested_function)
+                    // Recursively process nested closures to include their captures
+                    try getMonoTypeString(allocator, can_ir, lambda_expr.e_lambda.body)
+                else
+                    try getDefaultedTypeString(allocator, can_ir, func.ret);
+                defer allocator.free(ret_type);
+
+                // Nested function types need parens in Roc
+                if (is_nested_function) try result.appendSlice("(");
+                try result.appendSlice(ret_type);
+                if (is_nested_function) try result.appendSlice(")");
+
+                return result.toOwnedSlice();
+            }
+        }
+    }
+
+    // For non-closures, just use the regular type defaulting
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    return getDefaultedTypeString(allocator, can_ir, expr_var);
+}
+
 /// Generate MONO section for mono tests - emits monomorphized Roc code with type annotation
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
     const expr_idx = maybe_expr_idx orelse return;
 
-    // Apply closure transformation before emitting
-    var transformer = can.ClosureTransformer.init(output.gpa, can_ir);
-    defer transformer.deinit();
-    const transformed_idx = transformer.transformExpr(expr_idx) catch expr_idx;
-
-    // Emit the transformed expression
+    // Emit the expression (RocEmitter handles closures by prepending captures as arguments)
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
-    try emitter.emitExpr(transformed_idx);
+    try emitter.emitExpr(expr_idx);
 
     // Get the defaulted (monomorphized) type of the expression
-    const expr_var = ModuleEnv.varFrom(expr_idx);
-    const type_str = try getDefaultedTypeString(output.gpa, can_ir, expr_var);
+    const type_str = try getMonoTypeString(output.gpa, can_ir, expr_idx);
     defer output.gpa.free(type_str);
 
     try output.begin_section("MONO");
     try output.begin_code_block("roc");
 
-    // Write expression : Type
+    // Markdown output
     try output.md_writer.writer.writeAll(emitter.getOutput());
     try output.md_writer.writer.writeAll(" : ");
     try output.md_writer.writer.writeAll(type_str);
@@ -2552,7 +2649,6 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: 
         try writer.writer.writeAll(
             \\                <pre>
         );
-        // Escape HTML characters in the output
         for (emitter.getOutput()) |char| {
             try escapeHtmlChar(&writer.writer, char);
         }

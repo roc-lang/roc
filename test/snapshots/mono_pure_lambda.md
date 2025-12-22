@@ -9,7 +9,7 @@ type=mono
 ~~~
 # MONO
 ~~~roc
-#1({}) : a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+|x| x + 1 : Dec -> Dec
 ~~~
 # FORMATTED
 ~~~roc
