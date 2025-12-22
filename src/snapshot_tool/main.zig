@@ -1108,9 +1108,9 @@ fn processSnapshotContent(
 
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
-        .file => try parse.parse(&module_env.common, allocator),
+        .file, .mono => try parse.parse(&module_env.common, allocator), // mono tests are full modules
         .header => try parse.parseHeader(&module_env.common, allocator),
-        .expr, .mono => try parse.parseExpr(&module_env.common, allocator),
+        .expr => try parse.parseExpr(&module_env.common, allocator),
         .statement => try parse.parseStatement(&module_env.common, allocator),
         .package => try parse.parse(&module_env.common, allocator),
         .platform => try parse.parse(&module_env.common, allocator),
@@ -1154,9 +1154,8 @@ fn processSnapshotContent(
         .file, .package, .platform, .app => {
             // All file types that use canonicalizeFile() will use the combined function below
         },
-        .snippet => {
-            // Snippet tests can have arbitrary content (type declarations, expressions, etc.)
-            // that may not work with canonicalizeFile(), so handle them separately
+        .snippet, .mono => {
+            // Snippet and mono tests are full modules
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
             defer module_envs.deinit();
 
@@ -1171,8 +1170,8 @@ fn processSnapshotContent(
         .header => {
             // TODO: implement canonicalize_header when available
         },
-        .expr, .statement, .mono => {
-            // Expr, statement, and mono tests use different canonicalization methods
+        .expr, .statement => {
+            // Expr and statement tests use different canonicalization methods
             // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
             defer module_envs.deinit();
@@ -1185,7 +1184,7 @@ fn processSnapshotContent(
             defer czer.deinit();
 
             switch (content.meta.node_type) {
-                .expr, .mono => {
+                .expr => {
                     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
                     maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
                 },
@@ -2273,9 +2272,13 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
             try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
-        .expr, .mono => {
+        .expr => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
+        },
+        .mono => {
+            const file = parse_ast.store.getFile();
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
@@ -2343,9 +2346,12 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
             try fmt.formatHeader(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
         },
-        .expr, .mono => {
+        .expr => {
             try fmt.formatExpr(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
+        },
+        .mono => {
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .statement => {
             try fmt.formatStatement(parse_ast.*, &formatted.writer);
@@ -2622,40 +2628,54 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
     return getDefaultedTypeString(allocator, can_ir, expr_var);
 }
 
-/// Generate MONO section for mono tests - emits monomorphized Roc code with type annotation
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
-    const expr_idx = maybe_expr_idx orelse return;
-
-    // Emit the expression (RocEmitter handles closures by prepending captures as arguments)
-    var emitter = can.RocEmitter.init(output.gpa, can_ir);
-    defer emitter.deinit();
-    try emitter.emitExpr(expr_idx);
-
-    // Get the defaulted (monomorphized) type of the expression
-    const type_str = try getMonoTypeString(output.gpa, can_ir, expr_idx);
-    defer output.gpa.free(type_str);
-
+/// Generate MONO section for mono tests - emits complete monomorphized module
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx) !void {
     try output.begin_section("MONO");
     try output.begin_code_block("roc");
 
-    // Markdown output
-    try output.md_writer.writer.writeAll(emitter.getOutput());
-    try output.md_writer.writer.writeAll(" : ");
-    try output.md_writer.writer.writeAll(type_str);
-    try output.md_writer.writer.writeAll("\n");
+    // Emit module header
+    try output.md_writer.writer.writeAll("module []\n\n");
+
+    // Emit all top-level definitions
+    var emitter = can.RocEmitter.init(output.gpa, can_ir);
+    defer emitter.deinit();
+
+    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+    for (defs) |def_idx| {
+        const def = can_ir.store.getDef(def_idx);
+
+        // Emit the declaration with its monomorphized type
+        emitter.reset();
+        try emitter.emitPattern(def.pattern);
+        const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
+        defer output.gpa.free(pattern_output);
+
+        // Get the type of the expression
+        const type_str = try getMonoTypeString(output.gpa, can_ir, def.expr);
+        defer output.gpa.free(type_str);
+
+        // Emit the expression
+        emitter.reset();
+        try emitter.emitExpr(def.expr);
+
+        // Write: name : Type = expr
+        try output.md_writer.writer.writeAll(pattern_output);
+        try output.md_writer.writer.writeAll(" : ");
+        try output.md_writer.writer.writeAll(type_str);
+        try output.md_writer.writer.writeAll(" = ");
+        try output.md_writer.writer.writeAll(emitter.getOutput());
+        try output.md_writer.writer.writeAll("\n");
+    }
 
     // HTML MONO section
     if (output.html_writer) |writer| {
         try writer.writer.writeAll(
-            \\                <pre>
+            \\                <pre>module []
+
         );
-        for (emitter.getOutput()) |char| {
-            try escapeHtmlChar(&writer.writer, char);
-        }
-        try writer.writer.writeAll(" : ");
-        for (type_str) |char| {
-            try escapeHtmlChar(&writer.writer, char);
-        }
+        // Re-emit for HTML (simplified - just copy the markdown content idea)
+        // For now, just show a placeholder
+        try writer.writer.writeAll("(see markdown)\n");
         try writer.writer.writeAll(
             \\</pre>
             \\
