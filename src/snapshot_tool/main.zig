@@ -1110,7 +1110,7 @@ fn processSnapshotContent(
     var parse_ast: AST = switch (content.meta.node_type) {
         .file => try parse.parse(&module_env.common, allocator),
         .header => try parse.parseHeader(&module_env.common, allocator),
-        .expr => try parse.parseExpr(&module_env.common, allocator),
+        .expr, .mono => try parse.parseExpr(&module_env.common, allocator),
         .statement => try parse.parseStatement(&module_env.common, allocator),
         .package => try parse.parse(&module_env.common, allocator),
         .platform => try parse.parse(&module_env.common, allocator),
@@ -1171,8 +1171,8 @@ fn processSnapshotContent(
         .header => {
             // TODO: implement canonicalize_header when available
         },
-        .expr, .statement => {
-            // Expr and statement tests use different canonicalization methods
+        .expr, .statement, .mono => {
+            // Expr, statement, and mono tests use different canonicalization methods
             // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
             defer module_envs.deinit();
@@ -1185,7 +1185,7 @@ fn processSnapshotContent(
             defer czer.deinit();
 
             switch (content.meta.node_type) {
-                .expr => {
+                .expr, .mono => {
                     const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
                     maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
                 },
@@ -1213,7 +1213,7 @@ fn processSnapshotContent(
     // will call canonicalizeFile which sets it. Only do this for .expr/.statement which
     // don't call canonicalizeFile.
     const needs_evaluation_order = switch (content.meta.node_type) {
-        .expr, .statement => true,
+        .expr, .statement, .mono => true,
         .file, .package, .platform, .app, .snippet, .repl, .header => false,
     };
 
@@ -1312,9 +1312,9 @@ fn processSnapshotContent(
             );
             break :blk checker;
         },
-        .snippet, .statement, .header, .expr => blk: {
-            // For snippet/statement/header/expr tests, type check the already-canonicalized IR
-            // Note: .expr can reach here if canonicalizeExpr returned null (error during canonicalization)
+        .snippet, .statement, .header, .expr, .mono => blk: {
+            // For snippet/statement/header/expr/mono tests, type check the already-canonicalized IR
+            // Note: .expr and .mono can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             if (config.builtin_module) |builtin_env| {
@@ -1426,6 +1426,11 @@ fn processSnapshotContent(
     try generateFormattedSection(&output, &content, &parse_ast);
     try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
     try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+
+    // Generate MONO section only for mono tests
+    if (content.meta.node_type == .mono) {
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+    }
 
     try generateHtmlClosing(&output);
 
@@ -1632,6 +1637,7 @@ const Section = union(enum) {
     tokens,
     problems,
     types,
+    mono,
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
@@ -1643,6 +1649,7 @@ const Section = union(enum) {
     pub const TOKENS = "# TOKENS\n~~~zig\n";
     pub const PROBLEMS = "# PROBLEMS\n";
     pub const TYPES = "# TYPES\n~~~clojure\n";
+    pub const MONO = "# MONO\n~~~roc\n";
 
     pub const SECTION_END = "~~~\n";
 
@@ -1657,6 +1664,7 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, TYPES)) return .types;
         if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
         if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
+        if (std.mem.startsWith(u8, str, MONO)) return .mono;
         return null;
     }
 
@@ -1672,6 +1680,7 @@ const Section = union(enum) {
             .tokens => TOKENS,
             .problems => PROBLEMS,
             .types => TYPES,
+            .mono => MONO,
         };
     }
 
@@ -1705,6 +1714,7 @@ pub const NodeType = enum {
     app,
     repl,
     snippet,
+    mono,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1715,6 +1725,7 @@ pub const NodeType = enum {
     pub const APP = "app";
     pub const REPL = "repl";
     pub const SNIPPET = "snippet";
+    pub const MONO = "mono";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1726,6 +1737,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, APP)) return .app;
         if (std.mem.eql(u8, str, REPL)) return .repl;
         if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
+        if (std.mem.eql(u8, str, MONO)) return .mono;
         return Error.InvalidNodeType;
     }
 
@@ -1740,6 +1752,7 @@ pub const NodeType = enum {
             .app => "app",
             .repl => "repl",
             .snippet => "snippet",
+            .mono => "mono",
         };
     }
 };
@@ -2220,7 +2233,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
             try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
-        .expr => {
+        .expr, .mono => {
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
@@ -2290,7 +2303,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
             try fmt.formatHeader(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
         },
-        .expr => {
+        .expr, .mono => {
             try fmt.formatExpr(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
         },
@@ -2388,6 +2401,38 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
             \\                <pre>
         );
         try tree.toHtml(&writer.writer, linecol_mode);
+        try writer.writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Generate MONO section for mono tests - emits monomorphized Roc code
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx: ?CIR.Expr.Idx) !void {
+    const expr_idx = maybe_expr_idx orelse return;
+
+    var emitter = can.RocEmitter.init(output.gpa, can_ir);
+    defer emitter.deinit();
+
+    try emitter.emitExpr(expr_idx);
+
+    try output.begin_section("MONO");
+    try output.begin_code_block("roc");
+    try output.md_writer.writer.writeAll(emitter.getOutput());
+    try output.md_writer.writer.writeAll("\n");
+
+    // HTML MONO section
+    if (output.html_writer) |writer| {
+        try writer.writer.writeAll(
+            \\                <pre>
+        );
+        // Escape HTML characters in the output
+        for (emitter.getOutput()) |char| {
+            try escapeHtmlChar(&writer.writer, char);
+        }
         try writer.writer.writeAll(
             \\</pre>
             \\
