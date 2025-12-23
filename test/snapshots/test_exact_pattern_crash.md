@@ -57,7 +57,8 @@ The function `map_pair` expects 3 arguments, but 4 were provided:
          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 The function has the signature:
-    _Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)_
+
+    Pair(a, b), (a -> c), (b -> d) -> Pair(c, d)
 
 # TOKENS
 ~~~zig

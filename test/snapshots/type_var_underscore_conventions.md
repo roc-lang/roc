@@ -105,10 +105,12 @@ starting_dollar = |list| "default"
                          ^^^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But the type annotation says it should have the type:
-    _$elem_
+
+    $elem
 
 # TOKENS
 ~~~zig

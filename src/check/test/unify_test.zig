@@ -1884,7 +1884,7 @@ test "type_writer - recursion_var displays structure" {
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const result = try writer.writeGet(rec_var);
+    const result = try writer.writeGet(rec_var, .wrap);
 
     // Should display as "{}" (the structure it points to)
     try std.testing.expectEqualStrings("{}", result);
@@ -1919,7 +1919,7 @@ test "type_writer - recursion_var with cycle displays correctly" {
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const result = try writer.writeGet(rec_var);
+    const result = try writer.writeGet(rec_var, .wrap);
 
     // Should display as "List(...)" - the cycle is detected and shown as "..."
     try std.testing.expectEqualStrings("List(...)", result);
@@ -1956,7 +1956,7 @@ test "type_writer - nested recursion_var displays correctly" {
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const result = try writer.writeGet(outer_rec_var);
+    const result = try writer.writeGet(outer_rec_var, .wrap);
 
     // Should display as "List({})" - following through the RecursionVars
     try std.testing.expectEqualStrings("List({})", result);
@@ -2031,7 +2031,7 @@ test "recursion_var - integration: deep recursion with RecursionVar prevents inf
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const display = try writer.writeGet(var1);
+    const display = try writer.writeGet(var1, .wrap);
 
     // Should display "..." indicating cycle detection
     try std.testing.expect(std.mem.indexOf(u8, display, "...") != null);

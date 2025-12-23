@@ -26,7 +26,8 @@ main! = |_| swapPair(1, 2)
             ^^^^^^^^^^^^^^
 
 The function has the signature:
-    _Pair(a, b) -> Pair(b, a)_
+
+    Pair(a, b) -> Pair(b, a)
 
 # TOKENS
 ~~~zig

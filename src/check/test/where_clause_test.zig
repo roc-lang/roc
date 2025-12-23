@@ -37,7 +37,10 @@ test "where clause - basic method constraint infers correctly" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertDefType("helper", "a -> Str where [a.to_str : a -> Str]");
+    try test_env_b.assertDefType(
+        "helper",
+        "a -> Str where [a.to_str : a -> Str]",
+    );
     try test_env_b.assertDefType("main", "Str");
 }
 
@@ -62,7 +65,10 @@ test "where clause - polymorphic return type" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertDefType("helper", "a -> b where [a.to_str : a -> b]");
+    try test_env_b.assertDefType(
+        "helper",
+        "a -> b where [a.to_str : a -> b]",
+    );
     try test_env_b.assertDefType("main", "Str");
 }
 
@@ -87,7 +93,10 @@ test "where clause - constraint with multiple args" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertDefType("modify", "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]");
+    try test_env_b.assertDefType(
+        "modify",
+        "a, (Str -> Str) -> a where [a.transform : a, (Str -> Str) -> a]",
+    );
     try test_env_b.assertDefType("main", "A");
 }
 
@@ -117,7 +126,10 @@ test "where clause - multiple constraints on same variable" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertDefType("both", "a -> (Str, U64) where [a.to_str : a -> Str, a.to_u64 : a -> U64]");
+    try test_env_b.assertDefType(
+        "both",
+        "a -> (Str, U64) where [a.to_str : a -> Str, a.to_u64 : a -> U64]",
+    );
     try test_env_b.assertDefType("main", "(Str, U64)");
 }
 
@@ -145,7 +157,10 @@ test "where clause - cross-module constraint satisfaction" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertDefType("helper", "a -> Str where [a.to_str : a -> Str]");
+    try test_env_b.assertDefType(
+        "helper",
+        "a -> Str where [a.to_str : a -> Str]",
+    );
     try test_env_b.assertDefType("main", "Str");
 }
 
@@ -159,7 +174,10 @@ test "where clause - cross-module polymorphic constraint" {
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
     try test_env_a.assertDefType("A.to_str", "A -> Str");
-    try test_env_a.assertDefType("A.to_str2", "a -> b where [a.to_str : a -> b]");
+    try test_env_a.assertDefType(
+        "A.to_str2",
+        "a -> b where [a.to_str : a -> b]",
+    );
 
     const source_b =
         \\import A
@@ -294,6 +312,9 @@ test "where clause - inferred from method call without annotation" {
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertDefType("helper", "a -> b where [a.to_str : a -> b]");
+    try test_env_b.assertDefType(
+        "helper",
+        "a -> b where [a.to_str : a -> b]",
+    );
     try test_env_b.assertDefType("main", "Str");
 }

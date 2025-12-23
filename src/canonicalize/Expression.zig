@@ -510,6 +510,7 @@ pub const Expr = union(enum) {
         list_len,
         list_is_empty,
         list_get_unsafe,
+        list_append_unsafe,
         list_concat,
         list_with_capacity,
         list_sort_with,
@@ -883,6 +884,7 @@ pub const Expr = union(enum) {
                 .list_concat => &.{ .consume, .consume },
                 .list_with_capacity => &.{.borrow}, // capacity is value type
                 .list_sort_with => &.{.consume},
+                .list_append_unsafe => &.{.consume},
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
                 .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type

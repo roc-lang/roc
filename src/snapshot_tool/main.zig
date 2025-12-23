@@ -2582,7 +2582,7 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
     // Fall back to TypeWriter for other cases
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
-    try type_writer.write(type_var);
+    try type_writer.write(type_var, .one_line);
 
     // Copy the result since type_writer will be deinitialized
     return allocator.dupe(u8, type_writer.get());

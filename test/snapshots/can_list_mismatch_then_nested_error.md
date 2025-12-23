@@ -21,10 +21,12 @@ The second and third elements in this list have incompatible types:
     ^^^^^^^  ^^^^^^^^^^^^
 
 The second element has this type:
-    _Str_
+
+    Str
 
 However, the third element has this type:
-    _List(Str)_
+
+    List(Str)
 
 All elements in a list must have compatible types.
 
@@ -41,7 +43,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -55,7 +57,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 

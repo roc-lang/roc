@@ -2454,6 +2454,10 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
     if (maybe_expr_idx) |expr_idx| {
         try self.pushExprTypesToSExprTree(expr_idx, tree);
     } else {
+        // Create a TypeWriter to format the type
+        var type_writer = try self.initTypeWriter();
+        defer type_writer.deinit();
+
         // Generate full type information for all definitions and expressions
         const root_begin = tree.beginNode();
         try tree.pushStaticAtom("inferred-types");
@@ -2483,12 +2487,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
-            // Create a TypeWriter to format the type
-            var type_writer = self.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
             // Write the type to the buffer
-            type_writer.write(pattern_var) catch continue;
+            try type_writer.write(pattern_var, .one_line);
 
             // Add the pattern type entry
             const patt_begin = tree.beginNode();
@@ -2537,12 +2537,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         // Get the type variable for this statement
                         const stmt_var = varFrom(stmt_idx);
 
-                        // Create a TypeWriter to format the type
-                        var type_writer = self.initTypeWriter() catch continue;
-                        defer type_writer.deinit();
-
                         // Write the type to the buffer
-                        type_writer.write(stmt_var) catch continue;
+                        try type_writer.write(stmt_var, .one_line);
 
                         const type_str = type_writer.get();
                         try tree.pushStringPair("type", type_str);
@@ -2566,12 +2562,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         // Get the type variable for this statement
                         const stmt_var = varFrom(stmt_idx);
 
-                        // Create a TypeWriter to format the type
-                        var type_writer = self.initTypeWriter() catch continue;
-                        defer type_writer.deinit();
-
                         // Write the type to the buffer
-                        type_writer.write(stmt_var) catch continue;
+                        try type_writer.write(stmt_var, .one_line);
 
                         const type_str = type_writer.get();
                         try tree.pushStringPair("type", type_str);
@@ -2606,11 +2598,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const expr_region = self.store.getRegionAt(expr_node_idx);
 
             // Create a TypeWriter to format the type
-            var type_writer = self.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
             // Write the type to the buffer
-            type_writer.write(expr_var) catch continue;
+            try type_writer.write(expr_var, .one_line);
 
             // Add the expression type entry
             const expr_begin = tree.beginNode();
@@ -2643,7 +2632,7 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTre
     defer type_writer.deinit();
 
     // Write the type to the buffer
-    try type_writer.write(expr_var);
+    try type_writer.write(expr_var, .one_line);
 
     // Add the formatted type to the S-expression tree
     const type_str = type_writer.get();

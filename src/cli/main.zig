@@ -438,45 +438,22 @@ fn generateRandomSuffix(ctx: *CliContext) ![]u8 {
     return suffix;
 }
 
-/// Create a unique temporary directory with PID-based naming.
+/// Create a unique temporary directory under roc/{version}/{random}/.
 /// Returns the path to the directory (allocated from arena, no need to free).
 /// Uses system temp directory to avoid race conditions when cache is cleared.
 pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
-    // Use system temp directory (not roc cache) to avoid race conditions
-    const temp_dir = if (comptime is_windows)
-        std.process.getEnvVarOwned(ctx.arena, "TEMP") catch
-            std.process.getEnvVarOwned(ctx.arena, "TMP") catch try ctx.arena.dupe(u8, "C:\\Windows\\Temp")
-    else
-        std.process.getEnvVarOwned(ctx.arena, "TMPDIR") catch try ctx.arena.dupe(u8, "/tmp");
+    // Get the version-specific temp directory: {temp}/roc/{version}
+    const version_temp_dir = try CacheConfig.getVersionTempDir(ctx.arena);
 
-    const normalized_temp_dir = if (comptime is_windows)
-        std.mem.trimRight(u8, temp_dir, "/\\")
-    else
-        std.mem.trimRight(u8, temp_dir, "/");
+    // Ensure the roc/{version} directory exists
+    // makePath automatically handles PathAlreadyExists internally
+    try std.fs.cwd().makePath(version_temp_dir);
 
-    // Get the current process ID for uniqueness
-    const pid = if (comptime is_windows)
-        std.os.windows.GetCurrentProcessId()
-    else
-        std.c.getpid();
-
-    // Try PID-based name first, then fall back to random suffix up to 5 times
+    // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
     while (attempt < 6) : (attempt += 1) {
-        const dir_path = if (attempt == 0) blk: {
-            // First attempt: use PID only
-            break :blk if (comptime is_windows)
-                try std.fmt.allocPrint(ctx.arena, "{s}\\roc-{d}", .{ normalized_temp_dir, pid })
-            else
-                try std.fmt.allocPrint(ctx.arena, "{s}/roc-{d}", .{ normalized_temp_dir, pid });
-        } else blk: {
-            // Subsequent attempts: use PID + random 8-char suffix
-            const random_suffix = try generateRandomSuffix(ctx);
-            break :blk if (comptime is_windows)
-                try std.fmt.allocPrint(ctx.arena, "{s}\\roc-{d}-{s}", .{ normalized_temp_dir, pid, random_suffix })
-            else
-                try std.fmt.allocPrint(ctx.arena, "{s}/roc-{d}-{s}", .{ normalized_temp_dir, pid, random_suffix });
-        };
+        const random_suffix = try generateRandomSuffix(ctx);
+        const dir_path = try std.fs.path.join(ctx.arena, &.{ version_temp_dir, random_suffix });
 
         // Try to create the directory
         std.fs.cwd().makeDir(dir_path) catch |err| switch (err) {
@@ -492,7 +469,7 @@ pub fn createUniqueTempDir(ctx: *CliContext) ![]const u8 {
         return dir_path;
     }
 
-    // Failed after 6 attempts (1 with PID only, 5 with PID + random suffix)
+    // Failed after 6 attempts
     return error.FailedToCreateUniqueTempDir;
 }
 
@@ -525,51 +502,24 @@ pub fn writeFdCoordinationFile(ctx: *CliContext, temp_exe_path: []const u8, shm_
 
 /// Create the temporary directory structure for fd communication.
 /// Returns the path to the executable in the temp directory (allocated from arena, no need to free).
-/// If a cache directory is provided, it will be used for temporary files; otherwise
-/// falls back to the system temp directory.
+/// Uses the standard roc/{version}/{random}/ structure in the system temp directory.
 /// The exe_display_name is the name that will appear in `ps` output (e.g., "app.roc").
-pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, cache_dir: ?[]const u8) ![]const u8 {
-    // Use provided cache dir or fall back to system temp directory
-    const temp_dir = if (cache_dir) |dir|
-        try allocs.arena.dupe(u8, dir)
-    else if (comptime is_windows)
-        std.process.getEnvVarOwned(allocs.arena, "TEMP") catch
-            std.process.getEnvVarOwned(allocs.arena, "TMP") catch try allocs.arena.dupe(u8, "C:\\Windows\\Temp")
-    else
-        std.process.getEnvVarOwned(allocs.arena, "TMPDIR") catch try allocs.arena.dupe(u8, "/tmp");
+pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_display_name: []const u8, shm_handle: SharedMemoryHandle, _: ?[]const u8) ![]const u8 {
+    // Get the version-specific temp directory: {temp}/roc/{version}
+    const version_temp_dir = try CacheConfig.getVersionTempDir(allocs.arena);
 
-    const normalized_temp_dir = if (comptime is_windows)
-        std.mem.trimRight(u8, temp_dir, "/\\")
-    else
-        std.mem.trimRight(u8, temp_dir, "/");
+    // Ensure the roc/{version} directory exists
+    // makePath automatically handles PathAlreadyExists internally
+    try std.fs.cwd().makePath(version_temp_dir);
 
-    // Get the current process ID for uniqueness
-    const pid = if (comptime is_windows)
-        std.os.windows.GetCurrentProcessId()
-    else
-        std.c.getpid();
-
-    // Try PID-based name first, then fall back to random suffix up to 5 times
+    // Try to create a unique subdirectory with random suffix
     var attempt: u8 = 0;
     while (attempt < 6) : (attempt += 1) {
-        const dir_name_with_txt = if (attempt == 0) blk: {
-            // First attempt: use PID only
-            break :blk if (comptime is_windows)
-                try std.fmt.allocPrint(allocs.arena, "{s}\\roc-{d}.txt", .{ normalized_temp_dir, pid })
-            else
-                try std.fmt.allocPrint(allocs.arena, "{s}/roc-{d}.txt", .{ normalized_temp_dir, pid });
-        } else blk: {
-            // Subsequent attempts: use PID + random 8-char suffix
-            const random_suffix = try generateRandomSuffix(allocs);
-            break :blk if (comptime is_windows)
-                try std.fmt.allocPrint(allocs.arena, "{s}\\roc-{d}-{s}.txt", .{ normalized_temp_dir, pid, random_suffix })
-            else
-                try std.fmt.allocPrint(allocs.arena, "{s}/roc-{d}-{s}.txt", .{ normalized_temp_dir, pid, random_suffix });
-        };
+        const random_suffix = try generateRandomSuffix(allocs);
+        const temp_dir_path = try std.fs.path.join(allocs.arena, &.{ version_temp_dir, random_suffix });
 
-        // Get the directory path by slicing off the .txt suffix
-        const dir_path_len = dir_name_with_txt.len - 4; // Remove ".txt"
-        const temp_dir_path = dir_name_with_txt[0..dir_path_len];
+        // The coordination file path is the directory path with .txt appended
+        const dir_name_with_txt = try std.fmt.allocPrint(allocs.arena, "{s}.txt", .{temp_dir_path});
 
         // Try to create the directory
         std.fs.cwd().makeDir(temp_dir_path) catch |err| switch (err) {
@@ -620,7 +570,7 @@ pub fn createTempDirStructure(allocs: *Allocators, exe_path: []const u8, exe_dis
         return temp_exe_path;
     }
 
-    // Failed after 6 attempts (1 with PID only, 5 with PID + random suffix)
+    // Failed after 6 attempts
     return error.FailedToCreateUniqueTempDir;
 }
 
@@ -680,6 +630,25 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
     defer trace.end();
 
     ensureWindowsConsoleSupportsAnsiAndUtf8();
+
+    // Start background cache cleanup on a separate thread.
+    // This is a fire-and-forget thread that:
+    // - Cleans up stale temp directories (>5 min old)
+    // - Cleans up old persistent cache files (>30 days old)
+    // - Exits automatically when done
+    //
+    // We intentionally don't join the thread. If the main process exits before
+    // cleanup completes, the OS will automatically terminate the cleanup thread.
+    // This ensures cleanup never delays compilation or execution.
+    //
+    // Uses page_allocator instead of GPA to avoid leak detection false positives
+    // (the thread may still be running when the main thread's leak check fires).
+    if (compile.CacheCleanup.startBackgroundCleanup(std.heap.page_allocator)) |_| {
+        // Thread started successfully, will run in background
+    } else |_| {
+        // Non-fatal: cleanup failure shouldn't prevent compilation
+        std.log.debug("Failed to start background cleanup thread", .{});
+    }
 
     // Create I/O interface - this is passed to all command handlers via ctx
     var io = Io.init();
@@ -918,10 +887,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
 
     // Create cache directory for linked interpreter executables
-    const cache_dir = cache_manager.config.getCacheEntriesDir(ctx.arena) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-    const exe_cache_dir = std.fs.path.join(ctx.arena, &.{ cache_dir, "executables" }) catch |err| {
+    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
@@ -1397,6 +1363,13 @@ fn runWithWindowsHandleInheritance(ctx: *CliContext, exe_path: []const u8, shm_h
     _ = ipc.platform.windows.CloseHandle(process_info.hProcess);
     _ = ipc.platform.windows.CloseHandle(process_info.hThread);
 
+    // On Windows, clean up temp files after the child process exits.
+    // (Unlike Unix, Windows locks files while they're being executed)
+    if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
+        compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+        std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
+    }
+
     // Check exit code and propagate to parent
     if (exit_code != 0) {
         std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
@@ -1509,6 +1482,15 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
             .err = err,
         } });
     };
+
+    // Clean up temp files after child has exited.
+    // We wait until after child exits because the child needs to read the coordination
+    // file to find the shared memory before it can run.
+    // The background cleanup thread will also clean up old temp directories.
+    if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
+        compile.CacheCleanup.deleteTempDir(ctx.arena, temp_dir_path);
+        std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
+    }
 
     // Check the termination status
     switch (term) {

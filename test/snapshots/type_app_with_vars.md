@@ -24,7 +24,8 @@ main! = |_| mapList([1,2,3,4,5])
             ^^^^^^^^^^^^^^^^^^^^
 
 The function has the signature:
-    _List(a), (a -> b) -> List(b)_
+
+    List(a), (a -> b) -> List(b)
 
 # TOKENS
 ~~~zig
