@@ -1366,6 +1366,24 @@ test "List.repeat - empty case" {
     try helpers.runExpectEmptyListI64("List.repeat(7i64, 0)", .no_trace);
 }
 
+test "List.with_capacity - unknown case" {
+    // Create a list with specified capacity
+    try runExpectListZst(
+        "List.with_capacity(5)",
+        0,
+        .no_trace,
+    );
+}
+
+test "List.with_capacity - append case" {
+    // Create a list with specified capacity
+    try runExpectListI64(
+        "List.with_capacity(5).append(10i64)",
+        &[_]i64{10},
+        .trace,
+    );
+}
+
 // Bug regression tests - interpreter crash issues
 
 test "match with tag containing pattern-bound variable - regression" {
