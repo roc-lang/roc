@@ -74,8 +74,8 @@ For example, when [`List.set`](../builtins/List#set) is passed a unique list (re
 ## [Block Expressions](#block-expressions) {#block-expressions}
 
 A _block expression_ is an expression with some optional [statements](statements) 
-before it. It has its own scope, so anything assigned in it can't be accessed
-outsdie the block.
+before the expression. It has its own scope, so anything assigned in it can't be accessed
+outsdie the block. The entire block evaluates to the expression at its end.
 
 The statements are optional, so `{ x }` is a valid block expression. This is useful 
 stylistically in situations like conditional branches:
