@@ -18,18 +18,18 @@ x : Dec
 x = 10
 y : Dec
 y = 20
-add_x : Str
+add_x : Dec -> Dec
 add_x = #add_x_1({x: x})
-add_y : []
+add_y : Dec -> Dec
 add_y = #add_y_2({y: y})
-result1 : [Error]
+result1 : Dec
 result1 = match add_x {
     #add_x_1({x}) => {
         a = 5
         a + x
     },
 }
-result2 : Numeral
+result2 : Dec
 result2 = match add_y {
     #add_y_2({y}) => {
         b = 5

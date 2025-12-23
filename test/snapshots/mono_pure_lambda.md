@@ -10,9 +10,9 @@ result = add_one(5)
 ~~~
 # MONO
 ~~~roc
-add_one : [False, True]
+add_one : Dec -> Dec
 add_one = #add_one_1({})
-result : [Error]
+result : Dec
 result = match add_one {
     #add_one_1({}) => {
         x = 5

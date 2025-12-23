@@ -14,16 +14,16 @@ result = add_five(3)
 ~~~roc
 x : Dec
 x = 10
-make_adder : Str
+make_adder : Dec -> Dec -> Dec
 make_adder = #make_adder_1({x: x})
-add_five : Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+add_five : Dec -> Dec
 add_five = match make_adder {
     #make_adder_1({x}) => {
         y = 5
         |y0, z| x + y0 + z
     },
 }
-result : Numeral -> Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+result : Dec
 result = add_five(3)
 ~~~
 # FORMATTED

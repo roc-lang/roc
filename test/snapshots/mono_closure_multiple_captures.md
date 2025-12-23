@@ -16,9 +16,9 @@ a : Dec
 a = 1
 b : Dec
 b = 2
-add_ab : []
+add_ab : Dec -> Dec
 add_ab = #add_ab_1({a: a, b: b})
-result : [Error]
+result : Dec
 result = match add_ab {
     #add_ab_1({a, b}) => {
         x = 10

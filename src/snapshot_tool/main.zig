@@ -2709,8 +2709,10 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
         defer output.gpa.free(pattern_output);
 
-        // Get the type of the expression
-        const type_str = try getMonoTypeString(output.gpa, can_ir, def.expr);
+        // Get the type from the pattern (not the transformed expression, which may not have a valid type)
+        // The pattern's type variable was set during type checking before transformation
+        const pattern_var = ModuleEnv.varFrom(def.pattern);
+        const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_var);
         defer output.gpa.free(type_str);
 
         // Emit the expression

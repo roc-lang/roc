@@ -11,11 +11,11 @@ result = f(10)
 ~~~
 # MONO
 ~~~roc
-condition : Bool
+condition : [True, .._others]
 condition = True
-f : _a
+f : Dec -> Dec
 f = if condition #f_1({}) else #f_2({})
-result : Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+result : Dec
 result = match f {
     #f_1({}) => {
         x = 10

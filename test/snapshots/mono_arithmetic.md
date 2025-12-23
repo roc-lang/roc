@@ -9,7 +9,7 @@ sum = 1 + 2
 ~~~
 # MONO
 ~~~roc
-sum : Bool
+sum : Dec
 sum = 3
 ~~~
 # FORMATTED

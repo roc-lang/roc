@@ -13,9 +13,9 @@ result = add_x(10)
 ~~~roc
 x : Dec
 x = 42
-add_x : Str
+add_x : Dec -> Dec
 add_x = #add_x_1({x: x})
-result : Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+result : Dec
 result = match add_x {
     #add_x_1({x}) => {
         y = 10
