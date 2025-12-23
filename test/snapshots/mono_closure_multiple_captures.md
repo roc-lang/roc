@@ -17,13 +17,13 @@ a = 1
 b : Dec
 b = 2
 add_ab : Dec -> Dec
-add_ab = Closure_add_ab_1({a: a, b: b})
+add_ab = Closure_add_ab_1({ a: a, b: b })
 result : Dec
 result = match add_ab {
-    Closure_add_ab_1({a, b}) => {
-        x = 10
-        a + b + x
-    },
+	Closure_add_ab_1({ a, b }) => {
+		x = 10
+		a + b + x
+	}
 }
 ~~~
 # FORMATTED

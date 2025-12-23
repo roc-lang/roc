@@ -19,22 +19,22 @@ x = 10
 y : Dec
 y = 20
 add_x : Dec -> Dec
-add_x = Closure_add_x_1({x: x})
+add_x = Closure_add_x_1({ x: x })
 add_y : Dec -> Dec
-add_y = Closure_add_y_2({y: y})
+add_y = Closure_add_y_2({ y: y })
 result1 : Dec
 result1 = match add_x {
-    Closure_add_x_1({x}) => {
-        a = 5
-        a + x
-    },
+	Closure_add_x_1({ x }) => {
+		a = 5
+		a + x
+	}
 }
 result2 : Dec
 result2 = match add_y {
-    Closure_add_y_2({y}) => {
-        b = 5
-        b + y
-    },
+	Closure_add_y_2({ y }) => {
+		b = 5
+		b + y
+	}
 }
 ~~~
 # FORMATTED

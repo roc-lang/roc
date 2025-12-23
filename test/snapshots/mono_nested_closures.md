@@ -15,13 +15,13 @@ result = add_five(3)
 x : Dec
 x = 10
 make_adder : Dec -> (Dec -> Dec)
-make_adder = Closure_make_adder_1({x: x})
+make_adder = Closure_make_adder_1({ x: x })
 add_five : Dec -> Dec
 add_five = match make_adder {
-    Closure_make_adder_1({x}) => {
-        y = 5
-        |y0, z| x + y0 + z
-    },
+	Closure_make_adder_1({ x }) => {
+		y = 5
+		|y0, z| x + y0 + z
+	}
 }
 result : Dec
 result = add_five(3)

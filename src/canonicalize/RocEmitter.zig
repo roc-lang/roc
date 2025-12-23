@@ -268,7 +268,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(")");
         },
         .e_record => |record| {
-            try self.write("{");
+            try self.write("{ ");
             const field_indices = self.module_env.store.sliceRecordFields(record.fields);
             for (field_indices, 0..) |field_idx, i| {
                 const field = self.module_env.store.getRecordField(field_idx);
@@ -282,7 +282,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 try self.write("..");
                 try self.emitExpr(ext_idx);
             }
-            try self.write("}");
+            try self.write(" }");
         },
         .e_empty_record => {
             try self.write("{}");
@@ -448,7 +448,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(" {\n");
             self.indent_level += 1;
             const branch_indices = self.module_env.store.sliceMatchBranches(match.branches);
-            for (branch_indices) |branch_idx| {
+            for (branch_indices, 0..) |branch_idx, branch_i| {
                 const branch = self.module_env.store.getMatchBranch(branch_idx);
                 try self.emitIndent();
                 // Emit patterns
@@ -465,7 +465,11 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 try self.write(" => ");
                 try self.emitExpr(branch.value);
-                try self.write(",\n");
+                // Only add comma if not the last branch
+                if (branch_i < branch_indices.len - 1) {
+                    try self.write(",");
+                }
+                try self.write("\n");
             }
             self.indent_level -= 1;
             try self.emitIndent();
@@ -531,7 +535,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             }
         },
         .record_destructure => |record| {
-            try self.write("{");
+            try self.write("{ ");
             const destruct_indices = self.module_env.store.sliceRecordDestructs(record.destructs);
             for (destruct_indices, 0..) |destruct_idx, i| {
                 const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
@@ -562,7 +566,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
                     },
                 }
             }
-            try self.write("}");
+            try self.write(" }");
         },
         .tuple => |t| {
             try self.write("(");
@@ -693,7 +697,7 @@ fn emitIntValue(self: *Self, value: CIR.IntValue) !void {
 
 fn emitIndent(self: *Self) !void {
     for (0..self.indent_level) |_| {
-        try self.write("    ");
+        try self.write("\t");
     }
 }
 

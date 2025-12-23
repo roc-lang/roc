@@ -2525,8 +2525,8 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
                     const ret_resolved = can_ir.types.resolveVar(func.ret);
                     const ret_is_fn = ret_resolved.desc.content == .structure and
                         (ret_resolved.desc.content.structure == .fn_pure or
-                        ret_resolved.desc.content.structure == .fn_effectful or
-                        ret_resolved.desc.content.structure == .fn_unbound);
+                            ret_resolved.desc.content.structure == .fn_effectful or
+                            ret_resolved.desc.content.structure == .fn_unbound);
 
                     const ret_type = try getDefaultedTypeString(allocator, can_ir, func.ret);
                     defer allocator.free(ret_type);
@@ -2765,6 +2765,53 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     return true;
 }
 
+/// Validate that the MONO output is properly formatted.
+/// Returns true if the code is already properly formatted, false if there are formatting differences.
+/// If formatting differs, logs the differences as an error.
+fn validateMonoFormatting(allocator: Allocator, mono_source: []const u8, source_path: []const u8) bool {
+    // Parse and format the code
+    const formatted = parseAndFormat(allocator, mono_source) catch |err| {
+        std.log.err("MONO FORMATTING ERROR in {s}: Failed to format: {}", .{ source_path, err });
+        return false;
+    };
+    defer allocator.free(formatted);
+
+    // Compare formatted with original
+    if (std.mem.eql(u8, mono_source, formatted)) {
+        return true; // Already properly formatted
+    }
+
+    // Code is not properly formatted - report the difference
+    std.log.err("MONO FORMATTING ERROR in {s}: MONO section is not properly formatted.", .{source_path});
+    std.log.err("=== ORIGINAL ===", .{});
+    std.log.err("{s}", .{mono_source});
+    std.log.err("=== FORMATTED (expected) ===", .{});
+    std.log.err("{s}", .{formatted});
+    std.log.err("=== END DIFF ===", .{});
+
+    return false;
+}
+
+/// Parse Roc source and return formatted output.
+fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var module_env = try ModuleEnv.init(gpa, input);
+    defer module_env.deinit();
+
+    var parse_ast = try parse.parse(&module_env.common, gpa);
+    defer parse_ast.deinit(gpa);
+
+    // Check for parse errors - if there are any, we can't format
+    if (parse_ast.hasErrors()) {
+        return error.ParseFailed;
+    }
+
+    var result: std.Io.Writer.Allocating = .init(gpa);
+    errdefer result.deinit();
+    try fmt.formatAst(parse_ast, &result.writer);
+
+    return try result.toOwnedSlice();
+}
+
 /// Generate MONO section for mono tests - emits monomorphized type module
 fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8) !void {
     // First, build the mono source in a buffer for validation
@@ -2808,6 +2855,11 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     // Validate the generated MONO output - fail if it's not valid Roc code
     if (!validateMonoOutput(output.gpa, mono_buffer.items, source_path)) {
         return error.MonoValidationFailed;
+    }
+
+    // Validate the MONO output is properly formatted
+    if (!validateMonoFormatting(output.gpa, mono_buffer.items, source_path)) {
+        return error.MonoFormattingFailed;
     }
 
     // Write the validated output to the section
