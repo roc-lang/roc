@@ -214,7 +214,6 @@ g : e -> e where [e.A, e.B,]
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
-
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _B_ is not supported:
 **everything.md:14:24:14:27:**
@@ -224,7 +223,6 @@ g : e -> e where [e.A, e.B,]
                        ^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
-
 
 # TOKENS
 ~~~zig

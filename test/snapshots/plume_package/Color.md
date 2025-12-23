@@ -98,7 +98,6 @@ MISSING METHOD - Color.md:40:23:40:43
 MISSING METHOD - Color.md:62:12:62:26
 MISSING METHOD - Color.md:56:26:56:32
 MISSING METHOD - Color.md:57:32:57:38
-MISSING METHOD - Color.md:58:23:58:29
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -224,7 +223,7 @@ This **to_frac** method is being called on a value whose type doesn't have that 
 
 The value's type, which does not have a method named **to_frac**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
@@ -238,7 +237,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -252,7 +251,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -266,7 +265,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -280,7 +279,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -294,7 +293,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -308,7 +307,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -322,7 +321,7 @@ This **is_named_color** method is being called on a value whose type doesn't hav
 
 The value's type, which does not have a method named **is_named_color**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
@@ -336,7 +335,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 
 The value's type, which does not have a method named **to_str**, is:
 
-    _Color_
+    Color
 
 **Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
@@ -350,23 +349,9 @@ expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 
 The value's type, which does not have a method named **to_str**, is:
 
-    _Color_
+    Color
 
 **Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **map_ok** method is being called on a value whose type doesn't have that method:
-**Color.md:58:23:58:29:**
-```roc
-expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
-```
-                      ^^^^^^
-
-The value's type, which does not have a method named **map_ok**, is:
-
-    _Try(Color, [InvalidHex(Str)])_
-
-**Hint:** For this to work, the type would need to have a method named **map_ok** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

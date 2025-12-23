@@ -112,7 +112,6 @@ ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
                                         ^^^^^^^^^^^^^^^^^^^
 
 
-
 **TOO MANY ARGS**
 The type _Dict_ expects 0 arguments, but got 2 instead.
 **type_app_complex_nested.md:4:38:4:58:**
@@ -120,7 +119,6 @@ The type _Dict_ expects 0 arguments, but got 2 instead.
 processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
 ```
                                      ^^^^^^^^^^^^^^^^^^^^
-
 
 
 # TOKENS

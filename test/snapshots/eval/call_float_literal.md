@@ -20,8 +20,7 @@ x = 12.34()
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _({}) -> _ret_
-
+    ({}) -> _ret
 
 # TOKENS
 ~~~zig

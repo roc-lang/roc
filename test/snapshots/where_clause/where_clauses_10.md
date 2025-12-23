@@ -38,7 +38,6 @@ The where clause syntax _Decode_ is not supported:
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
-
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

@@ -321,7 +321,6 @@ The where clause syntax _A_ is not supported:
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
-
 **UNSUPPORTED WHERE CLAUSE**
 The where clause syntax _B_ is not supported:
 **everything.md:61:3:61:6:**
@@ -331,7 +330,6 @@ The where clause syntax _B_ is not supported:
 		^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
-
 
 # TOKENS
 ~~~zig

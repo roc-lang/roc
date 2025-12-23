@@ -50,10 +50,12 @@ The first argument being passed to this function has the wrong type:
 		             ^
 
 This argument has the type:
-    _b_
+
+    b
 
 But `f` needs the first argument to be:
-    _a_
+
+    a
 
 # TOKENS
 ~~~zig
