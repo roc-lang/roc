@@ -192,7 +192,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
 
 test "interpreter: 6 / 3 yields 2" {
     const roc_src = "6 / 3";
-    try helpers.runExpectInt(roc_src, 2, .no_trace);
+    try helpers.runExpectI64(roc_src, 2, .no_trace);
 
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -212,7 +212,7 @@ test "interpreter: 6 / 3 yields 2" {
 
 test "interpreter: 7 % 3 yields 1" {
     const roc_src = "7 % 3";
-    try helpers.runExpectInt(roc_src, 1, .no_trace);
+    try helpers.runExpectI64(roc_src, 1, .no_trace);
 
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);

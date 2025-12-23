@@ -22,10 +22,12 @@ y = "value: ${x}"
               ^
 
 It has the type:
-    _U8_
+
+    U8
 
 But I expected it to be:
-    _Str_
+
+    Str
 
 # TOKENS
 ~~~zig

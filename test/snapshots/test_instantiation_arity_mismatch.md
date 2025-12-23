@@ -24,7 +24,8 @@ The function `identity` expects 1 argument, but 2 were provided:
     ^^^^^^^^^^^^^^
 
 The function has the signature:
-    _(a, b) -> (a, b)_
+
+    (a, b) -> (a, b)
 
 # TOKENS
 ~~~zig

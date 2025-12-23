@@ -90,10 +90,14 @@ Builtin :: [].{
 		}
 
 		map : List(a), (a -> b) -> List(b)
-		map = |list, transform|
-		# Implement using fold + concat for now
-		# TODO: Optimize with in-place update when list is unique and element sizes match
-			List.fold(list, [], |acc, item| List.concat(acc, [transform(item)]))
+		map = |list, transform| {
+			# TODO: Optimize with in-place update when list is unique and element sizes match
+			var $new_list = List.with_capacity(list.len())
+			for item in list {
+				$new_list = list_append_unsafe($new_list, transform(item))
+			}
+			$new_list
+		}
 
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate|
@@ -287,6 +291,18 @@ Builtin :: [].{
 		err_or = |try, fallback| match try {
 			Err(val) => val
 			Ok(_) => fallback
+		}
+
+		map_ok : Try(a, err), (a -> b) -> Try(b, err)
+		map_ok = |try, transform| match try {
+			Err(err) => Err(err)
+			Ok(a) => Ok(transform(a))
+		}
+
+		map_err : Try(ok, a), (a -> b) -> Try(ok, b)
+		map_err = |try, transform| match try {
+			Err(a) => Err(transform(a))
+			Ok(ok) => Ok(ok)
 		}
 
 		is_eq : Try(ok, err), Try(ok, err) -> Bool
@@ -1090,6 +1106,9 @@ range_until = |var $current, end| {
 
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler, does not perform bounds checks
+list_append_unsafe : List(item), item -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler

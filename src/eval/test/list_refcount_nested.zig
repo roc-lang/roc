@@ -13,12 +13,12 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const testing = std.testing;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
 
 test "list refcount nested - simple nested list" {
     // Inner list refcount should increment when added to outer
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    inner = [1, 2]
         \\    outer = [inner]
@@ -28,7 +28,7 @@ test "list refcount nested - simple nested list" {
 }
 
 test "list refcount nested - multiple inner lists" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a = [1, 2]
         \\    b = [3, 4]
@@ -39,7 +39,7 @@ test "list refcount nested - multiple inner lists" {
 }
 
 test "list refcount nested - same inner list multiple times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    inner = [1, 2]
         \\    outer = [inner, inner, inner]
@@ -49,13 +49,13 @@ test "list refcount nested - same inner list multiple times" {
 }
 
 test "list refcount nested - two levels inline" {
-    try runExpectInt(
+    try runExpectI64(
         \\match [[1, 2], [3, 4]] { [first, ..] => match first { [a, b] => a + b, _ => 0 }, _ => 0 }
     , 3, .no_trace);
 }
 
 test "list refcount nested - three levels" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a = [1]
         \\    b = [a]
@@ -66,7 +66,7 @@ test "list refcount nested - three levels" {
 }
 
 test "list refcount nested - empty inner list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    inner = []
         \\    outer = [inner]
@@ -93,7 +93,7 @@ test "list refcount nested - inline string lists" {
 }
 
 test "list refcount nested - nested then aliased" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    inner = [1, 2]
         \\    outer = [inner]
@@ -104,7 +104,7 @@ test "list refcount nested - nested then aliased" {
 }
 
 test "list refcount nested - access second inner list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a = [1, 2]
         \\    b = [3, 4]
@@ -115,13 +115,13 @@ test "list refcount nested - access second inner list" {
 }
 
 test "list refcount nested - deeply nested inline" {
-    try runExpectInt(
+    try runExpectI64(
         \\match [[[1]]] { [lst] => match lst { [lst2] => match lst2 { [x] => x, _ => 0 }, _ => 0 }, _ => 0 }
     , 1, .no_trace);
 }
 
 test "list refcount nested - mixed nested and flat" {
-    try runExpectInt(
+    try runExpectI64(
         \\match [[1, 2], [3]] { [first, second] => {
         \\    a = match first { [x, ..] => x, _ => 0 }
         \\    b = match second { [y] => y, _ => 0 }

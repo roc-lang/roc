@@ -9,14 +9,14 @@ const std = @import("std");
 const helpers = @import("helpers.zig");
 const testing = std.testing;
 
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;
 
 // Tuples with Lists
 
 test "list refcount containers - single list in tuple" {
     // Simplified: List used before tuple, verify it still works
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    match x { [a, b] => a + b, _ => 0 }
@@ -25,7 +25,7 @@ test "list refcount containers - single list in tuple" {
 }
 
 test "list refcount containers - multiple lists in tuple" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = [3, 4]
@@ -37,7 +37,7 @@ test "list refcount containers - multiple lists in tuple" {
 
 test "list refcount containers - same list twice in tuple" {
     // List refcount should increment twice
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    t = (x, x)
@@ -59,7 +59,7 @@ test "list refcount containers - tuple with string list" {
 // Records with Lists
 
 test "list refcount containers - single field record with list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst = [1, 2, 3]
         \\    r = {items: lst}
@@ -69,7 +69,7 @@ test "list refcount containers - single field record with list" {
 }
 
 test "list refcount containers - multiple fields with lists" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = [3, 4]
@@ -80,7 +80,7 @@ test "list refcount containers - multiple fields with lists" {
 }
 
 test "list refcount containers - same list in multiple fields" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst = [10, 20]
         \\    r = {a: lst, b: lst}
@@ -90,7 +90,7 @@ test "list refcount containers - same list in multiple fields" {
 }
 
 test "list refcount containers - nested record with list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst = [5, 6]
         \\    inner = {data: lst}
@@ -111,7 +111,7 @@ test "list refcount containers - record with string list" {
 }
 
 test "list refcount containers - record with mixed types" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst = [1, 2, 3]
         \\    r = {count: 42, items: lst}
@@ -124,13 +124,13 @@ test "list refcount containers - record with mixed types" {
 
 test "list refcount containers - tag with list payload" {
     // Simplified: Inline list in tag construction
-    try runExpectInt(
+    try runExpectI64(
         \\match Some([1, 2]) { Some(lst) => match lst { [a, b] => a + b, _ => 0 }, None => 0 }
     , 3, .no_trace);
 }
 
 test "list refcount containers - tag with multiple list payloads" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    x = [1, 2]
         \\    y = [3, 4]
@@ -149,7 +149,7 @@ test "list refcount containers - tag with string list payload" {
 
 test "list refcount containers - Ok/Err with lists" {
     // Simplified: Inline list in Ok
-    try runExpectInt(
+    try runExpectI64(
         \\match Ok([1, 2, 3]) { Ok(lst) => match lst { [a, b, c] => a + b + c, _ => 0 }, Err(_) => 0 }
     , 6, .no_trace);
 }
@@ -157,7 +157,7 @@ test "list refcount containers - Ok/Err with lists" {
 // Complex Combinations
 
 test "list refcount containers - tuple of records with lists" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst1 = [1, 2]
         \\    lst2 = [3, 4]
@@ -170,7 +170,7 @@ test "list refcount containers - tuple of records with lists" {
 }
 
 test "list refcount containers - record of tuples with lists" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst = [5, 6]
         \\    t = (lst, 99)
@@ -181,7 +181,7 @@ test "list refcount containers - record of tuples with lists" {
 }
 
 test "list refcount containers - tag with record containing list" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    lst = [7, 8]
         \\    r = {items: lst}
@@ -192,7 +192,7 @@ test "list refcount containers - tag with record containing list" {
 }
 
 test "list refcount containers - empty list in record" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    empty = []
         \\    r = {lst: empty}

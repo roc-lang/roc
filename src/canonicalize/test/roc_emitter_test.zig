@@ -137,9 +137,8 @@ test "emit tag with no arguments" {
     const expr_idx = try module_env.store.addExpr(.{
         .e_zero_argument_tag = .{
             .closure_name = true_ident,
-            // variant_var and ext_var are not used by RocEmitter - it only emits the tag name
-            .variant_var = undefined,
-            .ext_var = undefined,
+            .variant_var = undefined, // not read by emitter
+            .ext_var = undefined, // not read by emitter
             .name = true_ident,
         },
     }, base.Region.zero());

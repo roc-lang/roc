@@ -276,7 +276,7 @@ pub const Store = struct {
 
         // Format this type and store the formatted string
         type_writer.reset();
-        try type_writer.write(var_);
+        try type_writer.write(var_, .wrap);
         const formatted = try self.gpa.dupe(u8, type_writer.get());
         try self.formatted_strings.put(self.gpa, snapshot_idx, formatted);
 
