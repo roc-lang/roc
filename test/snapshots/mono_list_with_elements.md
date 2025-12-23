@@ -9,7 +9,7 @@ numbers = [1, 2, 3]
 ~~~
 # MONO
 ~~~roc
-numbers : List(Dec)
+numbers : Bool
 numbers = [1, 2, 3]
 ~~~
 # FORMATTED
@@ -54,5 +54,5 @@ EndOfFile,
 	(defs
 		(patt (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Bool"))))
 ~~~

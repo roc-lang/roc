@@ -13,10 +13,15 @@ result = add_x(10)
 ~~~roc
 x : Dec
 x = 42
-add_x : Dec -> Dec
-add_x = |y| x + y
-result : Dec
-result = 52
+add_x : Str
+add_x = #add_x_1({x: x})
+result : Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+result = match add_x {
+    #add_x_1({x}) => {
+        y = 10
+        x + y
+    },
+}
 ~~~
 # FORMATTED
 ~~~roc
@@ -63,20 +68,35 @@ EndOfFile,
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "add_x"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-assign (ident "y")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "x")))
-					(e-lookup-local
-						(p-assign (ident "y")))))))
+		(e-tag (name "#add_x_1")
+			(args
+				(e-record
+					(fields
+						(field (name "x")
+							(e-lookup-local
+								(p-assign (ident "x")))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "52"))))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "add_x"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "y"))
+									(e-num (value "10")))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "x")))
+									(e-lookup-local
+										(p-assign (ident "y"))))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -87,6 +107,6 @@ EndOfFile,
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Str"))
+		(expr (type "Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
 ~~~

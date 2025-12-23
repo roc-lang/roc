@@ -16,10 +16,15 @@ a : Dec
 a = 1
 b : Dec
 b = 2
-add_ab : Dec -> Dec
-add_ab = |x| a + b + x
-result : Dec
-result = 13
+add_ab : []
+add_ab = #add_ab_1({a: a, b: b})
+result : [Error]
+result = match add_ab {
+    #add_ab_1({a, b}) => {
+        x = 10
+        a + b + x
+    },
+}
 ~~~
 # FORMATTED
 ~~~roc
@@ -75,24 +80,41 @@ EndOfFile,
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "add_ab"))
-		(e-closure
-			(captures
-				(capture (ident "a"))
-				(capture (ident "b")))
-			(e-lambda
-				(args
-					(p-assign (ident "x")))
-				(e-binop (op "add")
-					(e-binop (op "add")
-						(e-lookup-local
-							(p-assign (ident "a")))
-						(e-lookup-local
-							(p-assign (ident "b"))))
-					(e-lookup-local
-						(p-assign (ident "x")))))))
+		(e-tag (name "#add_ab_1")
+			(args
+				(e-record
+					(fields
+						(field (name "a")
+							(e-lookup-local
+								(p-assign (ident "a"))))
+						(field (name "b")
+							(e-lookup-local
+								(p-assign (ident "b")))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "13"))))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "add_ab"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "x"))
+									(e-num (value "10")))
+								(e-binop (op "add")
+									(e-binop (op "add")
+										(e-lookup-local
+											(p-assign (ident "a")))
+										(e-lookup-local
+											(p-assign (ident "b"))))
+									(e-lookup-local
+										(p-assign (ident "x"))))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -105,6 +127,6 @@ EndOfFile,
 	(expressions
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
+		(expr (type "[]"))
+		(expr (type "[Error]"))))
 ~~~

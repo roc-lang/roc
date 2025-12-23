@@ -669,7 +669,7 @@ test "ClosureTransformer: can generate tag names" {
     const tag_name1 = try transformer.generateClosureTagName(hint);
     const tag_str1 = module_env.getIdent(tag_name1);
 
-    try testing.expectEqualStrings("#myFunc", tag_str1);
+    try testing.expectEqualStrings("#myFunc_1", tag_str1);
 
     // Generate another tag name without hint
     const tag_name2 = try transformer.generateClosureTagName(null);

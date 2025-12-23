@@ -1391,9 +1391,50 @@ fn processSnapshotContent(
         }
     }
 
-    // Run constant folding for mono tests
-    // This evaluates expressions at compile time and folds results back into the CIR.
+    // Run closure transformation for mono tests
+    // This transforms closures to tags and generates dispatch match expressions
+    var has_closure_transforms = false;
     if (content.meta.node_type == .mono) {
+        const ClosureTransformer = can.ClosureTransformer;
+        var transformer = ClosureTransformer.init(allocator, can_ir);
+        defer transformer.deinit();
+
+        // Transform all top-level definitions
+        const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+        for (defs) |def_idx| {
+            const def = can_ir.store.getDef(def_idx);
+
+            // Get name hint from pattern
+            const pattern = can_ir.store.getPattern(def.pattern);
+            const name_hint: ?base.Ident.Idx = switch (pattern) {
+                .assign => |a| a.ident,
+                else => null,
+            };
+
+            // Transform the definition expression
+            const result = transformer.transformExprWithLambdaSet(def.expr, name_hint) catch |err| {
+                std.log.warn("Closure transformation failed: {}", .{err});
+                continue;
+            };
+
+            // Track the lambda set for this pattern
+            if (result.lambda_set) |lambda_set| {
+                transformer.pattern_lambda_sets.put(def.pattern, lambda_set) catch |err| {
+                    std.log.warn("Failed to track lambda set: {}", .{err});
+                };
+                has_closure_transforms = true;
+            }
+
+            // Update the definition to use the transformed expression
+            can_ir.store.setDefExpr(def_idx, result.expr);
+        }
+    }
+
+    // Run constant folding for mono tests (skip if we have closure transformations)
+    // This evaluates expressions at compile time and folds results back into the CIR.
+    // We skip this when closures have been transformed because the comptime evaluator
+    // doesn't yet know how to handle the closure tag format.
+    if (content.meta.node_type == .mono and !has_closure_transforms) {
         if (config.builtin_module) |builtin_env| {
             const BuiltinTypes = eval_mod.BuiltinTypes;
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;

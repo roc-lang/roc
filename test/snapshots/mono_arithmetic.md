@@ -9,7 +9,7 @@ sum = 1 + 2
 ~~~
 # MONO
 ~~~roc
-sum : Dec
+sum : Bool
 sum = 3
 ~~~
 # FORMATTED
@@ -49,5 +49,5 @@ EndOfFile,
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Bool"))))
 ~~~

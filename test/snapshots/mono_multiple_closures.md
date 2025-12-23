@@ -18,14 +18,24 @@ x : Dec
 x = 10
 y : Dec
 y = 20
-add_x : Dec -> Dec
-add_x = |a| a + x
-add_y : Dec -> Dec
-add_y = |b| b + y
-result1 : Dec
-result1 = 15
-result2 : Dec
-result2 = 25
+add_x : Str
+add_x = #add_x_1({x: x})
+add_y : []
+add_y = #add_y_2({y: y})
+result1 : [Error]
+result1 = match add_x {
+    #add_x_1({x}) => {
+        a = 5
+        a + x
+    },
+}
+result2 : Numeral
+result2 = match add_y {
+    #add_y_2({y}) => {
+        b = 5
+        b + y
+    },
+}
 ~~~
 # FORMATTED
 ~~~roc
@@ -94,36 +104,66 @@ EndOfFile,
 		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "add_x"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-assign (ident "a")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "a")))
-					(e-lookup-local
-						(p-assign (ident "x")))))))
+		(e-tag (name "#add_x_1")
+			(args
+				(e-record
+					(fields
+						(field (name "x")
+							(e-lookup-local
+								(p-assign (ident "x")))))))))
 	(d-let
 		(p-assign (ident "add_y"))
-		(e-closure
-			(captures
-				(capture (ident "y")))
-			(e-lambda
-				(args
-					(p-assign (ident "b")))
-				(e-binop (op "add")
-					(e-lookup-local
-						(p-assign (ident "b")))
-					(e-lookup-local
-						(p-assign (ident "y")))))))
+		(e-tag (name "#add_y_2")
+			(args
+				(e-record
+					(fields
+						(field (name "y")
+							(e-lookup-local
+								(p-assign (ident "y")))))))))
 	(d-let
 		(p-assign (ident "result1"))
-		(e-num (value "15")))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "add_x"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "a"))
+									(e-num (value "5")))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "a")))
+									(e-lookup-local
+										(p-assign (ident "x")))))))))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-num (value "25"))))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "add_y"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "b"))
+									(e-num (value "5")))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-lookup-local
+										(p-assign (ident "y"))))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -138,8 +178,8 @@ EndOfFile,
 	(expressions
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))))
+		(expr (type "Str"))
+		(expr (type "[]"))
+		(expr (type "[Error]"))
+		(expr (type "Numeral"))))
 ~~~

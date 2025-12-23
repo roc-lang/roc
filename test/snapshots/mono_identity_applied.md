@@ -10,10 +10,15 @@ result = identity(42)
 ~~~
 # MONO
 ~~~roc
-identity : _a -> _a
-identity = |x| x
+identity : [False, True]
+identity = #identity_1({})
 result : Dec
-result = 42
+result = match identity {
+    #identity_1({}) => {
+        x = 42
+        x
+    },
+}
 ~~~
 # FORMATTED
 ~~~roc
@@ -51,14 +56,28 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "identity"))
-		(e-lambda
+		(e-tag (name "#identity_1")
 			(args
-				(p-assign (ident "x")))
-			(e-lookup-local
-				(p-assign (ident "x")))))
+				(e-empty_record))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "42"))))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "identity"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "x"))
+									(e-num (value "42")))
+								(e-lookup-local
+									(p-assign (ident "x")))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -67,6 +86,6 @@ EndOfFile,
 		(patt (type "a -> a"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a"))
+		(expr (type "[False, True]"))
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

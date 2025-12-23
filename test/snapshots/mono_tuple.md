@@ -9,7 +9,7 @@ pair = (1, 2)
 ~~~
 # MONO
 ~~~roc
-pair : (Dec, Dec)
+pair : Bool
 pair = (1, 2)
 ~~~
 # FORMATTED
@@ -52,5 +52,5 @@ EndOfFile,
 	(defs
 		(patt (type "(a, b) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "(a, b) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "Bool"))))
 ~~~

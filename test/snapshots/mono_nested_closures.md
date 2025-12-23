@@ -14,12 +14,17 @@ result = add_five(3)
 ~~~roc
 x : Dec
 x = 10
-make_adder : Dec -> (Dec, Dec -> Dec)
-make_adder = |y| |y0, z| x + y0 + z
-add_five : Dec -> Dec
-add_five = make_adder(5)
-result : Dec
-result = 18
+make_adder : Str
+make_adder = #make_adder_1({x: x})
+add_five : Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+add_five = match make_adder {
+    #make_adder_1({x}) => {
+        y = 5
+        |y0, z| x + y0 + z
+    },
+}
+result : Numeral -> Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]
+result = add_five(3)
 ~~~
 # FORMATTED
 ~~~roc
@@ -77,36 +82,51 @@ EndOfFile,
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "make_adder"))
-		(e-closure
-			(captures
-				(capture (ident "x")))
-			(e-lambda
-				(args
-					(p-assign (ident "y")))
-				(e-closure
-					(captures
-						(capture (ident "x"))
-						(capture (ident "y")))
-					(e-lambda
-						(args
-							(p-assign (ident "z")))
-						(e-binop (op "add")
-							(e-binop (op "add")
-								(e-lookup-local
-									(p-assign (ident "x")))
-								(e-lookup-local
-									(p-assign (ident "y"))))
+		(e-tag (name "#make_adder_1")
+			(args
+				(e-record
+					(fields
+						(field (name "x")
 							(e-lookup-local
-								(p-assign (ident "z")))))))))
+								(p-assign (ident "x")))))))))
 	(d-let
 		(p-assign (ident "add_five"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "make_adder")))
-			(e-num (value "5"))))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "make_adder"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "y"))
+									(e-num (value "5")))
+								(e-closure
+									(captures
+										(capture (ident "x"))
+										(capture (ident "y")))
+									(e-lambda
+										(args
+											(p-assign (ident "z")))
+										(e-binop (op "add")
+											(e-binop (op "add")
+												(e-lookup-local
+													(p-assign (ident "x")))
+												(e-lookup-local
+													(p-assign (ident "y"))))
+											(e-lookup-local
+												(p-assign (ident "z")))))))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "18"))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "add_five")))
+			(e-num (value "3")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -118,7 +138,7 @@ EndOfFile,
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Str"))
+		(expr (type "Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))
+		(expr (type "Numeral -> Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
 ~~~

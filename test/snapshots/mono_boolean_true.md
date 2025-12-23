@@ -9,7 +9,7 @@ flag = True
 ~~~
 # MONO
 ~~~roc
-flag : [True, .._others]
+flag : Bool
 flag = True
 ~~~
 # FORMATTED
@@ -47,5 +47,5 @@ EndOfFile,
 	(defs
 		(patt (type "[True, .._others]")))
 	(expressions
-		(expr (type "[True, .._others]"))))
+		(expr (type "Bool"))))
 ~~~

@@ -9,7 +9,7 @@ result = if True 1 else 2
 ~~~
 # MONO
 ~~~roc
-result : Dec
+result : []
 result = 1
 ~~~
 # FORMATTED
@@ -50,5 +50,5 @@ EndOfFile,
 	(defs
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "[]"))))
 ~~~

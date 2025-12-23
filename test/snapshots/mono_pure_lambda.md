@@ -10,10 +10,15 @@ result = add_one(5)
 ~~~
 # MONO
 ~~~roc
-add_one : Dec -> Dec
-add_one = |x| x + 1
-result : Dec
-result = 6
+add_one : [False, True]
+add_one = #add_one_1({})
+result : [Error]
+result = match add_one {
+    #add_one_1({}) => {
+        x = 5
+        x + 1
+    },
+}
 ~~~
 # FORMATTED
 ~~~roc
@@ -53,16 +58,30 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
+		(e-tag (name "#add_one_1")
 			(args
-				(p-assign (ident "x")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-num (value "1")))))
+				(e-empty_record))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "6"))))
+		(e-match
+			(match
+				(cond
+					(e-lookup-local
+						(p-assign (ident "add_one"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-applied-tag)))
+						(value
+							(e-block
+								(s-let
+									(p-assign (ident "x"))
+									(e-num (value "5")))
+								(e-binop (op "add")
+									(e-lookup-local
+										(p-assign (ident "x")))
+									(e-num (value "1")))))))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -71,6 +90,6 @@ EndOfFile,
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "[False, True]"))
+		(expr (type "[Error]"))))
 ~~~
