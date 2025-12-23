@@ -553,8 +553,6 @@ pub const Expr = union(enum) {
         num_shift_right_zf_by, // Int a, U8 -> Int a (zero-fill/logical shift)
 
         // Numeric parsing operations
-        num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
-        num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
         num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
         num_from_str, // Parse Str -> Try(num, [BadNumStr])
 
@@ -895,9 +893,7 @@ pub const Expr = union(enum) {
                 .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
                 .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
 
-                // Numeric parsing - list borrowed for digits, string borrowed
-                .num_from_int_digits => &.{.borrow},
-                .num_from_dec_digits => &.{ .borrow, .borrow },
+                // Numeric parsing - string borrowed
                 .num_from_numeral => &.{.borrow},
                 .num_from_str => &.{.borrow},
 

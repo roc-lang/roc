@@ -2428,8 +2428,8 @@ test "check type - equirecursive static dispatch with type annotation" {
     const source =
         \\fn : a, b -> ret where [
         \\    a.plus : a, b -> ret,
-        \\    a.from_int_digits : List(U8) -> Try(a, [OutOfRange]),
-        \\    b.from_int_digits : List(U8) -> Try(b, [OutOfRange])
+        \\    a.is_eq : a, a -> Bool,
+        \\    b.is_eq : b, b -> Bool
         \\]
         \\fn = |a, b| (|x| x.plus(b))(a)
     ;
@@ -2439,11 +2439,9 @@ test "check type - equirecursive static dispatch with type annotation" {
         source,
         .{ .pass = .{ .def = "fn" } },
         \\a, b -> ret
-        \\  where [
-        \\    a.from_int_digits : List(U8) -> Try(a, [OutOfRange]),
-        \\    a.plus : a, b -> ret,
-        \\    b.from_int_digits : List(U8) -> Try(b, [OutOfRange]),
-        \\  ]
+        \\  where [a.is_eq : a, a -> Bool
+        \\     , a.plus : a, b -> ret
+        \\     , b.is_eq : b, b -> Bool]
         ,
     );
 }
