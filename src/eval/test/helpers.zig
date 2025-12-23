@@ -426,6 +426,45 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 }
 
+pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    if (result.layout.tag != .list_of_zst) {
+        std.debug.print("\nExpected .list_of_zst layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        return error.TestExpectedEqual;
+    }
+
+    // Get the element layout
+    const elem_layout_idx = result.layout.data.list;
+    const elem_layout = layout_cache.getLayout(elem_layout_idx);
+
+    // Use the ListAccessor to safely access list elements
+    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
+
+    try std.testing.expectEqual(expected_element_count, list_accessor.len());
+}
+
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
 pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);

@@ -29,6 +29,7 @@ const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
+const runExpectListZst = helpers.runExpectListZst;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -1311,6 +1312,15 @@ test "List.map - adding" {
     );
 }
 
+test "List.map - empty list" {
+    // Map with adding function
+    try runExpectListZst(
+        "List.map([], |x| x)",
+        0,
+        .no_trace,
+    );
+}
+
 // Test for List.append
 
 test "List.append - basic case" {
@@ -1331,11 +1341,11 @@ test "List.append - empty case" {
     );
 }
 
-test "List.append - empty case" {
+test "List.append - zst case" {
     // Append to empty list
-    try runExpectListI64(
-        "List.append([], 42i64)",
-        &[_]i64{42},
+    try runExpectListZst(
+        "List.append([{}], {})",
+        2,
         .no_trace,
     );
 }
