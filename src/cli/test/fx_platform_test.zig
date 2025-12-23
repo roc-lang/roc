@@ -25,37 +25,6 @@ comptime {
 
 const roc_binary_path = if (builtin.os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
-/// Clean up leftover roc temp directories from previous test runs.
-/// This prevents PathAlreadyExists errors when temp directories weren't fully cleaned up.
-fn cleanupLeftoverTempDirs(allocator: std.mem.Allocator) void {
-    // Get the system temp directory (works on macOS, Linux, Windows)
-    const temp_dir_path = std.process.getEnvVarOwned(allocator, "TMPDIR") catch
-        std.process.getEnvVarOwned(allocator, "TEMP") catch
-        std.process.getEnvVarOwned(allocator, "TMP") catch
-        return;
-    defer allocator.free(temp_dir_path);
-
-    var dir = std.fs.cwd().openDir(temp_dir_path, .{ .iterate = true }) catch return;
-    defer dir.close();
-
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        // Match roc-* directories and their .txt files
-        if (std.mem.startsWith(u8, entry.name, "roc-")) {
-            if (entry.kind == .directory) {
-                dir.deleteTree(entry.name) catch {};
-            } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".txt")) {
-                dir.deleteFile(entry.name) catch {};
-            }
-        }
-    }
-}
-
-// Run cleanup before tests start (test names are run in declaration order)
-test "000 cleanup leftover temp dirs" {
-    cleanupLeftoverTempDirs(testing.allocator);
-}
-
 /// Options for running roc commands
 const RunOptions = struct {
     /// Additional command line arguments (e.g., "test", "check")
