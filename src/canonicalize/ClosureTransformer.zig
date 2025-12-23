@@ -31,8 +31,8 @@
 //! ## Implementation Notes
 //!
 //! - Closures become tags with capture records (using `Closure_` prefix to avoid clashing with userspace tags)
-//! - Call sites become inline match expressions that dispatch based on the lambda set
-//! - Pure lambdas (no captures) become tags with empty records
+//! - Call sites to closures become inline match expressions that dispatch based on the lambda set
+//! - Pure lambdas (no captures) are left unchanged - they don't need transformation
 
 const std = @import("std");
 const base = @import("base");
@@ -611,34 +611,9 @@ pub fn transformClosure(
 
             return tag_expr;
         },
-        .e_lambda => |lambda| {
-            // Pure lambda (no captures) - still wrap in a tag with empty record
-            const tag_name = try self.generateClosureTagName(binding_name_hint);
-
-            const empty_record = try self.module_env.store.addExpr(Expr{
-                .e_empty_record = .{},
-            }, base.Region.zero());
-
-            const args_start = self.module_env.store.scratch.?.exprs.top();
-            try self.module_env.store.scratch.?.exprs.append(empty_record);
-            const args_span = try self.module_env.store.exprSpanFrom(args_start);
-
-            const tag_expr = try self.module_env.store.addExpr(Expr{
-                .e_tag = .{
-                    .name = tag_name,
-                    .args = args_span,
-                },
-            }, base.Region.zero());
-
-            // Store info for dispatch
-            try self.closures.put(closure_expr_idx, ClosureInfo{
-                .tag_name = tag_name,
-                .lambda_body = lambda.body,
-                .lambda_args = lambda.args,
-                .capture_names = std.ArrayList(base.Ident.Idx).empty,
-            });
-
-            return tag_expr;
+        .e_lambda => {
+            // Pure lambda (no captures) - leave unchanged, no transformation needed
+            return closure_expr_idx;
         },
         else => return closure_expr_idx, // Not a closure, return as-is
     }
@@ -655,8 +630,8 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             return try self.transformClosure(expr_idx, null);
         },
         .e_lambda => {
-            // Transform pure lambda to tag
-            return try self.transformClosure(expr_idx, null);
+            // Pure lambda (no captures) - leave unchanged
+            return expr_idx;
         },
         .e_block => |block| {
             // Transform block: handle statements and final expression

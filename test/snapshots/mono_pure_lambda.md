@@ -11,23 +11,29 @@ result = add_one(5)
 # MONO
 ~~~roc
 add_one : Dec -> Dec
-add_one = Closure_add_one_1({})
+add_one = |x| x + 1
 result : Dec
-result = match add_one {
-    Closure_add_one_1({}) => {
-        x = 5
-        x + 1
-    },
-}
+result = add_one(5)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-NIL
+COMPTIME EVAL ERROR - mono_pure_lambda.md:1:1:1:1
 # PROBLEMS
-NIL
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**mono_pure_lambda.md:1:1:1:1:**
+```roc
+add_one = |x| x + 1
+```
+^
+
+The evaluation failed with error:
+
+    ªªªªªªªªªªªªªªªªªª
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
@@ -58,30 +64,19 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-tag (name "Closure_add_one_1")
+		(e-lambda
 			(args
-				(e-empty_record))))
+				(p-assign (ident "x")))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-match
-			(match
-				(cond
-					(e-lookup-local
-						(p-assign (ident "add_one"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-block
-								(s-let
-									(p-assign (ident "x"))
-									(e-num (value "5")))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "1")))))))))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "add_one")))
+			(e-num (value "5")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -90,6 +85,6 @@ EndOfFile,
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "[False, True]"))
-		(expr (type "[Error]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool"))))
 ~~~

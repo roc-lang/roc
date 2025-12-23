@@ -483,16 +483,16 @@ fn transformClosureExpr(allocator: std.mem.Allocator, source: []const u8) ![]con
     return try allocator.dupe(u8, emitter.getOutput());
 }
 
-test "transform pure lambda to tag" {
-    // Test a pure lambda (no captures) - parsed directly without a block
+test "pure lambda is left unchanged" {
+    // Test a pure lambda (no captures) - should NOT be transformed
     const source = "|x| x + 1";
 
     const output = try transformClosureExpr(test_allocator, source);
     defer test_allocator.free(output);
 
-    // Pure lambda should be transformed to a # tag with empty record
-    try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "{}") != null);
+    // Pure lambda should be left as-is, NOT transformed to a tag
+    try testing.expect(std.mem.indexOf(u8, output, "Closure_") == null);
+    try testing.expectEqualStrings("|x| x + 1", output);
 }
 
 /// Helper to transform closures in a block and emit the result
@@ -607,7 +607,7 @@ test "verify: closure with multiple captures transforms correctly" {
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
-test "verify: pure lambda (no captures) transforms correctly" {
+test "verify: pure lambda (no captures) is left unchanged" {
     const source =
         \\{
         \\    f = |x| x + 1
@@ -619,13 +619,14 @@ test "verify: pure lambda (no captures) transforms correctly" {
     const transformed = try transformBlockAndEmit(test_allocator, source);
     defer test_allocator.free(transformed);
 
-    // Verify transformation structure:
-    // - Should have a # tag (internal closure tag)
-    // - Should have a match expression for the call site
-    // - Pure lambdas should have empty record {}
-    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
-    try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
-    try testing.expect(std.mem.indexOf(u8, transformed, "{}") != null);
+    // Verify pure lambda is NOT transformed:
+    // - Should NOT have a Closure_ tag
+    // - Should NOT have a match expression
+    // - Should have the lambda preserved as-is
+    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") == null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "match") == null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "|x|") != null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "f(41)") != null);
 }
 
 test "verify: nested closures with captures transforms correctly" {

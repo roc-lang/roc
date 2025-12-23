@@ -14,27 +14,29 @@ result = f(10)
 condition : [True]
 condition = True
 f : Dec -> Dec
-f = if (condition) Closure_f_1({}) else Closure_f_2({})
+f = if (condition) |x| x + 1 else |x| x * 2
 result : Dec
-result = match f {
-    Closure_f_1({}) => {
-        x = 10
-        x + 1
-    },
-    Closure_f_2({}) => {
-        x = 10
-        x * 2
-    },
-}
+result = f(10)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-NIL
+COMPTIME EVAL ERROR - mono_closure_dispatch.md:1:1:1:1
 # PROBLEMS
-NIL
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**mono_closure_dispatch.md:1:1:1:1:**
+```roc
+condition = True
+```
+^
+
+The evaluation failed with error:
+
+    ªªªªªªªªªªªªªªªªªª
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,UpperIdent,
@@ -77,7 +79,7 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "condition"))
-		(e-tag (name "True")))
+		(e-zero-argument-tag (closure "True") (name "True")))
 	(d-let
 		(p-assign (ident "f"))
 		(e-if
@@ -85,47 +87,27 @@ EndOfFile,
 				(if-branch
 					(e-lookup-local
 						(p-assign (ident "condition")))
-					(e-tag (name "Closure_f_1")
+					(e-lambda
 						(args
-							(e-empty_record)))))
+							(p-assign (ident "x")))
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-num (value "1"))))))
 			(if-else
-				(e-tag (name "Closure_f_2")
+				(e-lambda
 					(args
-						(e-empty_record))))))
+						(p-assign (ident "x")))
+					(e-binop (op "mul")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-num (value "2")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-match
-			(match
-				(cond
-					(e-lookup-local
-						(p-assign (ident "f"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-block
-								(s-let
-									(p-assign (ident "x"))
-									(e-num (value "10")))
-								(e-binop (op "add")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "1"))))))
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-block
-								(s-let
-									(p-assign (ident "x"))
-									(e-num (value "10")))
-								(e-binop (op "mul")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "2")))))))))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "f")))
+			(e-num (value "10")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -136,6 +118,6 @@ EndOfFile,
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "Bool"))
-		(expr (type "_a"))
-		(expr (type "Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "[]"))
+		(expr (type "Str"))))
 ~~~
