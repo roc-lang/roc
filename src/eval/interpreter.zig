@@ -2867,6 +2867,8 @@ pub const Interpreter = struct {
                         return out;
                     }
 
+                    std.debug.assert(elt_arg.ptr != null); // non-ZST element must have non-null pointer
+
                     // The list was inferred as list_of_zst (e.g., from List.with_capacity with unknown element type)
                     // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
                     // The original list_of_zst should be empty (or contain only ZST elements that we can discard).
@@ -3063,18 +3065,17 @@ pub const Interpreter = struct {
                 const elt_arg = args[1];
 
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
-                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
 
                 // Extract element layout from List(a)
-                std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
 
+                std.debug.assert((roc_list_arg.layout.tag == .list and elt_arg.ptr != null) or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
                     const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
 
                     // If the element is also ZST, just bump the length
-                    if (elt_arg.layout.tag == .zst) {
+                    if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
                         var result_list = roc_list.*;
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
@@ -3084,6 +3085,8 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
+
+                    std.debug.assert(elt_arg.ptr != null); // non-ZST element must have non-null pointer
 
                     // The list was inferred as list_of_zst (e.g., from List.with_capacity with unknown element type)
                     // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
