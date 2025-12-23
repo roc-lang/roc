@@ -11655,13 +11655,36 @@ pub const Interpreter = struct {
                     const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
                     const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
 
-                    // Schedule collection of elements
-                    try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
-                        .collected_count = 0,
-                        .remaining_elems = elems,
-                        .elem_rt_var = elem_rt_var,
-                        .list_rt_var = list_rt_var,
-                    } } });
+                    const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
+                    const elem_content = elem_resolved.desc.content;
+                    const is_elem_zst = switch (elem_content) {
+                        .structure => |ft| switch (ft) {
+                            .empty_record, .empty_tag_union => true,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    if (is_elem_zst) {
+                        // Special case: list of ZSTs
+                        // We can create the entire list immediately
+                        const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
+                        const dest = try self.pushRaw(list_layout, 0, list_rt_var);
+                        if (dest.ptr != null) {
+                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                            header.* = RocList.empty();
+                            header.length = elems.len;
+                        }
+                        try value_stack.push(dest);
+                    } else {
+
+                        // Schedule collection of elements
+                        try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
+                            .collected_count = 0,
+                            .remaining_elems = elems,
+                            .elem_rt_var = elem_rt_var,
+                            .list_rt_var = list_rt_var,
+                        } } });
+                    }
                 }
             },
 
@@ -17175,8 +17198,20 @@ pub const Interpreter = struct {
                     return error.Crash;
                 };
 
+                if (list_value.layout.tag == .list_of_zst) {
+                    // Short circuit for empty lists
+                    const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                    const list_len = list_header.len();
+                    if (list_len == 0) {
+                        // Empty list
+                        list_value.decref(&self.runtime_layout_store, roc_ops);
+                        try self.handleForLoopComplete(work_stack, value_stack, fl_in.stmt_context, fl_in.bindings_start, roc_ops);
+                        return true;
+                    }
+                }
+
                 // Get the list layout
-                if (list_value.layout.tag != .list) {
+                if (list_value.layout.tag != .list and list_value.layout.tag != .list_of_zst) {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
@@ -17224,16 +17259,13 @@ pub const Interpreter = struct {
                     return true;
                 }
 
-                // Process first element
-                const elem_ptr = if (list_header.bytes) |buffer|
-                    buffer
-                else {
-                    list_value.decref(&self.runtime_layout_store, roc_ops);
-                    return error.TypeMismatch;
-                };
+                if (list_header.bytes == null) {
+                    std.debug.assert(list_value.layout.tag == .list_of_zst);
+                }
 
+                // Process first element
                 var elem_value = StackValue{
-                    .ptr = elem_ptr,
+                    .ptr = list_header.bytes,
                     .layout = elem_layout,
                     .is_initialized = true,
                     .rt_var = fl.patt_rt_var,
@@ -17298,10 +17330,8 @@ pub const Interpreter = struct {
                 const list_header: *const RocList = @ptrCast(@alignCast(fl.list_value.ptr.?));
                 const elem_ptr = if (list_header.bytes) |buffer|
                     buffer + next_index * fl.elem_size
-                else {
-                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
-                    return error.TypeMismatch;
-                };
+                else
+                    null;
 
                 var elem_value = StackValue{
                     .ptr = elem_ptr,
