@@ -1311,6 +1311,35 @@ test "List.map - adding" {
     );
 }
 
+// Test for List.append
+
+test "List.append - basic case" {
+    // Append two non-empty lists
+    try runExpectListI64(
+        "List.append([1i64, 2i64], 3i64)",
+        &[_]i64{ 1, 2, 3 },
+        .no_trace,
+    );
+}
+
+test "List.append - empty case" {
+    // Append to empty list
+    try runExpectListI64(
+        "List.append([], 42i64)",
+        &[_]i64{42},
+        .no_trace,
+    );
+}
+
+test "List.append - empty case" {
+    // Append to empty list
+    try runExpectListI64(
+        "List.append([], 42i64)",
+        &[_]i64{42},
+        .no_trace,
+    );
+}
+
 // Test for List.repeat
 
 test "List.repeat - basic case" {
