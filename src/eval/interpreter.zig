@@ -17175,13 +17175,15 @@ pub const Interpreter = struct {
                     return error.Crash;
                 };
 
-                // Get the list layout
-                if (list_value.layout.tag != .list) {
+                // Get the list layout - handle both regular lists and list_of_zst (empty lists)
+                if (list_value.layout.tag != .list and list_value.layout.tag != .list_of_zst) {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                const elem_layout_idx = list_value.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_layout = if (list_value.layout.tag == .list)
+                    self.runtime_layout_store.getLayout(list_value.layout.data.list)
+                else
+                    layout.Layout.zst(); // list_of_zst has zero-sized elements
                 const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
 
                 // Get the RocList header
