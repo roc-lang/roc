@@ -426,6 +426,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 }
 
+/// Helpers to setup and run an interpreter expecting a list of zst result.
 pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
