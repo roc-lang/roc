@@ -1412,16 +1412,11 @@ fn processSnapshotContent(
             };
 
             // Transform the definition expression
-            const result = transformer.transformExprWithLambdaSet(def.expr, name_hint) catch |err| {
-                std.log.warn("Closure transformation failed: {}", .{err});
-                continue;
-            };
+            const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
 
             // Track the lambda set for this pattern
             if (result.lambda_set) |lambda_set| {
-                transformer.pattern_lambda_sets.put(def.pattern, lambda_set) catch |err| {
-                    std.log.warn("Failed to track lambda set: {}", .{err});
-                };
+                try transformer.pattern_lambda_sets.put(def.pattern, lambda_set);
                 has_closure_transforms = true;
             }
 
@@ -1440,23 +1435,15 @@ fn processSnapshotContent(
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
             const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
             const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping) catch |err| {
-                // If constant folding fails, just skip it - the original expression is still valid
-                std.log.warn("Failed to create comptime evaluator for constant folding: {}", .{err});
-                return false;
-            };
+            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping);
             defer comptime_evaluator.deinit();
 
             // First evaluate any top-level defs
-            _ = comptime_evaluator.evalAll() catch |err| {
-                std.log.warn("Constant folding for defs failed: {}", .{err});
-            };
+            _ = try comptime_evaluator.evalAll();
 
             // Then evaluate and fold the standalone expression if present
             if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
-                _ = comptime_evaluator.evalAndFoldExpr(expr_idx) catch |err| {
-                    std.log.warn("Constant folding for expression failed: {}", .{err});
-                };
+                _ = try comptime_evaluator.evalAndFoldExpr(expr_idx);
             }
         }
     }

@@ -1637,19 +1637,11 @@ pub const ComptimeEvaluator = struct {
     pub fn evalAndFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx) !bool {
         const ops = self.get_ops();
 
-        // Try to evaluate the expression
-        const result = self.interpreter.eval(expr_idx, ops) catch |err| {
-            // If evaluation fails, we can't fold - just return false
-            std.log.debug("Failed to evaluate expression for folding: {}", .{err});
-            return false;
-        };
+        // Evaluate the expression
+        const result = try self.interpreter.eval(expr_idx, ops);
 
-        // Try to fold the result into a constant
-        self.tryFoldExpr(expr_idx, result) catch |err| {
-            // If folding fails (e.g., unsupported type), just return false
-            std.log.debug("Failed to fold expression: {}", .{err});
-            return false;
-        };
+        // Fold the result into a constant
+        try self.tryFoldExpr(expr_idx, result);
 
         return true;
     }
