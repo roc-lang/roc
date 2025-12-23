@@ -17,10 +17,10 @@ a = 1
 b : Dec
 b = 2
 add_ab : Dec -> Dec
-add_ab = #add_ab_1({a: a, b: b})
+add_ab = Closure_add_ab_1({a: a, b: b})
 result : Dec
 result = match add_ab {
-    #add_ab_1({a, b}) => {
+    Closure_add_ab_1({a, b}) => {
         x = 10
         a + b + x
     },
@@ -80,7 +80,7 @@ EndOfFile,
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "add_ab"))
-		(e-tag (name "#add_ab_1")
+		(e-tag (name "Closure_add_ab_1")
 			(args
 				(e-record
 					(fields

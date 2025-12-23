@@ -1494,7 +1494,7 @@ fn processSnapshotContent(
 
     if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
-        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx));
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path);
         try generateFormattedSection(&output, &content, &parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
@@ -2533,9 +2533,54 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
                     }
 
                     try result.appendSlice(" -> ");
+
+                    // Check if return type is also a function - if so, wrap in parens
+                    const ret_resolved = can_ir.types.resolveVar(func.ret);
+                    const ret_is_fn = ret_resolved.desc.content == .structure and
+                        (ret_resolved.desc.content.structure == .fn_pure or
+                        ret_resolved.desc.content.structure == .fn_effectful or
+                        ret_resolved.desc.content.structure == .fn_unbound);
+
                     const ret_type = try getDefaultedTypeString(allocator, can_ir, func.ret);
                     defer allocator.free(ret_type);
-                    try result.appendSlice(ret_type);
+
+                    if (ret_is_fn) {
+                        try result.append('(');
+                        try result.appendSlice(ret_type);
+                        try result.append(')');
+                    } else {
+                        try result.appendSlice(ret_type);
+                    }
+
+                    return result.toOwnedSlice();
+                },
+                .tag_union => |tag_union| {
+                    // Emit tag union as closed union (without extension variable)
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    try result.append('[');
+                    const tags_slice = can_ir.types.getTagsSlice(tag_union.tags);
+                    for (tags_slice.items(.name), tags_slice.items(.args), 0..) |tag_name_idx, tag_args, i| {
+                        if (i > 0) try result.appendSlice(", ");
+
+                        const tag_name = can_ir.getIdent(tag_name_idx);
+                        try result.appendSlice(tag_name);
+
+                        // Add payload types if any
+                        const arg_vars = can_ir.types.sliceVars(tag_args);
+                        if (arg_vars.len > 0) {
+                            try result.append('(');
+                            for (arg_vars, 0..) |arg_var, j| {
+                                if (j > 0) try result.appendSlice(", ");
+                                const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
+                                defer allocator.free(arg_type);
+                                try result.appendSlice(arg_type);
+                            }
+                            try result.append(')');
+                        }
+                    }
+                    try result.append(']');
 
                     return result.toOwnedSlice();
                 },
@@ -2690,10 +2735,54 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
     return getDefaultedTypeString(allocator, can_ir, expr_var);
 }
 
+/// Validate that the MONO output is valid Roc code by parsing it.
+/// Returns true if validation passed, false if there were errors.
+fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path: []const u8) bool {
+    // Create a module environment for validation
+    var validation_env = ModuleEnv.init(allocator, mono_source) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to create validation environment: {}", .{ source_path, err });
+        return false;
+    };
+    defer validation_env.deinit();
+
+    // Calculate line starts for error reporting
+    validation_env.common.calcLineStarts(allocator) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to calculate line starts: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Parse the MONO output as a headerless type module
+    var validation_ast = parse.parse(&validation_env.common, allocator) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
+        return false;
+    };
+    defer validation_ast.deinit(allocator);
+
+    // Check for parse errors
+    if (validation_ast.hasErrors()) {
+        const tokenize_errs = validation_ast.tokenize_diagnostics.items.len;
+        const parse_errs = validation_ast.parse_diagnostics.items.len;
+        std.log.err("MONO PARSE ERROR in {s}: {d} tokenize error(s), {d} parse error(s) in generated MONO output:", .{ source_path, tokenize_errs, parse_errs });
+        for (validation_ast.tokenize_diagnostics.items) |diag| {
+            const tag_name = @tagName(diag.tag);
+            std.log.err("  - tokenize: {s}", .{tag_name});
+        }
+        for (validation_ast.parse_diagnostics.items) |diag| {
+            const tag_name = @tagName(diag.tag);
+            std.log.err("  - parse: {s}", .{tag_name});
+        }
+        std.log.err("MONO source that failed to parse:\n{s}", .{mono_source});
+        return false;
+    }
+
+    return true;
+}
+
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx) !void {
-    try output.begin_section("MONO");
-    try output.begin_code_block("roc");
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8) !void {
+    // First, build the mono source in a buffer for validation
+    var mono_buffer = std.ArrayList(u8).empty;
+    defer mono_buffer.deinit(output.gpa);
 
     // Emit all top-level definitions (no module header - type modules are headerless)
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
@@ -2703,33 +2792,41 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     for (defs) |def_idx| {
         const def = can_ir.store.getDef(def_idx);
 
-        // Emit the declaration with its monomorphized type
+        // Emit the pattern (left side of =)
         emitter.reset();
         try emitter.emitPattern(def.pattern);
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
         defer output.gpa.free(pattern_output);
 
-        // Get the type from the pattern (not the transformed expression, which may not have a valid type)
-        // The pattern's type variable was set during type checking before transformation
+        // Get the type from the pattern
         const pattern_var = ModuleEnv.varFrom(def.pattern);
         const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_var);
         defer output.gpa.free(type_str);
 
-        // Emit the expression
+        // Emit the expression (right side of =)
         emitter.reset();
         try emitter.emitExpr(def.expr);
 
-        // Write: name : Type (on one line)
-        //        name = expr (on next line)
-        try output.md_writer.writer.writeAll(pattern_output);
-        try output.md_writer.writer.writeAll(" : ");
-        try output.md_writer.writer.writeAll(type_str);
-        try output.md_writer.writer.writeAll("\n");
-        try output.md_writer.writer.writeAll(pattern_output);
-        try output.md_writer.writer.writeAll(" = ");
-        try output.md_writer.writer.writeAll(emitter.getOutput());
-        try output.md_writer.writer.writeAll("\n");
+        // Build the mono source: name : Type\nname = expr\n (separate lines for annotation and definition)
+        try mono_buffer.appendSlice(output.gpa, pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " : ");
+        try mono_buffer.appendSlice(output.gpa, type_str);
+        try mono_buffer.appendSlice(output.gpa, "\n");
+        try mono_buffer.appendSlice(output.gpa, pattern_output);
+        try mono_buffer.appendSlice(output.gpa, " = ");
+        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+        try mono_buffer.appendSlice(output.gpa, "\n");
     }
+
+    // Validate the generated MONO output - fail if it's not valid Roc code
+    if (!validateMonoOutput(output.gpa, mono_buffer.items, source_path)) {
+        return error.MonoValidationFailed;
+    }
+
+    // Write the validated output to the section
+    try output.begin_section("MONO");
+    try output.begin_code_block("roc");
+    try output.md_writer.writer.writeAll(mono_buffer.items);
 
     // HTML MONO section
     if (output.html_writer) |writer| {

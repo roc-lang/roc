@@ -11,10 +11,10 @@ result = add_one(5)
 # MONO
 ~~~roc
 add_one : Dec -> Dec
-add_one = #add_one_1({})
+add_one = Closure_add_one_1({})
 result : Dec
 result = match add_one {
-    #add_one_1({}) => {
+    Closure_add_one_1({}) => {
         x = 5
         x + 1
     },
@@ -58,7 +58,7 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-tag (name "#add_one_1")
+		(e-tag (name "Closure_add_one_1")
 			(args
 				(e-empty_record))))
 	(d-let

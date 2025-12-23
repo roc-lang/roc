@@ -110,7 +110,7 @@ test "end-to-end: emit if expression" {
     const output = try emitFromSource(test_allocator, "if True 1 else 2");
     defer test_allocator.free(output);
 
-    try testing.expectEqualStrings("if True 1 else 2", output);
+    try testing.expectEqualStrings("if (True) 1 else 2", output);
 }
 
 test "end-to-end: emit tuple" {
@@ -491,7 +491,7 @@ test "transform pure lambda to tag" {
     defer test_allocator.free(output);
 
     // Pure lambda should be transformed to a # tag with empty record
-    try testing.expect(std.mem.indexOf(u8, output, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
     try testing.expect(std.mem.indexOf(u8, output, "{}") != null);
 }
 
@@ -529,7 +529,7 @@ test "transform closure with single capture to tag" {
     defer test_allocator.free(output);
 
     // The closure should have been transformed to a # tag
-    try testing.expect(std.mem.indexOf(u8, output, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
 
     // The capture 'x' should appear in the tag's record argument
     try testing.expect(std.mem.indexOf(u8, output, "x:") != null or
@@ -553,7 +553,7 @@ test "transform closure with multiple captures" {
     defer test_allocator.free(output);
 
     // The closure should have been transformed to a # tag
-    try testing.expect(std.mem.indexOf(u8, output, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
 
     // Both captures 'a' and 'b' should appear in the tag's record
     try testing.expect(std.mem.indexOf(u8, output, "a:") != null or
@@ -582,7 +582,7 @@ test "verify: closure with single capture transforms correctly" {
     // - Should have a # tag (internal closure tag)
     // - Should have a match expression for the call site
     // - Should reference the captured variable x
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -603,7 +603,7 @@ test "verify: closure with multiple captures transforms correctly" {
     // Verify transformation structure:
     // - Should have a # tag (internal closure tag)
     // - Should have a match expression for the call site
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -623,7 +623,7 @@ test "verify: pure lambda (no captures) transforms correctly" {
     // - Should have a # tag (internal closure tag)
     // - Should have a match expression for the call site
     // - Pure lambdas should have empty record {}
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
     try testing.expect(std.mem.indexOf(u8, transformed, "{}") != null);
 }
@@ -646,7 +646,7 @@ test "verify: nested closures with captures transforms correctly" {
     // Verify transformation structure:
     // - Should have # tags (internal closure tags)
     // - Should have match expressions for the call sites
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -669,11 +669,11 @@ test "ClosureTransformer: can generate tag names" {
     const tag_name1 = try transformer.generateClosureTagName(hint);
     const tag_str1 = module_env.getIdent(tag_name1);
 
-    try testing.expectEqualStrings("#myFunc_1", tag_str1);
+    try testing.expectEqualStrings("Closure_myFunc_1", tag_str1);
 
     // Generate another tag name without hint
     const tag_name2 = try transformer.generateClosureTagName(null);
     const tag_str2 = module_env.getIdent(tag_name2);
 
-    try testing.expectEqualStrings("#2", tag_str2);
+    try testing.expectEqualStrings("Closure_2", tag_str2);
 }

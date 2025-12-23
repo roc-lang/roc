@@ -14,11 +14,11 @@ result = add_five(3)
 ~~~roc
 x : Dec
 x = 10
-make_adder : Dec -> Dec -> Dec
-make_adder = #make_adder_1({x: x})
+make_adder : Dec -> (Dec -> Dec)
+make_adder = Closure_make_adder_1({x: x})
 add_five : Dec -> Dec
 add_five = match make_adder {
-    #make_adder_1({x}) => {
+    Closure_make_adder_1({x}) => {
         y = 5
         |y0, z| x + y0 + z
     },
@@ -82,7 +82,7 @@ EndOfFile,
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "make_adder"))
-		(e-tag (name "#make_adder_1")
+		(e-tag (name "Closure_make_adder_1")
 			(args
 				(e-record
 					(fields

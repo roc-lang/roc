@@ -18,9 +18,9 @@
 //! ```roc
 //! {
 //!     x = 42
-//!     addX = #addX({ x: x })
+//!     addX = Closure_addX_1({ x: x })
 //!     match addX {
-//!         #addX({ x }) => {
+//!         Closure_addX_1({ x }) => {
 //!             y = 10
 //!             (x + y)
 //!         },
@@ -30,7 +30,7 @@
 //!
 //! ## Implementation Notes
 //!
-//! - Closures become tags with capture records (using `#` prefix to avoid clashing with userspace tags)
+//! - Closures become tags with capture records (using `Closure_` prefix to avoid clashing with userspace tags)
 //! - Call sites become inline match expressions that dispatch based on the lambda set
 //! - Pure lambdas (no captures) become tags with empty records
 
@@ -152,11 +152,11 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
     // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
     if (hint) |h| {
         const hint_name = self.module_env.getIdent(h);
-        // Use # prefix since it's Roc's comment syntax and can't clash with userspace tags
-        // Include counter to ensure uniqueness, e.g., "myFunc" becomes "#myFunc_1", "#myFunc_2", etc.
+        // Use Closure_ prefix (capitalized) to create valid Roc tag names that won't clash with userspace tags
+        // Include counter to ensure uniqueness, e.g., "myFunc" becomes "Closure_myFunc_1", "Closure_myFunc_2", etc.
         const tag_name = try std.fmt.allocPrint(
             self.allocator,
-            "#{s}_{d}",
+            "Closure_{s}_{d}",
             .{ hint_name, self.closure_counter },
         );
         defer self.allocator.free(tag_name);
@@ -166,7 +166,7 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
     // Otherwise generate a numeric name
     const tag_name = try std.fmt.allocPrint(
         self.allocator,
-        "#{d}",
+        "Closure_{d}",
         .{self.closure_counter},
     );
     defer self.allocator.free(tag_name);
@@ -178,9 +178,9 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
 /// Transforms a call like `f(10)` where `f` is a closure into:
 /// ```roc
 /// match f {
-///     #f({ x }) => {
-///         y = 10      # Bind call arguments to lambda parameters
-///         x + y       # Original lambda body
+///     Closure_f_1({ x }) => {
+///         y = 10
+///         x + y
 ///     }
 /// }
 /// ```
@@ -317,8 +317,8 @@ fn generateDispatchMatch(
 /// Transforms a call like `f(10)` where `f` could be one of several closures into:
 /// ```roc
 /// match f {
-///     Closure_add1({}) => 10 + 1,
-///     Closure_mul2({}) => 10 * 2,
+///     Closure_add1_1({}) => 10 + 1,
+///     Closure_mul2_2({}) => 10 * 2,
 /// }
 /// ```
 fn generateLambdaSetDispatchMatch(
@@ -1060,7 +1060,7 @@ test "ClosureTransformer: generateClosureTagName with hint" {
     const tag_name = try transformer.generateClosureTagName(hint);
     const tag_str = module_env.getIdent(tag_name);
 
-    try testing.expectEqualStrings("#addX_1", tag_str);
+    try testing.expectEqualStrings("Closure_addX_1", tag_str);
 }
 
 test "ClosureTransformer: generateClosureTagName without hint" {
@@ -1079,5 +1079,5 @@ test "ClosureTransformer: generateClosureTagName without hint" {
     const tag_name = try transformer.generateClosureTagName(null);
     const tag_str = module_env.getIdent(tag_name);
 
-    try testing.expectEqualStrings("#1", tag_str);
+    try testing.expectEqualStrings("Closure_1", tag_str);
 }

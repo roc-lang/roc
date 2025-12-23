@@ -19,19 +19,19 @@ x = 10
 y : Dec
 y = 20
 add_x : Dec -> Dec
-add_x = #add_x_1({x: x})
+add_x = Closure_add_x_1({x: x})
 add_y : Dec -> Dec
-add_y = #add_y_2({y: y})
+add_y = Closure_add_y_2({y: y})
 result1 : Dec
 result1 = match add_x {
-    #add_x_1({x}) => {
+    Closure_add_x_1({x}) => {
         a = 5
         a + x
     },
 }
 result2 : Dec
 result2 = match add_y {
-    #add_y_2({y}) => {
+    Closure_add_y_2({y}) => {
         b = 5
         b + y
     },
@@ -104,7 +104,7 @@ EndOfFile,
 		(e-num (value "20")))
 	(d-let
 		(p-assign (ident "add_x"))
-		(e-tag (name "#add_x_1")
+		(e-tag (name "Closure_add_x_1")
 			(args
 				(e-record
 					(fields
@@ -113,7 +113,7 @@ EndOfFile,
 								(p-assign (ident "x")))))))))
 	(d-let
 		(p-assign (ident "add_y"))
-		(e-tag (name "#add_y_2")
+		(e-tag (name "Closure_add_y_2")
 			(args
 				(e-record
 					(fields

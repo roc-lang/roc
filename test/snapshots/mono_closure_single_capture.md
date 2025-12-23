@@ -14,10 +14,10 @@ result = add_x(10)
 x : Dec
 x = 42
 add_x : Dec -> Dec
-add_x = #add_x_1({x: x})
+add_x = Closure_add_x_1({x: x})
 result : Dec
 result = match add_x {
-    #add_x_1({x}) => {
+    Closure_add_x_1({x}) => {
         y = 10
         x + y
     },
@@ -68,7 +68,7 @@ EndOfFile,
 		(e-num (value "42")))
 	(d-let
 		(p-assign (ident "add_x"))
-		(e-tag (name "#add_x_1")
+		(e-tag (name "Closure_add_x_1")
 			(args
 				(e-record
 					(fields

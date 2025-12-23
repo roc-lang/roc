@@ -246,12 +246,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             for (branch_indices, 0..) |branch_idx, i| {
                 const branch = self.module_env.store.getIfBranch(branch_idx);
                 if (i > 0) {
-                    try self.write(" else if ");
+                    try self.write(" else if (");
                 } else {
-                    try self.write("if ");
+                    try self.write("if (");
                 }
                 try self.emitExpr(branch.cond);
-                try self.write(" ");
+                try self.write(") ");
                 try self.emitExpr(branch.body);
             }
             try self.write(" else ");

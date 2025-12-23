@@ -11,17 +11,17 @@ result = f(10)
 ~~~
 # MONO
 ~~~roc
-condition : [True, .._others]
+condition : [True]
 condition = True
 f : Dec -> Dec
-f = if condition #f_1({}) else #f_2({})
+f = if (condition) Closure_f_1({}) else Closure_f_2({})
 result : Dec
 result = match f {
-    #f_1({}) => {
+    Closure_f_1({}) => {
         x = 10
         x + 1
     },
-    #f_2({}) => {
+    Closure_f_2({}) => {
         x = 10
         x * 2
     },
@@ -85,11 +85,11 @@ EndOfFile,
 				(if-branch
 					(e-lookup-local
 						(p-assign (ident "condition")))
-					(e-tag (name "#f_1")
+					(e-tag (name "Closure_f_1")
 						(args
 							(e-empty_record)))))
 			(if-else
-				(e-tag (name "#f_2")
+				(e-tag (name "Closure_f_2")
 					(args
 						(e-empty_record))))))
 	(d-let
