@@ -19,6 +19,8 @@ pub const snapshot = @import("snapshot.zig");
 pub const occurs = @import("occurs.zig");
 /// **Problem Reporting**
 pub const problem = @import("problem.zig");
+/// **Exhaustiveness Checking**
+pub const exhaustive = @import("exhaustive.zig");
 
 pub const Check = @import("Check.zig");
 
@@ -27,6 +29,7 @@ pub const ReportBuilder = problem.ReportBuilder;
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("copy_import.zig"));
+    std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("occurs.zig"));
     std.testing.refAllDecls(@import("problem.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
