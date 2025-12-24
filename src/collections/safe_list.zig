@@ -128,7 +128,7 @@ pub fn SafeList(comptime T: type) type {
         /// Serialized representation of a SafeList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            offset: u64,
+            offset: i64,
             len: u64,
             capacity: u64,
 
@@ -175,7 +175,7 @@ pub fn SafeList(comptime T: type) type {
                     };
                 } else {
                     // Apply the base address to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(base + @as(usize, @intCast(self.offset)));
+                    const items_ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
 
                     safe_list.* = SafeList(T){
                         .items = .{
@@ -626,7 +626,7 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Serialized representation of a SafeMultiList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            offset: u64,
+            offset: i64,
             len: u64,
             capacity: u64,
 
@@ -710,7 +710,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 } else {
                     // We need to reconstruct the MultiArrayList from the serialized field arrays
                     // MultiArrayList stores fields separately by type, and we serialized them in field order
-                    const current_ptr = @as([*]u8, @ptrFromInt(base + @as(usize, @intCast(self.offset))));
+                    const current_ptr = @as([*]u8, @ptrFromInt(base +% @as(usize, @intCast(self.offset))));
 
                     // Allocate aligned memory for the MultiArrayList bytes
                     const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));

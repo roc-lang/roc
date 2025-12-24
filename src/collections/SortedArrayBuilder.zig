@@ -292,7 +292,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Serialized representation of SortedArrayBuilder
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            entries_offset: u64,
+            entries_offset: i64,
             entries_len: u64,
             entries_capacity: u64,
             sorted: bool,
@@ -339,7 +339,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                     };
                 } else {
                     // Apply the base address to convert from serialized offset to actual pointer
-                    const entries_ptr: [*]Entry = @ptrFromInt(base_addr + @as(usize, @intCast(self.entries_offset)));
+                    const entries_ptr: [*]Entry = @ptrFromInt(base_addr +% @as(usize, @intCast(self.entries_offset)));
 
                     builder.* = SortedArrayBuilder(K, V){
                         .entries = .{
