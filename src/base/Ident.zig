@@ -281,7 +281,8 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+        /// The base parameter is the base address of the serialized buffer in memory.
+        pub fn deserialize(self: *Serialized, base: usize) *Store {
             // Note: Serialized may be smaller than the runtime struct.
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
@@ -300,8 +301,8 @@ pub const Store = struct {
             }
 
             store.* = Store{
-                .interner = self.interner.deserialize(offset).*,
-                .attributes = self.attributes.deserialize(offset).*,
+                .interner = self.interner.deserialize(base).*,
+                .attributes = self.attributes.deserialize(base).*,
                 .next_unique_name = self.next_unique_name,
             };
 

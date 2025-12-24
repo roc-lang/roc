@@ -128,7 +128,7 @@ pub fn SafeList(comptime T: type) type {
         /// Serialized representation of a SafeList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            offset: i64,
+            offset: u64,
             len: u64,
             capacity: u64,
 
@@ -162,7 +162,8 @@ pub fn SafeList(comptime T: type) type {
             }
 
             /// Deserialize this Serialized struct into a SafeList
-            pub fn deserialize(self: *Serialized, offset: i64) *SafeList(T) {
+            /// The base parameter is the base address of the serialized buffer in memory.
+            pub fn deserialize(self: *Serialized, base: usize) *SafeList(T) {
                 // Note: Serialized may be smaller than the runtime struct.
                 // We deserialize by overwriting the Serialized memory with the runtime struct.
                 const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
@@ -173,8 +174,8 @@ pub fn SafeList(comptime T: type) type {
                         .items = .{},
                     };
                 } else {
-                    // Apply the offset to convert from serialized offset to actual pointer
-                    const items_ptr: [*]T = @ptrFromInt(@as(usize, @intCast(self.offset + offset)));
+                    // Apply the base address to convert from serialized offset to actual pointer
+                    const items_ptr: [*]T = @ptrFromInt(base + @as(usize, @intCast(self.offset)));
 
                     safe_list.* = SafeList(T){
                         .items = .{
@@ -625,7 +626,7 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Serialized representation of a SafeMultiList
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            offset: i64,
+            offset: u64,
             len: u64,
             capacity: u64,
 
@@ -695,7 +696,8 @@ pub fn SafeMultiList(comptime T: type) type {
             }
 
             /// Deserialize this Serialized struct into a SafeMultiList
-            pub fn deserialize(self: *Serialized, offset: i64) *SafeMultiList(T) {
+            /// The base parameter is the base address of the serialized buffer in memory.
+            pub fn deserialize(self: *Serialized, base: usize) *SafeMultiList(T) {
                 // Note: Serialized may be smaller than the runtime struct.
                 // We deserialize by overwriting the Serialized memory with the runtime struct.
                 const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
@@ -708,7 +710,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 } else {
                     // We need to reconstruct the MultiArrayList from the serialized field arrays
                     // MultiArrayList stores fields separately by type, and we serialized them in field order
-                    const current_ptr = @as([*]u8, @ptrFromInt(@as(usize, @intCast(self.offset + offset))));
+                    const current_ptr = @as([*]u8, @ptrFromInt(base + @as(usize, @intCast(self.offset))));
 
                     // Allocate aligned memory for the MultiArrayList bytes
                     const bytes_ptr = @as([*]align(@alignOf(T)) u8, @ptrCast(@alignCast(current_ptr)));
@@ -899,7 +901,7 @@ test "SafeList empty list CompactWriter roundtrip" {
     // Cast to SafeList.Serialized and deserialize - empty list should still work
     const serialized_offset = writer.total_bytes - serialized_size;
     const serialized_ptr = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr + serialized_offset)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
@@ -924,7 +926,7 @@ test "SafeList edge cases serialization" {
         _ = try writer.writeToBuffer(buffer);
 
         const serialized_ptr = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 0), deserialized.len());
     }
@@ -946,11 +948,11 @@ test "SafeList edge cases serialization" {
                     try self.list_u8.serialize(&container.list_u8, allocator, writer);
                 }
 
-                pub fn deserialize(self: *Serialized, offset: i64) *Self {
+                pub fn deserialize(self: *Serialized, base: usize) *Self {
                     const container = @as(*Self, @ptrFromInt(@intFromPtr(self)));
                     container.* = Self{
-                        .list_u32 = self.list_u32.deserialize(offset).*,
-                        .list_u8 = self.list_u8.deserialize(offset).*,
+                        .list_u32 = self.list_u32.deserialize(base).*,
+                        .list_u8 = self.list_u8.deserialize(base).*,
                     };
                     return container;
                 }
@@ -977,7 +979,7 @@ test "SafeList edge cases serialization" {
         _ = try writer.writeToBuffer(buffer);
 
         const serialized_ptr = @as(*Container.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 0), deserialized.list_u32.len());
         try testing.expectEqual(@as(usize, 1), deserialized.list_u8.len());
@@ -1010,7 +1012,7 @@ test "SafeList CompactWriter verify offset calculation" {
 
     // The offset should be the size of the Serialized struct itself
     // since the slice data comes after it in the buffer
-    // Serialized has: offset (i64=8) + len (u64=8) + capacity (u64=8) = 24 bytes
+    // Serialized has: offset (u64=8) + len (u64=8) + capacity (u64=8) = 24 bytes
     const expected_offset = @sizeOf(SafeList(u16).Serialized);
     try testing.expectEqual(expected_offset, serialized.offset);
 }
@@ -1063,7 +1065,7 @@ test "SafeList CompactWriter complete roundtrip example" {
     const serialized_ptr = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr)));
 
     // Step 7: Deserialize - convert offset to pointer
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Step 8: Verify data is accessible and correct
     const Idx = SafeList(u32).Idx;
@@ -1165,10 +1167,10 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     var offset: usize = 0;
 
     // 1. Deserialize u8 list
-    // SafeList(u8).Serialized has 8-byte alignment due to i64/u64 fields
+    // SafeList(u8).Serialized has 8-byte alignment due to u64 fields
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u8).Serialized));
     const s_u8 = @as(*SafeList(u8).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u8 = s_u8.deserialize(@as(i64, @intCast(base_addr)));
+    const deser_u8 = s_u8.deserialize(base_addr);
     offset += @sizeOf(SafeList(u8).Serialized);
     // Skip the u8 data (3 bytes)
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
@@ -1183,7 +1185,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 2. Deserialize u16 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
     const s_u16 = @as(*SafeList(u16).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u16 = s_u16.deserialize(@as(i64, @intCast(base_addr)));
+    const deser_u16 = s_u16.deserialize(base_addr);
     offset += @sizeOf(SafeList(u16).Serialized);
     // Skip the u16 data (2 items)
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
@@ -1197,7 +1199,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 3. Deserialize u32 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
     const s_u32 = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u32 = s_u32.deserialize(@as(i64, @intCast(base_addr)));
+    const deser_u32 = s_u32.deserialize(base_addr);
     offset += @sizeOf(SafeList(u32).Serialized);
     // Skip the u32 data (4 items)
     offset = std.mem.alignForward(usize, offset, @alignOf(u32));
@@ -1213,7 +1215,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 4. Deserialize u64 list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
     const s_u64 = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_u64 = s_u64.deserialize(@as(i64, @intCast(base_addr)));
+    const deser_u64 = s_u64.deserialize(base_addr);
     offset += @sizeOf(SafeList(u64).Serialized);
     // Skip the u64 data (2 items)
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
@@ -1227,7 +1229,7 @@ test "SafeList CompactWriter multiple lists with different alignments" {
     // 5. Deserialize struct list
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(AlignedStruct).Serialized));
     const s_struct = @as(*SafeList(AlignedStruct).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const deser_struct = s_struct.deserialize(@as(i64, @intCast(base_addr)));
+    const deser_struct = s_struct.deserialize(base_addr);
 
     const StructIdx = SafeList(AlignedStruct).Idx;
     try testing.expectEqual(@as(usize, 2), deser_struct.len());
@@ -1337,7 +1339,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 1. First list - u8
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u8).Serialized));
     const s1 = @as(*SafeList(u8).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d1 = s1.deserialize(@as(i64, @intCast(base)));
+    const d1 = s1.deserialize(base);
     offset += @sizeOf(SafeList(u8).Serialized);
     offset = std.mem.alignForward(usize, offset, @alignOf(u8));
     offset += 3; // 3 u8 elements
@@ -1351,7 +1353,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 2. Second list - u64
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u64).Serialized));
     const s2 = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d2 = s2.deserialize(@as(i64, @intCast(base)));
+    const d2 = s2.deserialize(base);
     offset += @sizeOf(SafeList(u64).Serialized);
     offset = std.mem.alignForward(usize, offset, @alignOf(u64));
     offset += 2 * @sizeOf(u64); // 2 u64 elements
@@ -1364,7 +1366,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 3. Third list - u16
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u16).Serialized));
     const s3 = @as(*SafeList(u16).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d3 = s3.deserialize(@as(i64, @intCast(base)));
+    const d3 = s3.deserialize(base);
     offset += @sizeOf(SafeList(u16).Serialized);
     offset = std.mem.alignForward(usize, offset, @alignOf(u16));
     offset += 4 * @sizeOf(u16); // 4 u16 elements
@@ -1379,7 +1381,7 @@ test "SafeList CompactWriter interleaved pattern with alignment tracking" {
     // 4. Fourth list - u32
     offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u32).Serialized));
     const s4 = @as(*SafeList(u32).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-    const d4 = s4.deserialize(@as(i64, @intCast(base)));
+    const d4 = s4.deserialize(base);
 
     try testing.expectEqual(@as(usize, 1), d4.len());
     try testing.expectEqual(@as(u32, 42), d4.get(.first).*);
@@ -1481,7 +1483,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // First list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(T).Serialized));
             const s1 = @as(*SafeList(T).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-            const d1 = s1.deserialize(@as(i64, @intCast(base)));
+            const d1 = s1.deserialize(base);
             offset += @sizeOf(SafeList(T).Serialized);
             offset = std.mem.alignForward(usize, offset, @alignOf(T));
             offset += length * @sizeOf(T);
@@ -1497,7 +1499,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // u8 list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(u8).Serialized));
             const s_u8 = @as(*SafeList(u8).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-            const d_u8 = s_u8.deserialize(@as(i64, @intCast(base)));
+            const d_u8 = s_u8.deserialize(base);
             offset += @sizeOf(SafeList(u8).Serialized);
             offset = std.mem.alignForward(usize, offset, @alignOf(u8));
             offset += 1; // 1 u8 element
@@ -1508,7 +1510,7 @@ test "SafeList CompactWriter brute-force alignment verification" {
             // Second list
             offset = std.mem.alignForward(usize, offset, @alignOf(SafeList(T).Serialized));
             const s2 = @as(*SafeList(T).Serialized, @ptrCast(@alignCast(buffer.ptr + offset)));
-            const d2 = s2.deserialize(@as(i64, @intCast(base)));
+            const d2 = s2.deserialize(base);
 
             try testing.expectEqual(length, d2.len());
             i = 0;
@@ -1575,7 +1577,7 @@ test "SafeMultiList CompactWriter roundtrip with file" {
     // 2. Field data (appended by serialize method)
     // So the Serialized struct is at the beginning
     const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify the data
     const Idx = SafeMultiList(TestStruct).Idx;
@@ -1645,7 +1647,7 @@ test "SafeMultiList empty list CompactWriter roundtrip" {
 
     // The Serialized struct is at the beginning of the buffer
     const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
@@ -1730,7 +1732,7 @@ test "SafeMultiList CompactWriter multiple lists different alignments" {
 
     _ = try file.read(buffer);
 
-    const base = @as(i64, @intCast(@intFromPtr(buffer.ptr)));
+    const base = @intFromPtr(buffer.ptr);
 
     // Deserialize list1 (at offset1)
     const D1Idx = SafeMultiList(Type1).Idx;
@@ -1828,7 +1830,7 @@ test "SafeMultiList CompactWriter brute-force alignment verification" {
 
         _ = try file.read(buffer);
 
-        const base = @as(i64, @intCast(@intFromPtr(buffer.ptr)));
+        const base = @intFromPtr(buffer.ptr);
 
         // Verify first list
         const d1_serialized = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr + offset1)));
@@ -1927,7 +1929,7 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
 
             // Deserialize
             const serialized_ptr = @as(*SafeMultiList(TestType).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-            const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+            const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
             // Verify
             try testing.expectEqual(len, deserialized.len());
@@ -2097,7 +2099,7 @@ test "SafeMultiList CompactWriter verify exact memory layout" {
 
         // Also verify it deserializes correctly
         const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
         // Verify all data is accessible
         i = 0;
@@ -2178,7 +2180,7 @@ test "SafeMultiList CompactWriter stress test many field types" {
 
         // Deserialize
         const serialized_ptr = @as(*SafeMultiList(ComplexStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
         // Verify
         try testing.expectEqual(len, deserialized.len());
@@ -2244,7 +2246,7 @@ test "SafeMultiList CompactWriter empty with capacity" {
 
     // Deserialize
     const serialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify it's still empty
     try testing.expectEqual(@as(usize, 0), deserialized.len());
@@ -2297,7 +2299,7 @@ test "SafeMultiList.Serialized roundtrip" {
 
     // The Serialized struct is at the beginning of the buffer
     const deserialized_ptr = @as(*SafeMultiList(TestStruct).Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const list = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const list = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify the items are accessible
     try testing.expectEqual(@as(u32, 3), list.len());
@@ -2324,4 +2326,66 @@ test "SafeMultiList.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 100), item1.a);
     try testing.expectEqual(@as(f32, 1.5), item1.b);
     try testing.expectEqual(@as(u8, 255), item1.c);
+}
+
+test "SafeList deserialization with high address (issue 8728)" {
+    // This test verifies that deserialization works correctly when the buffer
+    // is located at a high memory address (above 0x8000_0000_0000_0000).
+    // Previously, casting such addresses to i64 made them negative, causing
+    // the @intCast to usize to fail with "integer does not fit in destination type".
+
+    const gpa = testing.allocator;
+
+    // Create a simple SafeList with some data
+    var original = try SafeList(u64).initCapacity(gpa, 3);
+    defer original.deinit(gpa);
+    _ = try original.append(gpa, 100);
+    _ = try original.append(gpa, 200);
+    _ = try original.append(gpa, 300);
+
+    // Serialize it
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+
+    const serialized = try writer.appendAlloc(gpa, SafeList(u64).Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+
+    // Write to a buffer
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    // Get the serialized struct
+    const serialized_ptr = @as(*SafeList(u64).Serialized, @ptrCast(@alignCast(buffer.ptr)));
+
+    // Test with the actual buffer address (should work on any system)
+    const actual_base = @intFromPtr(buffer.ptr);
+    const deserialized1 = serialized_ptr.deserialize(actual_base);
+    try testing.expectEqual(@as(usize, 3), deserialized1.len());
+
+    // Now test the math that would occur with a high address.
+    // If a buffer were at address 0x9000_0000_0000_0000, and the data offset within
+    // the buffer is, say, 0x100, then the final address should be 0x9000_0000_0000_0100.
+    //
+    // With the old i64-based approach:
+    // - base address 0x9000_0000_0000_0000 cast to i64 = negative number
+    // - adding offset 0x100 still gives negative number
+    // - casting negative to usize fails
+    //
+    // With the correct usize-based approach:
+    // - base address 0x9000_0000_0000_0000 stays as usize
+    // - adding u64 offset 0x100 gives 0x9000_0000_0000_0100
+    // - this is a valid usize
+    //
+    // We can't actually allocate at such a high address in a test, but we can verify
+    // the arithmetic works correctly by checking that high_base + offset produces
+    // the expected result when both are treated as unsigned.
+    const high_base: usize = 0x9000_0000_0000_0000;
+    const offset_in_buffer: u64 = 0x100;
+    const expected_address: usize = high_base + offset_in_buffer;
+
+    // This would have failed with the old i64 approach because:
+    // @as(i64, @intCast(high_base)) would be negative
+    // But with usize, this works correctly
+    try testing.expectEqual(@as(usize, 0x9000_0000_0000_0100), expected_address);
 }

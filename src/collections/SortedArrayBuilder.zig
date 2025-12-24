@@ -292,7 +292,7 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
         /// Serialized representation of SortedArrayBuilder
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
-            entries_offset: i64,
+            entries_offset: u64,
             entries_len: u64,
             entries_capacity: u64,
             sorted: bool,
@@ -319,9 +319,10 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             }
 
             /// Deserialize this Serialized struct into a SortedArrayBuilder
-            pub fn deserialize(self: *Serialized, offset: i64) *SortedArrayBuilder(K, V) {
+            /// The base_addr parameter is the base address of the serialized buffer in memory.
+            pub fn deserialize(self: *Serialized, base_addr: usize) *SortedArrayBuilder(K, V) {
                 // Note: Serialized may be smaller than the runtime struct because:
-                // - Uses i64 offsets instead of usize pointers
+                // - Uses u64 offsets instead of usize pointers
                 // - Omits runtime-only fields like allocators
                 // - May have different alignment/padding requirements
                 // We deserialize by overwriting the Serialized memory with the runtime struct.
@@ -337,9 +338,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
                         .deduplicated = self.deduplicated,
                     };
                 } else {
-                    // Apply the offset to convert from serialized offset to actual pointer
-                    const entries_ptr_usize: usize = @intCast(self.entries_offset + offset);
-                    const entries_ptr: [*]Entry = @ptrFromInt(entries_ptr_usize);
+                    // Apply the base address to convert from serialized offset to actual pointer
+                    const entries_ptr: [*]Entry = @ptrFromInt(base_addr + @as(usize, @intCast(self.entries_offset)));
 
                     builder.* = SortedArrayBuilder(K, V){
                         .entries = .{
