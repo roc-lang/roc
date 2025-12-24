@@ -4082,13 +4082,32 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_var => |var_stmt| {
                 // Check the pattern
                 try self.checkPattern(var_stmt.pattern_idx, env, .no_expectation);
-                const reassign_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
+                const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
-                does_fx = try self.checkExpr(var_stmt.expr, env, .no_expectation) or does_fx;
+                // Check the annotation, if it exists
+                const expectation = blk: {
+                    if (var_stmt.anno) |annotation_idx| {
+                        // Generate the annotation type var in-place
+                        try self.generateAnnotationType(annotation_idx, env);
+                        const annotation_var = ModuleEnv.varFrom(annotation_idx);
+
+                        // Unify the pattern with the annotation
+                        _ = try self.unify(var_pattern_var, annotation_var, env);
+
+                        // Return the expectation
+                        break :blk Expected{
+                            .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                        };
+                    } else {
+                        break :blk Expected.no_expectation;
+                    }
+                };
+
+                does_fx = try self.checkExpr(var_stmt.expr, env, expectation) or does_fx;
                 const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
 
                 // Unify the pattern with the expression
-                _ = try self.unify(reassign_pattern_var, var_expr, env);
+                _ = try self.unify(var_pattern_var, var_expr, env);
 
                 _ = try self.unify(stmt_var, var_expr, env);
             },

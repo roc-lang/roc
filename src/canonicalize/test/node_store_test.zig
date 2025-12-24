@@ -82,6 +82,7 @@ test "NodeStore round trip - Statements" {
         .s_var = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
+            .anno = rand_idx(CIR.Annotation.Idx),
         },
     });
 
