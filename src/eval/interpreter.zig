@@ -11489,30 +11489,17 @@ pub const Interpreter = struct {
                     }
                     try value_stack.push(dest);
                 } else {
-                    // Try to get element type from list_rt_var if it's a concrete List type.
-                    // This is useful when the list literal's element type can be inferred
-                    // from context (e.g., when expected_rt_var provides a concrete element type).
-                    const elem_rt_var: types.Var = blk: {
-                        const list_resolved = self.runtime_types.resolveVar(list_rt_var);
-                        if (list_resolved.desc.content == .structure) {
-                            if (list_resolved.desc.content.structure == .nominal_type) {
-                                const nom = list_resolved.desc.content.structure.nominal_type;
-                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                                // For List(elem), vars[0] is backing, vars[1] is element type
-                                if (vars.len == 2) {
-                                    const elem_var = vars[1];
-                                    const elem_resolved = self.runtime_types.resolveVar(elem_var);
-                                    // Only use if element type is concrete (not flex/rigid)
-                                    if (elem_resolved.desc.content == .structure) {
-                                        break :blk elem_var;
-                                    }
-                                }
-                            }
-                        }
-                        // Fallback: extract from first element's compile-time type
-                        const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-                        break :blk try self.translateTypeVar(self.env, first_elem_var);
-                    };
+                    // Get element type from list_rt_var. The list type should be List(elem)
+                    // where vars[0] is backing and vars[1] is the element type.
+                    // The element type may be flex (e.g., Num *) which is fine - downstream
+                    // code like getRuntimeLayout will default flex to Dec as needed.
+                    const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                    std.debug.assert(list_resolved.desc.content == .structure);
+                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
+                    const nom = list_resolved.desc.content.structure.nominal_type;
+                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                    const elem_rt_var = vars[1];
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
