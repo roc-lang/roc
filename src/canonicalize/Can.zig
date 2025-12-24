@@ -1857,9 +1857,8 @@ pub fn canonicalizeFile(
                             .top_level_var_error => {
                                 // This shouldn't happen for declarations in associated blocks
                             },
-                            .var_across_function_boundary => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
+                            .var_across_function_boundary => unreachable, // is_declaration=true
+                            .var_reassignment_ok => unreachable, // is_declaration=true
                         }
                     }
                 }
@@ -6458,35 +6457,12 @@ pub fn canonicalizePattern(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Check if this is a reassignable identifier ($var) that already exists as a var
-                // If so, we reuse the existing pattern for the reassignment
-                if (ident_idx.attributes.reassignable) {
-                    switch (self.scopeLookup(.ident, ident_idx)) {
-                        .found => |existing_pattern_idx| {
-                            if (self.isVarPattern(existing_pattern_idx)) {
-                                // This is a var reassignment in a pattern (e.g., `(a, $x) = ...` where $x exists)
-                                // Check for function boundary violations
-                                if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
-                                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
-                                        .region = region,
-                                    } });
-                                }
-                                // Reuse the existing pattern - this ensures that the interpreter's
-                                // upsertBinding will update the existing binding rather than creating
-                                // a new one with a different pattern_idx
-                                return existing_pattern_idx;
-                            }
-                        },
-                        .not_found => {},
-                    }
-                }
-
                 // Check if a placeholder exists for this identifier in the current scope
                 // Placeholders are tracked in the placeholder_idents hash map
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
 
-                // Create a Pattern node for our identifier (new binding, not a var reassignment)
+                // Create a Pattern node for our identifier
                 const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
                     .ident = ident_idx,
                 } }, region);
@@ -6496,7 +6472,8 @@ pub fn canonicalizePattern(
                     try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
                 } else {
                     // Introduce the identifier into scope mapping to this pattern node
-                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                    // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, false)) {
                         .success => {},
                         .shadowing_warning => |shadowed_pattern_idx| {
                             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -6515,10 +6492,14 @@ pub fn canonicalizePattern(
                             });
                         },
                         .var_across_function_boundary => {
-                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
-                                .ident = ident_idx,
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
                                 .region = region,
                             } });
+                        },
+                        .var_reassignment_ok => |existing_pattern_idx| {
+                            // This is a var reassignment - return the existing pattern
+                            // so the interpreter's upsertBinding will update the existing binding
+                            return existing_pattern_idx;
                         },
                     }
                 }
@@ -6537,33 +6518,15 @@ pub fn canonicalizePattern(
             // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Check if this var already exists in scope - if so, this is a reassignment
-                switch (self.scopeLookup(.ident, ident_idx)) {
-                    .found => |existing_pattern_idx| {
-                        if (self.isVarPattern(existing_pattern_idx)) {
-                            // This is a var reassignment - check for function boundary violations
-                            if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
-                                return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
-                                    .region = region,
-                                } });
-                            }
-                            // Reuse the existing pattern - this ensures that the interpreter's
-                            // upsertBinding will update the existing binding
-                            return existing_pattern_idx;
-                        }
-                    },
-                    .not_found => {},
-                }
-
-                // Create a new Pattern node for our mutable identifier (this is a declaration)
+                // Create a Pattern node for our mutable identifier
                 const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
                     .ident = ident_idx,
                 } }, region);
 
-                // Introduce the var with function boundary tracking (using scopeIntroduceVar)
-                _ = try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
-
-                return pattern_idx;
+                // Introduce the var with function boundary tracking
+                // scopeIntroduceVar will detect if this is a reassignment of an existing var
+                // and return the existing pattern in that case
+                return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
             } else {
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
@@ -7111,6 +7074,7 @@ pub fn canonicalizePattern(
                                 } });
                                 return pattern_idx;
                             },
+                            .var_reassignment_ok => unreachable, // is_declaration=true
                         }
                     }
                 } else {
@@ -7217,6 +7181,9 @@ pub fn canonicalizePattern(
                                         .ident = ident_idx,
                                         .region = list_rest_region,
                                     } });
+                                },
+                                .var_reassignment_ok => {
+                                    // This shouldn't happen for list rest patterns (is_declaration=true)
                                 },
                             }
 
@@ -7347,6 +7314,9 @@ pub fn canonicalizePattern(
                             .ident = ident_idx,
                             .region = region,
                         } });
+                    },
+                    .var_reassignment_ok => {
+                        // This shouldn't happen for as patterns (is_declaration=true)
                     },
                 }
 
@@ -7667,10 +7637,7 @@ fn scopeIntroduceVar(
 
     switch (result) {
         .success => {
-            // If this is a var declaration, record which function it belongs to
-            if (is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
+            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .shadowing_warning => |shadowed_pattern_idx| {
@@ -7680,9 +7647,7 @@ fn scopeIntroduceVar(
                 .region = region,
                 .original_region = original_region,
             } });
-            if (is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
+            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .top_level_var_error => {
@@ -7698,6 +7663,10 @@ fn scopeIntroduceVar(
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
             } });
+        },
+        .var_reassignment_ok => |existing_pattern_idx| {
+            // Var reassignment - return the existing pattern
+            return existing_pattern_idx;
         },
     }
 }
@@ -10232,8 +10201,9 @@ pub fn scopeIntroduceInternal(
 
     // Check for existing identifier in any scope level for shadowing detection
     if (self.scopeContains(item_kind, ident_idx)) |existing| {
-        // If it's a var reassignment (not declaration), check function boundaries
-        if (is_var and !is_declaration) {
+        // Check if this is a var reassignment: the existing pattern must have been
+        // declared with `var` (source of truth), and we're not declaring a new var
+        if (!is_declaration and self.isVarPattern(existing)) {
             // Find the scope where the var was declared and check for function boundaries
             var declaration_scope_idx: ?usize = null;
             var scope_idx = self.scopes.items.len;
@@ -10268,9 +10238,9 @@ pub fn scopeIntroduceInternal(
                     // Different function, return error
                     return Scope.IntroduceResult{ .var_across_function_boundary = existing };
                 } else {
-                    // Same function, allow reassignment without warning
-                    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
-                    return Scope.IntroduceResult{ .success = {} };
+                    // Same function, allow reassignment - return the existing pattern
+                    // so all references use the same pattern_idx for upsertBinding to work
+                    return Scope.IntroduceResult{ .var_reassignment_ok = existing };
                 }
             }
 
@@ -10282,6 +10252,12 @@ pub fn scopeIntroduceInternal(
         // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
         try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+        // If this is a var declaration, record it in var_patterns
+        if (is_var and is_declaration) {
+            try self.recordVarFunction(pattern_idx);
+        }
+
         return Scope.IntroduceResult{ .shadowing_warning = existing };
     }
 
@@ -10294,12 +10270,24 @@ pub fn scopeIntroduceInternal(
         if (ident_idx.idx == entry.key_ptr.idx) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+            // If this is a var declaration, record it in var_patterns
+            if (is_var and is_declaration) {
+                try self.recordVarFunction(pattern_idx);
+            }
+
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
         }
     }
 
     // No conflicts, introduce successfully
     try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+    // If this is a var declaration, record it in var_patterns
+    if (is_var and is_declaration) {
+        try self.recordVarFunction(pattern_idx);
+    }
+
     return Scope.IntroduceResult{ .success = {} };
 }
 

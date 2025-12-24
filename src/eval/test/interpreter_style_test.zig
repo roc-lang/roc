@@ -2563,3 +2563,40 @@ test "dbg: list of strings" {
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     try std.testing.expectEqualStrings("[\"a\", \"b\", \"c\"]", host.dbg_messages.items[0]);
 }
+
+// Regression test for issue #8729: var reassignment in tuple pattern in while loop
+test "issue 8729: var reassignment in tuple pattern in while loop" {
+    const roc_src =
+        \\{
+        \\    get_pair = |n| ("word", n + 1)
+        \\    var $index = 0
+        \\    while $index < 3 {
+        \\        (word, $index) = get_pair($index)
+        \\        dbg word
+        \\    }
+        \\    $index
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("3", rendered);
+
+    // The loop should have run 3 times, outputting "word" each time
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"word\"", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("\"word\"", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("\"word\"", host.dbg_messages.items[2]);
+}
