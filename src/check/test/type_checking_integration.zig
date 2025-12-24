@@ -2317,7 +2317,6 @@ test "check type - scoped type variables - bigger example 2" {
     );
 }
 
-
 // Associated items referencing each other
 
 test "associated item can reference another associated item from same type" {
