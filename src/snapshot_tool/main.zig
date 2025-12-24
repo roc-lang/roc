@@ -1436,6 +1436,12 @@ fn processSnapshotContent(
                 has_closure_transforms = true;
             }
 
+            // If the expression is a lambda with a return set, track what it returns when called
+            // This allows propagating closure information through calls to this lambda
+            if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
+                try transformer.pattern_lambda_return_sets.put(def.pattern, return_set);
+            }
+
             // Update the definition to use the transformed expression
             can_ir.store.setDefExpr(def_idx, result.expr);
         }
@@ -1501,7 +1507,7 @@ fn processSnapshotContent(
 
     if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
-        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path);
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config);
         try generateFormattedSection(&output, &content, &parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
@@ -2922,9 +2928,9 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
     return getDefaultedTypeString(allocator, can_ir, expr_var);
 }
 
-/// Validate that the MONO output is valid Roc code by parsing it.
+/// Validate that the MONO output is valid Roc code by parsing, canonicalizing, and type-checking it.
 /// Returns true if validation passed, false if there were errors.
-fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path: []const u8) bool {
+fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path: []const u8, config: *const Config) bool {
     // Create a module environment for validation
     var validation_env = ModuleEnv.init(allocator, mono_source) catch |err| {
         std.log.err("MONO VALIDATION ERROR in {s}: Failed to create validation environment: {}", .{ source_path, err });
@@ -2959,6 +2965,113 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
             std.log.err("  - parse: {s}", .{tag_name});
         }
         std.log.err("MONO source that failed to parse:\n{s}", .{mono_source});
+        return false;
+    }
+
+    // Initialize CIR fields for canonicalization
+    validation_env.initCIRFields("mono_validation") catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to init CIR fields: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Set up module_envs with builtin types if available
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+
+    if (config.builtin_module) |builtin_env| {
+        Can.populateModuleEnvs(&module_envs, &validation_env, builtin_env, config.builtin_indices) catch |err| {
+            std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate module envs: {}", .{ source_path, err });
+            return false;
+        };
+    }
+
+    // Canonicalize the parsed MONO output
+    var czer = Can.init(&validation_env, &validation_ast, &module_envs) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
+        return false;
+    };
+    defer czer.deinit();
+
+    czer.canonicalizeFile() catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Canonicalization failed: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Check for canonicalization diagnostics (skip warnings, only fail on errors)
+    const can_diagnostics = validation_env.getDiagnostics() catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to get diagnostics: {}", .{ source_path, err });
+        return false;
+    };
+    defer allocator.free(can_diagnostics);
+
+    // Count only actual errors, not warnings (shadowing_warning is just a warning)
+    var error_count: usize = 0;
+    for (can_diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .shadowing_warning => {}, // Skip warnings
+            else => error_count += 1,
+        }
+    }
+
+    if (error_count > 0) {
+        std.log.err("MONO CANONICALIZATION ERROR in {s}: {d} error(s) in generated MONO output:", .{ source_path, error_count });
+        for (can_diagnostics) |diagnostic| {
+            switch (diagnostic) {
+                .shadowing_warning => {}, // Skip warnings in output too
+                else => {
+                    const tag_name = @tagName(diagnostic);
+                    std.log.err("  - {s}", .{tag_name});
+                },
+            }
+        }
+        std.log.err("MONO source that failed canonicalization:\n{s}", .{mono_source});
+        return false;
+    }
+
+    // Type-check the canonicalized MONO output
+    // Create a BuiltinContext using the config's builtin information
+    const module_name = validation_env.insertIdent(base.Ident.for_text("mono_validation")) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to insert module name: {}", .{ source_path, err });
+        return false;
+    };
+
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = module_name,
+        .bool_stmt = config.builtin_indices.bool_type,
+        .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
+        .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
+    };
+
+    var checker = Check.init(
+        allocator,
+        &validation_env.types,
+        &validation_env,
+        &.{}, // No imported modules
+        &module_envs,
+        &validation_env.store.regions,
+        builtin_ctx,
+    ) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize type checker: {}", .{ source_path, err });
+        return false;
+    };
+    defer checker.deinit();
+
+    checker.checkFile() catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Type checking failed: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Check for type-checking problems
+    const type_problems = checker.problems.problems.items;
+    if (type_problems.len > 0) {
+        std.log.err("MONO TYPE ERROR in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
+        for (type_problems) |problem| {
+            const tag_name = @tagName(problem);
+            std.log.err("  - {s}", .{tag_name});
+        }
+        std.log.err("MONO source that failed type-checking:\n{s}", .{mono_source});
         return false;
     }
 
@@ -3013,7 +3126,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
 }
 
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3058,7 +3171,7 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     }
 
     // Validate the generated MONO output - fail if it's not valid Roc code
-    if (!validateMonoOutput(output.gpa, mono_buffer.items, source_path)) {
+    if (!validateMonoOutput(output.gpa, mono_buffer.items, source_path, config)) {
         return error.MonoValidationFailed;
     }
 

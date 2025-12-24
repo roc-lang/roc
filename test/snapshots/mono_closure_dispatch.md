@@ -17,11 +17,15 @@ result = func(1)
 func : Dec -> Dec
 func = |offset| {
 	condition = True
-	f = if (condition) Closure_f_1({ offset: offset }) else |x| x * 2
+	f = if (condition) Closure_f_1({ offset: offset }) else Closure_f_2({})
 	match f {
 		Closure_f_1({ offset }) => {
 			x = 10
 			x + offset
+		}
+		Closure_f_2({}) => {
+			x = 10
+			x * 2
 		}
 	}
 }
@@ -119,13 +123,9 @@ EndOfFile,
 													(e-lookup-local
 														(p-assign (ident "offset"))))))))))
 						(if-else
-							(e-lambda
+							(e-tag (name "Closure_f_2")
 								(args
-									(p-assign (ident "x")))
-								(e-binop (op "mul")
-									(e-lookup-local
-										(p-assign (ident "x")))
-									(e-num (value "2")))))))
+									(e-empty_record))))))
 				(e-match
 					(match
 						(cond
@@ -145,7 +145,20 @@ EndOfFile,
 											(e-lookup-local
 												(p-assign (ident "x")))
 											(e-lookup-local
-												(p-assign (ident "offset")))))))))))))
+												(p-assign (ident "offset")))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-block
+										(s-let
+											(p-assign (ident "x"))
+											(e-num (value "10")))
+										(e-binop (op "mul")
+											(e-lookup-local
+												(p-assign (ident "x")))
+											(e-num (value "2"))))))))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -157,9 +170,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> a where [_b.from_numeral : c, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> _ret where [_b.from_numeral : Numeral -> (a -> a), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : b]"))
-		(expr (type "a where [a.from_numeral : a]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
 ~~~

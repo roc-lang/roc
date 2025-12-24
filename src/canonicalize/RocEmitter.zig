@@ -466,7 +466,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(" {\n");
             self.indent_level += 1;
             const branch_indices = self.module_env.store.sliceMatchBranches(match.branches);
-            for (branch_indices, 0..) |branch_idx, branch_i| {
+            for (branch_indices) |branch_idx| {
                 const branch = self.module_env.store.getMatchBranch(branch_idx);
                 try self.emitIndent();
                 // Emit patterns
@@ -483,10 +483,6 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 try self.write(" => ");
                 try self.emitExpr(branch.value);
-                // Only add comma if not the last branch
-                if (branch_i < branch_indices.len - 1) {
-                    try self.write(",");
-                }
                 try self.write("\n");
             }
             self.indent_level -= 1;
@@ -553,38 +549,43 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             }
         },
         .record_destructure => |record| {
-            try self.write("{ ");
             const destruct_indices = self.module_env.store.sliceRecordDestructs(record.destructs);
-            for (destruct_indices, 0..) |destruct_idx, i| {
-                const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
-                if (i > 0) try self.write(", ");
-                const name = self.module_env.getIdent(destruct.label);
-                try self.write(name);
-                switch (destruct.kind) {
-                    .Required => |pat_idx| {
-                        // Check if the pattern is just an assign with same name
-                        const inner_pat = self.module_env.store.getPattern(pat_idx);
-                        switch (inner_pat) {
-                            .assign => |inner_assign| {
-                                const inner_name = self.module_env.getIdent(inner_assign.ident);
-                                if (!std.mem.eql(u8, name, inner_name)) {
+            // Empty record destructure should be {}
+            if (destruct_indices.len == 0) {
+                try self.write("{}");
+            } else {
+                try self.write("{ ");
+                for (destruct_indices, 0..) |destruct_idx, i| {
+                    const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
+                    if (i > 0) try self.write(", ");
+                    const name = self.module_env.getIdent(destruct.label);
+                    try self.write(name);
+                    switch (destruct.kind) {
+                        .Required => |pat_idx| {
+                            // Check if the pattern is just an assign with same name
+                            const inner_pat = self.module_env.store.getPattern(pat_idx);
+                            switch (inner_pat) {
+                                .assign => |inner_assign| {
+                                    const inner_name = self.module_env.getIdent(inner_assign.ident);
+                                    if (!std.mem.eql(u8, name, inner_name)) {
+                                        try self.write(": ");
+                                        try self.emitPattern(pat_idx);
+                                    }
+                                },
+                                else => {
                                     try self.write(": ");
                                     try self.emitPattern(pat_idx);
-                                }
-                            },
-                            else => {
-                                try self.write(": ");
-                                try self.emitPattern(pat_idx);
-                            },
-                        }
-                    },
-                    .SubPattern => |pat_idx| {
-                        try self.write(": ");
-                        try self.emitPattern(pat_idx);
-                    },
+                                },
+                            }
+                        },
+                        .SubPattern => |pat_idx| {
+                            try self.write(": ");
+                            try self.emitPattern(pat_idx);
+                        },
+                    }
                 }
+                try self.write(" }");
             }
-            try self.write(" }");
         },
         .tuple => |t| {
             try self.write("(");

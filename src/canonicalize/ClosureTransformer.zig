@@ -106,6 +106,12 @@ closures: std.AutoHashMap(Expr.Idx, ClosureInfo),
 /// Map from pattern index to lambda set (for tracking which closures can reach a variable)
 pattern_lambda_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 
+/// Map from lambda expression to its return lambda set (what closures it returns when called)
+lambda_return_sets: std.AutoHashMap(Expr.Idx, LambdaSet),
+
+/// Map from pattern to lambda return set (for looking up what a variable's lambda returns)
+pattern_lambda_return_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
+
 /// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
 top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 
@@ -120,6 +126,8 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .closure_counter = 0,
         .closures = std.AutoHashMap(Expr.Idx, ClosureInfo).init(allocator),
         .pattern_lambda_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
+        .lambda_return_sets = std.AutoHashMap(Expr.Idx, LambdaSet).init(allocator),
+        .pattern_lambda_return_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
         .dispatch_functions = std.ArrayList(DispatchFunction).empty,
     };
@@ -151,6 +159,20 @@ pub fn deinit(self: *Self) void {
         lambda_set.closures.deinit(self.allocator);
     }
     self.pattern_lambda_sets.deinit();
+
+    // Free lambda return sets
+    var return_set_iter = self.lambda_return_sets.valueIterator();
+    while (return_set_iter.next()) |lambda_set| {
+        lambda_set.closures.deinit(self.allocator);
+    }
+    self.lambda_return_sets.deinit();
+
+    // Free pattern lambda return sets
+    var pattern_return_iter = self.pattern_lambda_return_sets.valueIterator();
+    while (pattern_return_iter.next()) |lambda_set| {
+        lambda_set.closures.deinit(self.allocator);
+    }
+    self.pattern_lambda_return_sets.deinit();
 
     // Free top-level patterns set
     self.top_level_patterns.deinit();
@@ -495,11 +517,12 @@ pub fn transformExprWithLambdaSet(
             return .{ .expr = transformed, .lambda_set = null };
         },
         .e_lambda => |lambda| {
-            // Pure lambda (no captures) - transform body for nested closures
-            const transformed_body = try self.transformExpr(lambda.body);
+            // Pure lambda (no captures) - transform body and track what it returns
+            // Use transformExprWithLambdaSet to collect the body's lambda set
+            const body_result = try self.transformExprWithLambdaSet(lambda.body, name_hint);
 
             // If body is unchanged, return original lambda
-            if (transformed_body == lambda.body) {
+            if (body_result.expr == lambda.body) {
                 return .{ .expr = expr_idx, .lambda_set = null };
             }
 
@@ -507,17 +530,31 @@ pub fn transformExprWithLambdaSet(
             const new_lambda = try self.module_env.store.addExpr(Expr{
                 .e_lambda = .{
                     .args = lambda.args,
-                    .body = transformed_body,
+                    .body = body_result.expr,
                 },
             }, base.Region.zero());
+
+            // If the body returns closures, track this so calls to this lambda return those closures
+            if (body_result.lambda_set) |body_lambda_set| {
+                try self.lambda_return_sets.put(new_lambda, body_lambda_set);
+            }
+
             return .{ .expr = new_lambda, .lambda_set = null };
         },
         .e_if => |if_expr| {
             // If expression - collect closures from all branches
+            // We need to handle the case where some branches are closures and others are pure lambdas
             var lambda_set = LambdaSet.init();
 
             const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
-            const branch_start = self.module_env.store.scratch.?.if_branches.top();
+
+            // First pass: transform all branches and collect lambda sets
+            // Store transformed branches temporarily
+            const BranchInfo = struct { cond: Expr.Idx, body: Expr.Idx, has_lambda_set: bool };
+            var transformed_branches = std.ArrayList(BranchInfo).empty;
+            defer transformed_branches.deinit(self.allocator);
+
+            var any_branch_has_lambda_set = false;
 
             for (branches) |branch_idx| {
                 const branch = self.module_env.store.getIfBranch(branch_idx);
@@ -527,40 +564,160 @@ pub fn transformExprWithLambdaSet(
                 var body_result = try self.transformExprWithLambdaSet(branch.body, name_hint);
                 if (body_result.lambda_set) |*branch_lambda_set| {
                     try lambda_set.merge(self.allocator, branch_lambda_set);
-                    // Free the branch lambda set's ArrayList after merging (not capture_names, those are shared)
                     branch_lambda_set.deinit(self.allocator);
+                    any_branch_has_lambda_set = true;
                 }
 
-                const new_branch_idx = try self.module_env.store.addIfBranch(
-                    Expr.IfBranch{ .cond = new_cond, .body = body_result.expr },
-                    base.Region.zero(),
-                );
-                try self.module_env.store.scratch.?.if_branches.append(new_branch_idx);
+                try transformed_branches.append(self.allocator, .{
+                    .cond = new_cond,
+                    .body = body_result.expr,
+                    .has_lambda_set = body_result.lambda_set != null,
+                });
             }
 
             // Transform else branch and collect its lambda set
             var else_result = try self.transformExprWithLambdaSet(if_expr.final_else, name_hint);
+            const else_has_lambda_set = else_result.lambda_set != null;
             if (else_result.lambda_set) |*else_lambda_set| {
                 try lambda_set.merge(self.allocator, else_lambda_set);
-                // Free the else lambda set's ArrayList after merging
                 else_lambda_set.deinit(self.allocator);
+                any_branch_has_lambda_set = true;
             }
 
-            const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
+            // Second pass: if any branch has a lambda set, convert pure lambdas to closure tags
+            const branch_start = self.module_env.store.scratch.?.if_branches.top();
 
-            const new_if = try self.module_env.store.addExpr(Expr{
-                .e_if = .{
-                    .branches = new_branches_span,
-                    .final_else = else_result.expr,
+            if (any_branch_has_lambda_set) {
+                for (transformed_branches.items) |*tb| {
+                    var final_body = tb.body;
+                    if (!tb.has_lambda_set) {
+                        // Check if this is a pure lambda that needs to be converted to a closure tag
+                        const body_expr = self.module_env.store.getExpr(tb.body);
+                        if (body_expr == .e_lambda) {
+                            // Convert pure lambda to closure tag with empty captures
+                            const lambda = body_expr.e_lambda;
+                            const tag_name = try self.generateClosureTagName(name_hint);
+
+                            // Create empty record for captures
+                            const empty_record = try self.module_env.store.addExpr(Expr.e_empty_record, base.Region.zero());
+
+                            // Create tag expression with empty record
+                            const args_start = self.module_env.store.scratch.?.exprs.top();
+                            try self.module_env.store.scratch.?.exprs.append(empty_record);
+                            const args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+                            final_body = try self.module_env.store.addExpr(Expr{
+                                .e_tag = .{
+                                    .name = tag_name,
+                                    .args = args_span,
+                                },
+                            }, base.Region.zero());
+
+                            // Add to lambda set with the lambda's info
+                            try lambda_set.addClosure(self.allocator, ClosureInfo{
+                                .tag_name = tag_name,
+                                .lambda_body = lambda.body,
+                                .lambda_args = lambda.args,
+                                .capture_names = std.ArrayList(base.Ident.Idx).empty,
+                            });
+                        }
+                    }
+
+                    const new_branch_idx = try self.module_env.store.addIfBranch(
+                        Expr.IfBranch{ .cond = tb.cond, .body = final_body },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.scratch.?.if_branches.append(new_branch_idx);
+                }
+
+                // Handle else branch - convert pure lambda if needed
+                var final_else = else_result.expr;
+                if (!else_has_lambda_set) {
+                    const else_expr = self.module_env.store.getExpr(else_result.expr);
+                    if (else_expr == .e_lambda) {
+                        const lambda = else_expr.e_lambda;
+                        const tag_name = try self.generateClosureTagName(name_hint);
+
+                        // Create empty record for captures
+                        const empty_record = try self.module_env.store.addExpr(Expr.e_empty_record, base.Region.zero());
+
+                        // Create tag expression with empty record
+                        const args_start = self.module_env.store.scratch.?.exprs.top();
+                        try self.module_env.store.scratch.?.exprs.append(empty_record);
+                        const args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+                        final_else = try self.module_env.store.addExpr(Expr{
+                            .e_tag = .{
+                                .name = tag_name,
+                                .args = args_span,
+                            },
+                        }, base.Region.zero());
+
+                        // Add to lambda set with the lambda's info
+                        try lambda_set.addClosure(self.allocator, ClosureInfo{
+                            .tag_name = tag_name,
+                            .lambda_body = lambda.body,
+                            .lambda_args = lambda.args,
+                            .capture_names = std.ArrayList(base.Ident.Idx).empty,
+                        });
+                    }
+                }
+
+                const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
+
+                const new_if = try self.module_env.store.addExpr(Expr{
+                    .e_if = .{
+                        .branches = new_branches_span,
+                        .final_else = final_else,
+                    },
+                }, base.Region.zero());
+
+                return .{ .expr = new_if, .lambda_set = lambda_set };
+            } else {
+                // No closures in any branch, just create the if expression normally
+                for (transformed_branches.items) |tb| {
+                    const new_branch_idx = try self.module_env.store.addIfBranch(
+                        Expr.IfBranch{ .cond = tb.cond, .body = tb.body },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.scratch.?.if_branches.append(new_branch_idx);
+                }
+
+                const new_branches_span = try self.module_env.store.ifBranchSpanFrom(branch_start);
+
+                const new_if = try self.module_env.store.addExpr(Expr{
+                    .e_if = .{
+                        .branches = new_branches_span,
+                        .final_else = else_result.expr,
+                    },
+                }, base.Region.zero());
+
+                return .{ .expr = new_if, .lambda_set = null };
+            }
+        },
+        .e_call => |call| {
+            // Call expression - check if calling a lambda that returns closures
+            // Transform the call normally first
+            const transformed = try self.transformExpr(expr_idx);
+
+            // Check if the function is a local variable that might return closures
+            const func_expr = self.module_env.store.getExpr(call.func);
+            switch (func_expr) {
+                .e_lookup_local => |lookup| {
+                    // Check if this pattern has a lambda return set (calling a lambda that returns closures)
+                    if (self.pattern_lambda_return_sets.get(lookup.pattern_idx)) |return_set| {
+                        // Clone the return set for this call's result
+                        var call_lambda_set = LambdaSet.init();
+                        for (return_set.closures.items) |info| {
+                            try call_lambda_set.addClosure(self.allocator, info);
+                        }
+                        return .{ .expr = transformed, .lambda_set = call_lambda_set };
+                    }
                 },
-            }, base.Region.zero());
+                else => {},
+            }
 
-            const result_lambda_set = if (lambda_set.closures.items.len > 0)
-                lambda_set
-            else
-                null;
-
-            return .{ .expr = new_if, .lambda_set = result_lambda_set };
+            return .{ .expr = transformed, .lambda_set = null };
         },
         else => {
             // Other expressions - just transform without lambda set
@@ -629,20 +786,28 @@ pub fn transformClosure(
             if (non_toplevel_capture_count == 0) {
                 capture_names.deinit(self.allocator);
 
-                // Transform the lambda's body to handle any nested closures
-                const transformed_body = try self.transformExpr(lambda.body);
-                if (transformed_body == lambda.body) {
+                // Transform the lambda's body using transformExprWithLambdaSet to track
+                // what closures the body returns (important for nested closures)
+                const body_result = try self.transformExprWithLambdaSet(lambda.body, binding_name_hint);
+                if (body_result.expr == lambda.body) {
                     // Body unchanged, return original lambda
                     return closure.lambda_idx;
                 }
 
                 // Create new lambda with transformed body
-                return try self.module_env.store.addExpr(Expr{
+                const new_lambda = try self.module_env.store.addExpr(Expr{
                     .e_lambda = .{
                         .args = lambda.args,
-                        .body = transformed_body,
+                        .body = body_result.expr,
                     },
                 }, base.Region.zero());
+
+                // If the body returns closures, track this so calls to this lambda return those closures
+                if (body_result.lambda_set) |body_lambda_set| {
+                    try self.lambda_return_sets.put(new_lambda, body_lambda_set);
+                }
+
+                return new_lambda;
             }
 
             // Generate tag name (only if we have real captures)
