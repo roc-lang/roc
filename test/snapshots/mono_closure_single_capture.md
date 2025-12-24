@@ -24,7 +24,7 @@ func = |x| {
 	}
 }
 
-result : Dec -> Dec
+result : Dec
 result = func(42)
 ~~~
 # FORMATTED
@@ -130,5 +130,5 @@ EndOfFile,
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "Numeral -> Try(a -> a, [InvalidNumeral(Str)]) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

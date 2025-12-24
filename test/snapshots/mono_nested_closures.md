@@ -15,10 +15,10 @@ result = add_five(3)
 x : Dec
 x = 10
 
-make_adder : Dec -> (Dec -> Dec)
+make_adder : Dec -> [Closure_1({ y : Dec })]
 make_adder = |y| Closure_1({ y: y })
 
-add_five : Dec -> Dec
+add_five : [Closure_1({ y : Dec })]
 add_five = make_adder(5)
 
 result : Dec
@@ -107,13 +107,13 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))
-		(patt (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others, y: a }), .._others])])]"))
+		(patt (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ ..b, y: a }), ..c])])]"))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ ..b, y: c }), ..d])]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral([Closure_1({ ..b, y: c }), ..d])])]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others, y: b }), .._others])]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral([Closure_1({ .._others2, y: b }), .._others2])])]")))
 	(expressions
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others, y: a }), .._others])])]"))
+		(expr (type "a -> [Closure_1({ ..b, y: a }), ..c] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ ..b, y: a }), ..c])])]"))
+		(expr (type "[]"))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others, y: a }), .._others])])]"))))
 ~~~

@@ -18,16 +18,27 @@ add_one : Dec -> Dec
 add_one = |x| x + one
 
 result : Dec
-result = 6
+result = add_one(5)
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-NIL
+COMPTIME EVAL ERROR - mono_pure_lambda.md:1:1:1:1
 # PROBLEMS
-NIL
+**COMPTIME EVAL ERROR**
+This definition could not be evaluated at compile time:
+**mono_pure_lambda.md:1:1:1:1:**
+```roc
+one = 1
+```
+^
+
+The evaluation failed with error:
+
+    ªªªªªªªªªªªªªªªªªª
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,
@@ -75,7 +86,10 @@ EndOfFile,
 					(p-assign (ident "one"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "6"))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "add_one")))
+			(e-num (value "5")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -87,5 +101,5 @@ EndOfFile,
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "Bool"))))
 ~~~

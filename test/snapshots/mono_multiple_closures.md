@@ -185,5 +185,5 @@ EndOfFile,
 		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(d, d -> d)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(d, d -> d)])]")))
 	(expressions
 		(expr (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(c, c -> c)])]"))
-		(expr (type "_c where [_d.from_numeral : Numeral -> Try(_e, [InvalidNumeral(f, f -> f)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(f, f -> f)])]"))))
+		(expr (type "[ProvidedByCompiler]"))))
 ~~~

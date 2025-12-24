@@ -1422,24 +1422,12 @@ fn processSnapshotContent(
             const old_expr = def.expr;
             const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
 
-            // If the expression changed, copy the type from the old expression to the new one
-            // This preserves the type information that was set during type checking
+            // If the expression changed, compute the correct type for the new expression
+            // based on its structure (e.g., tag union for closure transforms)
+            // Note: We don't modify the pattern's type here to avoid breaking type unification.
+            // Instead, the type will be computed from the expression in generateMonoSection.
             if (old_expr != result.expr) {
-                const old_var = ModuleEnv.varFrom(old_expr);
-                const new_var = ModuleEnv.varFrom(result.expr);
-                // Ensure the new variable slot exists in the types store
-                if (@intFromEnum(new_var) >= can_ir.types.len()) {
-                    // Extend the types store to accommodate the new variable
-                    const current_len = can_ir.types.len();
-                    const needed_len = @intFromEnum(new_var) + 1;
-                    var i: usize = current_len;
-                    while (i < needed_len) : (i += 1) {
-                        _ = try can_ir.types.fresh();
-                    }
-                }
-                // Copy the type content from the old expression to the new one
-                const old_resolved = can_ir.types.resolveVar(old_var);
-                try can_ir.types.setVarContent(new_var, old_resolved.desc.content);
+                _ = try computeTransformedExprType(can_ir, result.expr);
             }
 
             // Track the lambda set for this pattern
@@ -2517,6 +2505,157 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
     try output.end_section();
 }
 
+/// Compute the correct type for a closure-transformed expression.
+/// Instead of copying the old function type, this builds the appropriate type
+/// based on the new expression's structure (e.g., tag union for closures).
+fn computeTransformedExprType(
+    can_ir: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+) !types.Var {
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+
+    // Ensure type var exists for this expression
+    if (@intFromEnum(expr_var) >= can_ir.types.len()) {
+        const current_len = can_ir.types.len();
+        const needed_len = @intFromEnum(expr_var) + 1;
+        var i: usize = current_len;
+        while (i < needed_len) : (i += 1) {
+            _ = try can_ir.types.fresh();
+        }
+    }
+
+    const expr = can_ir.store.getExpr(expr_idx);
+
+    switch (expr) {
+        .e_tag => |tag| {
+            // A tag expression (e.g., Closure_1({ y: y }))
+            // Type: [TagName(PayloadType)]
+            const tag_args = can_ir.store.exprSlice(tag.args);
+            if (tag_args.len == 1) {
+                // Single arg is the capture record - compute its type
+                const record_expr_idx = tag_args[0];
+                const record_type = try computeTransformedExprType(can_ir, record_expr_idx);
+
+                // Build tag union type: [TagName(record_type)]
+                const tag_type = try can_ir.types.mkTag(tag.name, &[_]types.Var{record_type});
+                const ext_var = try can_ir.types.fresh();
+                const content = try can_ir.types.mkTagUnion(&[_]types.Tag{tag_type}, ext_var);
+                try can_ir.types.setVarContent(expr_var, content);
+            } else if (tag_args.len == 0) {
+                // Tag with no payload
+                const tag_type = try can_ir.types.mkTag(tag.name, &[_]types.Var{});
+                const ext_var = try can_ir.types.fresh();
+                const content = try can_ir.types.mkTagUnion(&[_]types.Tag{tag_type}, ext_var);
+                try can_ir.types.setVarContent(expr_var, content);
+            }
+            return expr_var;
+        },
+        .e_record => |record| {
+            // Record expression - build record type from field types
+            const fields_slice = can_ir.store.sliceRecordFields(record.fields);
+
+            // Build record fields for the type
+            var type_fields = std.ArrayList(types.RecordField).empty;
+            defer type_fields.deinit(can_ir.gpa);
+
+            for (fields_slice) |field_idx| {
+                const field = can_ir.store.getRecordField(field_idx);
+                // Get the type of the field value expression
+                const field_type = try computeTransformedExprType(can_ir, field.value);
+                try type_fields.append(can_ir.gpa, .{ .name = field.name, .var_ = field_type });
+            }
+
+            const fields_range = try can_ir.types.appendRecordFields(type_fields.items);
+            const ext_var = try can_ir.types.fresh();
+            const content = types.Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
+            try can_ir.types.setVarContent(expr_var, content);
+            return expr_var;
+        },
+        .e_lambda => |lambda| {
+            // Lambda expression - build function type
+            // Get argument types from patterns
+            const arg_patterns = can_ir.store.slicePatterns(lambda.args);
+
+            var arg_types = std.ArrayList(types.Var).empty;
+            defer arg_types.deinit(can_ir.gpa);
+
+            for (arg_patterns) |pattern_idx| {
+                try arg_types.append(can_ir.gpa, ModuleEnv.varFrom(pattern_idx));
+            }
+
+            // Get return type from body (recursively compute it)
+            const ret_type = try computeTransformedExprType(can_ir, lambda.body);
+
+            // Build function type
+            const args_range = try can_ir.types.appendVars(arg_types.items);
+            const func = types.Func{ .args = args_range, .ret = ret_type, .needs_instantiation = false };
+            const content = types.Content{ .structure = .{ .fn_pure = func } };
+            try can_ir.types.setVarContent(expr_var, content);
+            return expr_var;
+        },
+        .e_lookup_local => |local| {
+            // Lookup - find the definition for this pattern and use its expression's type
+            // This ensures we get the transformed type, not the original pattern type
+            const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+            for (defs) |def_idx| {
+                const def = can_ir.store.getDef(def_idx);
+                if (def.pattern == local.pattern_idx) {
+                    // Found the definition - recursively compute the expression's type
+                    return try computeTransformedExprType(can_ir, def.expr);
+                }
+            }
+            // Fallback to pattern's type if definition not found
+            return ModuleEnv.varFrom(local.pattern_idx);
+        },
+        .e_call => |call| {
+            // Function call - the type is the return type of the function being called
+            // First compute the function's type
+            const func_type = try computeTransformedExprType(can_ir, call.func);
+            const func_resolved = can_ir.types.resolveVar(func_type);
+
+            // If it's a function type, return the return type
+            if (func_resolved.desc.content == .structure) {
+                const flat_type = func_resolved.desc.content.structure;
+                switch (flat_type) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        return func.ret;
+                    },
+                    else => {},
+                }
+            }
+            // Fall back to original expression type
+            return expr_var;
+        },
+        .e_num => {
+            // Numeric literal - use the original expression's type (with numeral constraint)
+            return expr_var;
+        },
+        .e_block => |block| {
+            // Block - the type is the type of the final expression
+            return try computeTransformedExprType(can_ir, block.final_expr);
+        },
+        .e_binop => |binop| {
+            // Binary operation - the result type is typically the same as the operand types
+            // For arithmetic operations, use the left operand's type (both should be the same)
+            return try computeTransformedExprType(can_ir, binop.lhs);
+        },
+        .e_match => |match_expr| {
+            // Match expression - the type is the type of the branch bodies
+            // All branches should have the same type, so we use the first branch
+            const branches = can_ir.store.sliceMatchBranches(match_expr.branches);
+            if (branches.len > 0) {
+                const first_branch = can_ir.store.getMatchBranch(branches[0]);
+                return try computeTransformedExprType(can_ir, first_branch.value);
+            }
+            return expr_var;
+        },
+        else => {
+            // For other expressions, use the original type from type-checking
+            return expr_var;
+        },
+    }
+}
+
 /// Get the defaulted (monomorphized) type string for an expression.
 /// This defaults:
 /// - Flex vars with from_numeral constraint → Dec
@@ -2570,6 +2709,30 @@ fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type
                     } else {
                         try result.appendSlice(ret_type);
                     }
+
+                    return result.toOwnedSlice();
+                },
+                .record => |record| {
+                    // Emit record as closed record (without extension variable)
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    try result.appendSlice("{ ");
+                    const fields_slice = can_ir.types.getRecordFieldsSlice(record.fields);
+                    const field_names = fields_slice.items(.name);
+                    const field_vars = fields_slice.items(.var_);
+                    for (field_names, field_vars, 0..) |field_name_idx, field_var, i| {
+                        if (i > 0) try result.appendSlice(", ");
+
+                        const field_name = can_ir.getIdent(field_name_idx);
+                        try result.appendSlice(field_name);
+                        try result.appendSlice(" : ");
+
+                        const field_type = try getDefaultedTypeString(allocator, can_ir, field_var);
+                        defer allocator.free(field_type);
+                        try result.appendSlice(field_type);
+                    }
+                    try result.appendSlice(" }");
 
                     return result.toOwnedSlice();
                 },
@@ -2864,9 +3027,9 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
         defer output.gpa.free(pattern_output);
 
-        // Get the type from the pattern
-        const pattern_var = ModuleEnv.varFrom(def.pattern);
-        const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_var);
+        // Get the type from the expression (not the pattern) to reflect closure transformations
+        const expr_type = try computeTransformedExprType(can_ir, def.expr);
+        const type_str = try getDefaultedTypeString(output.gpa, can_ir, expr_type);
         defer output.gpa.free(type_str);
 
         // Emit the expression (right side of =)
