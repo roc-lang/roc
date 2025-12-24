@@ -2516,8 +2516,8 @@ fn computeTransformedExprType(
 
     // Ensure type var exists for this expression
     if (@intFromEnum(expr_var) >= can_ir.types.len()) {
-        const current_len = can_ir.types.len();
-        const needed_len = @intFromEnum(expr_var) + 1;
+        const current_len: usize = @intCast(can_ir.types.len());
+        const needed_len: usize = @intCast(@intFromEnum(expr_var) + 1);
         var i: usize = current_len;
         while (i < needed_len) : (i += 1) {
             _ = try can_ir.types.fresh();
