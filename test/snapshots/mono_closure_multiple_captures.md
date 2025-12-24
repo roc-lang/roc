@@ -139,8 +139,8 @@ EndOfFile,
 (inferred-types
 	(defs
 		(patt (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]")))
+		(patt (type "_c where [_d.from_numeral : Numeral -> _ret, _e.from_numeral : Numeral -> Try(_f, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "Try(_c, [InvalidNumeral(Str)]) where [_d.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)])]"))))
+		(expr (type "_c where [_d.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)])]"))))
 ~~~

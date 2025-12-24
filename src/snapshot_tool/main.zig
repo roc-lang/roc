@@ -2613,12 +2613,17 @@ fn computeTransformedExprType(
             const func_type = try computeTransformedExprType(can_ir, call.func);
             const func_resolved = can_ir.types.resolveVar(func_type);
 
-            // If it's a function type, return the return type
+            // If it's a function type, set the call's type to the return type
+            // This is important for newly created call expressions (from closure transform)
+            // which may not have had their type vars initialized during type checking
             if (func_resolved.desc.content == .structure) {
                 const flat_type = func_resolved.desc.content.structure;
                 switch (flat_type) {
                     .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        return func.ret;
+                        // Set the call expression's type to match the function's return type
+                        const ret_resolved = can_ir.types.resolveVar(func.ret);
+                        try can_ir.types.setVarContent(expr_var, ret_resolved.desc.content);
+                        return expr_var;
                     },
                     else => {},
                 }

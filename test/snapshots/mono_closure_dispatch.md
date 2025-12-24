@@ -17,7 +17,7 @@ result = func(1)
 func : Dec -> Dec
 func = |offset| {
 	condition = True
-	f = if (condition) Closure_f_1({ offset }) else |x| x * 2
+	f = if (condition) Closure_f_1({ offset: offset }) else |x| x * 2
 	match f {
 		Closure_f_1({ offset }) => {
 			x = 10
@@ -157,9 +157,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [a.from_numeral : Numeral -> (a -> a), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> a where [_b.from_numeral : c, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> (a -> a)]"))
-		(expr (type "Numeral -> (a -> a) where [a.from_numeral : Numeral -> (a -> a)]"))))
+		(expr (type "a -> a where [a.from_numeral : b]"))
+		(expr (type "a where [a.from_numeral : a]"))))
 ~~~

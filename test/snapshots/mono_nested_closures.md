@@ -16,7 +16,7 @@ x : Dec
 x = 10
 
 make_adder : Dec -> [Closure_1({ y : Dec })]
-make_adder = |y| Closure_1({ y })
+make_adder = |y| Closure_1({ y: y })
 
 add_five : [Closure_1({ y : Dec })]
 add_five = make_adder(5)
@@ -114,6 +114,6 @@ EndOfFile,
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others, y: a }), .._others])])]"))
 		(expr (type "a -> [Closure_1({ ..b, y: a }), ..c] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ ..b, y: a }), ..c])])]"))
-		(expr (type "[]"))
+		(expr (type "[Closure_1({ .._others, y: a }), ..b] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others2, y: a }), ..b])])]"))
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_1({ .._others, y: a }), .._others])])]"))))
 ~~~

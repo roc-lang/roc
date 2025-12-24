@@ -275,9 +275,11 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 if (i > 0) try self.write(", ");
                 const name = self.module_env.getIdent(field.name);
 
-                // Check if we can use shorthand syntax { x } instead of { x: x }
+                // Check if we can use shorthand syntax { x, y } instead of { x: x, y: y }
+                // NOTE: Only use shorthand for records with multiple fields!
+                // Single-field { x } would be parsed as a block, not a record shorthand.
                 const field_value = self.module_env.store.getExpr(field.value);
-                const use_shorthand = if (field_value == .e_lookup_local) blk: {
+                const use_shorthand = if (field_indices.len > 1 and field_value == .e_lookup_local) blk: {
                     const lookup_pattern = self.module_env.store.getPattern(field_value.e_lookup_local.pattern_idx);
                     if (lookup_pattern == .assign) {
                         const lookup_name = self.module_env.getIdent(lookup_pattern.assign.ident);

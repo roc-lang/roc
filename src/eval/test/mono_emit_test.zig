@@ -532,8 +532,9 @@ test "transform closure with single capture to tag" {
     try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
 
     // The capture 'x' should appear in the tag's record argument
-    try testing.expect(std.mem.indexOf(u8, output, "x:") != null or
-        std.mem.indexOf(u8, output, "{x") != null);
+    // RocEmitter uses shorthand syntax { x } for captures
+    try testing.expect(std.mem.indexOf(u8, output, "{ x }") != null or
+        std.mem.indexOf(u8, output, "x:") != null);
 
     // The call should have been transformed to a match expression
     try testing.expect(std.mem.indexOf(u8, output, "match") != null);
@@ -556,10 +557,12 @@ test "transform closure with multiple captures" {
     try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
 
     // Both captures 'a' and 'b' should appear in the tag's record
-    try testing.expect(std.mem.indexOf(u8, output, "a:") != null or
-        std.mem.indexOf(u8, output, "{a") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "b:") != null or
-        std.mem.indexOf(u8, output, ", b") != null);
+    // RocEmitter uses shorthand syntax { a, b } for captures
+    try testing.expect(std.mem.indexOf(u8, output, "{ a") != null or
+        std.mem.indexOf(u8, output, "a:") != null);
+    try testing.expect(std.mem.indexOf(u8, output, " b }") != null or
+        std.mem.indexOf(u8, output, ", b") != null or
+        std.mem.indexOf(u8, output, "b:") != null);
 
     // The call should have been transformed to a match expression
     try testing.expect(std.mem.indexOf(u8, output, "match") != null);

@@ -15,7 +15,7 @@ result = func(42)
 ~~~roc
 func : Dec -> Dec
 func = |x| {
-	add_x = Closure_add_x_1({ x })
+	add_x = Closure_add_x_1({ x: x })
 	match add_x {
 		Closure_add_x_1({ x }) => {
 			y = 10
@@ -130,5 +130,5 @@ EndOfFile,
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "Numeral -> Try(a -> a, [InvalidNumeral(Str)]) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
 ~~~
