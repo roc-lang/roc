@@ -381,6 +381,14 @@ pub const SmallDecValue = struct {
         };
     }
 
+    /// Convert to RocDec representation (i128 scaled by 10^18)
+    pub fn toRocDec(self: SmallDecValue) RocDec {
+        const denom_power: i32 = @intCast(self.denominator_power_of_ten);
+        const scale_power: u7 = @intCast(@max(0, 18 - denom_power));
+        const scale = std.math.pow(i128, 10, scale_power);
+        return .{ .num = @as(i128, self.numerator) * scale };
+    }
+
     test "SmallDecValue.toF64 - basic cases" {
         // Test integer values
         {
