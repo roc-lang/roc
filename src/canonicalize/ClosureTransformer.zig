@@ -866,6 +866,11 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             const new_lhs = try self.transformExpr(binop.lhs);
             const new_rhs = try self.transformExpr(binop.rhs);
 
+            // Return original if unchanged
+            if (new_lhs == binop.lhs and new_rhs == binop.rhs) {
+                return expr_idx;
+            }
+
             return try self.module_env.store.addExpr(Expr{
                 .e_binop = .{
                     .op = binop.op,

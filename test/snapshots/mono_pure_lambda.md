@@ -13,27 +13,16 @@ result = add_one(5)
 add_one : Dec -> Dec
 add_one = |x| x + 1
 result : Dec
-result = add_one(5)
+result = 6
 ~~~
 # FORMATTED
 ~~~roc
 NO CHANGE
 ~~~
 # EXPECTED
-COMPTIME EVAL ERROR - mono_pure_lambda.md:1:1:1:1
+NIL
 # PROBLEMS
-**COMPTIME CRASH**
-This definition crashed during compile-time evaluation:
-**mono_pure_lambda.md:1:1:1:1:**
-```roc
-add_one = |x| x + 1
-```
-^
-
-The `crash` happened with this message:
-
-    ªªªªªªªªªªªªªªªªªªªªªªªªªªªªªªªªª
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
@@ -73,10 +62,7 @@ EndOfFile,
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call
-			(e-lookup-local
-				(p-assign (ident "add_one")))
-			(e-num (value "5")))))
+		(e-num (value "6"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -85,6 +71,6 @@ EndOfFile,
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "[False, True]"))
-		(expr (type "[]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -102,5 +102,5 @@ EndOfFile,
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "Bool"))))
+		(expr (type "_c where [_d.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)])]"))))
 ~~~

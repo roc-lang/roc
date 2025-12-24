@@ -1419,7 +1419,28 @@ fn processSnapshotContent(
             };
 
             // Transform the definition expression
+            const old_expr = def.expr;
             const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
+
+            // If the expression changed, copy the type from the old expression to the new one
+            // This preserves the type information that was set during type checking
+            if (old_expr != result.expr) {
+                const old_var = ModuleEnv.varFrom(old_expr);
+                const new_var = ModuleEnv.varFrom(result.expr);
+                // Ensure the new variable slot exists in the types store
+                if (@intFromEnum(new_var) >= can_ir.types.len()) {
+                    // Extend the types store to accommodate the new variable
+                    const current_len = can_ir.types.len();
+                    const needed_len = @intFromEnum(new_var) + 1;
+                    var i: usize = current_len;
+                    while (i < needed_len) : (i += 1) {
+                        _ = try can_ir.types.fresh();
+                    }
+                }
+                // Copy the type content from the old expression to the new one
+                const old_resolved = can_ir.types.resolveVar(old_var);
+                try can_ir.types.setVarContent(new_var, old_resolved.desc.content);
+            }
 
             // Track the lambda set for this pattern
             if (result.lambda_set) |lambda_set| {
