@@ -1,17 +1,21 @@
 # META
 ~~~ini
-description=Mono test: pure lambda (no captures) assigned to top-level
+description=Mono test: top-level constants are never captured by lambdas
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-add_one = |x| x + 1
+one = 1
+add_one = |x| x + one
 result = add_one(5)
 ~~~
 # MONO
 ~~~roc
+one : Dec
+one = 1
+
 add_one : Dec -> Dec
-add_one = |x| x + 1
+add_one = |x| x + one
 
 result : Dec
 result = 6
@@ -26,7 +30,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,Int,
+LowerIdent,OpAssign,Int,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 EndOfFile,
 ~~~
@@ -36,13 +41,16 @@ EndOfFile,
 	(type-module)
 	(statements
 		(s-decl
+			(p-ident (raw "one"))
+			(e-int (raw "1")))
+		(s-decl
 			(p-ident (raw "add_one"))
 			(e-lambda
 				(args
 					(p-ident (raw "x")))
 				(e-binop (op "+")
 					(e-ident (raw "x"))
-					(e-int (raw "1")))))
+					(e-ident (raw "one")))))
 		(s-decl
 			(p-ident (raw "result"))
 			(e-apply
@@ -53,6 +61,9 @@ EndOfFile,
 ~~~clojure
 (can-ir
 	(d-let
+		(p-assign (ident "one"))
+		(e-num (value "1")))
+	(d-let
 		(p-assign (ident "add_one"))
 		(e-lambda
 			(args
@@ -60,7 +71,8 @@ EndOfFile,
 			(e-binop (op "add")
 				(e-lookup-local
 					(p-assign (ident "x")))
-				(e-num (value "1")))))
+				(e-lookup-local
+					(p-assign (ident "one"))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-num (value "6"))))
@@ -69,9 +81,11 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
 ~~~
