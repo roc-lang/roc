@@ -768,6 +768,7 @@ fn mkFlexWithFromNumeralConstraint(
             .fn_unbound = types_mod.Func{
                 .args = try self.types.appendVars(&.{arg_var}),
                 .ret = ret_var,
+                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             },
         },
@@ -3720,6 +3721,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = dispatch_arg_vars_range,
                         .ret = dispatch_ret_var,
+                        .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                         .needs_instantiation = false,
                     } } }, env, dot_access.field_name_region);
 
@@ -3900,6 +3902,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = dispatch_arg_vars_range,
                     .ret = dispatch_ret_var,
+                    .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                     .needs_instantiation = false,
                 } } }, env, expr_region);
 
@@ -4568,6 +4571,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
         .args = args_range,
         .ret = ret_var,
+        .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
         .needs_instantiation = false,
     } } }, env, expr_region);
     try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
@@ -4681,6 +4685,7 @@ fn checkBinopExpr(
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
                     .ret = ret_var,
+                    .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                     .needs_instantiation = false,
                 } } }, env, expr_region);
 
@@ -4803,6 +4808,7 @@ fn checkBinopExpr(
             const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = args_range,
                 .ret = is_eq_ret_var,
+                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             } } }, env, expr_region);
 
@@ -4856,6 +4862,7 @@ fn checkBinopExpr(
             const not_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = not_args_range,
                 .ret = not_ret_var,
+                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             } } }, env, expr_region);
 
@@ -4881,6 +4888,7 @@ fn checkBinopExpr(
             const is_eq_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = is_eq_args_range,
                 .ret = is_eq_ret_var,
+                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             } } }, env, expr_region);
 

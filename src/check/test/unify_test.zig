@@ -1828,6 +1828,7 @@ test "recursion_var - unifies with flex preserving constraints" {
         .structure = .{ .fn_pure = .{
             .args = VarSafeList.Range.empty(),
             .ret = try env.module_env.types.fresh(),
+            .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
             .needs_instantiation = false,
         } },
     });

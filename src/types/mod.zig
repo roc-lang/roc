@@ -42,6 +42,7 @@ pub const TypeScope = types.TypeScope;
 pub const VarMap = types.VarMap;
 pub const StaticDispatchConstraint = types.StaticDispatchConstraint;
 pub const TwoStaticDispatchConstraints = types.TwoStaticDispatchConstraints;
+pub const LambdaSetEntry = types.LambdaSetEntry;
 pub const Int = types.Int;
 pub const Frac = types.Frac;
 pub const IntRequirements = types.IntRequirements;

@@ -28,6 +28,7 @@ const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
+const LambdaSetEntry = types_mod.LambdaSetEntry;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -282,6 +283,7 @@ pub const Instantiator = struct {
         return Func{
             .args = fresh_args_range,
             .ret = fresh_ret,
+            .lambda_set = func.lambda_set, // Preserve the original lambda set
             .needs_instantiation = true,
         };
     }
