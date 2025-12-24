@@ -13145,28 +13145,37 @@ pub const Interpreter = struct {
         }
         // Next try ALL active closure captures in reverse order
         if (self.active_closures.items.len > 0) {
-            var closure_idx: usize = self.active_closures.items.len;
-            while (closure_idx > 0) {
-                closure_idx -= 1;
-                const cls_val = self.active_closures.items[closure_idx];
-                if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                    const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
-                    const header_sz = @sizeOf(layout.Closure);
-                    const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
-                    const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
-                    const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
-                    const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
-                    // Use the closure's rt_var for the captures record
-                    const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = cls_val.rt_var };
-                    var rec_acc = (rec_val.asRecord(&self.runtime_layout_store)) catch continue;
-                    if (rec_acc.findFieldIndex(cap.name)) |fidx| {
-                        const field_rt_var = self.runtime_types.fresh() catch continue;
-                        if (rec_acc.getFieldByIndex(fidx, field_rt_var) catch null) |field_val| {
-                            return field_val;
+            // Translate the capture name from the module store to the runtime layout store.
+            // Capture field names are stored using idents from runtime_layout_store.env
+            // (see evalClosure where insertIdent is called), so we need to translate the
+            // lookup ident to match. Use lookup (not insert) to avoid modifying
+            // the ident store during evaluation.
+            const cap_name_text = self.env.getIdent(cap.name);
+            if (self.runtime_layout_store.env.common.idents.lookup(base_pkg.Ident.for_text(cap_name_text))) |translated_cap_name| {
+                var closure_idx: usize = self.active_closures.items.len;
+                while (closure_idx > 0) {
+                    closure_idx -= 1;
+                    const cls_val = self.active_closures.items[closure_idx];
+                    if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                        const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
+                        const header_sz = @sizeOf(layout.Closure);
+                        const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
+                        const aligned_off = std.mem.alignForward(usize, header_sz, @intCast(cap_align.toByteUnits()));
+                        const base: [*]u8 = @ptrCast(@alignCast(cls_val.ptr.?));
+                        const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
+                        // Use the closure's rt_var for the captures record
+                        const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = cls_val.rt_var };
+                        var rec_acc = (rec_val.asRecord(&self.runtime_layout_store)) catch continue;
+                        if (rec_acc.findFieldIndex(translated_cap_name)) |fidx| {
+                            const field_rt_var = self.runtime_types.fresh() catch continue;
+                            if (rec_acc.getFieldByIndex(fidx, field_rt_var) catch null) |field_val| {
+                                return field_val;
+                            }
                         }
                     }
                 }
             }
+            // If ident not found in runtime layout store, fall through to top-level defs search
         }
         // Finally try top-level defs by pattern idx
         const all_defs = self.env.store.sliceDefs(self.env.all_defs);
