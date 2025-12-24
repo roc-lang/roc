@@ -433,6 +433,102 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     return result;
 }
 
+// type contains error check //
+
+/// Check if a type contains an error anywhere in its structure.
+/// This is used to determine if an annotation type should be preserved
+/// when the expression body has any type errors (not just at the root).
+///
+/// Examples of types that contain errors:
+/// - `Error` (root is error)
+/// - `Error -> Error` (function with error args/return)
+/// - `List(Error)` (nominal with error arg)
+/// - `{ field: Error }` (record with error field)
+fn typeContainsError(self: *Self, var_: Var) bool {
+    var visited = std.AutoHashMap(types_mod.DescStoreIdx, void).init(self.gpa);
+    defer visited.deinit();
+    return self.typeContainsErrorHelper(var_, &visited);
+}
+
+fn typeContainsErrorHelper(self: *Self, var_: Var, visited: *std.AutoHashMap(types_mod.DescStoreIdx, void)) bool {
+    const resolved = self.types.resolveVar(var_);
+
+    // Check if we've already visited this (cycle detection)
+    if (visited.contains(resolved.desc_idx)) return false;
+    visited.put(resolved.desc_idx, {}) catch return false;
+
+    switch (resolved.desc.content) {
+        .err => return true,
+        .flex, .rigid => return false,
+        .recursion_var => |rec_var| {
+            return self.typeContainsErrorHelper(rec_var.structure, visited);
+        },
+        .alias => |alias| {
+            // Check alias args
+            const args = self.types.sliceAliasArgs(alias);
+            for (args) |arg| {
+                if (self.typeContainsErrorHelper(arg, visited)) return true;
+            }
+            // Check backing var
+            const backing_var = self.types.getAliasBackingVar(alias);
+            return self.typeContainsErrorHelper(backing_var, visited);
+        },
+        .structure => |flat_type| {
+            switch (flat_type) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const args = self.types.sliceVars(func.args);
+                    for (args) |arg| {
+                        if (self.typeContainsErrorHelper(arg, visited)) return true;
+                    }
+                    return self.typeContainsErrorHelper(func.ret, visited);
+                },
+                .tuple => |tuple| {
+                    const elems = self.types.sliceVars(tuple.elems);
+                    for (elems) |elem| {
+                        if (self.typeContainsErrorHelper(elem, visited)) return true;
+                    }
+                    return false;
+                },
+                .nominal_type => |nominal_type| {
+                    // Check all argument vars
+                    var arg_iter = self.types.iterNominalArgs(nominal_type);
+                    while (arg_iter.next()) |arg_var| {
+                        if (self.typeContainsErrorHelper(arg_var, visited)) return true;
+                    }
+                    // Check backing var
+                    const backing_var = self.types.getNominalBackingVar(nominal_type);
+                    return self.typeContainsErrorHelper(backing_var, visited);
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.var_)) |field_var| {
+                        if (self.typeContainsErrorHelper(field_var, visited)) return true;
+                    }
+                    return self.typeContainsErrorHelper(record.ext, visited);
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = self.types.getRecordFieldsSlice(fields);
+                    for (fields_slice.items(.var_)) |field_var| {
+                        if (self.typeContainsErrorHelper(field_var, visited)) return true;
+                    }
+                    return false;
+                },
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |tag_args| {
+                        const args = self.types.sliceVars(tag_args);
+                        for (args) |arg| {
+                            if (self.typeContainsErrorHelper(arg, visited)) return true;
+                        }
+                    }
+                    return self.typeContainsErrorHelper(tag_union.ext, visited);
+                },
+                .empty_record, .empty_tag_union => return false,
+            }
+        },
+    }
+}
+
 /// Find constraint origins for variables, checking resolved forms
 fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
     // Check the variables directly first
@@ -1527,16 +1623,13 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(env);
 
-        // TODO: This currently only works if the root type is an error, but we
-        // should later expand this to use the annotation if there's _any_ error.
-        //
-        // For example, if the expr resolves to `Error -> Error` does not
-        // trigger this codepath
-        if (mb_instantiated_anno_var != null and
-            self.types.resolveVar(expr_var).desc.content == .err)
-        {
-            // If there was an annotation AND the expr errored, then unify the
-            // ptrn against the annotation
+        // If the expression type contains any errors (not just at the root),
+        // preserve the annotation type for references to this definition.
+        // This ensures that errors in the body don't cascade to other code
+        // that correctly uses this definition according to its annotation.
+        if (mb_instantiated_anno_var != null and self.typeContainsError(expr_var)) {
+            // If there was an annotation AND the expr contains an error,
+            // then unify the ptrn against the annotation
             const instantiated_anno_var = mb_instantiated_anno_var.?;
             _ = try self.unify(ptrn_var, instantiated_anno_var, env);
         } else {
@@ -4040,11 +4133,11 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     try self.checkDeferredStaticDispatchConstraints(env);
                 }
 
-                if (mb_instantiated_anno_var != null and
-                    self.types.resolveVar(decl_expr_var).desc.content == .err)
-                {
-                    // If there was an annotation AND the expr errored, then
-                    // unify the ptrn against the annotation
+                // If the expression type contains any errors (not just at the root),
+                // preserve the annotation type for references to this definition.
+                if (mb_instantiated_anno_var != null and self.typeContainsError(decl_expr_var)) {
+                    // If there was an annotation AND the expr contains an error,
+                    // then unify the ptrn against the annotation
                     const instantiated_anno_var = mb_instantiated_anno_var.?;
                     _ = try self.unify(decl_pattern_var, instantiated_anno_var, env);
                 } else {

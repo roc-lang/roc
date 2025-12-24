@@ -267,7 +267,7 @@ INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
-TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
 UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
@@ -947,20 +947,20 @@ The function has the signature:
     [Red, ..[Blue, Green, .._others2]], _arg -> Error
 
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**syntax_grab_bag.md:175:26:175:27:**
+The first argument being passed to this function has the wrong type:
+**syntax_grab_bag.md:168:4:169:11:**
 ```roc
-		Stdout.line!("Adding ${n} to ${number}")
+			dbg # After dbg in list
+				number, # after dbg expr as arg
 ```
-		                       ^
 
-It has the type:
+This argument has the type:
+
+    {}
+
+But `add_one` needs the first argument to be:
 
     U64
-
-But I expected it to be:
-
-    Str
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2690,7 +2690,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))

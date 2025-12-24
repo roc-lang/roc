@@ -2271,6 +2271,92 @@ test "check type - body w/ anno does not leak to references - inline" {
     try test_env.assertDefTypeOptions("test", "Bool", .{ .allow_type_errors = true });
 }
 
+test "check type - body w/ anno does not leak - function returning error" {
+    // Test that when a function body has an error in the return type,
+    // the annotation is still preserved for references.
+    // This tests the typeContainsError function catches errors in function return types.
+    const source =
+        \\Test := [].{}
+        \\
+        \\x : Bool -> Bool
+        \\x = |_| "Str"
+        \\
+        \\y : Bool
+        \\y = x(True)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertDefTypeOptions("y", "Bool", .{ .allow_type_errors = true });
+}
+
+test "check type - body w/ anno does not leak - function with error in arg" {
+    // Test that when a function body treats the argument as wrong type,
+    // the annotation is still preserved for references.
+    const source =
+        \\Test := [].{}
+        \\
+        \\# x has annotation Bool -> Bool but body uses arg as Str
+        \\x : Bool -> Bool
+        \\x = |b| {
+        \\  # Use b + "str" to cause type error (Bool can't concat with Str)
+        \\  result = b or True
+        \\  result
+        \\}
+        \\
+        \\# Now call x with a Str argument to cause the error
+        \\z : Bool
+        \\z = x("wrong type")
+        \\
+        \\y : Bool
+        \\y = x(True)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertDefTypeOptions("y", "Bool", .{ .allow_type_errors = true });
+}
+
+test "check type - body w/ anno does not leak - record with error field" {
+    // Test that when a record body has an error in a field,
+    // the annotation is still preserved for references.
+    const source =
+        \\Test := [].{}
+        \\
+        \\x : { foo: Bool, bar: U64 }
+        \\x = { foo: "not a bool", bar: 42 }
+        \\
+        \\y : Bool
+        \\y = x.foo
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertDefTypeOptions("y", "Bool", .{ .allow_type_errors = true });
+}
+
+test "check type - body w/ anno does not leak - tuple with error element" {
+    // Test that when a tuple body has an error in an element,
+    // the annotation type is preserved (not Error).
+    const source =
+        \\Test := [].{}
+        \\
+        \\x : (Bool, U64)
+        \\x = ("not a bool", 42)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertDefTypeOptions("x", "(Bool, U64)", .{ .allow_type_errors = true });
+}
+
 test "check type - scoped type variables - bigger example 1" {
     const source =
         \\test_scoped : a, b -> a
