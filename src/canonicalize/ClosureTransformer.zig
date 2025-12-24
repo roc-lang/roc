@@ -106,6 +106,9 @@ closures: std.AutoHashMap(Expr.Idx, ClosureInfo),
 /// Map from pattern index to lambda set (for tracking which closures can reach a variable)
 pattern_lambda_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 
+/// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
+top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
+
 /// List of dispatch functions to generate
 dispatch_functions: std.ArrayList(DispatchFunction),
 
@@ -117,8 +120,19 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .closure_counter = 0,
         .closures = std.AutoHashMap(Expr.Idx, ClosureInfo).init(allocator),
         .pattern_lambda_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
+        .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
         .dispatch_functions = std.ArrayList(DispatchFunction).empty,
     };
+}
+
+/// Mark a pattern as a top-level definition (doesn't need to be captured)
+pub fn markTopLevel(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
+    try self.top_level_patterns.put(pattern_idx, {});
+}
+
+/// Check if a pattern is a top-level definition
+pub fn isTopLevel(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    return self.top_level_patterns.contains(pattern_idx);
 }
 
 /// Free resources
@@ -137,6 +151,9 @@ pub fn deinit(self: *Self) void {
         lambda_set.closures.deinit(self.allocator);
     }
     self.pattern_lambda_sets.deinit();
+
+    // Free top-level patterns set
+    self.top_level_patterns.deinit();
 
     // Free dispatch function closure lists
     for (self.dispatch_functions.items) |*df| {
@@ -239,6 +256,9 @@ fn generateDispatchMatch(
 
     const lambda_params = self.module_env.store.slicePatterns(closure_info.lambda_args);
 
+    // Transform the lambda body to handle nested closures
+    const transformed_lambda_body = try self.transformExpr(closure_info.lambda_body);
+
     // If we have arguments to bind, create a block with let bindings
     const body_expr = if (call_args.len > 0 and lambda_params.len > 0) blk: {
         const stmt_start = self.module_env.store.scratch.?.statements.top();
@@ -260,16 +280,16 @@ fn generateDispatchMatch(
 
         const stmts_span = try self.module_env.store.statementSpanFrom(stmt_start);
 
-        // Create block with bindings and lambda body as final expression
+        // Create block with bindings and transformed lambda body as final expression
         break :blk try self.module_env.store.addExpr(Expr{
             .e_block = .{
                 .stmts = stmts_span,
-                .final_expr = closure_info.lambda_body,
+                .final_expr = transformed_lambda_body,
             },
         }, base.Region.zero());
     } else blk: {
-        // No arguments, just use the lambda body directly
-        break :blk closure_info.lambda_body;
+        // No arguments, just use the transformed lambda body directly
+        break :blk transformed_lambda_body;
     };
 
     // Step 4: Create the match branch
@@ -378,6 +398,9 @@ fn generateLambdaSetDispatchMatch(
         // Create the body - bind arguments and execute lambda body
         const lambda_params = self.module_env.store.slicePatterns(closure_info.lambda_args);
 
+        // Transform the lambda body to handle nested closures
+        const transformed_lambda_body = try self.transformExpr(closure_info.lambda_body);
+
         const body_expr = if (call_args.len > 0 and lambda_params.len > 0) blk: {
             const stmt_start = self.module_env.store.scratch.?.statements.top();
 
@@ -400,11 +423,11 @@ fn generateLambdaSetDispatchMatch(
             break :blk try self.module_env.store.addExpr(Expr{
                 .e_block = .{
                     .stmts = stmts_span,
-                    .final_expr = closure_info.lambda_body,
+                    .final_expr = transformed_lambda_body,
                 },
             }, base.Region.zero());
         } else blk: {
-            break :blk closure_info.lambda_body;
+            break :blk transformed_lambda_body;
         };
 
         // Create match branch pattern
@@ -460,15 +483,34 @@ pub fn transformExprWithLambdaSet(
     const expr = self.module_env.store.getExpr(expr_idx);
 
     switch (expr) {
-        .e_closure, .e_lambda => {
-            // Direct closure/lambda - transform and create single-element lambda set
+        .e_closure => {
+            // Closure with captures - transform to tag and create lambda set
             const transformed = try self.transformClosure(expr_idx, name_hint);
             if (self.closures.get(expr_idx)) |closure_info| {
                 var lambda_set = LambdaSet.init();
                 try lambda_set.addClosure(self.allocator, closure_info);
                 return .{ .expr = transformed, .lambda_set = lambda_set };
             }
+            // If no closure_info, it was converted to a pure lambda (all captures were top-level)
             return .{ .expr = transformed, .lambda_set = null };
+        },
+        .e_lambda => |lambda| {
+            // Pure lambda (no captures) - transform body for nested closures
+            const transformed_body = try self.transformExpr(lambda.body);
+
+            // If body is unchanged, return original lambda
+            if (transformed_body == lambda.body) {
+                return .{ .expr = expr_idx, .lambda_set = null };
+            }
+
+            // Create new lambda with transformed body
+            const new_lambda = try self.module_env.store.addExpr(Expr{
+                .e_lambda = .{
+                    .args = lambda.args,
+                    .body = transformed_body,
+                },
+            }, base.Region.zero());
+            return .{ .expr = new_lambda, .lambda_set = null };
         },
         .e_if => |if_expr| {
             // If expression - collect closures from all branches
@@ -546,19 +588,25 @@ pub fn transformClosure(
                 else => return closure_expr_idx, // Not a lambda, return as-is
             };
 
-            // Generate tag name
-            const tag_name = try self.generateClosureTagName(binding_name_hint);
-
             // Get captures
             const captures = self.module_env.store.sliceCaptures(closure.captures);
 
-            // Build capture record fields
+            // Build capture record fields, filtering out top-level patterns
+            // (top-level constants don't need to be captured since they're always in scope)
             const scratch_top = self.module_env.store.scratch.?.record_fields.top();
 
             var capture_names = std.ArrayList(base.Ident.Idx).empty;
+            var non_toplevel_capture_count: usize = 0;
 
             for (captures) |capture_idx| {
                 const capture = self.module_env.store.getCapture(capture_idx);
+
+                // Skip top-level patterns - they don't need to be captured
+                if (self.isTopLevel(capture.pattern_idx)) {
+                    continue;
+                }
+
+                non_toplevel_capture_count += 1;
 
                 // Create a lookup expression for the captured variable
                 // Use store.addExpr directly to avoid region sync checks during transformation
@@ -576,17 +624,36 @@ pub fn transformClosure(
                 try capture_names.append(self.allocator, capture.name);
             }
 
+            // If all captures were top-level, this is effectively a pure lambda
+            // But we still need to transform its body (it might contain nested closures)
+            if (non_toplevel_capture_count == 0) {
+                capture_names.deinit(self.allocator);
+
+                // Transform the lambda's body to handle any nested closures
+                const transformed_body = try self.transformExpr(lambda.body);
+                if (transformed_body == lambda.body) {
+                    // Body unchanged, return original lambda
+                    return closure.lambda_idx;
+                }
+
+                // Create new lambda with transformed body
+                return try self.module_env.store.addExpr(Expr{
+                    .e_lambda = .{
+                        .args = lambda.args,
+                        .body = transformed_body,
+                    },
+                }, base.Region.zero());
+            }
+
+            // Generate tag name (only if we have real captures)
+            const tag_name = try self.generateClosureTagName(binding_name_hint);
+
             // Create the record expression
             const fields_span = try self.module_env.store.recordFieldSpanFrom(scratch_top);
 
-            const record_expr = if (captures.len > 0)
-                try self.module_env.store.addExpr(Expr{
-                    .e_record = .{ .fields = fields_span, .ext = null },
-                }, base.Region.zero())
-            else
-                try self.module_env.store.addExpr(Expr{
-                    .e_empty_record = .{},
-                }, base.Region.zero());
+            const record_expr = try self.module_env.store.addExpr(Expr{
+                .e_record = .{ .fields = fields_span, .ext = null },
+            }, base.Region.zero());
 
             // Create the tag expression: `tagName(captureRecord)
             // First, add the record as an argument
@@ -629,9 +696,22 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
             // Transform closure to tag
             return try self.transformClosure(expr_idx, null);
         },
-        .e_lambda => {
-            // Pure lambda (no captures) - leave unchanged
-            return expr_idx;
+        .e_lambda => |lambda| {
+            // Pure lambda (no captures) - transform the body to handle nested closures
+            const transformed_body = try self.transformExpr(lambda.body);
+
+            // If body is unchanged, return original lambda
+            if (transformed_body == lambda.body) {
+                return expr_idx;
+            }
+
+            // Create new lambda with transformed body
+            return try self.module_env.store.addExpr(Expr{
+                .e_lambda = .{
+                    .args = lambda.args,
+                    .body = transformed_body,
+                },
+            }, base.Region.zero());
         },
         .e_block => |block| {
             // Transform block: handle statements and final expression

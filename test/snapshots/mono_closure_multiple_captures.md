@@ -17,14 +17,9 @@ a = 1
 b : Dec
 b = 2
 add_ab : Dec -> Dec
-add_ab = Closure_add_ab_1({ a: a, b: b })
+add_ab = |x| a + b + x
 result : Dec
-result = match add_ab {
-	Closure_add_ab_1({ a, b }) => {
-		x = 10
-		a + b + x
-	}
-}
+result = 13
 ~~~
 # FORMATTED
 ~~~roc
@@ -80,41 +75,20 @@ EndOfFile,
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "add_ab"))
-		(e-tag (name "Closure_add_ab_1")
+		(e-lambda
 			(args
-				(e-record
-					(fields
-						(field (name "a")
-							(e-lookup-local
-								(p-assign (ident "a"))))
-						(field (name "b")
-							(e-lookup-local
-								(p-assign (ident "b")))))))))
+				(p-assign (ident "x")))
+			(e-binop (op "add")
+				(e-binop (op "add")
+					(e-lookup-local
+						(p-assign (ident "a")))
+					(e-lookup-local
+						(p-assign (ident "b"))))
+				(e-lookup-local
+					(p-assign (ident "x"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-match
-			(match
-				(cond
-					(e-lookup-local
-						(p-assign (ident "add_ab"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-block
-								(s-let
-									(p-assign (ident "x"))
-									(e-num (value "10")))
-								(e-binop (op "add")
-									(e-binop (op "add")
-										(e-lookup-local
-											(p-assign (ident "a")))
-										(e-lookup-local
-											(p-assign (ident "b"))))
-									(e-lookup-local
-										(p-assign (ident "x"))))))))))))
+		(e-num (value "13"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -127,6 +101,6 @@ EndOfFile,
 	(expressions
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
-		(expr (type "[]"))
-		(expr (type "[Error]"))))
+		(expr (type "c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool"))))
 ~~~

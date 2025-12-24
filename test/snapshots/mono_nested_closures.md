@@ -15,14 +15,9 @@ result = add_five(3)
 x : Dec
 x = 10
 make_adder : Dec -> (Dec -> Dec)
-make_adder = Closure_make_adder_1({ x: x })
+make_adder = |y| Closure_1({ y: y })
 add_five : Dec -> Dec
-add_five = match make_adder {
-	Closure_make_adder_1({ x }) => {
-		y = 5
-		|y0, z| x + y0 + z
-	}
-}
+add_five = make_adder(5)
 result : Dec
 result = add_five(3)
 ~~~
@@ -82,45 +77,22 @@ EndOfFile,
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "make_adder"))
-		(e-tag (name "Closure_make_adder_1")
+		(e-lambda
 			(args
-				(e-record
-					(fields
-						(field (name "x")
-							(e-lookup-local
-								(p-assign (ident "x")))))))))
+				(p-assign (ident "y")))
+			(e-tag (name "Closure_1")
+				(args
+					(e-record
+						(fields
+							(field (name "y")
+								(e-lookup-local
+									(p-assign (ident "y"))))))))))
 	(d-let
 		(p-assign (ident "add_five"))
-		(e-match
-			(match
-				(cond
-					(e-lookup-local
-						(p-assign (ident "make_adder"))))
-				(branches
-					(branch
-						(patterns
-							(pattern (degenerate false)
-								(p-applied-tag)))
-						(value
-							(e-block
-								(s-let
-									(p-assign (ident "y"))
-									(e-num (value "5")))
-								(e-closure
-									(captures
-										(capture (ident "x"))
-										(capture (ident "y")))
-									(e-lambda
-										(args
-											(p-assign (ident "z")))
-										(e-binop (op "add")
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "x")))
-												(e-lookup-local
-													(p-assign (ident "y"))))
-											(e-lookup-local
-												(p-assign (ident "z")))))))))))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "make_adder")))
+			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -138,7 +110,7 @@ EndOfFile,
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "Str"))
-		(expr (type "Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))
-		(expr (type "Numeral -> Try(_a, [InvalidNumeral(Str)]) where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "[ProvidedByCompiler]"))
+		(expr (type "[]"))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

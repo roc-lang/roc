@@ -22,17 +22,17 @@ NO CHANGE
 # EXPECTED
 COMPTIME EVAL ERROR - mono_pure_lambda.md:1:1:1:1
 # PROBLEMS
-**COMPTIME EVAL ERROR**
-This definition could not be evaluated at compile time:
+**COMPTIME CRASH**
+This definition crashed during compile-time evaluation:
 **mono_pure_lambda.md:1:1:1:1:**
 ```roc
 add_one = |x| x + 1
 ```
 ^
 
-The evaluation failed with error:
+The `crash` happened with this message:
 
-    ªªªªªªªªªªªªªªªªªª
+    ªªªªªªªªªªªªªªªªªªªªªªªªªªªªªªªªª
 
 # TOKENS
 ~~~zig
@@ -85,6 +85,6 @@ EndOfFile,
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "Bool"))))
+		(expr (type "[False, True]"))
+		(expr (type "[]"))))
 ~~~

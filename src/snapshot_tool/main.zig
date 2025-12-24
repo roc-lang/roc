@@ -1399,8 +1399,15 @@ fn processSnapshotContent(
         var transformer = ClosureTransformer.init(allocator, can_ir);
         defer transformer.deinit();
 
-        // Transform all top-level definitions
+        // First pass: mark all top-level patterns
+        // Top-level constants don't need to be captured since they're always in scope
         const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+        for (defs) |def_idx| {
+            const def = can_ir.store.getDef(def_idx);
+            try transformer.markTopLevel(def.pattern);
+        }
+
+        // Second pass: transform all top-level definitions
         for (defs) |def_idx| {
             const def = can_ir.store.getDef(def_idx);
 
@@ -1423,6 +1430,10 @@ fn processSnapshotContent(
             // Update the definition to use the transformed expression
             can_ir.store.setDefExpr(def_idx, result.expr);
         }
+
+        // Also check if any closures were transformed (even nested inside pure lambdas)
+        // This is important because nested closures may not produce a lambda_set at the top level
+        has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
     }
 
     // Run constant folding for mono tests (skip if we have closure transformations)
