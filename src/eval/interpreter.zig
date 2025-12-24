@@ -8596,14 +8596,10 @@ pub const Interpreter = struct {
         // Return cached value if available
         if (self.cached_list_u8_rt_var) |cached| return cached;
 
-        const origin_module_id = self.root_env.idents.builtin_module;
-
-        // Create U8 type
-        const u8_type_name = "U8";
-        const u8_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(u8_type_name));
-        const u8_type_ident = types.TypeIdent{ .ident_idx = u8_type_name_ident };
-        const u8_backing_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
-        const u8_content = try self.runtime_types.mkNominal(u8_type_ident, u8_backing_var, &.{}, origin_module_id, false);
+        // Create a canonical Builtin.Num.U8 type.
+        // Layout generation recognizes the fully-qualified numeric idents (Builtin.Num.U8, etc.);
+        // using an unqualified ident like "U8" can end up as ZST and then default numeric literals to Dec.
+        const u8_content = try self.mkNumberTypeContentRuntime("U8");
         const u8_rt_var = try self.runtime_types.freshFromContent(u8_content);
 
         // Create List(U8) type and cache it
@@ -11493,9 +11489,17 @@ pub const Interpreter = struct {
                     }
                     try value_stack.push(dest);
                 } else {
-                    // Get element type variable from first element
-                    const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-                    const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
+                    // Get element type from list_rt_var. The list type should be List(elem)
+                    // where vars[0] is backing and vars[1] is the element type.
+                    // The element type may be flex (e.g., Num *) which is fine - downstream
+                    // code like getRuntimeLayout will default flex to Dec as needed.
+                    const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                    std.debug.assert(list_resolved.desc.content == .structure);
+                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
+                    const nom = list_resolved.desc.content.structure.nominal_type;
+                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                    const elem_rt_var = vars[1];
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
@@ -12141,6 +12145,60 @@ pub const Interpreter = struct {
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
                     // poly_context_generation increments when flex_type_context changes, which invalidates
                     // stale layout cache entries. No explicit @memset needed.
+                }
+
+                // Seed flex_type_context from any already-bound local lookups in the argument list.
+                //
+                // This lets earlier arguments (like numeric literals inside `[0]`) be evaluated using the
+                // concrete type that is only apparent from a later argument (like `bytes : List U8`).
+                //
+                // Example: `List.concat([0], bytes)` where `bytes` was computed earlier in the block. The
+                // call arguments are evaluated left-to-right, so without this seeding the `[0]` may
+                // default to `List Dec` before we ever look up `bytes`, causing element-size mismatches.
+                // Avoid seeding while evaluating inside the Builtin module itself; those pre-compiled
+                // helpers (e.g. `List.repeat`) rely on their own internal inference and are called
+                // polymorphically many times in a single REPL session.
+                const can_seed_from_bindings = blk: {
+                    if (self.builtin_module_env) |builtin_env| {
+                        if (self.env == @constCast(builtin_env)) break :blk false;
+                    }
+                    break :blk true;
+                };
+                if (can_seed_from_bindings) {
+                    for (arg_indices) |arg_idx| {
+                        const arg_expr = self.env.store.getExpr(arg_idx);
+                        if (arg_expr != .e_lookup_local) continue;
+
+                        const lookup = arg_expr.e_lookup_local;
+                        var i: usize = self.bindings.items.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const b = self.bindings.items[i];
+                            if (b.source_env != self.env) continue;
+                            if (b.pattern_idx != lookup.pattern_idx) continue;
+
+                            // Only seed from layouts where we can reliably recover a meaningful runtime type.
+                            // In particular, `.list_of_zst` has no element layout, so it cannot drive inference.
+                            if (b.value.layout.tag != .list) break;
+
+                            const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                            // Avoid seeding from a rigid CT var directly; rigid vars typically represent
+                            // generalized parameters (e.g. `state` in List.fold). Mapping them to a concrete
+                            // runtime type here can introduce cycles in layout computation.
+                            const arg_ct_resolved = self.env.types.resolveVar(arg_ct_var);
+                            if (arg_ct_resolved.desc.content == .rigid) break;
+
+                            // IMPORTANT: Always map to a fresh runtime type var derived from the layout.
+                            //
+                            // `prepareCallWithFuncVar` performs runtime unification between parameter
+                            // types and argument types. If we map directly to `b.value.rt_var`, that
+                            // unification can redirect the value's actual `rt_var`, which then changes
+                            // behavior of downstream operations like `Str.inspect`.
+                            const mapping_rt_var = try self.createTypeFromLayout(b.value.layout);
+                            try self.propagateFlexMappings(self.env, arg_ct_var, mapping_rt_var);
+                            break;
+                        }
+                    }
                 }
 
                 // Compute argument runtime type variables

@@ -2808,7 +2808,7 @@ expect {
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
 		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls

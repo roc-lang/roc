@@ -61,6 +61,8 @@ pub const Pattern = union(enum) {
 
 /// Identifies a tag within a union
 pub const TagId = enum(u16) {
+    /// The first/only constructor in a single-constructor type (records, tuples, etc.)
+    only = 0,
     _,
 
     pub fn toInt(self: TagId) u16 {
@@ -330,7 +332,7 @@ pub fn convertPattern(
             const alternatives = try allocator.alloc(CtorInfo, 1);
             alternatives[0] = .{
                 .name = .{ .tag = Ident.Idx.NONE },
-                .tag_id = @enumFromInt(0),
+                .tag_id = .only,
                 .arity = destructs.len,
             };
 
@@ -339,7 +341,7 @@ pub fn convertPattern(
                     .alternatives = alternatives,
                     .render_as = .record,
                 },
-                .tag_id = @enumFromInt(0),
+                .tag_id = .only,
                 .args = args,
             } };
         },
@@ -355,7 +357,7 @@ pub fn convertPattern(
             const alternatives = try allocator.alloc(CtorInfo, 1);
             alternatives[0] = .{
                 .name = .{ .tag = Ident.Idx.NONE },
-                .tag_id = @enumFromInt(0),
+                .tag_id = .only,
                 .arity = elem_indices.len,
             };
 
@@ -364,7 +366,7 @@ pub fn convertPattern(
                     .alternatives = alternatives,
                     .render_as = .tuple,
                 },
-                .tag_id = @enumFromInt(0),
+                .tag_id = .only,
                 .args = args,
             } };
         },
@@ -462,7 +464,7 @@ pub fn convertMatchBranches(
                 const alternatives = try allocator.alloc(CtorInfo, 1);
                 alternatives[0] = .{
                     .name = .{ .tag = Ident.Idx.NONE },
-                    .tag_id = @enumFromInt(0),
+                    .tag_id = .only,
                     .arity = 2,
                 };
 
@@ -471,7 +473,7 @@ pub fn convertMatchBranches(
                         .alternatives = alternatives,
                         .render_as = .guard,
                     },
-                    .tag_id = @enumFromInt(0),
+                    .tag_id = .only,
                     .args = guard_args,
                 } };
             } else converted;

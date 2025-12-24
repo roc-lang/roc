@@ -657,6 +657,21 @@ test "e_low_level_lambda - List.concat preserves order" {
     try testing.expectEqualStrings("Ok(10)", first_value);
 }
 
+test "e_low_level_lambda - List.concat with Str.to_utf8 inside lambda (issue 8618)" {
+    const src =
+        \\test = |line| {
+        \\    bytes = line.to_utf8()
+        \\    List.concat([0], bytes)
+        \\}
+        \\
+        \\x = test("abc")
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("[0, 97, 98, 99]", value);
+}
+
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
     const src =
         \\x = List.concat(["hello", "world"], ["foo", "bar"])
