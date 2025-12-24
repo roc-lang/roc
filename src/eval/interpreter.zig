@@ -2579,6 +2579,13 @@ pub const Interpreter = struct {
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+
+                // Check index_arg has correct layout for integer extraction
+                if (index_arg.layout.tag != .scalar or index_arg.layout.data.scalar.tag != .int) {
+                    self.triggerCrash("list_get_unsafe: index argument is not an integer scalar", false, roc_ops);
+                    return error.TypeMismatch;
+                }
+
                 const index = index_arg.asI128(); // U64 stored as i128
 
                 // Get element layout
@@ -16567,6 +16574,44 @@ pub const Interpreter = struct {
                 try value_stack.push(receiver_value);
                 try value_stack.push(method_func);
 
+                // Get the method function's type to use parameter types for argument evaluation.
+                // This is critical for properly typing polymorphic numeric literals like `0` in `list.get(0)`.
+                const closure_header_for_args: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Use the closure's source environment for type translation, as that's where the method is defined
+                const method_env = closure_header_for_args.source_env;
+                const method_lambda_ct_var_for_args = can.ModuleEnv.varFrom(closure_header_for_args.lambda_expr_idx);
+                const method_lambda_rt_var_for_args = try self.translateTypeVar(@constCast(method_env), method_lambda_ct_var_for_args);
+                const method_resolved_for_args = self.runtime_types.resolveVar(method_lambda_rt_var_for_args);
+
+                // Unify the method's first parameter with the receiver type to resolve type variables.
+                // This ensures that type variables like `a` in `List(a)` are properly bound.
+                const method_param_types: ?[]const types.Var = if (method_resolved_for_args.desc.content.unwrapFunc()) |func_info| blk: {
+                    const params = self.runtime_types.sliceVars(func_info.args);
+                    if (params.len >= 1) {
+                        // Create a copy of the receiver's type to avoid corrupting the original
+                        const recv_resolved = self.runtime_types.resolveVar(da.receiver_rt_var);
+                        const recv_copy = try self.runtime_types.register(.{
+                            .content = recv_resolved.desc.content,
+                            .rank = recv_resolved.desc.rank,
+                            .mark = types.Mark.none,
+                        });
+                        _ = unify.unifyWithConf(
+                            @constCast(method_env),
+                            self.runtime_types,
+                            &self.problems,
+                            &self.snapshots,
+                            &self.type_writer,
+                            &self.unify_scratch,
+                            &self.unify_scratch.occurs_scratch,
+                            params[0],
+                            recv_copy,
+                            unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                        ) catch {};
+                    }
+                    break :blk params;
+                } else null;
+
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                     .method_name = da.field_name,
                     .collected_count = 0,
@@ -16576,17 +16621,17 @@ pub const Interpreter = struct {
                 } } });
 
                 // Start evaluating first arg
-                // For static dispatch methods like I64.to_str(x), use the receiver type
-                // as the expected type for the first argument. This enables proper type
-                // inference for polymorphic numeric literals.
-                // Note: This assumes methods take their receiver type as first arg, which
-                // is true for common patterns like I64.to_str. For multi-arg methods,
-                // only the first arg gets this treatment.
-                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                // Use the method's second parameter type (first explicit arg) if available.
+                // For List.get(0), the second param is U64, so the literal 0 gets the correct type.
+                const first_arg_expected_rt_var: types.Var = if (method_param_types != null and method_param_types.?.len >= 2)
+                    method_param_types.?[1]
+                else blk: {
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    break :blk try self.translateTypeVar(self.env, first_arg_ct_var);
+                };
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
-                    .expected_rt_var = first_arg_rt_var,
+                    .expected_rt_var = first_arg_expected_rt_var,
                 } });
                 return true;
             },
