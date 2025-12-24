@@ -12,6 +12,7 @@ result = add_one(5)
 ~~~roc
 add_one : Dec -> Dec
 add_one = |x| x + 1
+
 result : Dec
 result = 6
 ~~~

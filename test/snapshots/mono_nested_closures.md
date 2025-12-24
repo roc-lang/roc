@@ -14,10 +14,13 @@ result = add_five(3)
 ~~~roc
 x : Dec
 x = 10
+
 make_adder : Dec -> (Dec -> Dec)
 make_adder = |y| Closure_1({ y: y })
+
 add_five : Dec -> Dec
 add_five = make_adder(5)
+
 result : Dec
 result = add_five(3)
 ~~~

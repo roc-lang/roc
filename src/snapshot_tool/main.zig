@@ -2881,7 +2881,12 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         try mono_buffer.appendSlice(output.gpa, pattern_output);
         try mono_buffer.appendSlice(output.gpa, " = ");
         try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        try mono_buffer.appendSlice(output.gpa, "\n");
+        try mono_buffer.appendSlice(output.gpa, "\n\n");
+    }
+
+    // Trim trailing newline (we added one too many at the end)
+    if (mono_buffer.items.len > 0 and mono_buffer.items[mono_buffer.items.len - 1] == '\n') {
+        _ = mono_buffer.pop();
     }
 
     // Validate the generated MONO output - fail if it's not valid Roc code

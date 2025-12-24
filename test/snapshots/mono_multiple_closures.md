@@ -16,14 +16,19 @@ result2 = add_y(5)
 ~~~roc
 x : Dec
 x = 10
+
 y : Dec
 y = 20
+
 add_x : Dec -> Dec
 add_x = |a| a + x
+
 add_y : Dec -> Dec
 add_y = |b| b + y
+
 result1 : Dec
 result1 = 15
+
 result2 : Dec
 result2 = 25
 ~~~

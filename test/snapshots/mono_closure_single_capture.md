@@ -13,8 +13,10 @@ result = add_x(10)
 ~~~roc
 x : Dec
 x = 42
+
 add_x : Dec -> Dec
 add_x = |y| x + y
+
 result : Dec
 result = 52
 ~~~

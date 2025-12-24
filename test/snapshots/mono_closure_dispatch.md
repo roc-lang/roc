@@ -13,8 +13,10 @@ result = f(10)
 ~~~roc
 condition : [True]
 condition = True
+
 f : Dec -> Dec
 f = if (condition) |x| x + 1 else |x| x * 2
+
 result : Dec
 result = 11
 ~~~
