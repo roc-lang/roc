@@ -12,28 +12,36 @@ type=expr
 ]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_list_multiline_mismatch.md:2:5:2:5
+MISSING METHOD - can_list_multiline_mismatch.md:2:5:2:7
+MISSING METHOD - can_list_multiline_mismatch.md:4:5:4:8
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The first two elements in this list have incompatible types:
-**can_list_multiline_mismatch.md:2:5:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**can_list_multiline_mismatch.md:2:5:2:7:**
 ```roc
     42,
-    "hello world",
 ```
     ^^
-    ^^^^^^^^^^^^^
 
-The first element has this type:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-However, the second element has this type:
-    _Str_
+    Str
 
-All elements in a list must have compatible types.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**can_list_multiline_mismatch.md:4:5:4:8:**
+```roc
+    100
+```
+    ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -71,5 +79,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(Str)"))
 ~~~

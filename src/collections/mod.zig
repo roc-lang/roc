@@ -21,6 +21,13 @@ pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuil
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const CompactWriter = @import("CompactWriter.zig");
 
+/// Serialization format definitions for embedded module data.
+pub const serialization = @import("serialization.zig");
+pub const SerializedHeader = serialization.SerializedHeader;
+pub const SerializedModuleInfo = serialization.SerializedModuleInfo;
+pub const SERIALIZED_FORMAT_MAGIC = serialization.SERIALIZED_FORMAT_MAGIC;
+pub const SERIALIZED_FORMAT_VERSION = serialization.SERIALIZED_FORMAT_VERSION;
+
 /// Re-exported alignment constant from CompactWriter for convenience.
 /// This alignment is required for all serialization buffers to ensure proper memory access.
 pub const SERIALIZATION_ALIGNMENT = CompactWriter.SERIALIZATION_ALIGNMENT;
@@ -43,19 +50,17 @@ pub const NonEmptyRange = struct {
 };
 
 /// A key-value map that uses direct array indexing instead of hashing.
-/// Keys must be enums that are convertible to indices, and key value 0 is reserved
-/// as a sentinel value which indicates an empty slot.
+/// Keys must be enums that are convertible to indices. The value type V must
+/// have a `none` constant that serves as the sentinel value for empty slots.
 pub fn ArrayListMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
-        // We store V directly, using 0 as a sentinel value meaning "empty"
         entries: []V,
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
-            // Allocate zeroed memory
             const entries = try allocator.alloc(V, capacity);
-            @memset(entries, std.mem.zeroes(V));
+            @memset(entries, V.none);
 
             return .{ .entries = entries };
         }
@@ -69,11 +74,18 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             if (idx >= self.entries.len) return null;
 
             const value = self.entries[idx];
-            // Check if this is an empty slot (zero value)
-            if (std.meta.eql(value, std.mem.zeroes(V))) {
+            if (value == V.none) {
                 return null;
             }
             return value;
+        }
+
+        const init_capacity = @as(comptime_int, @max(1, std.atomic.cache_line / @sizeOf(V)));
+
+        /// Called when memory growth is necessary. Returns a capacity larger than
+        /// minimum that grows super-linearly. Copied from std.ArrayList.
+        inline fn growCapacity(minimum: usize) usize {
+            return minimum +| (minimum / 2 + init_capacity);
         }
 
         pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
@@ -81,10 +93,9 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 
             // Grow if necessary
             if (idx >= self.entries.len) {
-                const new_size = idx + 1;
+                const new_size = growCapacity(idx);
                 const new_entries = try allocator.realloc(self.entries, new_size);
-                // Zero out the new memory
-                @memset(new_entries[self.entries.len..], std.mem.zeroes(V));
+                @memset(new_entries[self.entries.len..], V.none);
                 self.entries = new_entries;
             }
 
@@ -102,5 +113,6 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
 }

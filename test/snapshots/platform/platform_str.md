@@ -1,12 +1,14 @@
 # META
 ~~~ini
-description=the str test platform
+description=the str test platform with for-clause syntax
 type=file
 ~~~
 # SOURCE
 ~~~roc
 platform ""
-    requires {} { processString : Str -> Str }
+    requires {
+        processString : Str -> Str
+    }
     exposes []
     packages {}
     provides { processString: "processString" }
@@ -14,13 +16,24 @@ platform ""
 processString : Str -> Str
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:46
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `processString` is exposed, but it is not defined anywhere in this module.
+
+**platform_str.md:7:16:7:46:**
+```roc
+    provides { processString: "processString" }
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `processString` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
-KwRequires,OpenCurly,CloseCurly,OpenCurly,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,CloseCurly,
+KwRequires,OpenCurly,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
 KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
@@ -31,9 +44,10 @@ EndOfFile,
 ~~~clojure
 (file
 	(platform (name "")
-		(rigids)
-		(ty-record
-			(anno-record-field (name "processString")
+		(requires
+			(requires-entry
+				(type-aliases)
+				(entrypoint "processString")
 				(ty-fn
 					(ty (name "Str"))
 					(ty (name "Str")))))
@@ -52,7 +66,9 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 platform ""
-	requires {} { processString : Str -> Str }
+	requires {
+		processString : Str -> Str
+	}
 	exposes []
 	packages {}
 	provides { processString: "processString" }

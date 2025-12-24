@@ -10,6 +10,7 @@ pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const reporting = @import("cache_reporting.zig");
 pub const manager = @import("cache_manager.zig");
+pub const cleanup = @import("cache_cleanup.zig");
 
 pub const Header = module.Header;
 pub const CacheModule = module.CacheModule;
@@ -18,6 +19,9 @@ pub const CacheManager = manager.CacheManager;
 pub const CacheResult = manager.CacheResult;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
+/// Cache cleanup utilities for managing temporary and persistent cache files.
+pub const CacheCleanup = cleanup;
+pub const CleanupStats = cleanup.CleanupStats;
 pub const PackageEnv = package.PackageEnv;
 pub const BuildEnv = build.BuildEnv;
 
@@ -43,6 +47,7 @@ pub const BuildEnv = build.BuildEnv;
 // }
 
 test "compile tests" {
+    std.testing.refAllDecls(@import("cache_cleanup.zig"));
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(@import("cache_manager.zig"));
@@ -55,4 +60,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/module_env_test.zig"));
     std.testing.refAllDecls(@import("test/test_build_env.zig"));
     std.testing.refAllDecls(@import("test/test_package_env.zig"));
+    std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
 }

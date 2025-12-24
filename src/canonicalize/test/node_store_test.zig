@@ -8,6 +8,7 @@ const builtins = @import("builtins");
 
 const StringLiteral = base.StringLiteral;
 const CIR = @import("../CIR.zig");
+const ModuleEnv = @import("../ModuleEnv.zig");
 const NodeStore = @import("../NodeStore.zig");
 const RocDec = builtins.dec.RocDec;
 const CalledVia = base.CalledVia;
@@ -70,9 +71,18 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
+        .s_decl_gen = .{
+            .pattern = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .anno = rand_idx(CIR.Annotation.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
         .s_var = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
+            .anno = rand_idx(CIR.Annotation.Idx),
         },
     });
 
@@ -116,8 +126,16 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
+        .s_while = .{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
         .s_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
+            .lambda = rand_idx(CIR.Expr.Idx),
         },
     });
 
@@ -141,6 +159,7 @@ test "NodeStore round trip - Statements" {
         .s_nominal_decl = .{
             .header = rand_idx(CIR.TypeHeader.Idx),
             .anno = rand_idx(CIR.TypeAnno.Idx),
+            .is_opaque = false,
         },
     });
 
@@ -148,6 +167,12 @@ test "NodeStore round trip - Statements" {
         .name = rand_ident_idx(),
         .anno = rand_idx(CIR.TypeAnno.Idx),
         .where = null,
+    } });
+
+    try statements.append(gpa, CIR.Statement{ .s_type_var_alias = .{
+        .alias_name = rand_ident_idx(),
+        .type_var_name = rand_ident_idx(),
+        .type_var_anno = rand_idx(CIR.TypeAnno.Idx),
     } });
 
     try statements.append(gpa, CIR.Statement{ .s_runtime_error = .{
@@ -159,17 +184,11 @@ test "NodeStore round trip - Statements" {
         const idx = try store.addStatement(stmt, region);
         const retrieved = store.getStatement(idx);
 
-        testing.expectEqualDeep(stmt, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{stmt});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(stmt, retrieved);
     }
 
     const actual_test_count = statements.items.len;
     if (actual_test_count < NodeStore.MODULEENV_STATEMENT_NODE_COUNT) {
-        std.debug.print("Statement test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_STATEMENT_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing statement variants.\n", .{});
         return error.IncompleteStatementTestCoverage;
     }
 }
@@ -230,6 +249,11 @@ test "NodeStore round trip - Expressions" {
             .module_idx = rand_idx_u16(CIR.Import.Idx),
             .target_node_idx = rand.random().int(u16),
             .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_lookup_required = .{
+            .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(rand.random().int(u32)),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -327,6 +351,7 @@ test "NodeStore round trip - Expressions" {
         .e_dot_access = .{
             .receiver = rand_idx(CIR.Expr.Idx),
             .field_name = rand_ident_idx(),
+            .field_name_region = rand_region(),
             .args = null,
         },
     });
@@ -373,23 +398,44 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_anno_only = .{},
     });
+    try expressions.append(gpa, CIR.Expr{
+        .e_hosted_lambda = .{
+            .symbol_name = rand_ident_idx(),
+            .index = rand.random().int(u32),
+            .args = CIR.Pattern.Span{ .span = rand_span() },
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_return = .{
+            .expr = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_for = .{
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_var_dispatch = .{
+            .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
+            .method_name = rand_ident_idx(),
+            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
+        },
+    });
 
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
         const idx = try store.addExpr(expr, region);
         const retrieved = store.getExpr(idx);
 
-        testing.expectEqualDeep(expr, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{expr});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(expr, retrieved);
     }
 
     const actual_test_count = expressions.items.len;
     if (actual_test_count < NodeStore.MODULEENV_EXPR_NODE_COUNT) {
-        std.debug.print("Expression test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_EXPR_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing expression variants.\n", .{});
         return error.IncompleteExpressionTestCoverage;
     }
 }
@@ -501,6 +547,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .if_else_not_canonicalized = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .if_expr_without_else = .{
             .region = rand_region(),
         },
     });
@@ -687,12 +739,6 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .invalid_single_quote = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
         .f64_pattern_literal = .{
             .region = rand_region(),
         },
@@ -822,17 +868,11 @@ test "NodeStore round trip - Diagnostics" {
         const idx = try store.addDiagnostic(diagnostic);
         const retrieved = store.getDiagnostic(idx);
 
-        testing.expectEqualDeep(diagnostic, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{diagnostic});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(diagnostic, retrieved);
     }
 
     const actual_test_count = diagnostics.items.len;
     if (actual_test_count < NodeStore.MODULEENV_DIAGNOSTIC_NODE_COUNT) {
-        std.debug.print("Diagnostic test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_DIAGNOSTIC_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing diagnostic variants.\n", .{});
         return error.IncompleteDiagnosticTestCoverage;
     }
 }
@@ -932,6 +972,7 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .record = .{
             .fields = CIR.TypeAnno.RecordField.Span{ .span = rand_span() },
+            .ext = null,
         },
     });
 
@@ -961,11 +1002,7 @@ test "NodeStore round trip - TypeAnno" {
         const idx = try store.addTypeAnno(type_anno, region);
         const retrieved = store.getTypeAnno(idx);
 
-        testing.expectEqualDeep(type_anno, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{type_anno});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(type_anno, retrieved);
     }
 
     // We have extra tests for:
@@ -975,8 +1012,6 @@ test "NodeStore round trip - TypeAnno" {
 
     const actual_test_count = type_annos.items.len;
     if (actual_test_count - extra_test_count < NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT) {
-        std.debug.print("CIR.TypeAnno test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_TYPE_ANNO_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing type annotation variants.\n", .{});
         return error.IncompleteTypeAnnoTestCoverage;
     }
 }
@@ -1095,25 +1130,15 @@ test "NodeStore round trip - Pattern" {
         const idx = try store.addPattern(pattern, region);
         const retrieved = store.getPattern(idx);
 
-        testing.expectEqualDeep(pattern, retrieved) catch |err| {
-            std.debug.print("\n\nOriginal:  {any}\n\n", .{pattern});
-            std.debug.print("Retrieved: {any}\n\n", .{retrieved});
-            return err;
-        };
+        try testing.expectEqualDeep(pattern, retrieved);
 
         // Also verify the region was stored correctly
         const stored_region = store.getRegionAt(@enumFromInt(@intFromEnum(idx)));
-        testing.expectEqualDeep(region, stored_region) catch |err| {
-            std.debug.print("\n\nExpected region: {any}\n\n", .{region});
-            std.debug.print("Stored region: {any}\n\n", .{stored_region});
-            return err;
-        };
+        try testing.expectEqualDeep(region, stored_region);
     }
 
     const actual_test_count = patterns.items.len;
     if (actual_test_count < NodeStore.MODULEENV_PATTERN_NODE_COUNT) {
-        std.debug.print("CIR.Pattern test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.MODULEENV_PATTERN_NODE_COUNT, actual_test_count });
-        std.debug.print("Please add test cases for missing pattern variants.\n", .{});
         return error.IncompletePatternTestCoverage;
     }
 }

@@ -14,7 +14,7 @@ MyBool : Bool
 Person : { name: Str, age: U64 }
 
 # Type with parameters
-Result(ok, err) : [Ok(ok), Err(err)]
+Try(ok, err) : [Ok(ok), Err(err)]
 
 # Forward reference - Tree references Node before Node is defined
 Tree(a) : [Branch(Node(a)), Leaf(a)]
@@ -23,7 +23,7 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 Node(a) : { value: a, children: List(Tree(a)) }
 
 # Using a previously defined type
-MyResult : Result(Str, U64)
+MyTry : Try(Str, U64)
 
 # Type redeclaration (should error)
 Person : U64
@@ -38,28 +38,28 @@ MyDict : Dict(Str, U64)
 # Complex nested type using multiple declared types
 Complex : {
     person: Person,
-    result: Result(Bool, Str),
+    result: Try(Bool, Str),
     tree: Tree(U64)
 }
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:37
+TYPE REDECLARED - type_comprehensive_scope.md:10:1:10:34
 UNDECLARED TYPE - type_comprehensive_scope.md:13:19:13:23
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 TOO MANY ARGS - type_comprehensive_scope.md:29:10:29:24
 # PROBLEMS
 **TYPE REDECLARED**
-The type _Result_ is being redeclared.
+The type _Try_ is being redeclared.
 
 The redeclaration is here:
-**type_comprehensive_scope.md:10:1:10:37:**
+**type_comprehensive_scope.md:10:1:10:34:**
 ```roc
-Result(ok, err) : [Ok(ok), Err(err)]
+Try(ok, err) : [Ok(ok), Err(err)]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But _Result_ was already declared here:
+But _Try_ was already declared here:
 **type_comprehensive_scope.md:1:1:1:1:**
 ```roc
 # Built-in types should work
@@ -108,13 +108,12 @@ BadType : SomeUndeclaredType
 
 
 **TOO MANY ARGS**
-The type _Dict_ expects  argument, but got  instead.
+The type _Dict_ expects 0 arguments, but got 2 instead.
 **type_comprehensive_scope.md:29:10:29:24:**
 ```roc
 MyDict : Dict(Str, U64)
 ```
          ^^^^^^^^^^^^^^
-
 
 
 # TOKENS
@@ -164,7 +163,7 @@ EndOfFile,
 				(anno-record-field (name "age")
 					(ty (name "U64")))))
 		(s-type-decl
-			(header (name "Result")
+			(header (name "Try")
 				(args
 					(ty-var (raw "ok"))
 					(ty-var (raw "err"))))
@@ -204,10 +203,10 @@ EndOfFile,
 							(ty (name "Tree"))
 							(ty-var (raw "a")))))))
 		(s-type-decl
-			(header (name "MyResult")
+			(header (name "MyTry")
 				(args))
 			(ty-apply
-				(ty (name "Result"))
+				(ty (name "Try"))
 				(ty (name "Str"))
 				(ty (name "U64"))))
 		(s-type-decl
@@ -239,7 +238,7 @@ EndOfFile,
 					(ty (name "Person")))
 				(anno-record-field (name "result")
 					(ty-apply
-						(ty (name "Result"))
+						(ty (name "Try"))
 						(ty (name "Bool"))
 						(ty (name "Str"))))
 				(anno-record-field (name "tree")
@@ -258,7 +257,7 @@ MyBool : Bool
 Person : { name : Str, age : U64 }
 
 # Type with parameters
-Result(ok, err) : [Ok(ok), Err(err)]
+Try(ok, err) : [Ok(ok), Err(err)]
 
 # Forward reference - Tree references Node before Node is defined
 Tree(a) : [Branch(Node(a)), Leaf(a)]
@@ -267,7 +266,7 @@ Tree(a) : [Branch(Node(a)), Leaf(a)]
 Node(a) : { value : a, children : List(Tree(a)) }
 
 # Using a previously defined type
-MyResult : Result(Str, U64)
+MyTry : Try(Str, U64)
 
 # Type redeclaration (should error)
 Person : U64
@@ -282,7 +281,7 @@ MyDict : Dict(Str, U64)
 # Complex nested type using multiple declared types
 Complex : {
 	person : Person,
-	result : Result(Bool, Str),
+	result : Try(Bool, Str),
 	tree : Tree(U64),
 }
 ~~~
@@ -306,7 +305,7 @@ Complex : {
 			(field (field "age")
 				(ty-lookup (name "U64") (builtin)))))
 	(s-alias-decl
-		(ty-header (name "Result")
+		(ty-header (name "Try")
 			(ty-args
 				(ty-rigid-var (name "ok"))
 				(ty-rigid-var (name "err"))))
@@ -336,8 +335,8 @@ Complex : {
 					(ty-apply (name "Tree") (local)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(s-alias-decl
-		(ty-header (name "MyResult"))
-		(ty-apply (name "Result") (builtin)
+		(ty-header (name "MyTry"))
+		(ty-apply (name "Try") (builtin)
 			(ty-lookup (name "Str") (builtin))
 			(ty-lookup (name "U64") (builtin))))
 	(s-alias-decl
@@ -361,7 +360,7 @@ Complex : {
 			(field (field "person")
 				(ty-lookup (name "Person") (local)))
 			(field (field "result")
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Bool") (builtin))
 					(ty-lookup (name "Str") (builtin))))
 			(field (field "tree")
@@ -381,8 +380,8 @@ Complex : {
 			(ty-header (name "MyBool")))
 		(alias (type "Person")
 			(ty-header (name "Person")))
-		(alias (type "Result(ok, err)")
-			(ty-header (name "Result")
+		(alias (type "Try(ok, err)")
+			(ty-header (name "Try")
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))))
@@ -394,8 +393,8 @@ Complex : {
 			(ty-header (name "Node")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "MyResult")
-			(ty-header (name "MyResult")))
+		(alias (type "MyTry")
+			(ty-header (name "MyTry")))
 		(alias (type "Person")
 			(ty-header (name "Person")))
 		(alias (type "BadType")

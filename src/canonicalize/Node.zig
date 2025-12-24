@@ -25,6 +25,7 @@ pub const Idx = List.Idx;
 pub const Tag = enum {
     // Statements
     statement_decl,
+    statement_decl_gen,
     statement_var,
     statement_reassign,
     statement_crash,
@@ -32,11 +33,13 @@ pub const Tag = enum {
     statement_expr,
     statement_expect,
     statement_for,
+    statement_while,
     statement_return,
     statement_import,
     statement_alias_decl,
     statement_nominal_decl,
     statement_type_anno,
+    statement_type_var_alias,
     // Expressions
     expr_var,
     expr_tuple,
@@ -50,6 +53,7 @@ pub const Tag = enum {
     expr_field_access,
     expr_static_dispatch,
     expr_external_lookup,
+    expr_required_lookup,
     expr_dot_access,
     expr_apply,
     expr_string,
@@ -78,9 +82,13 @@ pub const Tag = enum {
     expr_block,
     expr_ellipsis,
     expr_anno_only,
+    expr_hosted_lambda,
     expr_low_level,
     expr_expect,
+    expr_for,
     expr_record_builder,
+    expr_return,
+    expr_type_var_dispatch,
     match_branch,
     match_branch_pattern,
     type_header,
@@ -151,7 +159,6 @@ pub const Tag = enum {
     // diagnostic indices stored in malformed nodes.
     diag_not_implemented,
     diag_invalid_num_literal,
-    diag_invalid_single_quote,
     diag_empty_single_quote,
     diag_empty_tuple,
     diag_ident_already_in_scope,
@@ -209,4 +216,5 @@ pub const Tag = enum {
     diag_underscore_in_type_declaration,
     diagnostic_exposed_but_not_implemented,
     diag_redundant_exposed,
+    diag_if_expr_without_else,
 };

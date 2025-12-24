@@ -40,6 +40,26 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         anno: ?Annotation.Idx,
     },
+    /// A generalized declaration (for lambdas and number literals only).
+    /// These bindings use let-polymorphism and can be instantiated at different types.
+    ///
+    /// ```roc
+    /// id = |x| x         # generalized - can be used polymorphically
+    /// number = id(0)     # works
+    /// empty_str = id("") # also works
+    ///
+    /// one = 1            # generalized - can be used polymorphically
+    /// u64_one = one + [].len()   # `one` can be a U64
+    /// two_point_one = one + 1.1  # `one` can also be Dec
+    /// ```
+    ///
+    /// Other literals don't allow generalization - see
+    /// https://github.com/seanpm2001/Roc-Lang_RFCs/blob/main/0010-let-generalization-lets-not.md
+    s_decl_gen: struct {
+        pattern: Pattern.Idx,
+        expr: Expr.Idx,
+        anno: ?Annotation.Idx,
+    },
     /// A rebindable declaration using the "var" keyword.
     ///
     /// Not valid at the top level of a module.
@@ -50,6 +70,7 @@ pub const Statement = union(enum) {
     s_var: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
+        anno: ?Annotation.Idx,
     },
     /// Reassignment of a previously declared var
     ///
@@ -109,6 +130,20 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         body: Expr.Idx,
     },
+    /// A block of code that will run repeatedly while a condition is true.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// while $count < 10 {
+    ///     print!($count.toStr())
+    ///     $count = $count + 1
+    /// }
+    /// ```
+    s_while: struct {
+        cond: Expr.Idx,
+        body: Expr.Idx,
+    },
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
@@ -118,6 +153,9 @@ pub const Statement = union(enum) {
     /// ```
     s_return: struct {
         expr: Expr.Idx,
+        /// The lambda this return belongs to (for type unification).
+        /// This is null if the return is outside a function (an error case).
+        lambda: ?Expr.Idx,
     },
     /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
     ///
@@ -137,17 +175,19 @@ pub const Statement = union(enum) {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
     },
-    /// A nominal type declaration, e.g., `Foo := (U64, Str)`
+    /// A nominal type declaration, e.g., `Foo := (U64, Str)` or `Foo :: (U64, Str)`
     ///
     /// Only valid at the top level of a module
     s_nominal_decl: struct {
         header: CIR.TypeHeader.Idx,
         anno: CIR.TypeAnno.Idx,
+        /// True if declared with :: (opaque), false if declared with := (nominal)
+        is_opaque: bool,
     },
     /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     ///
     /// ```roc
-    /// print! : Str => Result({}, [IOErr])
+    /// print! : Str => Try({}, [IOErr])
     /// ```
     ///
     /// Typically an annotation will be stored on the `Def` and will not be
@@ -159,16 +199,48 @@ pub const Statement = union(enum) {
         where: ?CIR.WhereClause.Span,
     },
 
+    /// A type variable alias within a block - enables static dispatch on type vars.
+    /// This binds an uppercase name to a type variable from the enclosing function signature,
+    /// allowing method calls like `Thing.method(arg)` that dispatch based on what the type
+    /// variable resolves to at runtime.
+    ///
+    /// ```roc
+    /// foo : thing -> Str
+    /// foo = |arg|
+    ///     Thing : thing       # Type var alias - binds `Thing` to the type variable `thing`
+    ///     Thing.something(arg) # Static dispatch using the type var alias
+    /// ```
+    s_type_var_alias: struct {
+        /// The alias name (e.g., "Thing") - uppercase identifier
+        alias_name: Ident.Idx,
+        /// The type variable name (e.g., "thing") - the lowercase type var being aliased
+        type_var_name: Ident.Idx,
+        /// Reference to the type annotation index for the type variable (from the enclosing scope)
+        type_var_anno: CIR.TypeAnno.Idx,
+    },
+
     s_runtime_error: struct {
         diagnostic: CIR.Diagnostic.Idx,
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), env: *const ModuleEnv, tree: *SExprTree, stmt_idx: Statement.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .s_decl => |d| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-let");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getPattern(d.pattern).pushToSExprTree(env, tree, d.pattern);
+                try env.store.getExpr(d.expr).pushToSExprTree(env, tree, d.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_decl_gen => |d| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-let");
                 const region = env.store.getStatementRegion(stmt_idx);
@@ -259,6 +331,18 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .s_while => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
+                try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
+
+                try tree.endNode(begin, attrs);
+            },
             .s_return => |s| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -343,6 +427,19 @@ pub const Statement = union(enum) {
                     }
                     try tree.endNode(where_begin, where_attrs);
                 }
+
+                try tree.endNode(begin, attrs);
+            },
+            .s_type_var_alias => |s| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-type-var-alias");
+                const region = env.store.getStatementRegion(stmt_idx);
+                try env.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("alias", env.getIdentText(s.alias_name));
+                try tree.pushStringPair("type-var", env.getIdentText(s.type_var_name));
+                const attrs = tree.beginNode();
+
+                try env.store.getTypeAnno(s.type_var_anno).pushToSExprTree(env, tree, s.type_var_anno);
 
                 try tree.endNode(begin, attrs);
             },

@@ -475,7 +475,7 @@ test "hexadecimal integer literals" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
@@ -534,7 +534,7 @@ test "binary integer literals" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
@@ -593,7 +593,7 @@ test "octal integer literals" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, env.gpa);
         defer ast.deinit(gpa);
@@ -652,7 +652,7 @@ test "integer literals with uppercase base prefixes" {
         var env = try ModuleEnv.init(gpa, tc.literal);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -685,7 +685,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Create an int literal pattern directly
         const int_pattern = CIR.Pattern{
@@ -708,7 +708,7 @@ test "numeric literal patterns use pattern idx as type var" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Create a dec literal pattern directly
         const dec_pattern = CIR.Pattern{
@@ -738,7 +738,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Test i128 max
         const max_pattern = CIR.Pattern{
@@ -768,7 +768,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         const small_dec_pattern = CIR.Pattern{
             .small_dec_literal = .{
@@ -793,7 +793,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         const dec_pattern = CIR.Pattern{
             .dec_literal = .{
@@ -814,7 +814,7 @@ test "pattern numeric literal value edge cases" {
         var env = try ModuleEnv.init(gpa, "");
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         // Test negative zero (RocDec doesn't distinguish between +0 and -0)
         const neg_zero_pattern = CIR.Pattern{
@@ -891,8 +891,8 @@ test "parseIntWithUnderscores function" {
     }
 }
 
-test "parseNumLiteralWithSuffix function" {
-    // Test the parseNumLiteralWithSuffix function to ensure correct parsing of prefixes and suffixes
+test "parseNumeralWithSuffix function" {
+    // Test the parseNumeralWithSuffix function to ensure correct parsing of prefixes and suffixes
     const test_cases = [_]struct {
         input: []const u8,
         expected_num_text: []const u8,
@@ -930,10 +930,10 @@ test "parseNumLiteralWithSuffix function" {
     };
 
     for (test_cases) |tc| {
-        const result = types.Num.parseNumLiteralWithSuffix(tc.input);
+        const result = types.parseNumeralWithSuffix(tc.input);
 
         if (!std.mem.eql(u8, result.num_text, tc.expected_num_text)) {
-            std.debug.print("MISMATCH num_text: parseNumLiteralWithSuffix('{s}').num_text = '{s}' (expected '{s}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
+            std.debug.print("MISMATCH num_text: parseNumeralWithSuffix('{s}').num_text = '{s}' (expected '{s}')\n", .{ tc.input, result.num_text, tc.expected_num_text });
         }
         try std.testing.expectEqualSlices(u8, tc.expected_num_text, result.num_text);
 
@@ -964,7 +964,7 @@ test "hex literal parsing logic integration" {
 
     for (test_cases) |tc| {
         // Mimic the exact parsing logic from canonicalizeExpr
-        const parsed = types.Num.parseNumLiteralWithSuffix(tc.literal);
+        const parsed = types.parseNumeralWithSuffix(tc.literal);
 
         const is_negated = parsed.num_text[0] == '-';
         const after_minus_sign = @as(usize, @intFromBool(is_negated));
@@ -1019,7 +1019,6 @@ test "hex literal parsing logic integration" {
 }
 
 // number req tests //
-// TODO: Review, claude generated
 
 test "IntValue.toIntRequirements - boundary values for each type" {
     // u8 boundary: 255/256
@@ -1029,7 +1028,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"8".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"8".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u128 };
@@ -1037,7 +1036,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"9_to_15".toBits());
     }
 
     // i8 positive boundary: 127/128
@@ -1047,7 +1046,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed); // Positive doesn't need sign
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"7".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1055,7 +1054,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed); // Positive doesn't need sign
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"8".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"8".toBits());
     }
 
     // i8 negative boundary: -127/-128/-129
@@ -1065,7 +1064,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"7".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1073,7 +1072,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7".toBits()); // Due to special case
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"7".toBits()); // Due to special case
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1081,7 +1080,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"8".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"8".toBits());
     }
 
     // u16 boundary: 65535/65536
@@ -1091,7 +1090,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"16".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"16".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .u128 };
@@ -1099,7 +1098,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"17_to_31".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"17_to_31".toBits());
     }
 
     // i16 boundaries: 32767/-32768/-32769
@@ -1109,7 +1108,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"9_to_15".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1117,7 +1116,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15".toBits()); // Due to special case
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"9_to_15".toBits()); // Due to special case
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1125,7 +1124,7 @@ test "IntValue.toIntRequirements - boundary values for each type" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"16".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"16".toBits());
     }
 }
 
@@ -1135,7 +1134,7 @@ test "IntValue.toIntRequirements - zero and small values" {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed); // Zero doesn't need sign
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"7".toBits());
     }
 
     // 1 and -1
@@ -1145,7 +1144,7 @@ test "IntValue.toIntRequirements - zero and small values" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"7".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1153,7 +1152,7 @@ test "IntValue.toIntRequirements - zero and small values" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"7".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"7".toBits());
     }
 }
 
@@ -1165,7 +1164,7 @@ test "IntValue.toIntRequirements - powers of 2 edge cases" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15".toBits()); // Should NOT be special cased
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"9_to_15".toBits()); // Should NOT be special cased
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1173,7 +1172,7 @@ test "IntValue.toIntRequirements - powers of 2 edge cases" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"9_to_15".toBits()); // Should NOT be special cased
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"9_to_15".toBits()); // Should NOT be special cased
     }
 }
 
@@ -1184,7 +1183,7 @@ test "IntValue.toIntRequirements - i32 boundaries" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"17_to_31".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"17_to_31".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1192,7 +1191,7 @@ test "IntValue.toIntRequirements - i32 boundaries" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"17_to_31".toBits()); // Due to special case
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"17_to_31".toBits()); // Due to special case
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1200,7 +1199,7 @@ test "IntValue.toIntRequirements - i32 boundaries" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"32".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"32".toBits());
     }
 }
 
@@ -1211,7 +1210,7 @@ test "IntValue.toIntRequirements - i64 boundaries" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(!req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"33_to_63".toBits());
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"33_to_63".toBits());
     }
     {
         var val = CIR.IntValue{ .bytes = [_]u8{0} ** 16, .kind = .i128 };
@@ -1219,7 +1218,7 @@ test "IntValue.toIntRequirements - i64 boundaries" {
         @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
         const req = val.toIntRequirements();
         try testing.expect(req.sign_needed);
-        try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"33_to_63".toBits()); // Due to special case
+        try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"33_to_63".toBits()); // Due to special case
     }
 }
 
@@ -1229,7 +1228,7 @@ test "IntValue.toIntRequirements - u128 max" {
     @memcpy(val.bytes[0..16], std.mem.asBytes(&test_val));
     const req = val.toIntRequirements();
     try testing.expect(!req.sign_needed);
-    try testing.expectEqual(req.bits_needed, types.Num.Int.BitsNeeded.@"128".toBits());
+    try testing.expectEqual(req.bits_needed, types.Int.BitsNeeded.@"128".toBits());
 }
 
 test "IntValue.toFracRequirements - f32 precision boundaries" {

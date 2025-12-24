@@ -1,3 +1,5 @@
+//! Maps of common syntax mistakes and misspellings to helpful error messages.
+
 const std = @import("std");
 
 /// A static map of common misspellings and mistakes in Roc code.
@@ -22,6 +24,7 @@ pub const CommonMisspellings = struct {
         .{ "case", "`case` is not a keyword in Roc. Use `match` for pattern matching." },
         .{ "switch", "`switch` is not a keyword in Roc. Use `match` for pattern matching." },
         .{ "when", "`when` is not a keyword in Roc. Use `match` for pattern matching." },
+        .{ "debug", "`debug` is not a keyword in Roc. Use `dbg` for debug printing." },
         .{ "then", "`then` is not a keyword in Roc. You can put the first branch of an `if` immediately after the condition, e.g. `if (condition) then_branch else else_branch`" },
         .{ "elif", "Roc uses `else if` for chaining conditions, not `elif`." },
         .{ "elseif", "Roc uses `else if` (two words) for chaining conditions." },
@@ -33,6 +36,7 @@ pub const CommonMisspellings = struct {
         .{ "fn", "`fn` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
         .{ "fun", "`fun` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
         .{ "fn", "`fn` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
+        .{ "is", "`is` is not a keyword in Roc." },
         .{ "lambda", "`lambda` is not a keyword in Roc. Use `fn_name = |arg1, arg2| body` to define functions." },
         .{ "class", "Roc doesn't have a `class` keyword, but it does have nominal types. Docs for nominal types can be found at <https://www.roc-lang.org/docs>" },
         .{ "trait", "Roc doesn't have a `trait` keyword, but it does have static dispatch. Docs for nominal types can be found at <https://www.roc-lang.org/docs>" },
@@ -67,6 +71,13 @@ pub const CommonMisspellings = struct {
         .{ "vector", "Roc uses `List` for sequential collections, not `vector`." },
         .{ "Vec", "Roc uses `List` for sequential collections, not `Vec`." },
         .{ "map", "Roc uses `Dict` for key-value mappings, not `map`. Also, many Roc types have a method named `map`, but that would be called using `my_val.map(...)` syntax, not `map` as a standalone function." },
+        .{ "fold_left", "Roc uses the names `fold` and `fold_rev`, not `fold_left` and `fold_right`." },
+        .{ "foldLeft", "Roc uses the names `fold` and `fold_rev`, not `foldLeft` and `foldRight`." },
+        .{ "foldl", "Roc uses the names `fold` and `fold_rev`, not `foldl` and `foldr`." },
+        .{ "foldr", "Roc uses the names `fold` and `fold_rev`, not `foldl` and `foldr`." },
+        .{ "reduce", "Roc uses the names `fold` and `fold_rev`, not `reduce` and `reduce_right`." },
+        .{ "reduce_right", "Roc uses the names `fold` and `fold_rev`, not `reduce` and `reduce_right`." },
+        .{ "reduceRight", "Roc uses the names `fold` and `fold_rev`, not `reduce` and `reduceRight`." },
         .{ "hash", "Roc uses `Dict` for key-value mappings." },
         .{ "hashmap", "Roc uses `Dict` for key-value mappings." },
         .{ "HashMap", "Roc uses `Dict` for key-value mappings." },
@@ -99,7 +110,7 @@ test "identifier misspellings lookup" {
     const tip = CommonMisspellings.getIdentifierTip("case");
     try std.testing.expect(tip != null);
     try std.testing.expectEqualStrings(
-        "`case` is not a keyword in Roc. Use `when` for pattern matching.",
+        "`case` is not a keyword in Roc. Use `match` for pattern matching.",
         tip.?,
     );
 }

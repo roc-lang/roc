@@ -433,7 +433,8 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, wasm_path: []cons
     // Create and instantiate the module instance using the gpa allocator for the VM
     var module_instance = try bytebox.createModuleInstance(.Stack, module_def, gpa);
     errdefer module_instance.destroy();
-    try module_instance.instantiate(.{});
+    // Use a larger stack size (256 KB instead of default 128 KB) to accommodate complex interpreter code
+    try module_instance.instantiate(.{ .stack_size = 1024 * 256 });
 
     logDebug("[INFO] WASM module instantiated successfully.\n", .{});
 
@@ -1019,7 +1020,7 @@ pub fn main() !void {
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"LIST NOT CLOSED"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE MISMATCH"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
 
     // Empty Source Test
     const empty_source_code = try allocator.dupe(u8, "");
@@ -1125,14 +1126,14 @@ pub fn main() !void {
     get_hover_info_steps[2] = .{
         .message = .{ .type = "GET_HOVER_INFO", .identifier = "num", .line = 7, .ch = 1 },
         .expected_status = "SUCCESS",
-        .expected_hover_info_contains = "Num(Int(Signed32))",
+        .expected_hover_info_contains = "I32",
     };
     try test_cases.append(allocator, .{
         .name = "GET_HOVER_INFO - Specific Type Query",
         .steps = get_hover_info_steps,
     });
 
-    // ====== REPL Test Cases ======
+    // REPL Test Cases
 
     // Test: REPL Lifecycle - Init, Step, Clear, Reset
     var repl_lifecycle_steps = try allocator.alloc(MessageStep, 5);
@@ -1189,9 +1190,9 @@ pub fn main() !void {
     repl_error_steps[3] = .{
         .message = .{ .type = "REPL_STEP", .input = "x +" }, // Invalid syntax - incomplete expression
         .expected_status = "SUCCESS",
-        .expected_result_output_contains = "Crash:",
+        .expected_result_output_contains = "UNEXPECTED TOKEN",
         .expected_result_type = "error",
-        .expected_result_error_stage = "evaluation",
+        .expected_result_error_stage = "parse",
     };
     repl_error_steps[4] = .{
         .message = .{ .type = "REPL_STEP", .input = "x" }, // Should still work

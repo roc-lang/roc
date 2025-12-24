@@ -141,7 +141,6 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
-MODULE NOT FOUND - fuzz_crash_020.md:4:1:4:34
 MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
 MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
 MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
@@ -176,7 +175,9 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:8:102:13
 UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - fuzz_crash_020.md:105:2:105:8
+UNDEFINED VARIABLE - fuzz_crash_020.md:105:55:105:59
+UNDEFINED VARIABLE - fuzz_crash_020.md:105:60:105:64
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
@@ -192,9 +193,11 @@ UNUSED VALUE - fuzz_crash_020.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 UNUSED VALUE - fuzz_crash_020.md:1:1:1:1
 UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
+MISSING METHOD - fuzz_crash_020.md:77:11:77:14
 UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
 UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
 UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
+UNUSED VALUE - fuzz_crash_020.md:119:2:119:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -345,17 +348,6 @@ This type variable is referenced here:
 Som : { foo : O, bar : g }
 ```
                        ^
-
-
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**fuzz_crash_020.md:4:1:4:34:**
-```roc
-import pf.Stdout exposing [line!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -743,9 +735,38 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+This feature is not yet implemented: unsupported operator
+
+**fuzz_crash_020.md:105:2:105:8:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	^^^^^^
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `e_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:105:55:105:59:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                     ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_020.md:105:60:105:64:**
+```roc
+	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
+```
+	                                                          ^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `r` in this scope.
@@ -860,13 +881,12 @@ app [main!] { pf: platform "c" }
 You can fix this by either defining `main!` in this module, or by removing it from the list of exposed values.
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **fuzz_crash_020.md:17:3:18:4:**
 ```roc
 		List( #rg
 		),
 ```
-
 
 
 **UNUSED VALUE**
@@ -878,7 +898,8 @@ This expression produces a value, but it's not being used:
 	^
 
 It has the type:
-    _Num(_size)_
+
+    f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -906,14 +927,14 @@ The pattern in the fourth branch of this `match` differs from previous ones:
      ^^^^^
 
 The fourth pattern has this type:
-    _Str_
+
+    Str
 
 But all the previous patterns have this type: 
-    _[Blue]_others_
+
+    [Blue, .._others]
 
 All patterns in an `match` must have compatible types.
-
-
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -924,7 +945,8 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __f_
+
+    _f
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -935,7 +957,22 @@ This expression produces a value, but it's not being used:
 	         ^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_020.md:77:11:77:14:**
+```roc
+	var er = 123
+```
+	         ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -951,7 +988,12 @@ This expression produces a value, but it's not being used:
 ```
 
 It has the type:
-    _(Num(_size), Str, Error, [O]_others, (Error, Error), List(Num(_size2)))_
+
+    (f, Str, Error, [O, .._others], (Error, Error), List(j))
+      where [
+        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+        j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
+      ]
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -962,7 +1004,8 @@ This expression produces a value, but it's not being used:
 	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Bool_
+
+    Bool
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -973,7 +1016,20 @@ This expression produces a value, but it's not being used:
 	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    __f_
+
+    _f
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**fuzz_crash_020.md:119:2:119:10:**
+```roc
+	foo == 1
+```
+	^^^^^^^^
+
+It has the type:
+
+    _f
 
 # TOKENS
 ~~~zig
@@ -1385,20 +1441,20 @@ EndOfFile,
 								(e-binop (op "<=")
 									(e-int (raw "12"))
 									(e-int (raw "3")))))
-						(e-field-access
+						(e-question-suffix
 							(e-field-access
-								(e-field-access
-									(e-question-suffix
-										(e-apply
-											(e-ident (raw "e_fn"))
-											(e-ident (raw "arg1"))))
-									(e-question-suffix
-										(e-apply
-											(e-ident (raw "od")))))
 								(e-question-suffix
-									(e-apply
-										(e-ident (raw "ned")))))
-							(e-question-suffix
+									(e-field-access
+										(e-question-suffix
+											(e-field-access
+												(e-question-suffix
+													(e-apply
+														(e-ident (raw "e_fn"))
+														(e-ident (raw "arg1"))))
+												(e-apply
+													(e-ident (raw "od")))))
+										(e-apply
+											(e-ident (raw "ned")))))
 								(e-ident (raw "recd"))))
 						(e-apply
 							(e-tag (raw "Stdo!"))
@@ -1648,7 +1704,7 @@ expect {
 						(branch
 							(patterns
 								(pattern (degenerate false)
-									(p-str (text """))))
+									(p-str (text "for"))))
 							(value
 								(e-num (value "20"))))
 						(branch
@@ -1857,9 +1913,7 @@ expect {
 					(s-expr
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-runtime-error (tag "ident_not_in_scope"))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-num (value "5")))
 							(e-binop (op "or")
 								(e-binop (op "and")
@@ -1877,13 +1931,101 @@ expect {
 									(e-num (value "12"))
 									(e-num (value "3"))))))
 					(s-expr
-						(e-dot-access (field "unknown")
-							(receiver
-								(e-dot-access (field "unknown")
-									(receiver
-										(e-dot-access (field "unknown")
-											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+						(e-match
+							(match
+								(cond
+									(e-dot-access (field "recd")
+										(receiver
+											(e-match
+												(match
+													(cond
+														(e-dot-access (field "ned")
+															(receiver
+																(e-match
+																	(match
+																		(cond
+																			(e-dot-access (field "od")
+																				(receiver
+																					(e-match
+																						(match
+																							(cond
+																								(e-call
+																									(e-runtime-error (tag "ident_not_in_scope"))
+																									(e-runtime-error (tag "ident_not_in_scope"))))
+																							(branches
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-lookup-local
+																											(p-assign (ident "#ok")))))
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-return
+																											(e-tag (name "Err")
+																												(args
+																													(e-lookup-local
+																														(p-assign (ident "#err"))))))))))))
+																				(args)))
+																		(branches
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-lookup-local
+																						(p-assign (ident "#ok")))))
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-return
+																						(e-tag (name "Err")
+																							(args
+																								(e-lookup-local
+																									(p-assign (ident "#err"))))))))))))
+															(args)))
+													(branches
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-lookup-local
+																	(p-assign (ident "#ok")))))
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-return
+																	(e-tag (name "Err")
+																		(args
+																			(e-lookup-local
+																				(p-assign (ident "#err"))))))))))))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err"))))))))))))
 					(e-tag (name "Stdo!")
 						(args
 							(e-string
@@ -1977,12 +2119,12 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "()"))
-		(patt (type "Bool -> Num(_size)"))
+		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
-		(patt (type "[Rum]_others -> Error"))
-		(patt (type "[Blue]_others -> Error"))
+		(patt (type "[Rum, .._others] -> Error"))
+		(patt (type "[Blue, .._others] -> Error"))
 		(patt (type "Error"))
-		(patt (type "_arg -> [Stdo!(Error)]_others"))
+		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2014,12 +2156,12 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "()"))
-		(expr (type "Bool -> Num(_size)"))
+		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
-		(expr (type "[Rum]_others -> Error"))
-		(expr (type "[Blue]_others -> Error"))
+		(expr (type "[Rum, .._others] -> Error"))
+		(expr (type "[Blue, .._others] -> Error"))
 		(expr (type "Error"))
-		(expr (type "_arg -> [Stdo!(Error)]_others"))
+		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

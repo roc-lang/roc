@@ -24,6 +24,11 @@ const Ident = base.Ident;
 const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
 
+/// When storing optional indices/values where 0 is a valid value, we add this offset
+/// to distinguish "value is 0" from "value is null". This is a common pattern when
+/// packing optional data into u32 fields where 0 would otherwise be ambiguous.
+const OPTIONAL_VALUE_OFFSET: u32 = 1;
+
 const NodeStore = @This();
 
 gpa: Allocator,
@@ -41,7 +46,6 @@ const Scratch = struct {
     if_branches: base.Scratch(CIR.Expr.IfBranch.Idx),
     where_clauses: base.Scratch(CIR.WhereClause.Idx),
     patterns: base.Scratch(CIR.Pattern.Idx),
-    pattern_record_fields: base.Scratch(CIR.PatternRecordField.Idx),
     record_destructs: base.Scratch(CIR.Pattern.RecordDestruct.Idx),
     type_annos: base.Scratch(CIR.TypeAnno.Idx),
     anno_record_fields: base.Scratch(CIR.TypeAnno.RecordField.Idx),
@@ -62,7 +66,6 @@ const Scratch = struct {
             .if_branches = try base.Scratch(CIR.Expr.IfBranch.Idx).init(gpa),
             .where_clauses = try base.Scratch(CIR.WhereClause.Idx).init(gpa),
             .patterns = try base.Scratch(CIR.Pattern.Idx).init(gpa),
-            .pattern_record_fields = try base.Scratch(CIR.PatternRecordField.Idx).init(gpa),
             .record_destructs = try base.Scratch(CIR.Pattern.RecordDestruct.Idx).init(gpa),
             .type_annos = try base.Scratch(CIR.TypeAnno.Idx).init(gpa),
             .anno_record_fields = try base.Scratch(CIR.TypeAnno.RecordField.Idx).init(gpa),
@@ -84,7 +87,6 @@ const Scratch = struct {
         self.if_branches.deinit();
         self.where_clauses.deinit();
         self.patterns.deinit();
-        self.pattern_record_fields.deinit();
         self.record_destructs.deinit();
         self.type_annos.deinit();
         self.anno_record_fields.deinit();
@@ -124,15 +126,24 @@ pub fn deinit(store: *NodeStore) void {
     }
 }
 
+/// Add the given offset to the memory addresses of all pointers in `self`.
+/// This is used when loading a NodeStore from shared memory at a different address.
+pub fn relocate(store: *NodeStore, offset: isize) void {
+    store.nodes.relocate(offset);
+    store.regions.relocate(offset);
+    store.extra_data.relocate(offset);
+    // scratch is null for deserialized NodeStores, no need to relocate
+}
+
 /// Compile-time constants for union variant counts to ensure we don't miss cases
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 35;
+pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 14;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -231,10 +242,37 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 },
             } };
         },
-        .statement_var => return CIR.Statement{ .s_var = .{
-            .pattern_idx = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
+        .statement_decl_gen => {
+            return CIR.Statement{ .s_decl_gen = .{
+                .pattern = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const has_anno = extra_data[0] != 0;
+                    if (has_anno) {
+                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
+        .statement_var => {
+            return CIR.Statement{ .s_var = .{
+                .pattern_idx = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    if (extra_data[0] != 0) {
+                        break :blk @enumFromInt(extra_data[1]);
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_reassign => return CIR.Statement{ .s_reassign = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
@@ -256,8 +294,13 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             .expr = @enumFromInt(node.data_2),
             .body = @enumFromInt(node.data_3),
         } },
+        .statement_while => return CIR.Statement{ .s_while = .{
+            .cond = @enumFromInt(node.data_1),
+            .body = @enumFromInt(node.data_2),
+        } },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
+            .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
         } },
         .statement_import => {
             const extra_start = node.data_2;
@@ -290,10 +333,14 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_nominal_decl => {
+            // Get is_opaque from extra_data
+            const extra_idx = node.data_3;
+            const is_opaque = store.extra_data.items.items[extra_idx] != 0;
             return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = @as(CIR.TypeHeader.Idx, @enumFromInt(node.data_1)),
                     .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_2)),
+                    .is_opaque = is_opaque,
                 },
             };
         },
@@ -316,6 +363,15 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                     .name = name,
                     .anno = anno,
                     .where = where_clause,
+                },
+            };
+        },
+        .statement_type_var_alias => {
+            return CIR.Statement{
+                .s_type_var_alias = .{
+                    .alias_name = @bitCast(node.data_1),
+                    .type_var_name = @bitCast(node.data_2),
+                    .type_var_anno = @enumFromInt(node.data_3),
                 },
             };
         },
@@ -349,6 +405,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .module_idx = @enumFromInt(node.data_1),
                 .target_node_idx = @intCast(node.data_2),
                 .region = store.getRegionAt(node_idx),
+            } };
+        },
+        .expr_required_lookup => {
+            // Handle required lookups (platform requires clause)
+            return CIR.Expr{ .e_lookup_required = .{
+                .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(node.data_1),
             } };
         },
         .expr_num => {
@@ -621,15 +683,56 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_suffix_single_question,
         .expr_record_builder,
         => {
-            return CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = @enumFromInt(0),
-            } };
+            return CIR.Expr{
+                .e_runtime_error = .{
+                    .diagnostic = undefined, // deserialized runtime errors don't preserve diagnostics
+                },
+            };
         },
         .expr_ellipsis => {
             return CIR.Expr{ .e_ellipsis = .{} };
         },
         .expr_anno_only => {
             return CIR.Expr{ .e_anno_only = .{} };
+        },
+        .expr_return => {
+            return CIR.Expr{ .e_return = .{
+                .expr = @enumFromInt(node.data_1),
+            } };
+        },
+        .expr_type_var_dispatch => {
+            // Retrieve type var dispatch data from node and extra_data
+            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(node.data_1);
+            const method_name: base.Ident.Idx = @bitCast(node.data_2);
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+
+            return CIR.Expr{ .e_type_var_dispatch = .{
+                .type_var_alias_stmt = type_var_alias_stmt,
+                .method_name = method_name,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+            } };
+        },
+        .expr_hosted_lambda => {
+            // Retrieve hosted lambda data from node and extra_data
+            const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
+            const index = node.data_2;
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+
+            const args_start = extra_data[0];
+            const args_len = extra_data[1];
+            const body_idx = extra_data[2];
+
+            return CIR.Expr{ .e_hosted_lambda = .{
+                .symbol_name = symbol_name,
+                .index = index,
+                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .body = @enumFromInt(body_idx),
+            } };
         },
         .expr_low_level => {
             // Retrieve low-level lambda data from extra_data
@@ -652,6 +755,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .body = @enumFromInt(node.data_1),
             } };
         },
+        .expr_for => {
+            return CIR.Expr{ .e_for = .{
+                .patt = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .body = @enumFromInt(node.data_3),
+            } };
+        },
         .expr_if_then_else => {
             const extra_start = node.data_1;
             const extra_data = store.extra_data.items.items[extra_start..];
@@ -672,8 +782,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_dot_access => {
-            const args_span = if (node.data_3 != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(node.data_3);
+            // Read extra data: field_name_region (2 u32s) + optional args (1 u32)
+            const extra_start = node.data_3;
+            const extra_data = store.extra_data.items.items[extra_start..];
+            const field_name_region = base.Region{
+                .start = .{ .offset = extra_data[0] },
+                .end = .{ .offset = extra_data[1] },
+            };
+            const args_packed = extra_data[2];
+            const args_span = if (args_packed != 0) blk: {
+                const packed_span = FunctionArgs.fromU32(args_packed - OPTIONAL_VALUE_OFFSET);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -681,6 +799,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_dot_access = .{
                 .receiver = @enumFromInt(node.data_1),
                 .field_name = @bitCast(node.data_2),
+                .field_name_region = field_name_region,
                 .args = args_span,
             } };
         },
@@ -717,6 +836,34 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
         .data_1 = @intFromEnum(num_kind),
         .data_2 = @intFromEnum(value.kind),
         .data_3 = @intCast(extra_data_start),
+    });
+}
+
+/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
+/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithZeroArgumentTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    closure_name: Ident.Idx,
+    variant_var: types.Var,
+    ext_var: types.Var,
+    name: Ident.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    const extra_data_start = store.extra_data.len();
+    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
+    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
+    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_zero_argument_tag,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = 0,
+        .data_3 = 0,
     });
 }
 
@@ -1005,14 +1152,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
     }
 }
 
-/// Retrieves a pattern record field from the store.
-pub fn getPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField.Idx) CIR.PatternRecordField {
-    _ = store;
-    _ = patternRecordField;
-    // Return empty placeholder since PatternRecordField has no fields yet
-    return CIR.PatternRecordField{};
-}
-
 /// Retrieves a type annotation from the store.
 pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeAnno));
@@ -1085,7 +1224,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
             .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3) else null,
+            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
         } },
         .ty_tag => return CIR.TypeAnno{ .tag = .{
             .name = @bitCast(node.data_1),
@@ -1094,9 +1233,12 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_tuple => return CIR.TypeAnno{ .tuple = .{
             .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
         } },
-        .ty_record => return CIR.TypeAnno{ .record = .{
-            .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-        } },
+        .ty_record => return CIR.TypeAnno{
+            .record = .{
+                .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
+            },
+        },
         .ty_fn => {
             const extra_data_idx = node.data_3;
             const effectful = store.extra_data.items.items[extra_data_idx] != 0;
@@ -1129,9 +1271,15 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 
     std.debug.assert(node.tag == .type_header);
 
+    // Unpack args from packed format (start in upper 16 bits, len in lower 16 bits)
+    const packed_args = node.data_3;
+    const args_start: u32 = packed_args >> 16;
+    const args_len: u32 = packed_args & 0xFFFF;
+
     return CIR.TypeHeader{
         .name = @bitCast(node.data_1),
-        .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
+        .relative_name = @bitCast(node.data_2),
+        .args = .{ .span = .{ .start = args_start, .len = args_len } },
     };
 }
 
@@ -1237,10 +1385,33 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = extra_data_start;
         },
+        .s_decl_gen => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
+            node.tag = .statement_decl_gen;
+            node.data_1 = @intFromEnum(s.pattern);
+            node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
+        },
         .s_var => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
             node.tag = .statement_var;
             node.data_1 = @intFromEnum(s.pattern_idx);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
@@ -1269,9 +1440,16 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_2 = @intFromEnum(s.expr);
             node.data_3 = @intFromEnum(s.body);
         },
+        .s_while => |s| {
+            node.tag = .statement_while;
+            node.data_1 = @intFromEnum(s.cond);
+            node.data_2 = @intFromEnum(s.body);
+        },
         .s_return => |s| {
             node.tag = .statement_return;
             node.data_1 = @intFromEnum(s.expr);
+            // Store lambda as data_2, using 0 for null and idx+1 for valid indices
+            node.data_2 = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0;
         },
         .s_import => |s| {
             node.tag = .statement_import;
@@ -1313,6 +1491,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_nominal_decl;
             node.data_1 = @intFromEnum(s.header);
             node.data_2 = @intFromEnum(s.anno);
+            // Store is_opaque in extra_data
+            const extra_idx = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
+            node.data_3 = @intCast(extra_idx);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
@@ -1339,6 +1521,12 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             // Store the extra data start position in the node
             node.data_1 = @intCast(extra_start);
         },
+        .s_type_var_alias => |s| {
+            node.tag = .statement_type_var_alias;
+            node.data_1 = @bitCast(s.alias_name);
+            node.data_2 = @bitCast(s.type_var_name);
+            node.data_3 = @intFromEnum(s.type_var_anno);
+        },
         .s_runtime_error => |s| {
             node.data_1 = @intFromEnum(s.diagnostic);
             node.tag = .malformed;
@@ -1357,7 +1545,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined, // set below in switch
     };
 
     switch (expr) {
@@ -1370,6 +1558,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_external_lookup;
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = e.target_node_idx;
+        },
+        .e_lookup_required => |e| {
+            // For required lookups (platform requires clause), store the index
+            node.tag = .expr_required_lookup;
+            node.data_1 = e.requires_idx.toU32();
         },
         .e_num => |e| {
             node.tag = .expr_num;
@@ -1474,13 +1667,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_dot_access;
             node.data_1 = @intFromEnum(e.receiver);
             node.data_2 = @bitCast(e.field_name);
+            // Store extra data: field_name_region (2 u32s) + optional args (1 u32)
+            node.data_3 = @intCast(store.extra_data.len());
+            _ = try store.extra_data.append(store.gpa, e.field_name_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, e.field_name_region.end.offset);
             if (e.args) |args| {
-                // Use PackedDataSpan for efficient storage - FunctionArgs config is good for method call args
                 std.debug.assert(FunctionArgs.canFit(args.span));
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                node.data_3 = packed_span.toU32();
+                _ = try store.extra_data.append(store.gpa, packed_span.toU32() + OPTIONAL_VALUE_OFFSET);
             } else {
-                node.data_3 = 0; // No args
+                _ = try store.extra_data.append(store.gpa, 0);
             }
         },
         .e_runtime_error => |e| {
@@ -1500,6 +1696,39 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_anno_only => |_| {
             node.tag = .expr_anno_only;
+        },
+        .e_return => |ret| {
+            node.tag = .expr_return;
+            node.data_1 = @intFromEnum(ret.expr);
+        },
+        .e_type_var_dispatch => |tvd| {
+            node.tag = .expr_type_var_dispatch;
+            // data_1 = type_var_alias_stmt (Statement.Idx)
+            // data_2 = method_name (Ident.Idx)
+            // extra_data: args span start, args span len
+            node.data_1 = @intFromEnum(tvd.type_var_alias_stmt);
+            node.data_2 = @bitCast(tvd.method_name);
+
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, tvd.args.span.start);
+            _ = try store.extra_data.append(store.gpa, tvd.args.span.len);
+
+            node.data_3 = @intCast(extra_data_start);
+        },
+        .e_hosted_lambda => |hosted| {
+            node.tag = .expr_hosted_lambda;
+            // data_1 = symbol_name (Ident.Idx via @bitCast)
+            // data_2 = index (u32)
+            // extra_data: args span start, args span len, body index
+            node.data_1 = @bitCast(hosted.symbol_name);
+            node.data_2 = hosted.index;
+
+            const extra_data_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.start);
+            _ = try store.extra_data.append(store.gpa, hosted.args.span.len);
+            _ = try store.extra_data.append(store.gpa, @intFromEnum(hosted.body));
+
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_low_level_lambda => |low_level| {
             node.tag = .expr_low_level;
@@ -1639,6 +1868,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_expect => |e| {
             node.tag = .expr_expect;
             node.data_1 = @intFromEnum(e.body);
+        },
+        .e_for => |e| {
+            node.tag = .expr_for;
+            node.data_1 = @intFromEnum(e.patt);
+            node.data_2 = @intFromEnum(e.expr);
+            node.data_3 = @intFromEnum(e.body);
         },
     }
 
@@ -1947,14 +2182,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
     return @enumFromInt(@intFromEnum(node_idx));
 }
 
-/// Adds a pattern record field to the store.
-pub fn addPatternRecordField(store: *NodeStore, patternRecordField: CIR.PatternRecordField) Allocator.Error!CIR.PatternRecordField.Idx {
-    _ = store;
-    _ = patternRecordField;
-
-    return @enumFromInt(0);
-}
-
 /// Adds a type annotation to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
@@ -1964,7 +2191,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined, // set below in switch
     };
 
     switch (typeAnno) {
@@ -2027,7 +2254,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .tag_union => |tu| {
             node.data_1 = tu.tags.span.start;
             node.data_2 = tu.tags.span.len;
-            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) else 0;
+            node.data_3 = if (tu.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0;
             node.tag = .ty_tag_union;
         },
         .tag => |t| {
@@ -2044,6 +2271,7 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         .record => |r| {
             node.data_1 = r.fields.span.start;
             node.data_2 = r.fields.span.len;
+            node.data_3 = if (r.ext) |ext| @intFromEnum(ext) + OPTIONAL_VALUE_OFFSET else 0;
             node.tag = .ty_record;
         },
         .@"fn" => |f| {
@@ -2075,10 +2303,15 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
+    // Pack args.start and args.len into one u32 (16 bits each) to free up data_3 for relative_name
+    std.debug.assert(typeHeader.args.span.start <= std.math.maxInt(u16));
+    std.debug.assert(typeHeader.args.span.len <= std.math.maxInt(u16));
+    const packed_args: u32 = (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
+
     const node = Node{
         .data_1 = @bitCast(typeHeader.name),
-        .data_2 = typeHeader.args.span.start,
-        .data_3 = typeHeader.args.span.len,
+        .data_2 = @bitCast(typeHeader.relative_name),
+        .data_3 = packed_args,
         .tag = .type_header,
     };
 
@@ -2290,6 +2523,14 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
         .cond = @enumFromInt(node.data_1),
         .body = @enumFromInt(node.data_2),
     };
+}
+
+/// Check if a raw node index refers to a definition node.
+/// This is useful when exposed items might be either definitions or type declarations.
+pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
+    const nid: Node.Idx = @enumFromInt(node_idx);
+    const node = store.nodes.get(nid);
+    return node.tag == .def;
 }
 
 /// Generic function to get the top of any scratch buffer
@@ -2656,7 +2897,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
-        .tag = @enumFromInt(0),
+        .tag = undefined, // set below in switch
     };
     var region = base.Region.zero();
 
@@ -2668,10 +2909,6 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         },
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
-            region = r.region;
-        },
-        .invalid_single_quote => |r| {
-            node.tag = .diag_invalid_single_quote;
             region = r.region;
         },
         .empty_tuple => |r| {
@@ -2748,6 +2985,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         },
         .if_else_not_canonicalized => |r| {
             node.tag = .diag_if_else_not_canonicalized;
+            region = r.region;
+        },
+        .if_expr_without_else => |r| {
+            node.tag = .diag_if_expr_without_else;
             region = r.region;
         },
         .malformed_type_annotation => |r| {
@@ -3029,9 +3270,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_single_quote => return CIR.Diagnostic{ .invalid_single_quote = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
             .region = store.getRegionAt(node_idx),
         } },
@@ -3093,6 +3331,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_if_else_not_canonicalized => return CIR.Diagnostic{ .if_else_not_canonicalized = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
@@ -3381,7 +3622,8 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error
 }
 
 /// Serialized representation of NodeStore
-pub const Serialized = struct {
+/// Uses extern struct to guarantee consistent field layout across optimization levels.
+pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
@@ -3406,7 +3648,7 @@ pub const Serialized = struct {
     /// Deserialize this Serialized struct into a NodeStore
     pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
         // Note: Serialized may be smaller than the runtime struct.
-        // CRITICAL: On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
+        // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
@@ -3488,7 +3730,7 @@ test "NodeStore basic CompactWriter roundtrip" {
         .data_2 = 0,
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, node1);
+    const node1_idx = try original.nodes.append(gpa, node1);
 
     // Add integer value to extra_data (i128 as 4 u32s)
     const value: i128 = 42;
@@ -3503,7 +3745,7 @@ test "NodeStore basic CompactWriter roundtrip" {
         .start = .{ .offset = 0 },
         .end = .{ .offset = 5 },
     };
-    _ = try original.regions.append(gpa, region);
+    const region1_idx = try original.regions.append(gpa, region);
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -3536,7 +3778,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
-    const retrieved_node = deserialized.nodes.get(@enumFromInt(0));
+    const retrieved_node = deserialized.nodes.get(node1_idx);
     try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
     try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
 
@@ -3549,7 +3791,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify regions
     try testing.expectEqual(@as(usize, 1), deserialized.regions.len());
-    const retrieved_region = deserialized.regions.get(@enumFromInt(0));
+    const retrieved_region = deserialized.regions.get(region1_idx);
     try testing.expectEqual(region.start.offset, retrieved_region.start.offset);
     try testing.expectEqual(region.end.offset, retrieved_region.end.offset);
 }
@@ -3569,7 +3811,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .data_2 = 0,
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, var_node);
+    const var_node_idx = try original.nodes.append(gpa, var_node);
 
     // Add expression list node
     const list_node = Node{
@@ -3578,7 +3820,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .data_2 = 3, // elems len
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, list_node);
+    const list_node_idx = try original.nodes.append(gpa, list_node);
 
     // Add float node with extra data
     const float_node = Node{
@@ -3587,7 +3829,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .data_2 = 0,
         .data_3 = 0,
     };
-    _ = try original.nodes.append(gpa, float_node);
+    const float_node_idx = try original.nodes.append(gpa, float_node);
 
     // Add float value to extra_data
     const float_value: f64 = 3.14159;
@@ -3598,14 +3840,12 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     }
 
     // Add regions for each node
-    const regions = [_]Region{
-        .{ .start = .{ .offset = 0 }, .end = .{ .offset = 5 } },
-        .{ .start = .{ .offset = 10 }, .end = .{ .offset = 20 } },
-        .{ .start = .{ .offset = 25 }, .end = .{ .offset = 32 } },
-    };
-    for (regions) |region| {
-        _ = try original.regions.append(gpa, region);
-    }
+    const region1 = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 5 } };
+    const region2 = Region{ .start = .{ .offset = 10 }, .end = .{ .offset = 20 } };
+    const region3 = Region{ .start = .{ .offset = 25 }, .end = .{ .offset = 32 } };
+    const region1_idx = try original.regions.append(gpa, region1);
+    const region2_idx = try original.regions.append(gpa, region2);
+    const region3_idx = try original.regions.append(gpa, region3);
 
     // Create a temp file
     var tmp_dir = testing.tmpDir(.{});
@@ -3639,32 +3879,36 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());
 
-    // Verify var node
-    const retrieved_var = deserialized.nodes.get(@enumFromInt(0));
+    // Verify var node using captured index
+    const retrieved_var = deserialized.nodes.get(var_node_idx);
     try testing.expectEqual(Node.Tag.expr_var, retrieved_var.tag);
     try testing.expectEqual(@as(u32, 5), retrieved_var.data_1);
 
-    // Verify list node
-    const retrieved_list = deserialized.nodes.get(@enumFromInt(1));
+    // Verify list node using captured index
+    const retrieved_list = deserialized.nodes.get(list_node_idx);
     try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
     try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
     try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
 
-    // Verify float node and extra data
-    const retrieved_float = deserialized.nodes.get(@enumFromInt(2));
+    // Verify float node and extra data using captured index
+    const retrieved_float = deserialized.nodes.get(float_node_idx);
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
     const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
     const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);
     const retrieved_float_value: f64 = @bitCast(retrieved_float_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
 
-    // Verify regions
+    // Verify regions using captured indices
     try testing.expectEqual(@as(usize, 3), deserialized.regions.len());
-    for (regions, 0..) |expected_region, i| {
-        const retrieved_region = deserialized.regions.get(@enumFromInt(i));
-        try testing.expectEqual(expected_region.start.offset, retrieved_region.start.offset);
-        try testing.expectEqual(expected_region.end.offset, retrieved_region.end.offset);
-    }
+    const retrieved_region1 = deserialized.regions.get(region1_idx);
+    try testing.expectEqual(region1.start.offset, retrieved_region1.start.offset);
+    try testing.expectEqual(region1.end.offset, retrieved_region1.end.offset);
+    const retrieved_region2 = deserialized.regions.get(region2_idx);
+    try testing.expectEqual(region2.start.offset, retrieved_region2.start.offset);
+    try testing.expectEqual(region2.end.offset, retrieved_region2.end.offset);
+    const retrieved_region3 = deserialized.regions.get(region3_idx);
+    try testing.expectEqual(region3.start.offset, retrieved_region3.start.offset);
+    try testing.expectEqual(region3.end.offset, retrieved_region3.end.offset);
 
     // Verify scratch is null (deserialized NodeStores don't allocate scratch)
     try testing.expect(deserialized.scratch == null);

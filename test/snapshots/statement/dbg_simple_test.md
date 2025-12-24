@@ -62,7 +62,7 @@ test = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "{}")))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "{}"))))
 ~~~

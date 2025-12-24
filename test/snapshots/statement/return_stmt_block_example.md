@@ -5,7 +5,7 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-foo : U64 -> Result(Str, [TooBig])
+foo : U64 -> Try(Str, [TooBig])
 foo = |num| {
     str = if (num > 10) {
         return Err(TooBig)
@@ -16,31 +16,9 @@ foo = |num| {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - return_stmt_block_example.md:3:11:3:11
+NIL
 # PROBLEMS
-**INCOMPATIBLE IF BRANCHES**
-This `if` has an `else` branch with a different type from it's `then` branch:
-**return_stmt_block_example.md:3:11:**
-```roc
-    str = if (num > 10) {
-        return Err(TooBig)
-    } else {
-        "SMALL"
-    }
-```
-        ^^^^^^^
-
-The `else` branch has the type:
-    _Str_
-
-But the `then` branch has the type:
-    _[Err([TooBig]_others)]_others2_
-
-All branches in an `if` must have compatible types.
-
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
@@ -63,7 +41,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "U64"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Str"))
 					(ty-tag-union
 						(tags
@@ -98,7 +76,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-foo : U64 -> Result(Str, [TooBig])
+foo : U64 -> Try(Str, [TooBig])
 foo = |num| {
 	str = if (num > 10) {
 		return Err(TooBig)
@@ -127,9 +105,10 @@ foo = |num| {
 										(p-assign (ident "num")))
 									(e-num (value "10")))
 								(e-block
-									(e-tag (name "Err")
-										(args
-											(e-tag (name "TooBig")))))))
+									(e-return
+										(e-tag (name "Err")
+											(args
+												(e-tag (name "TooBig"))))))))
 						(if-else
 							(e-block
 								(e-string
@@ -141,7 +120,7 @@ foo = |num| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Str") (builtin))
 					(ty-tag-union
 						(ty-tag-name (name "TooBig"))))))))
@@ -150,7 +129,7 @@ foo = |num| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned64)) -> Try(Error, [TooBig])")))
+		(patt (type "U64 -> Try(Str, [TooBig])")))
 	(expressions
-		(expr (type "Num(Int(Unsigned64)) -> Try(Error, [TooBig])"))))
+		(expr (type "U64 -> Try(Str, [TooBig])"))))
 ~~~

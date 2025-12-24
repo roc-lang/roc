@@ -225,6 +225,7 @@ EndOfFile,
 ~~~roc
 # Define a polymorphic container with static dispatch
 Container(a) := [Empty, Value(a)].{
+	# Method with annotation
 	map : Container(a), (a -> b) -> Container(b)
 	map = |container, f| {
 		match container {
@@ -232,12 +233,16 @@ Container(a) := [Empty, Value(a)].{
 			Empty => Empty
 		}
 	}
+
+	# Method without annotation (inferred)
 	get_or = |container, default| {
 		match container {
 			Value(val) => val
 			Empty => default
 		}
 	}
+
+	# Chained method dispatch
 	flat_map : Container(a), (a -> Container(b)) -> Container(b)
 	flat_map = |container, f| {
 		match container {
@@ -263,38 +268,35 @@ func = {
 (can-ir
 	(d-let
 		(p-assign (ident "Container.map"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "f")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Value")
-											(args
-												(e-call
-													(e-lookup-local
-														(p-assign (ident "f")))
-													(e-lookup-local
-														(p-assign (ident "val"))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Empty"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "f")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Value")
+										(args
+											(e-call
+												(e-lookup-local
+													(p-assign (ident "f")))
+												(e-lookup-local
+													(p-assign (ident "val"))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Empty")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Container") (local)
@@ -307,66 +309,60 @@ func = {
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "Container.get_or"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "default")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "val")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-lookup-local
-											(p-assign (ident "default"))))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "default")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "val")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-lookup-local
+										(p-assign (ident "default")))))))))))
 	(d-let
 		(p-assign (ident "Container.flat_map"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "f")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-lookup-local
-												(p-assign (ident "f")))
-											(e-lookup-local
-												(p-assign (ident "val"))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Empty"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "f")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "f")))
+										(e-lookup-local
+											(p-assign (ident "val"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Empty")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Container") (local)
@@ -434,9 +430,9 @@ func = {
 (inferred-types
 	(defs
 		(patt (type "Container(a), (a -> b) -> Container(b)"))
-		(patt (type "[Value(c), Empty]_others, c -> c"))
+		(patt (type "[Value(c), Empty, .._others], c -> c"))
 		(patt (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(patt (type "Num(_size)")))
+		(patt (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -444,7 +440,7 @@ func = {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Container(a), (a -> b) -> Container(b)"))
-		(expr (type "[Value(c), Empty]_others, c -> c"))
+		(expr (type "[Value(c), Empty, .._others], c -> c"))
 		(expr (type "Container(a), (a -> Container(b)) -> Container(b)"))
-		(expr (type "Num(_size)"))))
+		(expr (type "b where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
 ~~~

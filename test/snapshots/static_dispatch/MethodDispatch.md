@@ -233,37 +233,31 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "Container.get_value"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "s"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Container") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Container.transform"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "fn")))
-				(e-nominal (nominal "Container")
-					(e-tag (name "Box")
-						(args
-							(e-call
-								(e-lookup-local
-									(p-assign (ident "fn")))
-								(e-lookup-local
-									(p-assign (ident "s")))))))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag))
+				(p-assign (ident "fn")))
+			(e-nominal (nominal "Container")
+				(e-tag (name "Box")
+					(args
+						(e-call
+							(e-lookup-local
+								(p-assign (ident "fn")))
+							(e-lookup-local
+								(p-assign (ident "s"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Container") (local))

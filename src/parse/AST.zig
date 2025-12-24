@@ -60,12 +60,26 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     var i = region.start;
     const tags = self.tokens.tokens.items(.tag);
     while (i < region.end) {
-        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len and (tags[i + 1] == .CloseSquare or
-            tags[i + 1] == .CloseRound or
-            tags[i + 1] == .CloseCurly or
-            tags[i + 1] == .OpBar))
-        {
-            return true;
+        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len) {
+            const next_tag = tags[i + 1];
+            if (next_tag == .CloseSquare or next_tag == .CloseRound or next_tag == .CloseCurly) {
+                return true;
+            }
+            // For OpBar, we need to distinguish between:
+            // - Closing bar (trailing comma): |x, y,| body
+            // - Opening bar (NOT trailing): fn(a, |x| body)
+            // Check the token after the bar to determine which case this is
+            if (next_tag == .OpBar and i + 2 < self.tokens.tokens.len) {
+                const after_bar = tags[i + 2];
+                // If what follows is a lambda parameter, the bar is opening (not a trailing comma)
+                const is_opening_bar = switch (after_bar) {
+                    .LowerIdent, .UpperIdent, .Underscore, .OpenRound, .OpenSquare, .OpenCurly => true,
+                    else => false,
+                };
+                if (!is_opening_bar) {
+                    return true;
+                }
+            }
         }
         i += 1;
     }
@@ -128,6 +142,9 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "NON-PRINTABLE UNICODE IN STRING-LIKE LITERAL",
         .InvalidUtf8InSource => "INVALID UTF-8",
         .DollarInMiddleOfIdentifier => "STRAY DOLLAR SIGN",
+        .SingleQuoteTooLong => "SINGLE QUOTE TOO LONG",
+        .SingleQuoteEmpty => "SINGLE QUOTE EMPTY",
+        .SingleQuoteUnclosed => "UNCLOSED SINGLE QUOTE",
     };
 
     const body = switch (diagnostic.tag) {
@@ -141,6 +158,8 @@ pub fn tokenizeDiagnosticToReport(self: *AST, diagnostic: tokenize.Diagnostic, a
         .NonPrintableUnicodeInStrLiteral => "Non-printable Unicode characters are not allowed in string-like literals.",
         .InvalidUtf8InSource => "Invalid UTF-8 encoding found in source code. Roc source files must be valid UTF-8.",
         .DollarInMiddleOfIdentifier => "Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.",
+        .SingleQuoteTooLong, .SingleQuoteEmpty => "Single-quoted literals must contain exactly one valid UTF-8 codepoint.",
+        .SingleQuoteUnclosed => "This single-quoted literal is missing a closing quote.",
     };
 
     var report = reporting.Report.init(allocator, title, .runtime_error);
@@ -245,6 +264,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .ty_anno_unexpected_token => "UNEXPECTED TOKEN IN TYPE ANNOTATION",
         .string_unexpected_token => "UNEXPECTED TOKEN IN STRING",
         .expr_unexpected_token => "UNEXPECTED TOKEN IN EXPRESSION",
+        .return_outside_function => "RETURN OUTSIDE FUNCTION",
         .import_must_be_top_level => "IMPORT MUST BE TOP LEVEL",
         .expected_expr_close_square_or_comma => "LIST NOT CLOSED",
         .where_expected_open_bracket => "WHERE CLAUSE ERROR",
@@ -402,6 +422,16 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
                 try report.document.addReflowingTextWithBackticks(tip);
             }
         },
+        .return_outside_function => {
+            try report.document.addText("The ");
+            try report.document.addAnnotated("return", .error_highlight);
+            try report.document.addText(" keyword can only be used inside a function body.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Use `return` to exit early from a function and provide a value. For example:");
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock("foo = |x| { if x < 0 { return Err(NegativeInput) }; Ok(x) }");
+        },
         .import_must_be_top_level => {
             try report.document.addReflowingText("Import statements must appear at the top level of a module.");
             try report.document.addLineBreak();
@@ -442,7 +472,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("Dict(Str, Num)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
-            try report.document.addAnnotated("Result(a, Str)", .dimmed);
+            try report.document.addAnnotated("Try(a, Str)", .dimmed);
             try report.document.addLineBreak();
             try report.document.addIndent(1);
             try report.document.addAnnotated("Maybe(List(U64))", .dimmed);
@@ -636,6 +666,14 @@ pub const Diagnostic = struct {
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
         expected_requires_signatures_open_curly,
+        expected_for_clause_open_square,
+        expected_for_clause_close_square,
+        expected_for_clause_alias_name,
+        expected_for_clause_colon,
+        expected_for_clause_rigid_name,
+        expected_for_keyword,
+        expected_for_clause_entrypoint_name,
+        expected_for_clause_type_colon,
         header_expected_open_square,
         header_expected_close_square,
         pattern_unexpected_token,
@@ -671,6 +709,7 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
+        return_outside_function,
         expected_expr_record_field_name,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,
@@ -686,6 +725,7 @@ pub const Diagnostic = struct {
         var_only_allowed_in_a_body,
         var_must_have_ident,
         var_expected_equals,
+        var_type_anno_needs_var_keyword,
         for_expected_in,
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
@@ -698,6 +738,30 @@ pub const Diagnostic = struct {
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
         where_clause_not_allowed_in_type_declaration,
+
+        // Targets section parse errors
+        expected_targets,
+        expected_targets_colon,
+        expected_targets_open_curly,
+        expected_targets_close_curly,
+        expected_targets_field_name,
+        expected_targets_field_colon,
+        expected_targets_files_string,
+        unknown_targets_field,
+
+        // Target entry parse errors
+        expected_target_link_open_curly,
+        expected_target_link_close_curly,
+        expected_target_name,
+        expected_target_colon,
+        expected_target_files_open_square,
+        expected_target_files_close_square,
+        expected_target_file,
+        expected_target_file_string_end,
+
+        // Semantic warnings (detected at CLI time, not parse time)
+        targets_exe_empty,
+        targets_duplicate_target,
     };
 };
 
@@ -803,12 +867,14 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
     try tree.toStringPretty(writer, .include_linecol);
 }
 
-/// The kind of the type declaration represented, either:
+/// The kind of the type declaration represented:
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
+/// 3. An opaque type of the form `Foo :: [Bar, Baz]`
 pub const TypeDeclKind = enum {
     alias,
     nominal,
+    @"opaque",
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.
@@ -839,6 +905,11 @@ pub const Statement = union(enum) {
     @"for": struct {
         patt: Pattern.Idx,
         expr: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
+    @"while": struct {
+        cond: Expr.Idx,
         body: Expr.Idx,
         region: TokenizedRegion,
     },
@@ -958,7 +1029,7 @@ pub const Statement = union(enum) {
                     try tree.pushStaticAtom("exposing");
                     const attrs2 = tree.beginNode();
                     for (ast.store.exposedItemSlice(import.exposes)) |e| {
-                        try ast.store.getExposedItem(e).pushToSExprTree(gpa, env, ast, tree);
+                        try ast.store.getExposedItem(e).pushToSExprTree(env, ast, tree);
                     }
                     try tree.endNode(exposed, attrs2);
                 }
@@ -1071,6 +1142,20 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .@"while" => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-while");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+
+                // condition
+                try ast.store.getExpr(a.cond).pushToSExprTree(gpa, env, ast, tree);
+
+                // body
+                try ast.store.getExpr(a.body).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .@"return" => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -1125,6 +1210,7 @@ pub const Statement = union(enum) {
             .dbg => |s| s.region,
             .expect => |s| s.region,
             .@"for" => |s| s.region,
+            .@"while" => |s| s.region,
             .@"return" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
@@ -1171,6 +1257,11 @@ pub const Associated = struct {
 /// Represents a Pattern used in pattern matching.
 pub const Pattern = union(enum) {
     ident: struct {
+        ident_tok: Token.Idx,
+        region: TokenizedRegion,
+    },
+    /// A mutable variable binding in a pattern, e.g., `var $x` in `|var $x, y|`
+    var_ident: struct {
         ident_tok: Token.Idx,
         region: TokenizedRegion,
     },
@@ -1237,6 +1328,7 @@ pub const Pattern = union(enum) {
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
             .ident => |p| p.region,
+            .var_ident => |p| p.region,
             .tag => |p| p.region,
             .int => |p| p.region,
             .frac => |p| p.region,
@@ -1259,6 +1351,21 @@ pub const Pattern = union(enum) {
             .ident => |ident| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("p-ident");
+                try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
+
+                // Add raw attribute
+                const raw_begin = tree.beginNode();
+                try tree.pushStaticAtom("raw");
+                try tree.pushString(ast.resolve(ident.ident_tok));
+                const attrs2 = tree.beginNode();
+                try tree.endNode(raw_begin, attrs2);
+                const attrs = tree.beginNode();
+
+                try tree.endNode(begin, attrs);
+            },
+            .var_ident => |ident| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-var-ident");
                 try ast.appendRegionInfoToSexprTree(env, tree, ident.region);
 
                 // Add raw attribute
@@ -1526,11 +1633,11 @@ pub const Header = union(enum) {
     },
     platform: struct {
         name: Token.Idx,
-        requires_rigids: Collection.Idx,
-        requires_signatures: TypeAnno.Idx,
+        requires_entries: RequiresEntry.Span, // [Model : model] for main : () -> { ... }
         exposes: Collection.Idx,
         packages: Collection.Idx,
         provides: Collection.Idx,
+        targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
         region: TokenizedRegion,
     },
     hosted: struct {
@@ -1573,7 +1680,7 @@ pub const Header = union(enum) {
                 // Could push region info for provides_coll here if desired
                 for (provides_items) |item_idx| {
                     const item = ast.store.getExposedItem(item_idx);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(provides_begin, attrs2);
 
@@ -1609,7 +1716,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1629,7 +1736,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1655,22 +1762,42 @@ pub const Header = union(enum) {
                 try tree.pushStringPair("name", ast.resolve(a.name));
                 const attrs = tree.beginNode();
 
-                // Requires Rigids
-                const rigids = ast.store.getCollection(a.requires_rigids);
-                const rigids_begin = tree.beginNode();
-                try tree.pushStaticAtom("rigids");
-                try ast.appendRegionInfoToSexprTree(env, tree, rigids.region);
+                // Requires Entries (for-clause syntax)
+                const requires_begin = tree.beginNode();
+                try tree.pushStaticAtom("requires");
                 const attrs3 = tree.beginNode();
-                // Could push region info for rigids here if desired
-                for (ast.store.exposedItemSlice(.{ .span = rigids.span })) |exposed| {
-                    const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
-                }
-                try tree.endNode(rigids_begin, attrs3);
+                for (ast.store.requiresEntrySlice(a.requires_entries)) |entry_idx| {
+                    const entry = ast.store.getRequiresEntry(entry_idx);
+                    const entry_begin = tree.beginNode();
+                    try tree.pushStaticAtom("requires-entry");
+                    try ast.appendRegionInfoToSexprTree(env, tree, entry.region);
+                    const entry_attrs = tree.beginNode();
 
-                // Requires Signatures
-                const signatures = ast.store.getTypeAnno(a.requires_signatures);
-                try signatures.pushToSExprTree(gpa, env, ast, tree);
+                    // Type aliases
+                    const aliases_begin = tree.beginNode();
+                    try tree.pushStaticAtom("type-aliases");
+                    const aliases_attrs = tree.beginNode();
+                    for (ast.store.forClauseTypeAliasSlice(entry.type_aliases)) |alias_idx| {
+                        const alias = ast.store.getForClauseTypeAlias(alias_idx);
+                        const alias_begin = tree.beginNode();
+                        try tree.pushStaticAtom("alias");
+                        try tree.pushStringPair("name", ast.resolve(alias.alias_name));
+                        try tree.pushStringPair("rigid", ast.resolve(alias.rigid_name));
+                        const alias_attrs = tree.beginNode();
+                        try tree.endNode(alias_begin, alias_attrs);
+                    }
+                    try tree.endNode(aliases_begin, aliases_attrs);
+
+                    // Entrypoint name
+                    try tree.pushStringPair("entrypoint", ast.resolve(entry.entrypoint_name));
+
+                    // Type annotation
+                    const type_anno = ast.store.getTypeAnno(entry.type_anno);
+                    try type_anno.pushToSExprTree(gpa, env, ast, tree);
+
+                    try tree.endNode(entry_begin, entry_attrs);
+                }
+                try tree.endNode(requires_begin, attrs3);
 
                 // Exposes
                 const exposes = ast.store.getCollection(a.exposes);
@@ -1680,7 +1807,7 @@ pub const Header = union(enum) {
                 const attrs4 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs4);
 
@@ -1725,7 +1852,7 @@ pub const Header = union(enum) {
                 const attrs2 = tree.beginNode();
                 for (ast.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                     const item = ast.store.getExposedItem(exposed);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                    try item.pushToSExprTree(env, ast, tree);
                 }
                 try tree.endNode(exposes_begin, attrs2);
 
@@ -1798,9 +1925,7 @@ pub const ExposedItem = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
-        _ = gpa;
-
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .lower_ident => |i| {
                 const begin = tree.beginNode();
@@ -1902,6 +2027,72 @@ pub const ExposedItem = union(enum) {
     }
 };
 
+/// A targets section in a platform header
+pub const TargetsSection = struct {
+    files_path: ?Token.Idx, // "files:" directive string literal
+    exe: ?TargetLinkType.Idx, // exe: { ... }
+    static_lib: ?TargetLinkType.Idx, // static_lib: { ... }
+    // shared_lib to be added later
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// A link type section (exe, static_lib, shared_lib)
+pub const TargetLinkType = struct {
+    entries: TargetEntry.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// Single target entry: x64musl: ["crt1.o", "host.o", app]
+pub const TargetEntry = struct {
+    target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
+    files: TargetFile.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// File item in target list
+pub const TargetFile = union(enum) {
+    string_literal: Token.Idx, // "crt1.o"
+    special_ident: Token.Idx, // app, win_gui
+    malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// A type alias mapping in a for-clause: Model : model
+/// Maps an uppercase alias (Model) to a lowercase rigid variable (model)
+pub const ForClauseTypeAlias = struct {
+    /// The alias name token (e.g., "Model") - UpperIdent
+    alias_name: Token.Idx,
+    /// The rigid variable name token (e.g., "model") - LowerIdent
+    rigid_name: Token.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// A requires entry with for-clause: [Model : model] for main : () -> { ... }
+pub const RequiresEntry = struct {
+    /// Type aliases: [Model : model, Foo : foo]
+    type_aliases: ForClauseTypeAlias.Span,
+    /// The entrypoint name token (e.g., "main") - LowerIdent
+    entrypoint_name: Token.Idx,
+    /// The type annotation for this entrypoint
+    type_anno: TypeAnno.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
 /// TODO
 pub const TypeHeader = struct {
     name: Token.Idx,
@@ -1944,6 +2135,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
+        ext: ?TypeAnno.Idx,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2084,6 +2276,15 @@ pub const TypeAnno = union(enum) {
                         },
                     };
                     try field.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                // Output extension if present
+                if (a.ext) |ext_idx| {
+                    const ext_begin = tree.beginNode();
+                    try tree.pushStaticAtom("ty-record-ext");
+                    const ext_attrs = tree.beginNode();
+                    try ast.store.getTypeAnno(ext_idx).pushToSExprTree(gpa, env, ast, tree);
+                    try tree.endNode(ext_begin, ext_attrs);
                 }
 
                 try tree.endNode(begin, attrs);
@@ -2317,6 +2518,11 @@ pub const Expr = union(enum) {
         @"else": Expr.Idx,
         region: TokenizedRegion,
     },
+    if_without_else: struct {
+        condition: Expr.Idx,
+        then: Expr.Idx,
+        region: TokenizedRegion,
+    },
     match: struct {
         expr: Expr.Idx,
         branches: MatchBranch.Span,
@@ -2340,6 +2546,12 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     block: Block,
+    for_expr: struct {
+        patt: Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -2382,11 +2594,13 @@ pub const Expr = union(enum) {
             .suffix_single_question => |e| e.region,
             .apply => |e| e.region,
             .if_then_else => |e| e.region,
+            .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
+            .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
             .single_quote => |e| e.region,
@@ -2584,6 +2798,17 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .if_without_else => |stmt| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-if-without-else");
+                try ast.appendRegionInfoToSexprTree(env, tree, stmt.region);
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(stmt.condition).pushToSExprTree(gpa, env, ast, tree);
+                try ast.store.getExpr(stmt.then).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
             .match => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-match");
@@ -2705,6 +2930,23 @@ pub const Expr = union(enum) {
 
                 // Push child expression
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .for_expr => |f| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-for");
+                try ast.appendRegionInfoToSexprTree(env, tree, f.region);
+                const attrs = tree.beginNode();
+
+                // Push pattern
+                try ast.store.getPattern(f.patt).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push list expression
+                try ast.store.getExpr(f.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                // Push body expression
+                try ast.store.getExpr(f.body).pushToSExprTree(gpa, env, ast, tree);
 
                 try tree.endNode(begin, attrs);
             },

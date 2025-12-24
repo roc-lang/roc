@@ -7,8 +7,8 @@ type=file
 ~~~roc
 app [main] { pf: platform "platform.roc" }
 
-# Map over Result type
-map_result : Result(a, e), (a -> b) -> Result(b, e)
+# Map over Try type
+map_result : Try(a, e), (a -> b) -> Try(b, e)
 map_result = |result, transform| {
     match result {
         Ok(value) => Ok(transform(value))
@@ -28,8 +28,8 @@ make_pair = |x, y| { first: x, second: y }
 list_length : List(_a) -> U64
 list_length = |_lst| 42
 
-# Nested Result types
-wrap_in_result : a -> Result(Result(a, Str), Str)
+# Nested Try types
+wrap_in_result : a -> Try(Try(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
 
 main = |_| "done"
@@ -77,14 +77,14 @@ EndOfFile,
 		(s-type-anno (name "map_result")
 			(ty-fn
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-var (raw "a"))
 					(ty-var (raw "e")))
 				(ty-fn
 					(ty-var (raw "a"))
 					(ty-var (raw "b")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-var (raw "b"))
 					(ty-var (raw "e")))))
 		(s-decl
@@ -158,9 +158,9 @@ EndOfFile,
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-apply
-						(ty (name "Result"))
+						(ty (name "Try"))
 						(ty-var (raw "a"))
 						(ty (name "Str")))
 					(ty (name "Str")))))
@@ -186,8 +186,8 @@ EndOfFile,
 ~~~roc
 app [main] { pf: platform "platform.roc" }
 
-# Map over Result type
-map_result : Result(a, e), (a -> b) -> Result(b, e)
+# Map over Try type
+map_result : Try(a, e), (a -> b) -> Try(b, e)
 map_result = |result, transform| {
 	match result {
 		Ok(value) => Ok(transform(value))
@@ -207,8 +207,8 @@ make_pair = |x, y| { first: x, second: y }
 list_length : List(_a) -> U64
 list_length = |_lst| 42
 
-# Nested Result types
-wrap_in_result : a -> Result(Result(a, Str), Str)
+# Nested Try types
+wrap_in_result : a -> Try(Try(a, Str), Str)
 wrap_in_result = |value| Ok(Ok(value))
 
 main = |_| "done"
@@ -218,52 +218,48 @@ main = |_| "done"
 (can-ir
 	(d-let
 		(p-assign (ident "map_result"))
-		(e-closure
-			(captures
-				(capture (ident "value"))
-				(capture (ident "error")))
-			(e-lambda
-				(args
-					(p-assign (ident "result"))
-					(p-assign (ident "transform")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Ok")
-											(args
-												(e-call
-													(e-lookup-local
-														(p-assign (ident "transform")))
-													(e-lookup-local
-														(p-assign (ident "value"))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Err")
-											(args
+		(e-lambda
+			(args
+				(p-assign (ident "result"))
+				(p-assign (ident "transform")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Ok")
+										(args
+											(e-call
 												(e-lookup-local
-													(p-assign (ident "error")))))))))))))
+													(p-assign (ident "transform")))
+												(e-lookup-local
+													(p-assign (ident "value"))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-lookup-local
+												(p-assign (ident "error"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "e")))
 				(ty-parens
 					(ty-fn (effectful false)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var (name "b"))))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
@@ -325,8 +321,8 @@ main = |_| "done"
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
-				(ty-apply (name "Result") (builtin)
-					(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
+					(ty-apply (name "Try") (builtin)
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-lookup (name "Str") (builtin)))
 					(ty-lookup (name "Str") (builtin))))))
@@ -345,14 +341,14 @@ main = |_| "done"
 		(patt (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(patt (type "a -> a"))
 		(patt (type "a, b -> { first: a, second: b }"))
-		(patt (type "List(_a) -> Num(Int(Unsigned64))"))
+		(patt (type "List(_a) -> U64"))
 		(patt (type "a -> Try(Try(a, Str), Str)"))
 		(patt (type "_arg -> Str")))
 	(expressions
 		(expr (type "Try(a, e), (a -> b) -> Try(b, e)"))
 		(expr (type "a -> a"))
 		(expr (type "a, b -> { first: a, second: b }"))
-		(expr (type "List(_a) -> Num(Int(Unsigned64))"))
+		(expr (type "List(_a) -> U64"))
 		(expr (type "a -> Try(Try(a, Str), Str)"))
 		(expr (type "_arg -> Str"))))
 ~~~

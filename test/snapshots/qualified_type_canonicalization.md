@@ -8,11 +8,11 @@ type=file
 module [
     Color,
     ModuleA.ModuleB.TypeC,
-    Result,
+    Try,
     ExternalModule,
 ]
 
-import Basics.Result
+import Basics.Try
 import Color
 import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
@@ -30,8 +30,8 @@ multiLevelQualified : ModuleA.ModuleB.TypeC
 multiLevelQualified = TypeC.new
 
 # Using qualified type with generics
-resultType : Result.Result(I32, Str)
-resultType = Result.Ok(42)
+resultType : Try.Try(I32, Str)
+resultType = Try.Ok(42)
 
 # Function returning qualified type
 getColor : {} -> Color.RGB
@@ -43,32 +43,32 @@ processColor = |color|
     "Color processed"
 
 # Multiple qualified types in a function signature
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 transform = |result|
     match result {
-        Result.Ok(rgb) => TypeC.fromColor(rgb)
-        Result.Err(err) => TypeC.default
+        Try.Ok(rgb) => TypeC.fromColor(rgb)
+        Try.Err(err) => TypeC.default
     }
 ~~~
 # EXPECTED
 PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
-PARSE ERROR - qualified_type_canonicalization.md:8:14:8:21
+PARSE ERROR - qualified_type_canonicalization.md:8:14:8:18
 MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
 MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
 UNDECLARED TYPE - qualified_type_canonicalization.md:15:19:15:24
 MODULE NOT IMPORTED - qualified_type_canonicalization.md:22:23:22:44
 DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
-MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:27
+MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:21
 UNDECLARED TYPE - qualified_type_canonicalization.md:31:16:31:21
 UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:26
-MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:55:39:76
-UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:15
-DOES NOT EXIST - qualified_type_canonicalization.md:42:27:42:42
-UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:15
-DOES NOT EXIST - qualified_type_canonicalization.md:43:28:43:41
-UNUSED VARIABLE - qualified_type_canonicalization.md:43:20:43:23
+MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
+MODULE NOT IMPORTED - qualified_type_canonicalization.md:39:49:39:70
+UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:12
+DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
+UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:12
+DOES NOT EXIST - qualified_type_canonicalization.md:43:25:43:38
+UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `import_exposing_no_close`
@@ -76,7 +76,7 @@ This is an unexpected parsing error. Please check your syntax.
 
 **qualified_type_canonicalization.md:8:1:8:7:**
 ```roc
-import Basics.Result
+import Basics.Try
 ```
 ^^^^^^
 
@@ -94,14 +94,14 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
-**qualified_type_canonicalization.md:8:14:8:21:**
+**qualified_type_canonicalization.md:8:14:8:18:**
 ```roc
-import Basics.Result
+import Basics.Try
 ```
-             ^^^^^^^
+             ^^^^
 
 
 **MODULE NOT FOUND**
@@ -170,14 +170,14 @@ multiLevelQualified = TypeC.new
 
 
 **MISSING NESTED TYPE**
-`Result` is in scope, but it doesn't have a nested type that's also named `Result`.
+`Try` is in scope, but it doesn't have a nested type that's also named `Try`.
 
 It's referenced here:
-**qualified_type_canonicalization.md:26:14:26:27:**
+**qualified_type_canonicalization.md:26:14:26:21:**
 ```roc
-resultType : Result.Result(I32, Str)
+resultType : Try.Try(I32, Str)
 ```
-             ^^^^^^^^^^^^^
+             ^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -204,67 +204,67 @@ processColor = |color|
 
 
 **MISSING NESTED TYPE**
-`Result` is in scope, but it doesn't have a nested type that's also named `Result`.
+`Try` is in scope, but it doesn't have a nested type that's also named `Try`.
 
 It's referenced here:
-**qualified_type_canonicalization.md:39:13:39:26:**
+**qualified_type_canonicalization.md:39:13:39:20:**
 ```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
-            ^^^^^^^^^^^^^
+            ^^^^^^^
 
 
 **MODULE NOT IMPORTED**
 There is no module with the name `ModuleA.ModuleB` imported into this Roc file.
 
 You're attempting to use this module here:
-**qualified_type_canonicalization.md:39:55:39:76:**
+**qualified_type_canonicalization.md:39:49:39:70:**
 ```roc
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 ```
-                                                      ^^^^^^^^^^^^^^^^^^^^^
+                                                ^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
+The type _Try_ is not declared in this scope.
 
 This type is referenced here:
-**qualified_type_canonicalization.md:42:9:42:15:**
+**qualified_type_canonicalization.md:42:9:42:12:**
 ```roc
-        Result.Ok(rgb) => TypeC.fromColor(rgb)
+        Try.Ok(rgb) => TypeC.fromColor(rgb)
 ```
-        ^^^^^^
+        ^^^
 
 
 **DOES NOT EXIST**
 `TypeC.fromColor` does not exist.
 
-**qualified_type_canonicalization.md:42:27:42:42:**
+**qualified_type_canonicalization.md:42:24:42:39:**
 ```roc
-        Result.Ok(rgb) => TypeC.fromColor(rgb)
+        Try.Ok(rgb) => TypeC.fromColor(rgb)
 ```
-                          ^^^^^^^^^^^^^^^
+                       ^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
-The type _Result_ is not declared in this scope.
+The type _Try_ is not declared in this scope.
 
 This type is referenced here:
-**qualified_type_canonicalization.md:43:9:43:15:**
+**qualified_type_canonicalization.md:43:9:43:12:**
 ```roc
-        Result.Err(err) => TypeC.default
+        Try.Err(err) => TypeC.default
 ```
-        ^^^^^^
+        ^^^
 
 
 **DOES NOT EXIST**
 `TypeC.default` does not exist.
 
-**qualified_type_canonicalization.md:43:28:43:41:**
+**qualified_type_canonicalization.md:43:25:43:38:**
 ```roc
-        Result.Err(err) => TypeC.default
+        Try.Err(err) => TypeC.default
 ```
-                           ^^^^^^^^^^^^^
+                        ^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -272,11 +272,11 @@ Variable `err` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_err` to suppress this warning.
 The unused variable is declared here:
-**qualified_type_canonicalization.md:43:20:43:23:**
+**qualified_type_canonicalization.md:43:17:43:20:**
 ```roc
-        Result.Err(err) => TypeC.default
+        Try.Err(err) => TypeC.default
 ```
-                   ^^^
+                ^^^
 
 
 # TOKENS
@@ -348,13 +348,13 @@ EndOfFile,
 			(e-ident (raw "TypeC.new")))
 		(s-type-anno (name "resultType")
 			(ty-apply
-				(ty (name "Result.Result"))
+				(ty (name "Try.Try"))
 				(ty (name "I32"))
 				(ty (name "Str"))))
 		(s-decl
 			(p-ident (raw "resultType"))
 			(e-apply
-				(e-tag (raw "Result.Ok"))
+				(e-tag (raw "Try.Ok"))
 				(e-int (raw "42"))))
 		(s-type-anno (name "getColor")
 			(ty-fn
@@ -388,7 +388,7 @@ EndOfFile,
 		(s-type-anno (name "transform")
 			(ty-fn
 				(ty-apply
-					(ty (name "Result.Result"))
+					(ty (name "Try.Try"))
 					(ty (name "Color.RGB"))
 					(ty (name "ExtMod.Error")))
 				(ty (name "ModuleA.ModuleB.TypeC"))))
@@ -431,8 +431,8 @@ multiLevelQualified : ModuleA.ModuleB.TypeC
 multiLevelQualified = TypeC.new
 
 # Using qualified type with generics
-resultType : Result.Result(I32, Str)
-resultType = Result.Ok(42)
+resultType : Try.Try(I32, Str)
+resultType = Try.Ok(42)
 
 # Function returning qualified type
 getColor : {} -> Color.RGB
@@ -444,11 +444,11 @@ processColor = |color|
 	"Color processed"
 
 # Multiple qualified types in a function signature
-transform : Result.Result(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
+transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC
 transform = |result|
 	match result {
-		Result.Ok(rgb) => TypeC.fromColor(rgb)
-		Result.Err(err) => TypeC.default
+		Try.Ok(rgb) => TypeC.fromColor(rgb)
+		Try.Err(err) => TypeC.default
 	}
 ~~~
 # CANONICALIZE

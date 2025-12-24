@@ -13,6 +13,9 @@ DOES NOT EXIST - record_mixed_types.md:1:35:1:44
 **DOES NOT EXIST**
 `Bool.true` does not exist.
 
+`Bool` is in scope, but it has no associated `true`.
+
+It's referenced here:
 **record_mixed_types.md:1:35:1:44:**
 ```roc
 { name: "Alice", age: 30, active: Bool.true, scores: [95, 87, 92], balance: 1250.75 }
@@ -57,7 +60,7 @@ NO CHANGE
 		(field (name "age")
 			(e-num (value "30")))
 		(field (name "active")
-			(e-runtime-error (tag "qualified_ident_does_not_exist")))
+			(e-runtime-error (tag "nested_value_not_found")))
 		(field (name "scores")
 			(e-list
 				(elems
@@ -69,5 +72,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ active: Error, age: Num(_size), balance: Num(Frac(_size2)), name: Str, scores: List(Num(_size3)) }"))
+(expr (type "{ active: Error, age: a, balance: b, name: Str, scores: List(c) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 ~~~

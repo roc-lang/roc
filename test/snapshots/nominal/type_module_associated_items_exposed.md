@@ -57,6 +57,7 @@ Foo := [Blah].{
 	Bar := {}.{
 		baz = {}
 	}
+
 	stuff = {}
 }
 ~~~

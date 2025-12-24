@@ -10,19 +10,9 @@ import pf.Stdout exposing [line!, write!]
 main = 42
 ~~~
 # EXPECTED
-MODULE NOT FOUND - exposed_items_test.md:1:1:1:42
+NIL
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**exposed_items_test.md:1:1:1:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,
@@ -63,7 +53,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

@@ -663,6 +663,20 @@ pub const RocDec = extern struct {
     pub fn atan(self: RocDec) RocDec {
         return fromF64(math.atan(self.toF64())).?;
     }
+
+    pub fn rem(
+        self: RocDec,
+        other: RocDec,
+        roc_ops: *RocOps,
+    ) RocDec {
+        // (n % 0) is an error
+        if (other.num == 0) {
+            roc_ops.crash("Decimal remainder by 0!");
+        }
+
+        // For Dec, remainder is straightforward since both operands have the same scaling factor
+        return RocDec{ .num = @rem(self.num, other.num) };
+    }
 };
 
 // A number has `k` trailing zeros if `10^k` divides into it cleanly
@@ -1042,6 +1056,48 @@ pub fn fromF32C(
 /// TODO: Document toF64.
 pub fn toF64(arg: RocDec) callconv(.c) f64 {
     return @call(.always_inline, RocDec.toF64, .{arg});
+}
+
+/// Convert Dec to F32 (lossy conversion)
+pub fn toF32(arg: RocDec) callconv(.c) f32 {
+    return @floatCast(arg.toF64());
+}
+
+/// Convert Dec to F32 with range check - returns null if out of range
+pub fn toF32Try(arg: RocDec) ?f32 {
+    const f64_val = arg.toF64();
+    // Check if the value is within F32 range
+    if (f64_val > math.floatMax(f32) or f64_val < -math.floatMax(f32)) {
+        return null;
+    }
+    // Also check for infinity (which would indicate overflow)
+    const f32_val: f32 = @floatCast(f64_val);
+    if (math.isInf(f32_val) and !math.isInf(f64_val)) {
+        return null;
+    }
+    return f32_val;
+}
+
+/// Convert Dec to integer by truncating the fractional part (wrapping on overflow)
+pub fn toIntWrap(comptime T: type, arg: RocDec) T {
+    // Divide by one_point_zero_i128 to get the integer part
+    const whole_part = @divTrunc(arg.num, RocDec.one_point_zero_i128);
+    // Truncate to the target type (wrapping)
+    // First cast the i128 to u128, then truncate to the target size, then cast back to T if needed
+    const as_u128: u128 = @bitCast(whole_part);
+    const truncated = @as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(as_u128));
+    return @bitCast(truncated);
+}
+
+/// Convert Dec to integer by truncating the fractional part (returns null if out of range)
+pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
+    // Divide by one_point_zero_i128 to get the integer part
+    const whole_part = @divTrunc(arg.num, RocDec.one_point_zero_i128);
+    // Check if it fits in the target type
+    if (whole_part < math.minInt(T) or whole_part > math.maxInt(T)) {
+        return null;
+    }
+    return @intCast(whole_part);
 }
 
 /// TODO: Document exportFromInt.

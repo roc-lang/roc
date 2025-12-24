@@ -6,6 +6,7 @@ const eval = @import("eval");
 const base = @import("base");
 const check = @import("check");
 const parse = @import("parse");
+const types = @import("types");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const ModuleEnv = can_mod.ModuleEnv;
@@ -76,10 +77,12 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .gpa = gpa,
         .common = common,
         .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
+        .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
+        .requires_types = serialized_ptr.requires_types.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(base_ptr))).*,
         .builtin_statements = serialized_ptr.builtin_statements,
         .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
         .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
@@ -88,12 +91,11 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .diagnostics = serialized_ptr.diagnostics,
         .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
         .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .idents = ModuleEnv.CommonIdents.find(&common),
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+        .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
     return LoadedModule{
@@ -309,19 +311,20 @@ test "Repl - minimal interpreter integration" {
 
     // Step 3: Create CIR
     const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields(gpa, "test");
+    try cir.initCIRFields("test");
 
-    // Get Bool and Result statement indices from the builtin module
+    // Get Bool, Try, and Str statement indices from the builtin module
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
     const try_stmt_in_builtin_module = builtin_indices.try_type;
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try cir.insertIdent(base.Ident.for_text("test")),
-        .list = try cir.insertIdent(base.Ident.for_text("List")),
-        .box = try cir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Step 4: Canonicalize
@@ -335,24 +338,419 @@ test "Repl - minimal interpreter integration" {
 
     // Step 5: Type check - Pass Builtin as imported module
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
-    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, common_idents);
+
+    // Resolve imports - map each import to its index in imported_envs
+    cir.imports.resolveImports(cir, &imported_envs);
+
+    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, builtin_ctx);
     defer checker.deinit();
 
     _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, &[_]*const ModuleEnv{});
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &imported_envs, &checker.import_mapping, null);
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate
-    const result = try interpreter.evalMinimal(canonical_expr_idx.get_idx(), test_env.get_ops());
+    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
     defer result.decref(&interpreter.runtime_layout_store, test_env.get_ops());
 
     // Step 8: Verify result using renderer
     const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
     const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
-    const rendered = try interpreter.renderValueRocWithType(result, rt_var);
+    const rendered = try interpreter.renderValueRocWithType(result, rt_var, test_env.get_ops());
     defer gpa.free(rendered);
     try testing.expectEqualStrings("42", rendered);
+}
+
+test "Repl - Str.is_empty works for empty and non-empty strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const empty_result = try repl.step("Str.is_empty(\"\")");
+    defer std.testing.allocator.free(empty_result);
+    try testing.expectEqualStrings("True", empty_result);
+
+    const non_empty_result = try repl.step("Str.is_empty(\"a\")");
+    defer std.testing.allocator.free(non_empty_result);
+    try testing.expectEqualStrings("False", non_empty_result);
+}
+
+test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // This expression was leaking memory
+    const result = try repl.step("List.len(Str.to_utf8(\"hello\"))");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("5", result);
+}
+
+test "Repl - Str.to_utf8 returns list that should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // Test Str.to_utf8 directly - the resulting list should be decreffed
+    const result = try repl.step("Str.to_utf8(\"hello\")");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("[104, 101, 108, 108, 111]", result);
+}
+
+test "Repl - multiple Str.to_utf8 calls should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // Test multiple calls in same REPL session
+    {
+        const result1 = try repl.step("List.len(Str.to_utf8(\"\"))");
+        defer std.testing.allocator.free(result1);
+        try testing.expectEqualStrings("0", result1);
+    }
+    {
+        const result2 = try repl.step("List.len(Str.to_utf8(\"hello\"))");
+        defer std.testing.allocator.free(result2);
+        try testing.expectEqualStrings("5", result2);
+    }
+    {
+        const result3 = try repl.step("List.len(Str.to_utf8(\"é\"))");
+        defer std.testing.allocator.free(result3);
+        try testing.expectEqualStrings("2", result3);
+    }
+}
+
+test "Repl - list literals should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // Test list literals
+    {
+        const result = try repl.step("List.len([1, 2, 3])");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("3", result);
+    }
+    {
+        const result = try repl.step("[1, 2, 3]");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("[1, 2, 3]", result);
+    }
+}
+
+test "Repl - list of strings should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // List of strings - similar to what snapshot tests do
+    const result = try repl.step("List.len([\"hello\", \"world\", \"test\"])");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("3", result);
+}
+
+test "Repl - from_utf8_lossy should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    {
+        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("\"hello\"", result);
+    }
+}
+
+test "Repl - for loop over list should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // Simple list of strings - test that list literals are properly freed
+    {
+        const result = try repl.step("[\"hello\", \"world\", \"test\"]");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("[\"hello\", \"world\", \"test\"]", result);
+    }
+
+    // For loop assignment - matches snapshot pattern
+    {
+        const result = try repl.step("count = { var counter_ = 0; for _ in [\"hello\", \"world\", \"test\"] { counter_ = counter_ + 1 }; counter_ }");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("assigned `count`", result);
+    }
+}
+
+test "Repl - list_sort_with should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // Test list_sort_with - matches the snapshot pattern
+    {
+        const result = try repl.step("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("3", result);
+    }
+    {
+        const result = try repl.step("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("5", result);
+    }
+}
+
+test "Repl - list fold with concat should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // Test List.fold with List.concat - creates list literals in callback
+    const result = try repl.step("List.len(List.fold([1, 2, 3], [], |acc, x| List.concat(acc, [x])))");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("3", result);
+}
+
+test "Repl - all list operations should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // All list operation patterns from snapshots
+    {
+        const result = try repl.step("List.len(List.concat([1, 2], [3, 4]))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("4", result);
+    }
+    {
+        const result = try repl.step("List.len(List.concat([], [1, 2, 3]))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("3", result);
+    }
+    {
+        const result = try repl.step("List.len(List.concat([1, 2, 3], []))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("3", result);
+    }
+    {
+        const result = try repl.step("List.contains([1, 2, 3, 4, 5], 3)");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("True", result);
+    }
+    {
+        const result = try repl.step("List.drop_if([1, 2, 3, 4, 5], |x| x > 2)");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("[1, 2]", result);
+    }
+    {
+        const result = try repl.step("List.keep_if([1, 2, 3, 4, 5], |x| x > 2)");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("[3, 4, 5]", result);
+    }
+    {
+        const result = try repl.step("List.keep_if([1, 2, 3], |_| Bool.False)");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("[]", result);
+    }
+    {
+        const result = try repl.step("List.fold_rev([1, 2, 3], 0, |x, acc| acc * 10 + x)");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("321", result);
+    }
+    {
+        const result = try repl.step("List.fold_rev([], 42, |x, acc| x + acc)");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("42", result);
+    }
+}
+
+test "Repl - all for loop snapshots should not leak" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // All the for loop snapshot patterns
+    {
+        const result = try repl.step("unchanged = { var value_ = 42; for n in [] { value_ = n }; value_ }");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("assigned `unchanged`", result);
+    }
+    {
+        const result = try repl.step("result = { var allTrue_ = Bool.True; for b in [Bool.True, Bool.True, Bool.False] { if b == Bool.False { allTrue_ = Bool.False } else { {} } }; allTrue_ }");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("assigned `result`", result);
+    }
+    {
+        const result = try repl.step("count = { var counter_ = 0; for _ in [\"hello\", \"world\", \"test\"] { counter_ = counter_ + 1 }; counter_ }");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("assigned `count`", result);
+    }
+    {
+        const result = try repl.step("sum = { var total_ = 0; for n in [1, 2, 3, 4, 5] { total_ = total_ + n }; total_ }");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("assigned `sum`", result);
+    }
+    {
+        const result = try repl.step("product = { var result_ = 0; for i in [1, 2, 3] { for j in [10, 20] { result_ = result_ + (i * j) } }; result_ }");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("assigned `product`", result);
+    }
+}
+
+test "Repl - full list_sort_with snapshot pattern" {
+    // This mimics exactly what the snapshot validation does
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // All expressions from list_sort_with.md - collected first then freed
+    var outputs = std.array_list.Managed([]const u8).init(std.testing.allocator);
+    defer {
+        for (outputs.items) |item| {
+            std.testing.allocator.free(item);
+        }
+        outputs.deinit();
+    }
+
+    try outputs.append(try repl.step("List.len(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.len(List.sort_with([], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.len(List.sort_with([42], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.first(List.sort_with([3, 1, 2], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.first(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.first(List.sort_with([5, 4, 3, 2, 1], |a, b| if a > b LT else if a < b GT else EQ))"));
+    try outputs.append(try repl.step("List.len(List.sort_with([1, 1, 1, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.first(List.sort_with([1, 1, 1, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.len(List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
+    try outputs.append(try repl.step("List.first(List.sort_with([2, 1], |a, b| if a < b LT else if a > b GT else EQ))"));
+
+    try testing.expectEqualStrings("3", outputs.items[0]);
+    try testing.expectEqualStrings("5", outputs.items[1]);
+}
+
+test "Repl - full str_to_utf8 snapshot test" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    // All expressions from str_to_utf8.md
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("0", result);
+    }
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"hello\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("5", result);
+    }
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"é\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("2", result);
+    }
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"🎉\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("4", result);
+    }
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"Hello, World!\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("13", result);
+    }
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"日本語\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("9", result);
+    }
+    {
+        const result = try repl.step("List.len(Str.to_utf8(\"a é 🎉\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("9", result);
+    }
+    {
+        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"hello\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("\"hello\"", result);
+    }
+    {
+        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("\"\"", result);
+    }
+    {
+        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"🎉 party!\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("\"🎉 party!\"", result);
+    }
+    {
+        const result = try repl.step("Str.from_utf8_lossy(Str.to_utf8(\"abc123\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("\"abc123\"", result);
+    }
+    {
+        const result = try repl.step("List.is_empty(Str.to_utf8(\"\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("True", result);
+    }
+    {
+        const result = try repl.step("List.is_empty(Str.to_utf8(\"x\"))");
+        defer std.testing.allocator.free(result);
+        try testing.expectEqualStrings("False", result);
+    }
+}
+
+test "Repl - lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x| x + 1");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
+}
+
+test "Repl - multi-arg lambda function renders as <function>" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var repl = try Repl.init(std.testing.allocator, test_env.get_ops(), test_env.crashContextPtr());
+    defer repl.deinit();
+
+    const result = try repl.step("|x, y| x + y");
+    defer std.testing.allocator.free(result);
+    try testing.expectEqualStrings("<function>", result);
 }

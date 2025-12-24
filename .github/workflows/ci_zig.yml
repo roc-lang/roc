@@ -21,9 +21,17 @@ jobs:
 
       - name: zig lints
         run: |
-          ./ci/zig_lints.sh
+          zig run ci/zig_lints.zig
 
           zig build check-fmt
+
+      - name: Check that test is actually wired up
+        run: |
+          zig run ci/check_test_wiring.zig
+
+      - name: Check fx platform test coverage
+        run: |
+          zig build checkfx
 
       # We run zig check with tracy enabled.
       # This ensure it compiles and doesn't go stale.
@@ -77,18 +85,25 @@ jobs:
         include:
           - os: macos-15-intel
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: ''
           - os: macos-15
             cpu_flag: ''
+            target_flag: ''
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: -Dtarget=x86_64-linux-musl
           - os: ubuntu-24.04-arm
             cpu_flag: ''
+            target_flag: -Dtarget=aarch64-linux-musl
           - os: windows-2022
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: ''
           - os: windows-2025
             cpu_flag: -Dcpu=x86_64_v3
+            target_flag: ''
           - os: windows-11-arm
             cpu_flag: ''
+            target_flag: ''
 
     steps:
       - name: Checkout
@@ -111,14 +126,24 @@ jobs:
       - name: build roc + repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }}"
-          error_string_contains: "EndOfStream"
+          command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+          error_string_contains: "EndOfStream|Timeout"
           retry_count: 3
+
+      - name: Check Builtin.roc formatting (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./zig-out/bin/roc fmt --check src/build/roc/Builtin.roc
+
+      - name: Check Builtin.roc formatting (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig-out\bin\roc.exe fmt --check src/build/roc/Builtin.roc
 
       - name: Run Test Platforms (Unix)
         if: runner.os != 'Windows'
         run: |
-          zig build test-cli
+          zig build test-cli ${{ matrix.target_flag }}
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -134,7 +159,7 @@ jobs:
       - name: Build Test Platforms (cross-compile)
         if: runner.os != 'Windows'
         run: |
-          ./ci/test_int_platform.sh
+          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
@@ -147,22 +172,22 @@ jobs:
           zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
 
       - name: zig snapshot tests
-        run: zig build snapshot -- --debug
+        run: zig build snapshot ${{ matrix.target_flag }} -- --debug
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Dfuzz -Dsystem-afl=false"
-          error_string_contains: "double roundtrip bundle"
+          command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile"
           retry_count: 3
 
       # 2) in release mode
       - name: Build and execute tests, build repro executables. All in release mode.
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }}"
-          error_string_contains: "double roundtrip bundle"
+          command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile"
           retry_count: 3
 
       - name: Check for snapshot changes
@@ -183,16 +208,22 @@ jobs:
             exit 1;
           }
 
-      - name: check snapshots with valgrind (ubuntu)
+      - name: test with valgrind (ubuntu)
         # Sadly, with zig 0.14.1, this had to be disabled on arm.
         # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
         # So valgrind only works happily on x86_64 linux.
         # We can re-evaluate as new version of zig/valgrind come out.
         if: ${{ matrix.os == 'ubuntu-22.04' }}
         run: |
-          sudo apt install -y valgrind
+          # Install libc6-dbg which is required for Valgrind's function redirections
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
+          sudo snap install valgrind --classic
           valgrind --version
-          valgrind --leak-check=full --error-exitcode=1 --errors-for-leak-kinds=definite,possible ./zig-out/bin/snapshot --debug
+          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
+          # valgrind all app files in test/fx except those that read from stdin
+          # find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -226,7 +257,7 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          nix develop ./src/ -c zig build && zig build snapshot && zig build test
+          nix develop ./src/ -c zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}
 
   zig-cross-compile:
     needs: check-once
@@ -253,8 +284,10 @@ jobs:
           use-cache: true
 
       - name: cross compile with llvm
-        run: |
-          ./ci/retry_flaky.sh zig build -Dtarget=${{ matrix.target }}
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build -Dtarget=${{ matrix.target }}
+          error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout"
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:

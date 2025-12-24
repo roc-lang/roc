@@ -9,6 +9,7 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__singleline.md:1:5:1:8
+NOT IMPLEMENTED - binop_omnibus__singleline.md:1:1:1:15
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -19,6 +20,18 @@ Is there an `import` or `exposing` missing up-top?
 Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
 ```
     ^^^
+
+
+**NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+**binop_omnibus__singleline.md:1:1:1:15:**
+```roc
+Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+^^^^^^^^^^^^^^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 # TOKENS
@@ -64,11 +77,7 @@ NO CHANGE
 ~~~clojure
 (e-binop (op "or")
 	(e-binop (op "gt")
-		(e-binop (op "null_coalesce")
-			(e-tag (name "Err")
-				(args
-					(e-runtime-error (tag "ident_not_in_scope"))))
-			(e-num (value "12")))
+		(e-runtime-error (tag "not_implemented"))
 		(e-binop (op "mul")
 			(e-num (value "5"))
 			(e-num (value "5"))))

@@ -34,7 +34,7 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try original.common.line_starts.append(gpa, 20);
 
     // Initialize CIR fields to ensure imports are available
-    try original.initCIRFields(gpa, "TestModule");
+    try original.initCIRFields("TestModule");
 
     // Add some imports to test serialization/deserialization
     const import1 = try original.imports.getOrPut(gpa, &original.common.strings, "json.Json");
@@ -43,6 +43,8 @@ test "ModuleEnv.Serialized roundtrip" {
 
     _ = import2; // Mark as used
 
+    // First add to exposed items, then set node index
+    try original.addExposedById(hello_idx);
     try original.setExposedNodeIndexById(hello_idx, 42);
     original.ensureExposedSorted(gpa);
     original.module_name = "TestModule";
@@ -90,10 +92,12 @@ test "ModuleEnv.Serialized roundtrip" {
         .gpa = gpa,
         .common = common,
         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
-        .module_kind = deserialized_ptr.module_kind,
+        .module_kind = deserialized_ptr.module_kind.decode(),
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,
+        .requires_types = deserialized_ptr.requires_types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .builtin_statements = deserialized_ptr.builtin_statements,
         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
         .imports = (try deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc)).*,
@@ -102,21 +106,29 @@ test "ModuleEnv.Serialized roundtrip" {
         .diagnostics = deserialized_ptr.diagnostics,
         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
         .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
+        .idents = ModuleEnv.CommonIdents.find(&common),
+        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
+        .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
+        .method_idents = deserialized_ptr.method_idents.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
-
-    // Verify the data was preserved
-    // try testing.expectEqual(@as(usize, 2), env.ident_ids_for_slicing.len());
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 6 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus
-    try testing.expectEqual(@as(u32, 9), original.common.idents.interner.entry_count);
+    // ModuleEnv.init() also interns 16 well-known identifiers: Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq
+    // Plus 19 type identifiers: Str, Builtin.Try, Builtin.Num.Numeral, Builtin.Str, List, Box, Builtin.Num.{U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec}
+    // Plus 3 field/tag identifiers: before_dot, after_dot, ProvidedByCompiler
+    // Plus 7 more identifiers: tag, payload, is_negative, digits_before_pt, digits_after_pt, box, unbox
+    // Plus 2 Try tag identifiers: Ok, Err
+    // Plus 1 method identifier: from_numeral
+    // Plus 2 Bool tag identifiers: True, False
+    // Plus 6 from_utf8 identifiers: byte_index, string, is_ok, problem_code, problem, index
+    // Plus 2 synthetic identifiers for ? operator desugaring: #ok, #err
+    // Plus 2 numeric method identifiers: abs, abs_diff
+    // Plus 1 inspect method identifier: to_inspect
+    // Plus 14 unqualified builtin type names: Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+    // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
+    try testing.expectEqual(@as(u32, 79), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -125,8 +137,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 9 identifiers as original: hello, world, TestModule + 6 well-known identifiers from ModuleEnv.init()
-    try testing.expectEqual(@as(u32, 9), env.common.idents.interner.entry_count);
+    // Should have same 79 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 14 unqualified builtin type names from ModuleEnv.init() + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox)
+    // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
+    try testing.expectEqual(@as(u32, 79), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -181,7 +194,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     defer original.deinit();
 
 //     // Initialize CIR fields
-//     try original.initCIRFields(gpa, "test.Types");
+//     try original.initCIRFields("test.Types");
 
 //     // Add some type variables
 //     const var1 = try original.types.freshFromContent(.err);
@@ -346,7 +359,7 @@ test "ModuleEnv.Serialized roundtrip" {
 //     defer original.deinit();
 
 //     // Initialize CIR fields
-//     try original.initCIRFields(gpa, "test.Hello");
+//     try original.initCIRFields("test.Hello");
 
 //     // Create arena allocator for serialization
 //     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -404,13 +417,27 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
     // First add a string literal
     const str_literal_idx = try env.insertString("hello");
 
+    // Create a nominal Str type
+    const str_ident = try env.insertIdent(base.Ident.for_text("Str"));
+    const builtin_ident = try env.insertIdent(base.Ident.for_text("Builtin"));
+
+    // Create backing type for Str (empty_record as placeholder for the tag union)
+    const str_backing_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const str_vars = [_]types.Var{str_backing_var};
+    const str_vars_range = try env.types.appendVars(&str_vars);
+
+    const str_nominal = types.NominalType{
+        .ident = types.TypeIdent{ .ident_idx = str_ident },
+        .vars = .{ .nonempty = str_vars_range },
+        .origin_module = builtin_ident,
+        .is_opaque = false,
+    };
     // Add a string segment expression
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
 
     // Now create a string expression that references the segment
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
-    _ = try env.types.freshFromContent(.{ .structure = .str });
+    _ = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     // Create an S-expression tree
     var tree = base.SExprTree.init(gpa);
@@ -426,9 +453,6 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     // Verify the output contains the type information
     const result_str = result.items;
-
-    // Uncomment to debug:
-    // std.debug.print("\nType extraction result:\n{s}\n", .{result_str});
 
     try testing.expect(std.mem.indexOf(u8, result_str, "(expr") != null);
     try testing.expect(std.mem.indexOf(u8, result_str, "(type") != null);

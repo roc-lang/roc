@@ -1,17 +1,13 @@
 # META
 ~~~ini
-description=Multiline formatting platform
+description=Multiline formatting platform with for-clause syntax
 type=file
 ~~~
 # SOURCE
 ~~~roc
 platform "pf"
 	requires {
-		R1,
-		R2,
-	} {
-		r1 : R1 -> R2,
-		r2 : R1 -> R2,
+		[R1 : r1, R2 : r2] for main : R1 -> R2
 	}
 	exposes [
 		E1,
@@ -21,20 +17,41 @@ platform "pf"
 		pa1: "pa1",
 		pa2: "pa2",
 	}
-	# imports [I1.{ I11, I12, }, I2.{ I21, I22, },]
 	provides {
 		pr1: "not implemented",
 		pr2: "not implemented",
 	}
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform.md:10:3:10:5
-EXPOSED BUT NOT DEFINED - platform.md:11:3:11:5
+EXPOSED BUT NOT DEFINED - platform.md:14:3:14:25
+EXPOSED BUT NOT DEFINED - platform.md:15:3:15:25
+EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
+EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
 # PROBLEMS
+**EXPOSED BUT NOT DEFINED**
+The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
+
+**platform.md:14:3:14:25:**
+```roc
+		pr1: "not implemented",
+```
+		^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `pr1` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `pr2` is exposed, but it is not defined anywhere in this module.
+
+**platform.md:15:3:15:25:**
+```roc
+		pr2: "not implemented",
+```
+		^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `pr2` in this module, or by removing it from the list of exposed values.
+
 **EXPOSED BUT NOT DEFINED**
 The module header says that `E1` is exposed, but it is not defined anywhere in this module.
 
-**platform.md:10:3:10:5:**
+**platform.md:6:3:6:5:**
 ```roc
 		E1,
 ```
@@ -44,7 +61,7 @@ You can fix this by either defining `E1` in this module, or by removing it from 
 **EXPOSED BUT NOT DEFINED**
 The module header says that `E2` is exposed, but it is not defined anywhere in this module.
 
-**platform.md:11:3:11:5:**
+**platform.md:7:3:7:5:**
 ```roc
 		E2,
 ```
@@ -55,11 +72,7 @@ You can fix this by either defining `E2` in this module, or by removing it from 
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
 KwRequires,OpenCurly,
-UpperIdent,Comma,
-UpperIdent,Comma,
-CloseCurly,OpenCurly,
-LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,Comma,
-LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,Comma,
+OpenSquare,UpperIdent,OpColon,LowerIdent,Comma,UpperIdent,OpColon,LowerIdent,CloseSquare,KwFor,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 CloseCurly,
 KwExposes,OpenSquare,
 UpperIdent,Comma,
@@ -79,15 +92,12 @@ EndOfFile,
 ~~~clojure
 (file
 	(platform (name "pf")
-		(rigids
-			(exposed-upper-ident (text "R1"))
-			(exposed-upper-ident (text "R2")))
-		(ty-record
-			(anno-record-field (name "r1")
-				(ty-fn
-					(ty (name "R1"))
-					(ty (name "R2"))))
-			(anno-record-field (name "r2")
+		(requires
+			(requires-entry
+				(type-aliases
+					(alias (name "R1") (rigid "r1"))
+					(alias (name "R2") (rigid "r2")))
+				(entrypoint "main")
 				(ty-fn
 					(ty (name "R1"))
 					(ty (name "R2")))))

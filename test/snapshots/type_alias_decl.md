@@ -11,7 +11,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 UserId : U64
 
 # Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
+Try(ok, err) : [Ok(ok), Err(err)]
 
 # Record type alias
 Person : { name : Str, age : U64 }
@@ -20,7 +20,7 @@ Person : { name : Str, age : U64 }
 MapFn(a, b) : a -> b
 
 # Complex nested type alias
-ApiResponse(data) : Result(data, Str)
+ApiResponse(data) : Try(data, Str)
 
 # Type declaration with tag union
 Color : [Red, Green, Blue, Custom(U8, U8, U8)]
@@ -46,21 +46,21 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-TYPE REDECLARED - type_alias_decl.md:7:1:7:37
+TYPE REDECLARED - type_alias_decl.md:7:1:7:34
 UNUSED VARIABLE - type_alias_decl.md:33:5:33:11
 UNUSED VARIABLE - type_alias_decl.md:36:5:36:10
 # PROBLEMS
 **TYPE REDECLARED**
-The type _Result_ is being redeclared.
+The type _Try_ is being redeclared.
 
 The redeclaration is here:
-**type_alias_decl.md:7:1:7:37:**
+**type_alias_decl.md:7:1:7:34:**
 ```roc
-Result(ok, err) : [Ok(ok), Err(err)]
+Try(ok, err) : [Ok(ok), Err(err)]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But _Result_ was already declared here:
+But _Try_ was already declared here:
 **type_alias_decl.md:1:1:1:1:**
 ```roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
@@ -136,7 +136,7 @@ EndOfFile,
 				(args))
 			(ty (name "U64")))
 		(s-type-decl
-			(header (name "Result")
+			(header (name "Try")
 				(args
 					(ty-var (raw "ok"))
 					(ty-var (raw "err"))))
@@ -169,7 +169,7 @@ EndOfFile,
 				(args
 					(ty-var (raw "data"))))
 			(ty-apply
-				(ty (name "Result"))
+				(ty (name "Try"))
 				(ty-var (raw "data"))
 				(ty (name "Str"))))
 		(s-type-decl
@@ -237,7 +237,7 @@ app [main!] { pf: platform "../basic-cli/main.roc" }
 UserId : U64
 
 # Generic type alias
-Result(ok, err) : [Ok(ok), Err(err)]
+Try(ok, err) : [Ok(ok), Err(err)]
 
 # Record type alias
 Person : { name : Str, age : U64 }
@@ -246,7 +246,7 @@ Person : { name : Str, age : U64 }
 MapFn(a, b) : a -> b
 
 # Complex nested type alias
-ApiResponse(data) : Result(data, Str)
+ApiResponse(data) : Try(data, Str)
 
 # Type declaration with tag union
 Color : [Red, Green, Blue, Custom(U8, U8, U8)]
@@ -301,7 +301,7 @@ main! = |_| {
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin)))
 	(s-alias-decl
-		(ty-header (name "Result")
+		(ty-header (name "Try")
 			(ty-args
 				(ty-rigid-var (name "ok"))
 				(ty-rigid-var (name "err"))))
@@ -329,7 +329,7 @@ main! = |_| {
 		(ty-header (name "ApiResponse")
 			(ty-args
 				(ty-rigid-var (name "data"))))
-		(ty-apply (name "Result") (builtin)
+		(ty-apply (name "Try") (builtin)
 			(ty-rigid-var-lookup (ty-rigid-var (name "data")))
 			(ty-lookup (name "Str") (builtin))))
 	(s-alias-decl
@@ -361,12 +361,12 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> UserId")))
+		(patt (type "_arg -> U64")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId")))
-		(alias (type "Result(ok, err)")
-			(ty-header (name "Result")
+		(alias (type "Try(ok, err)")
+			(ty-header (name "Try")
 				(ty-args
 					(ty-rigid-var (name "ok"))
 					(ty-rigid-var (name "err")))))
@@ -388,5 +388,5 @@ main! = |_| {
 				(ty-args
 					(ty-rigid-var (name "item"))))))
 	(expressions
-		(expr (type "_arg -> UserId"))))
+		(expr (type "_arg -> U64"))))
 ~~~

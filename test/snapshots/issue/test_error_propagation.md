@@ -36,10 +36,12 @@ value = "test"
         ^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But the type annotation says it should have the type:
-    _GoodAlias_
+
+    GoodAlias
 
 # TOKENS
 ~~~zig

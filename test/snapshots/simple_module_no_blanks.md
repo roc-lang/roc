@@ -10,20 +10,8 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-MODULE NOT FOUND - simple_module_no_blanks.md:1:1:1:17
 UNDEFINED VARIABLE - simple_module_no_blanks.md:2:10:2:22
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**simple_module_no_blanks.md:1:1:1:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?

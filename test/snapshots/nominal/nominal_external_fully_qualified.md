@@ -5,29 +5,29 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import MyResultModule
+import MyTryModule
 
-handleResult : MyResultModule.MyResultType(Str, I32) -> Str
-handleResult = |result| {
+handleTry : MyTryModule.MyTryType(Str, I32) -> Str
+handleTry = |result| {
     match result {
-        MyResultModule.MyResultType.Ok(value) => value
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+        MyTryModule.MyTryType.Ok(value) => value
+        MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
     }
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_external_fully_qualified.md:1:1:1:22
-UNUSED VARIABLE - nominal_external_fully_qualified.md:7:41:7:45
+MODULE NOT FOUND - nominal_external_fully_qualified.md:1:1:1:19
+UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 # PROBLEMS
 **MODULE NOT FOUND**
-The module `MyResultModule` was not found in this Roc project.
+The module `MyTryModule` was not found in this Roc project.
 
 You're attempting to use this module here:
-**nominal_external_fully_qualified.md:1:1:1:22:**
+**nominal_external_fully_qualified.md:1:1:1:19:**
 ```roc
-import MyResultModule
+import MyTryModule
 ```
-^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -35,11 +35,11 @@ Variable `code` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_code` to suppress this warning.
 The unused variable is declared here:
-**nominal_external_fully_qualified.md:7:41:7:45:**
+**nominal_external_fully_qualified.md:7:35:7:39:**
 ```roc
-        MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+        MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
 ```
-                                        ^^^^
+                                  ^^^^
 
 
 # TOKENS
@@ -59,16 +59,16 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-import (raw "MyResultModule"))
-		(s-type-anno (name "handleResult")
+		(s-import (raw "MyTryModule"))
+		(s-type-anno (name "handleTry")
 			(ty-fn
 				(ty-apply
-					(ty (name "MyResultModule.MyResultType"))
+					(ty (name "MyTryModule.MyTryType"))
 					(ty (name "Str"))
 					(ty (name "I32")))
 				(ty (name "Str"))))
 		(s-decl
-			(p-ident (raw "handleResult"))
+			(p-ident (raw "handleTry"))
 			(e-lambda
 				(args
 					(p-ident (raw "result")))
@@ -89,13 +89,13 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import MyResultModule
+import MyTryModule
 
-handleResult : MyResultModule.MyResultType(Str, I32) -> Str
-handleResult = |result| {
+handleTry : MyTryModule.MyTryType(Str, I32) -> Str
+handleTry = |result| {
 	match result {
-		MyResultModule.MyResultType.Ok(value) => value
-		MyResultModule.MyResultType.Err(code) => "Error: $(code.toStr())"
+		MyTryModule.MyTryType.Ok(value) => value
+		MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
 	}
 }
 ~~~
@@ -103,43 +103,40 @@ handleResult = |result| {
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "handleResult"))
-		(e-closure
-			(captures
-				(capture (ident "value")))
-			(e-lambda
-				(args
-					(p-assign (ident "result")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (external-module "MyResultModule")
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "value")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (external-module "MyResultModule")
-												(p-applied-tag))))
-									(value
-										(e-string
-											(e-literal (string "Error: $(code.toStr())")))))))))))
+		(p-assign (ident "handleTry"))
+		(e-lambda
+			(args
+				(p-assign (ident "result")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal-external (external-module "MyTryModule")
+											(p-applied-tag))))
+								(value
+									(e-lookup-local
+										(p-assign (ident "value")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal-external (external-module "MyTryModule")
+											(p-applied-tag))))
+								(value
+									(e-string
+										(e-literal (string "Error: $(code.toStr())"))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "MyResultType") (external-module "MyResultModule")
+				(ty-apply (name "MyTryType") (external-module "MyTryModule")
 					(ty-lookup (name "Str") (builtin))
 					(ty-lookup (name "I32") (builtin)))
 				(ty-lookup (name "Str") (builtin)))))
-	(s-import (module "MyResultModule")
+	(s-import (module "MyTryModule")
 		(exposes)))
 ~~~
 # TYPES

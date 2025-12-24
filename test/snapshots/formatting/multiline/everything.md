@@ -134,6 +134,8 @@ UNUSED VARIABLE - everything.md:73:2:73:4
 UNUSED VARIABLE - everything.md:77:2:77:4
 UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:85:2:85:4
+UNSUPPORTED WHERE CLAUSE - everything.md:60:3:60:6
+UNSUPPORTED WHERE CLAUSE - everything.md:61:3:61:6
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -308,6 +310,26 @@ The unused variable is declared here:
 ```
 	^^
 
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _A_ is not supported:
+**everything.md:60:3:60:6:**
+```roc
+		e.A,
+```
+		^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
+
+**UNSUPPORTED WHERE CLAUSE**
+The where clause syntax _B_ is not supported:
+**everything.md:61:3:61:6:**
+```roc
+		e.B,
+```
+		^^^
+
+This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
 
 # TOKENS
 ~~~zig
@@ -566,33 +588,31 @@ import I2 exposing [
 
 # Where constraint
 A(a) : a
-	where
-		[
-
+	where [
+		
 			a.a1 : (
 			a,
 			a,
-		) -> Str
-,
+		) -> Str,
 		
 			a.a2 : (
 			a,
 			a,
-		) -> Str]
+		) -> Str,
+	]
 B(b) : b
-	where
-		[
-
+	where [
+		
 			b.b1 : (
 			b,
 			b,
-		) -> Str
-,
+		) -> Str,
 		
 			b.b2 : (
 			b,
 			b,
-		) -> Str]
+		) -> Str,
+	]
 
 C(
 	a,
@@ -618,11 +638,10 @@ F : [
 ]
 
 g : e -> e
-	where
-		[
-e.A
-,
-		e.B]
+	where [
+		e.A,
+		e.B,
+	]
 
 h = |x, y| {
 	h1 = {
@@ -693,11 +712,7 @@ h = |x, y| {
 		(p-assign (ident "h"))
 		(e-closure
 			(captures
-				(capture (ident "h"))
-				(capture (ident "a"))
-				(capture (ident "a"))
-				(capture (ident "a"))
-				(capture (ident "a")))
+				(capture (ident "h")))
 			(e-lambda
 				(args
 					(p-assign (ident "x"))
@@ -841,7 +856,7 @@ h = |x, y| {
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -867,5 +882,5 @@ h = |x, y| {
 			(ty-header (name "F"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c"))))
 ~~~

@@ -234,5 +234,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ callback: Num(_size) -> Num(_size2), metadata: [Ok({ permissions: List([Read, Write, Admin]_others), tags: List(Str) })]_others2, name: Str, nested: { items: List([Some(Str)][None]_others3), result: [Success({ data: List(Num(_size3)), timestamp: Str })]_others4 }, preferences: { notifications: [Email(Str)]_others5, theme: [Dark]_others6 }, scores: List(Num(_size4)), status: [Active({ since: Str })]_others7 }"))
+(expr (type "{ callback: a -> a, metadata: [Ok({ permissions: List([Read, Write, Admin, .._others]), tags: List(Str) }), .._others2], name: Str, nested: { items: List([Some(Str), ..[None, .._others3]]), result: [Success({ data: List(b), timestamp: Str }), .._others4] }, preferences: { notifications: [Email(Str), .._others5], theme: [Dark, .._others6] }, scores: List(c), status: [Active({ since: Str }), .._others7] } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]"))
 ~~~

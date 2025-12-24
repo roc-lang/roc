@@ -30,9 +30,7 @@ test "fractional literal - basic decimal" {
             try testing.expectEqual(dec.value.numerator, 314);
             try testing.expectEqual(dec.value.denominator_power_of_ten, 2);
         },
-        .e_dec => |dec| {
-            _ = dec;
-        },
+        .e_dec => {},
         else => {
             std.debug.print("Unexpected expr type: {}\n", .{expr});
             try testing.expect(false); // Should be dec_small or frac_dec
@@ -54,9 +52,8 @@ test "fractional literal - scientific notation small" {
             // This is expected behavior when the value is too small for i16 representation
             try testing.expectEqual(dec.value.numerator, 0);
         },
-        .e_dec => |frac| {
+        .e_dec => {
             // RocDec stores the value in a special format
-            _ = frac;
         },
         .e_frac_f64 => |frac| {
             try testing.expectApproxEqAbs(frac.value, 1.23e-10, 1e-20);

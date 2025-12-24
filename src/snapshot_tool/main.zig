@@ -21,6 +21,7 @@ const repl = @import("repl");
 const eval_mod = @import("eval");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -648,87 +649,6 @@ fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { s
     return .{ .start = start_idx, .end = next_section_idx };
 }
 
-/// Wrapper for a loaded compiled builtin module that tracks the buffer
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
-
-        // Free the buffer (the env points into this buffer for most data)
-        self.gpa.free(self.buffer);
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
-    // Copy the embedded data to properly aligned memory
-    // CompactWriter requires specific alignment for serialization
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    // Cast to the serialized structure
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*;
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .module_kind = serialized_ptr.module_kind,
-        .all_defs = serialized_ptr.all_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .exports = serialized_ptr.exports,
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
-        .module_name = module_name,
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .evaluation_order = null,
-        .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
-    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
     .backing_allocator = std.heap.c_allocator,
 };
@@ -736,10 +656,17 @@ var debug_allocator: std.heap.DebugAllocator(.{}) = .{
 /// cli entrypoint for snapshot tool
 pub fn main() !void {
     // Always use the debug allocator with the snapshot tool to help find allocation bugs.
-    const gpa = debug_allocator.allocator();
+    var gpa_tracy: tracy.TracyAllocator(null) = undefined;
+    var gpa = debug_allocator.allocator();
     defer {
         const mem_state = debug_allocator.deinit();
         std.debug.assert(mem_state == .ok);
+    }
+
+    // Wrap with Tracy for allocation profiling when enabled
+    if (tracy.enable_allocation) {
+        gpa_tracy = tracy.tracyAllocator(gpa);
+        gpa = gpa_tracy.allocator();
     }
 
     const args = try std.process.argsAlloc(gpa);
@@ -868,12 +795,12 @@ pub fn main() !void {
         }
     }
 
-    // Load compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_loaded.deinit();
+    // Load builtin modules using the same code path as roc check
+    const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
+    defer gpa.destroy(builtin_modules_ptr);
 
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
+    defer builtin_modules_ptr.deinit();
 
     const config = Config{
         .maybe_fuzz_corpus_path = maybe_fuzz_corpus_path,
@@ -882,8 +809,8 @@ pub fn main() !void {
         .output_section_command = output_section_command,
         .trace_eval = trace_eval,
         .linecol_mode = linecol_mode,
-        .builtin_module = builtin_loaded.env,
-        .builtin_indices = builtin_indices,
+        .builtin_module = builtin_modules_ptr.builtin_module.env,
+        .builtin_indices = builtin_modules_ptr.builtin_indices,
     };
 
     if (config.maybe_fuzz_corpus_path != null) {
@@ -921,12 +848,12 @@ pub fn main() !void {
 }
 
 fn checkSnapshotExpectations(gpa: Allocator) !bool {
-    // Load compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_loaded = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_loaded.deinit();
+    // Load builtin modules using the same code path as roc check
+    const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
+    defer gpa.destroy(builtin_modules_ptr);
 
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
+    defer builtin_modules_ptr.deinit();
 
     const config = Config{
         .maybe_fuzz_corpus_path = null,
@@ -934,8 +861,8 @@ fn checkSnapshotExpectations(gpa: Allocator) !bool {
         .expected_section_command = .check,
         .output_section_command = .check,
         .disable_updates = true,
-        .builtin_module = builtin_loaded.env,
-        .builtin_indices = builtin_indices,
+        .builtin_module = builtin_modules_ptr.builtin_module.env,
+        .builtin_indices = builtin_modules_ptr.builtin_indices,
     };
     const snapshots_dir = "test/snapshots";
     var work_list = WorkList.init(gpa);
@@ -1210,93 +1137,87 @@ fn processSnapshotContent(
             basename;
     };
     var can_ir = &module_env; // ModuleEnv contains the canonical IR
-    try can_ir.initCIRFields(allocator, module_name);
+    try can_ir.initCIRFields(module_name);
 
-    const common_idents: Check.CommonIdents = .{
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
-        .list = try can_ir.insertIdent(base.Ident.for_text("List")),
-        .box = try can_ir.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
         .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
     };
-
-    // Auto-inject Bool, Result, Str, Dict, and Set as available imports (if they're loaded)
-    // This makes them available without needing explicit `import` statements in tests
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-
-    // Register each builtin type individually with its statement index
-    // They all point to the same Builtin module env
-    // Note: Str is NOT added because it's handled as a primitive builtin type
-    // in TypeAnno.Builtin.fromBytes() and should never go through module_envs
-    if (config.builtin_module) |builtin_env| {
-        const bool_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Bool"));
-        const result_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Result"));
-        const dict_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Dict"));
-        const set_ident = try can_ir.common.idents.insert(allocator, base.Ident.for_text("Set"));
-
-        try module_envs.put(bool_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.bool_type,
-        });
-        try module_envs.put(result_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.try_type,
-        });
-        try module_envs.put(dict_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.dict_type,
-        });
-        try module_envs.put(set_ident, .{
-            .env = builtin_env,
-            .statement_idx = config.builtin_indices.set_type,
-        });
-    }
-
-    var czer = try Can.init(can_ir, &parse_ast, &module_envs);
-    defer czer.deinit();
 
     var maybe_expr_idx: ?Can.CanonicalizedExpr = null;
 
     switch (content.meta.node_type) {
-        .file => {
+        .file, .package, .platform, .app => {
+            // All file types that use canonicalizeFile() will use the combined function below
+        },
+        .snippet => {
+            // Snippet tests can have arbitrary content (type declarations, expressions, etc.)
+            // that may not work with canonicalizeFile(), so handle them separately
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+            defer module_envs.deinit();
+
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+            }
+
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            defer czer.deinit();
             try czer.canonicalizeFile();
-            try czer.validateForChecking();
         },
         .header => {
             // TODO: implement canonicalize_header when available
         },
-        .expr => {
-            const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-            maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
-        },
-        .statement => {
-            const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
-            if (can_stmt_result.canonicalized_stmt) |can_stmt| {
-                // Manually track scratch statements because we aren't using the file entrypoint
-                const scratch_statements_start = can_ir.store.scratch.?.statements.top();
-                try can_ir.store.addScratchStatement(can_stmt.idx);
-                can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+        .expr, .statement => {
+            // Expr and statement tests use different canonicalization methods
+            // Auto-inject builtin types (Bool, Try, List, Dict, Set, Str, and numeric types) as available imports
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+            defer module_envs.deinit();
+
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+            }
+
+            var czer = try Can.init(can_ir, &parse_ast, &module_envs);
+            defer czer.deinit();
+
+            switch (content.meta.node_type) {
+                .expr => {
+                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
+                },
+                .statement => {
+                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const can_stmt_result = try czer.canonicalizeBlockStatement(czer.parse_ir.store.getStatement(ast_stmt_idx), &.{}, 0);
+                    if (can_stmt_result.canonicalized_stmt) |can_stmt| {
+                        // Manually track scratch statements because we aren't using the file entrypoint
+                        const scratch_statements_start = can_ir.store.scratch.?.statements.top();
+                        try can_ir.store.addScratchStatement(can_stmt.idx);
+                        can_ir.all_statements = try can_ir.store.statementSpanFrom(scratch_statements_start);
+                    }
+                },
+                else => unreachable,
             }
         },
-        .package => try czer.canonicalizeFile(),
-        .platform => try czer.canonicalizeFile(),
-        .app => try czer.canonicalizeFile(),
         .repl => unreachable, // Handled above
-        .snippet => {
-            // Snippet - just canonicalize without validation
-            try czer.canonicalizeFile();
-        },
     }
 
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
     // Compute dependency-based evaluation order if not already set
-    // (canonicalizeFile sets it, but other paths like .statement don't)
-    if (can_ir.evaluation_order == null) {
+    // Skip for .file/.package/.platform/.app tests because canonicalizeAndTypeCheckModule
+    // will call canonicalizeFile which sets it. Only do this for .expr/.statement which
+    // don't call canonicalizeFile.
+    const needs_evaluation_order = switch (content.meta.node_type) {
+        .expr, .statement => true,
+        .file, .package, .platform, .app, .snippet, .repl, .header => false,
+    };
+
+    if (needs_evaluation_order and can_ir.evaluation_order == null) {
         const DependencyGraph = @import("can").DependencyGraph;
         var graph = try DependencyGraph.buildDependencyGraph(
             can_ir,
@@ -1306,12 +1227,14 @@ fn processSnapshotContent(
         defer graph.deinit();
 
         const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
-        const eval_order_ptr = try allocator.create(DependencyGraph.EvaluationOrder);
+        // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
+        // will free this with self.gpa. They must match to avoid memory leaks.
+        const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
         eval_order_ptr.* = eval_order;
         can_ir.evaluation_order = eval_order_ptr;
     }
 
-    // Types - include Set, Dict, Bool, Result, and Str modules in the order they appear in imports
+    // Types - include Set, Dict, Bool, Try, and Str modules in the order they appear in imports
     // The order MUST match the import order in can_ir.imports because module_idx in external
     // type references is based on the import index
     var builtin_modules = std.array_list.Managed(*const ModuleEnv).init(allocator);
@@ -1331,22 +1254,89 @@ fn processSnapshotContent(
         }
     }
 
-    var solver = try Check.init(
-        allocator,
-        &can_ir.types,
-        can_ir,
-        builtin_modules.items,
-        &module_envs,
-        &can_ir.store.regions,
-        common_idents,
-    );
-    defer solver.deinit();
+    // Use the shared type checking function to ensure identical behavior with roc check
+    // We need to keep module_envs alive until after we're done with the checker (for type printing)
+    var module_envs_for_repl_expr: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
+    defer if (module_envs_for_repl_expr) |*envs| envs.deinit();
 
-    if (maybe_expr_idx) |expr_idx| {
-        _ = try solver.checkExprRepl(expr_idx.idx);
-    } else {
-        try solver.checkFile();
-    }
+    var module_envs_for_snippet: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
+    defer if (module_envs_for_snippet) |*envs| envs.deinit();
+
+    var module_envs_for_file: ?std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null;
+    defer if (module_envs_for_file) |*envs| envs.deinit();
+
+    var solver = if (maybe_expr_idx) |expr_idx| blk: {
+        // For REPL/expr tests, create module_envs for type checking
+        var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+
+        if (config.builtin_module) |builtin_env| {
+            try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+        }
+
+        var checker = try Check.init(
+            allocator,
+            &can_ir.types,
+            can_ir,
+            builtin_modules.items,
+            &module_envs,
+            &can_ir.store.regions,
+            builtin_ctx,
+        );
+        _ = try checker.checkExprRepl(expr_idx.idx);
+        module_envs_for_repl_expr = module_envs; // Keep alive
+        break :blk checker;
+    } else switch (content.meta.node_type) {
+        .file, .package, .platform, .app => blk: {
+            // For file types, use the combined canonicalize+typecheck function.
+            // This ensures the SAME module_envs map is used for both phases (just like REPL tests)
+            // For file tests, canonicalization happens INSIDE canonicalizeAndTypeCheckModule,
+            // so can_ir.imports is still empty at this point. We can't use builtin_modules
+            // (which is built from can_ir.imports). Instead, just pass builtin_env directly.
+            const builtin_env = config.builtin_module orelse unreachable;
+            // Cast from *const ModuleEnv to *ModuleEnv (function signature requires non-const pointer)
+            const builtin_env_nonconst: *ModuleEnv = @constCast(builtin_env);
+            const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env_nonconst};
+
+            // Initialize module_envs_for_file and pass it to the function
+            // This way it stays alive until the defer at line 1249
+            module_envs_for_file = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+
+            const checker = try compile.PackageEnv.canonicalizeAndTypeCheckModule(
+                allocator,
+                can_ir,
+                &parse_ast,
+                builtin_env,
+                config.builtin_indices,
+                imported_envs_for_file,
+                &module_envs_for_file.?,
+            );
+            break :blk checker;
+        },
+        .snippet, .statement, .header, .expr => blk: {
+            // For snippet/statement/header/expr tests, type check the already-canonicalized IR
+            // Note: .expr can reach here if canonicalizeExpr returned null (error during canonicalization)
+            var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+
+            if (config.builtin_module) |builtin_env| {
+                try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+            }
+
+            var checker = try Check.init(
+                allocator,
+                &can_ir.types,
+                can_ir,
+                builtin_modules.items,
+                &module_envs,
+                &can_ir.store.regions,
+                builtin_ctx,
+            );
+            try checker.checkFile();
+            module_envs_for_snippet = module_envs; // Keep alive
+            break :blk checker;
+        },
+        .repl => unreachable, // Should never reach here - repl is handled earlier
+    };
+    defer solver.deinit();
 
     // Assert that we have regions for every type variable
     solver.debugAssertArraysInSync();
@@ -1491,7 +1481,7 @@ const Config = struct {
     disable_updates: bool = false, // Disable updates for check mode
     trace_eval: bool = false,
     linecol_mode: LineColMode = .skip_linecol, // Include line/column info in output
-    // Compiled Builtin module (contains nested Bool, Result, Str, Dict, Set)
+    // Compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
 };
@@ -2936,8 +2926,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     return success;
 }
 
-fn generateReplProblemsSection(output: *DualOutput, content: *const Content) !void {
-    _ = content;
+fn generateReplProblemsSection(output: *DualOutput, _: *const Content) !void {
     try output.begin_section("PROBLEMS");
     try output.md_writer.writer.writeAll("NIL\n");
 
@@ -2963,7 +2952,7 @@ test "snapshot validation" {
 test "no Builtin module leaks in snapshots" {
     // IMPORTANT: The "Builtin" module is an implementation detail that should NEVER
     // appear in user-facing error messages. We consolidate all builtin types (Bool,
-    // Result, Dict, Set, Str) into a single Builtin module so they can have cyclic
+    // Try, Dict, Set, Str) into a single Builtin module so they can have cyclic
     // dependencies with each other. However, users should only see the type names
     // (e.g., "Dict", "Bool") not qualified names like "Builtin.Dict" or references
     // to the Builtin module in error messages.
@@ -3039,37 +3028,21 @@ fn searchDirectoryForBuiltin(
     }
 }
 
-test "TODO: cross-module function calls - fibonacci" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - fibonacci" {}
 
-test "TODO: cross-module function calls - nested_ifs" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - nested_ifs" {}
 
-test "TODO: cross-module function calls - repl_boolean_expressions" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - repl_boolean_expressions" {}
 
-test "TODO: cross-module function calls - string_edge_cases" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_edge_cases" {}
 
-test "TODO: cross-module function calls - string_equality_basic" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_equality_basic" {}
 
-test "TODO: cross-module function calls - string_interpolation_comparison" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_interpolation_comparison" {}
 
-test "TODO: cross-module function calls - string_multiline_comparison" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_multiline_comparison" {}
 
-test "TODO: cross-module function calls - string_ordering_unsupported" {
-    return error.SkipZigTest; // Cross-module function calls not yet implemented in interpreter
-}
+test "TODO: cross-module function calls - string_ordering_unsupported" {}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
@@ -3089,7 +3062,7 @@ pub const SnapshotOps = struct {
                 .roc_dbg = snapshotRocDbg,
                 .roc_expect_failed = snapshotRocExpectFailed,
                 .roc_crashed = snapshotRocCrashed,
-                .host_fns = undefined, // Not used in snapshots
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in snapshots
             },
         };
     }
@@ -3185,16 +3158,22 @@ fn snapshotRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) v
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn snapshotRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
+fn snapshotRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("snapshotRocDbg not implemented yet");
 }
 
 fn snapshotRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("snapshotRocExpectFailed not implemented yet");
+    const snapshot_env: *SnapshotOps = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(snapshot_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate snapshot expect failure message", .{});
+    };
+    snapshot_env.crash.recordCrash(formatted) catch |err| {
+        snapshot_env.allocator.free(formatted);
+        std.debug.panic("failed to store snapshot expect failure: {}", .{err});
+    };
 }
 
 fn snapshotRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {

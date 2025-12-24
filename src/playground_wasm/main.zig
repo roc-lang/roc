@@ -133,6 +133,7 @@ const CompilerStageData = struct {
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
     builtin_types: ?eval.BuiltinTypes = null,
+    builtin_module: ?BuiltinModule = null,
 
     // Pre-canonicalization HTML representations
     tokens_html: ?[]const u8 = null,
@@ -144,6 +145,18 @@ const CompilerStageData = struct {
     parse_reports: std.array_list.Managed(reporting.Report),
     can_reports: std.array_list.Managed(reporting.Report),
     type_reports: std.array_list.Managed(reporting.Report),
+
+    const BuiltinModule = struct {
+        env: *ModuleEnv,
+        buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        gpa: Allocator,
+
+        fn deinit(self: *@This()) void {
+            self.env.imports.map.deinit(self.gpa);
+            self.gpa.free(self.buffer);
+            self.gpa.destroy(self.env);
+        }
+    };
 
     pub fn init(alloc: Allocator, module_env: *ModuleEnv) CompilerStageData {
         return CompilerStageData{
@@ -195,6 +208,11 @@ const CompilerStageData = struct {
         // Finally, deinit the ModuleEnv and free its memory
         self.module_env.deinit();
         allocator.destroy(self.module_env);
+
+        // Deinit the builtin module if it was loaded
+        if (self.builtin_module) |*bm| {
+            bm.deinit();
+        }
     }
 };
 
@@ -212,12 +230,12 @@ const ReplSession = struct {
 var repl_session: ?ReplSession = null;
 
 /// REPL result types
-const ReplResultType = enum {
+const ReplTryType = enum {
     expression,
     definition,
     @"error",
 
-    pub fn jsonStringify(self: ReplResultType, writer: anytype) !void {
+    pub fn jsonStringify(self: ReplTryType, writer: anytype) !void {
         try writer.writeAll("\"");
         try writer.writeAll(@tagName(self));
         try writer.writeAll("\"");
@@ -245,7 +263,7 @@ const ReplErrorStage = enum {
 /// Structured REPL result
 const ReplStepResult = struct {
     output: []const u8,
-    try_type: ReplResultType,
+    try_type: ReplTryType,
     error_stage: ?ReplErrorStage = null,
     error_details: ?[]const u8 = null,
     compiler_available: bool = true,
@@ -385,7 +403,7 @@ fn createWasmRocOps(crash_ctx: *CrashContext) !*RocOps {
         .roc_dbg = wasmRocDbg,
         .roc_expect_failed = wasmRocExpectFailed,
         .roc_crashed = wasmRocCrashed,
-        .host_fns = undefined, // Not used in playground
+        .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in playground
     };
     return roc_ops;
 }
@@ -424,14 +442,22 @@ fn wasmRocRealloc(realloc_args: *builtins.host_abi.RocRealloc, _: *anyopaque) ca
     }
 }
 
-fn wasmRocDbg(dbg_args: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+fn wasmRocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
     // No-op in WASM playground
-    _ = dbg_args;
 }
 
-fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    // No-op in WASM playground
-    _ = expect_failed_args;
+fn wasmRocExpectFailed(expect_failed_args: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
+    const ctx: *CrashContext = @ptrCast(@alignCast(env));
+    const source_bytes = expect_failed_args.utf8_bytes[0..expect_failed_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate wasm expect failure message", .{});
+    };
+    ctx.recordCrash(formatted) catch |err| {
+        allocator.free(formatted);
+        std.debug.panic("failed to record wasm expect failure: {}", .{err});
+    };
 }
 
 fn wasmRocCrashed(crashed_args: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) void {
@@ -714,7 +740,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             };
             const input = input_value.string;
 
-            const result = repl_ptr.step(input) catch |err| {
+            const structured_result = repl_ptr.stepStructured(input) catch |err| {
                 // Handle hard errors (like OOM) that aren't caught by the REPL
                 // Create a static error message to avoid allocation issues
                 const error_msg = @errorName(err);
@@ -727,14 +753,15 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 try writeReplStepResultJson(response_buffer, step_result);
                 return;
             };
-            defer allocator.free(result);
+            defer structured_result.deinit(allocator);
 
             if (crash_ctx.state == .crashed) {
                 const crash_details = crash_ctx.crashMessage();
                 crash_ctx.reset();
 
+                const output = structured_result.getMessage() orelse "";
                 const step_result = ReplStepResult{
-                    .output = result,
+                    .output = output,
                     .try_type = .@"error",
                     .error_stage = .evaluation,
                     .error_details = crash_details,
@@ -743,8 +770,8 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
                 return;
             }
 
-            // Parse the result to determine type and extract error information
-            const step_result = parseReplResult(result);
+            // Convert StepResult to ReplStepResult
+            const step_result = convertStepResult(structured_result);
             try writeReplStepResultJson(response_buffer, step_result);
         },
         .CLEAR_REPL => {
@@ -906,7 +933,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
     const env = result.module_env;
-    try env.initCIRFields(allocator, "main");
+    try env.initCIRFields("main");
 
     // Load builtin modules and inject Bool and Result type declarations
     // (following the pattern from eval.zig and TestEnv.zig)
@@ -949,10 +976,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .gpa = gpa,
                 .common = common,
                 .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-                .module_kind = serialized_ptr.module_kind,
+                .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
+                .requires_types = serialized_ptr.requires_types.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(base_ptr))).*,
                 .builtin_statements = serialized_ptr.builtin_statements,
                 .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
                 .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
@@ -961,12 +990,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
                 .diagnostics = serialized_ptr.diagnostics,
                 .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
                 .evaluation_order = null,
-                .from_int_digits_ident = common.findIdent(base.Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-                .from_dec_digits_ident = common.findIdent(base.Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-                .try_ident = common.findIdent("Try") orelse unreachable,
-                .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-                .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-                .plus_ident = common.findIdent(base.Ident.PLUS_METHOD_NAME) orelse unreachable,
+                .idents = ModuleEnv.CommonIdents.find(&common),
+                .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
+                .import_mapping = types.import_mapping.ImportMapping.init(gpa),
+                .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
 
@@ -987,8 +1015,13 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     logDebug("compileSource: Loading Builtin module\n", .{});
     const builtin_source = compiled_builtins.builtin_source;
-    var builtin_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_module.deinit();
+    const builtin_module = try LoadedModule.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
+    // Store in result instead of deferring deinit - we need it for test evaluation
+    result.builtin_module = .{
+        .env = builtin_module.env,
+        .buffer = builtin_module.buffer,
+        .gpa = builtin_module.gpa,
+    };
     logDebug("compileSource: Builtin module loaded\n", .{});
 
     // Get builtin statement indices from the builtin module
@@ -1005,25 +1038,22 @@ fn compileSource(source: []const u8) !CompilerStageData {
     result.bool_stmt = bool_stmt_in_builtin_module;
     result.builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
 
-    const module_common_idents: Check.CommonIdents = .{
+    const str_stmt_in_builtin_module = builtin_indices.str_type;
+
+    const module_builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("main")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = bool_stmt_in_builtin_module,
         .try_stmt = try_stmt_in_builtin_module,
+        .str_stmt = str_stmt_in_builtin_module,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
     // Create module_envs map for canonicalization (enables qualified calls)
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs_map.deinit();
-    // Add entries for all auto-imported types from Builtin module
-    const bool_ident = try module_env.insertIdent(base.Ident.for_text("Bool"));
-    try module_envs_map.put(bool_ident, .{ .env = builtin_module.env });
-    const result_ident = try module_env.insertIdent(base.Ident.for_text("Result"));
-    try module_envs_map.put(result_ident, .{ .env = builtin_module.env });
-    const str_ident = try module_env.insertIdent(base.Ident.for_text("Str"));
-    try module_envs_map.put(str_ident, .{ .env = builtin_module.env });
+    // Use the shared populateModuleEnvs function to set up auto-imported types
+    try Can.populateModuleEnvs(&module_envs_map, module_env, builtin_module.env, builtin_indices);
 
     logDebug("compileSource: Starting canonicalization\n", .{});
     var czer = try Can.init(env, &result.parse_ast.?, &module_envs_map);
@@ -1068,8 +1098,12 @@ fn compileSource(source: []const u8) !CompilerStageData {
     {
         const type_can_ir = result.module_env;
         const imported_envs: []const *ModuleEnv = &.{};
+
+        // Resolve imports - map each import to its index in imported_envs
+        type_can_ir.imports.resolveImports(type_can_ir, imported_envs);
+
         // Use pointer to the stored CIR to ensure solver references valid memory
-        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_common_idents);
+        var solver = try Check.init(allocator, &type_can_ir.types, type_can_ir, imported_envs, &module_envs_map, &type_can_ir.store.regions, module_builtin_ctx);
         result.solver = solver;
 
         solver.checkFile() catch |check_err| {
@@ -1150,8 +1184,7 @@ const ResponseWriter = struct {
         return result;
     }
 
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        _ = splat;
+    fn drain(w: *std.Io.Writer, data: []const []const u8, _: usize) std.Io.Writer.Error!usize {
         const self: *Self = @alignCast(@fieldParentPtr("interface", w));
         var total: usize = 0;
         for (data) |bytes| {
@@ -1299,64 +1332,54 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     try resp_writer.finalize();
 }
 
-/// Parse REPL result string to determine type and extract error information
-fn parseReplResult(result: []const u8) ReplStepResult {
-    // Check for known error patterns
-    if (std.mem.startsWith(u8, result, "Parse error:")) {
-        return ReplStepResult{
-            .output = result,
+/// Convert REPL StepResult to playground's ReplStepResult
+fn convertStepResult(result: repl.Repl.StepResult) ReplStepResult {
+    return switch (result) {
+        .expression => |output| ReplStepResult{
+            .output = output,
+            .try_type = .expression,
+        },
+        .definition => |output| ReplStepResult{
+            .output = output,
+            .try_type = .definition,
+        },
+        .help => |output| ReplStepResult{
+            .output = output,
+            .try_type = .expression, // Treat help as expression output
+        },
+        .quit => ReplStepResult{
+            .output = "Goodbye!",
+            .try_type = .expression,
+        },
+        .empty => ReplStepResult{
+            .output = "",
+            .try_type = .expression,
+        },
+        .parse_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .parse,
-            .error_details = if (result.len > 13) result[13..] else null,
-        };
-    } else if (std.mem.indexOf(u8, result, "Canonicalize") != null) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .canonicalize_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .canonicalize,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Type check") != null) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .type_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .typecheck,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.indexOf(u8, result, "Layout") != null) {
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .layout,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.startsWith(u8, result, "Evaluation error:")) {
-        return ReplStepResult{
-            .output = result,
+            .error_details = extractErrorDetails(output),
+        },
+        .eval_error => |output| ReplStepResult{
+            .output = output,
             .try_type = .@"error",
             .error_stage = .evaluation,
-            .error_details = if (result.len > 17) result[17..] else null,
-        };
-    } else if (std.mem.indexOf(u8, result, "Interpreter") != null) {
-        return ReplStepResult{
-            .output = result,
-            .try_type = .@"error",
-            .error_stage = .interpreter,
-            .error_details = extractErrorDetails(result),
-        };
-    } else if (std.mem.startsWith(u8, result, "assigned")) {
-        // Definition success
-        return ReplStepResult{
-            .output = result,
-            .try_type = .definition,
-        };
-    } else {
-        // Expression result
-        return ReplStepResult{
-            .output = result,
-            .try_type = .expression,
-        };
-    }
+            .error_details = extractErrorDetails(output),
+        },
+    };
 }
 
 /// Extract error details from an error message (part after ": ")
@@ -1557,7 +1580,13 @@ fn writeEvaluateTestsResponse(response_buffer: []u8, data: CompilerStageData) Re
     };
 
     // Create interpreter infrastructure for test evaluation
-    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests) catch {
+    const empty_modules: []const *const ModuleEnv = &.{};
+    const builtin_module_env: ?*const ModuleEnv = if (data.builtin_module) |bm| bm.env else null;
+    const solver = data.solver orelse {
+        try writeErrorResponse(response_buffer, .ERROR, "Type checker not available for test evaluation.");
+        return;
+    };
+    var test_runner = TestRunner.init(local_arena.allocator(), env, builtin_types_for_tests, empty_modules, builtin_module_env, &solver.import_mapping) catch {
         try writeErrorResponse(response_buffer, .ERROR, "Failed to initialize test runner.");
         return;
     };
@@ -1722,7 +1751,7 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                         defer type_writer.deinit();
 
                         const def_var = @as(types.Var, @enumFromInt(@intFromEnum(def_idx)));
-                        try type_writer.write(def_var);
+                        try type_writer.write(def_var, .wrap);
                         const type_str_from_writer = type_writer.get();
                         const owned_type_str = try local_allocator.dupe(u8, type_str_from_writer);
 
@@ -1852,20 +1881,9 @@ fn writeDiagnosticJson(writer: anytype, diagnostic: Diagnostic) !void {
     });
 }
 
-/// Write a string with JSON escaping
+/// Write a string with JSON escaping (without surrounding quotes)
 fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
-    for (str) |char| {
-        switch (char) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            // Control characters U+0000 to U+001F
-            0...8, 11, 12, 14...31 => try writer.print("\\u{x:0>4}", .{char}),
-            else => try writer.writeByte(char),
-        }
-    }
+    try std.json.Stringify.encodeJsonStringChars(str, .{}, writer);
 }
 
 /// Processes a message and returns a pointer to a null-terminated, dynamically allocated JSON response string.
@@ -1996,4 +2014,108 @@ export fn validateBase58Hash(hash_ptr: [*]const u8, hash_len: usize) bool {
     } else {
         return false;
     }
+}
+
+/// Unbundle a tar.zst archive from memory, returning extracted files as JSON.
+/// The response is a JSON object with either:
+/// - {"success": true, "files": [{"path": "...", "content": "..."}], "directories": ["..."]}
+/// - {"success": false, "error": "..."}
+///
+/// Returns 0 on success, 1 on error (response buffer too small), 2 on unbundle error.
+export fn unbundleToBuffer(
+    compressed_ptr: [*]const u8,
+    compressed_len: usize,
+    hash_ptr: [*]const u8, // 32-byte BLAKE3 hash
+    response_ptr: [*]u8,
+    response_len: usize,
+) u8 {
+    const compressed = compressed_ptr[0..compressed_len];
+    const expected_hash = hash_ptr[0..32].*;
+
+    // Create a fixed buffer reader from the compressed data
+    var fixed_reader = std.Io.Reader.fixed(compressed);
+
+    // Create buffer extract writer for in-memory extraction
+    var buffer_writer = unbundle.BufferExtractWriter.init(allocator);
+    defer buffer_writer.deinit();
+
+    // Perform unbundling
+    unbundle.unbundleStream(
+        allocator,
+        &fixed_reader,
+        buffer_writer.extractWriter(),
+        &expected_hash,
+        null,
+    ) catch |err| {
+        // Write error response
+        return writeUnbundleErrorResponse(response_ptr[0..response_len], err);
+    };
+
+    // Write success response with file list as JSON
+    return writeUnbundleSuccessResponse(response_ptr[0..response_len], &buffer_writer);
+}
+
+fn writeUnbundleErrorResponse(response: []u8, err: unbundle.UnbundleError) u8 {
+    const error_msg = switch (err) {
+        error.DecompressionFailed => "Decompression failed",
+        error.InvalidTarHeader => "Invalid tar header",
+        error.UnexpectedEndOfStream => "Unexpected end of stream",
+        error.FileCreateFailed => "File create failed",
+        error.DirectoryCreateFailed => "Directory create failed",
+        error.FileWriteFailed => "File write failed",
+        error.HashMismatch => "Hash mismatch - archive may be corrupted",
+        error.InvalidFilename => "Invalid filename in archive",
+        error.FileTooLarge => "File too large",
+        error.InvalidPath => "Invalid path in archive",
+        error.NoDataExtracted => "No data extracted from archive",
+        error.ChecksumFailure => "Checksum failure",
+        error.DictionaryIdFlagUnsupported => "Dictionary ID flag unsupported",
+        error.MalformedBlock => "Malformed block in archive",
+        error.MalformedFrame => "Malformed frame in archive",
+        error.WriteFailed => "Write failed",
+        error.ReadFailed => "Read failed",
+        error.EndOfStream => "End of stream",
+        error.OutOfMemory => "Out of memory",
+    };
+
+    _ = std.fmt.bufPrint(response, "{{\"success\":false,\"error\":\"{s}\"}}", .{error_msg}) catch {
+        return 1; // Response buffer too small
+    };
+    return 2; // Unbundle error
+}
+
+fn writeUnbundleSuccessResponse(response: []u8, buffer_writer: *unbundle.BufferExtractWriter) u8 {
+    var writer = std.Io.Writer.fixed(response);
+
+    writer.writeAll("{\"success\":true,\"files\":[") catch return 1;
+
+    var first_file = true;
+    var iter = buffer_writer.files.iterator();
+    while (iter.next()) |entry| {
+        if (!first_file) {
+            writer.writeAll(",") catch return 1;
+        }
+        first_file = false;
+
+        writer.writeAll("{\"path\":") catch return 1;
+        std.json.Stringify.encodeJsonString(entry.key_ptr.*, .{}, &writer) catch return 1;
+        writer.writeAll(",\"content\":") catch return 1;
+        std.json.Stringify.encodeJsonString(entry.value_ptr.items, .{}, &writer) catch return 1;
+        writer.writeAll("}") catch return 1;
+    }
+
+    writer.writeAll("],\"directories\":[") catch return 1;
+
+    var first_dir = true;
+    for (buffer_writer.directories.items) |dir| {
+        if (!first_dir) {
+            writer.writeAll(",") catch return 1;
+        }
+        first_dir = false;
+
+        std.json.Stringify.encodeJsonString(dir, .{}, &writer) catch return 1;
+    }
+
+    writer.writeAll("]}") catch return 1;
+    return 0; // Success
 }

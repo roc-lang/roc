@@ -67,8 +67,9 @@ fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
 /// Roc expect failed function
 fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
     _ = env;
-    const message = roc_expect.utf8_bytes[0..roc_expect.len];
-    std.debug.print("ROC EXPECT FAILED: {s}\n", .{message});
+    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
@@ -80,7 +81,7 @@ fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) no
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__processString(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__process_string(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -127,7 +128,7 @@ fn platform_main() !void {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .host_fns = undefined, // No host functions for this simple example
+        .hosted_fns = .{ .count = 0, .fns = undefined }, // No host functions for this simple example
     };
 
     // Create the input string for the Roc function (if it's a function)
@@ -142,7 +143,7 @@ fn platform_main() !void {
 
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc__processString(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
+    roc__process_string(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it
@@ -155,5 +156,6 @@ fn platform_main() !void {
         try stdout.print("\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n", .{});
     } else {
         try stdout.print("\n\x1b[31mFAIL\x1b[0m: Result does not contain expected substring!\n", .{});
+        return error.TestFailed;
     }
 }

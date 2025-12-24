@@ -50,10 +50,7 @@ pub const Token = struct {
         StringPart,
         MalformedStringPart, // malformed, but should be treated similar to a StringPart in the parser
         SingleQuote,
-        MalformedSingleQuoteUnclosed, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteEmpty, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteTooLong, // malformed, but should be treated similar to a SingleQuote in the parser
-        MalformedSingleQuoteInvalidEscapeSequence, // malformed, but should be treated similar to a SingleQuote in the parser
+        MalformedSingleQuote, // malformed, but should be treated similar to a SingleQuote in the parser
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
@@ -120,6 +117,7 @@ pub const Token = struct {
         OpLessThan,
         OpEquals,
         OpColonEqual,
+        OpDoubleColon,
         NoSpaceOpQuestion,
 
         Comma,
@@ -137,7 +135,6 @@ pub const Token = struct {
         KwAs,
         KwCrash,
         KwDbg,
-        KwDebug,
         KwElse,
         KwExpect,
         KwExposes,
@@ -160,8 +157,10 @@ pub const Token = struct {
         KwProvides,
         KwRequires,
         KwReturn,
+        KwTargets,
         KwVar,
         KwWhere,
+        KwWhile,
         KwWith,
 
         MalformedUnknownToken,
@@ -195,8 +194,10 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwTargets,
                 .KwVar,
                 .KwWhere,
+                .KwWhile,
                 .KwWith,
                 => true,
                 else => false,
@@ -260,6 +261,7 @@ pub const Token = struct {
                 .OpLessThan,
                 .OpEquals,
                 .OpColonEqual,
+                .OpDoubleColon,
                 .NoSpaceOpQuestion,
                 .Comma,
                 .Dot,
@@ -274,7 +276,6 @@ pub const Token = struct {
                 .KwAs,
                 .KwCrash,
                 .KwDbg,
-                .KwDebug,
                 .KwElse,
                 .KwExpect,
                 .KwExposes,
@@ -297,8 +298,10 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwTargets,
                 .KwVar,
                 .KwWhere,
+                .KwWhile,
                 .KwWith,
                 => false,
 
@@ -315,10 +318,7 @@ pub const Token = struct {
                 .MalformedOpaqueNameWithoutName,
                 .MalformedUnicodeIdent,
                 .MalformedUnknownToken,
-                .MalformedSingleQuoteUnclosed,
-                .MalformedSingleQuoteEmpty,
-                .MalformedSingleQuoteTooLong,
-                .MalformedSingleQuoteInvalidEscapeSequence,
+                .MalformedSingleQuote,
                 .MalformedStringPart,
                 => true,
             };
@@ -370,7 +370,6 @@ pub const Token = struct {
         .{ "as", .KwAs },
         .{ "crash", .KwCrash },
         .{ "dbg", .KwDbg },
-        .{ "debug", .KwDebug },
         .{ "else", .KwElse },
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },
@@ -394,8 +393,10 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
+        .{ "targets", .KwTargets },
         .{ "var", .KwVar },
         .{ "where", .KwWhere },
+        .{ "while", .KwWhile },
         .{ "with", .KwWith },
     });
 
@@ -486,6 +487,9 @@ pub const Diagnostic = struct {
         NonPrintableUnicodeInStrLiteral,
         InvalidUtf8InSource,
         DollarInMiddleOfIdentifier,
+        SingleQuoteTooLong,
+        SingleQuoteEmpty,
+        SingleQuoteUnclosed,
     };
 };
 
@@ -924,6 +928,16 @@ pub const Cursor = struct {
                         return error.InvalidUnicodeEscapeSequence;
                     }
                 }
+                const hex_code = self.buf[hex_start .. self.pos - 1];
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch {
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
+                    return error.InvalidUnicodeEscapeSequence;
+                };
+
+                if (!std.unicode.utf8ValidCodepoint(codepoint)) {
+                    self.pushMessage(.InvalidUnicodeEscapeSequence, escape_start, self.pos);
+                    return error.InvalidUnicodeEscapeSequence;
+                }
             },
             else => {
                 // Include the character after the backslash in the error region
@@ -941,7 +955,9 @@ pub const Cursor = struct {
             TooLong,
             Invalid,
         };
+
         std.debug.assert(self.peek() == '\'');
+        const start = self.pos;
 
         // Skip the initial quote.
         self.pos += 1;
@@ -959,7 +975,8 @@ pub const Cursor = struct {
             switch (state) {
                 .Empty => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteEmpty;
+                        self.pushMessage(.SingleQuoteEmpty, start, self.pos);
+                        return .MalformedSingleQuote;
                     },
                     '\\' => {
                         state = .Enough;
@@ -983,20 +1000,22 @@ pub const Cursor = struct {
                 },
                 .TooLong => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteTooLong;
+                        self.pushMessage(.SingleQuoteTooLong, start, self.pos);
+                        return .MalformedSingleQuote;
                     },
                     else => {},
                 },
                 .Invalid => switch (c) {
                     '\'' => {
-                        return .MalformedSingleQuoteInvalidEscapeSequence;
+                        return .MalformedSingleQuote;
                     },
                     else => {},
                 },
             }
         }
 
-        return .MalformedSingleQuoteUnclosed;
+        self.pushMessage(.SingleQuoteUnclosed, start, self.pos);
+        return .MalformedSingleQuote;
     }
 
     /// Chomps a UTF-8 codepoint and advances the cursor position.
@@ -1090,7 +1109,7 @@ pub const Tokenizer = struct {
         self.string_interpolation_stack.deinit();
     }
 
-    pub fn finishAndDeinit(self: *Tokenizer, _: std.mem.Allocator) TokenOutput {
+    pub fn finishAndDeinit(self: *Tokenizer) TokenOutput {
         self.string_interpolation_stack.deinit();
         const actual_message_count = @min(self.cursor.message_count, self.cursor.messages.len);
         return .{
@@ -1233,7 +1252,7 @@ pub const Tokenizer = struct {
                         } else {
                             self.cursor.pos += 1;
                             // Look at what follows the minus to determine if it's unary
-                            const tokenType: Token.Tag = if (self.canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
+                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(gpa, tokenType, start);
                         }
                     } else {
@@ -1377,6 +1396,9 @@ pub const Tokenizer = struct {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
                         try self.pushTokenNormalHere(gpa, .OpColonEqual, start);
+                    } else if (self.cursor.peekAt(1) == ':') {
+                        self.cursor.pos += 2;
+                        try self.pushTokenNormalHere(gpa, .OpDoubleColon, start);
                     } else {
                         self.cursor.pos += 1;
                         try self.pushTokenNormalHere(gpa, .OpColon, start);
@@ -1547,8 +1569,7 @@ pub const Tokenizer = struct {
     }
 
     /// Determines if a character can follow a unary minus (i.e., can start an expression)
-    fn canFollowUnaryMinus(self: *const Tokenizer, c: u8) bool {
-        _ = self;
+    fn canFollowUnaryMinus(c: u8) bool {
         return switch (c) {
             // Identifiers
             'a'...'z', 'A'...'Z', '_' => true,
@@ -1662,7 +1683,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     var messages: [32]Diagnostic = undefined;
     var tokenizer = try Tokenizer.init(&env, gpa, input, &messages);
     try tokenizer.tokenize(gpa);
-    var output = tokenizer.finishAndDeinit(gpa);
+    var output = tokenizer.finishAndDeinit();
     defer output.tokens.deinit(gpa);
 
     if (debug) {
@@ -1697,7 +1718,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     // Second tokenization.
     tokenizer = try Tokenizer.init(&env, gpa, buf2.items, &messages);
     try tokenizer.tokenize(gpa);
-    var output2 = tokenizer.finishAndDeinit(gpa);
+    var output2 = tokenizer.finishAndDeinit();
     defer output2.tokens.deinit(gpa);
 
     if (debug) {
@@ -1895,14 +1916,28 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
 
             .UpperIdent => {
-                try buf2.append('Z');
-                for (1..length) |_| {
-                    try buf2.append('z');
+                if (length > 0 and buf[region.start.offset] == '$') {
+                    try buf2.append('$');
+                    for (1..length) |_| {
+                        try buf2.append('Z');
+                    }
+                } else {
+                    try buf2.append('Z');
+                    for (1..length) |_| {
+                        try buf2.append('z');
+                    }
                 }
             },
             .LowerIdent => {
-                for (0..length) |_| {
-                    try buf2.append('z');
+                if (length > 0 and buf[region.start.offset] == '$') {
+                    try buf2.append('$');
+                    for (1..length) |_| {
+                        try buf2.append('z');
+                    }
+                } else {
+                    for (0..length) |_| {
+                        try buf2.append('z');
+                    }
                 }
             },
             .Underscore => {
@@ -2128,6 +2163,11 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 try buf2.append(':');
                 try buf2.append('=');
             },
+            .OpDoubleColon => {
+                std.debug.assert(length == 2);
+                try buf2.append(':');
+                try buf2.append(':');
+            },
 
             .Comma => {
                 std.debug.assert(length == 1);
@@ -2183,9 +2223,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwDbg => {
                 try buf2.appendSlice("dbg");
-            },
-            .KwDebug => {
-                try buf2.appendSlice("debug");
             },
             .KwElse => {
                 try buf2.appendSlice("else");
@@ -2250,6 +2287,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .KwReturn => {
                 try buf2.appendSlice("return");
             },
+            .KwTargets => {
+                try buf2.appendSlice("targets");
+            },
             .KwVar => {
                 try buf2.appendSlice("var");
             },
@@ -2258,6 +2298,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwWhere => {
                 try buf2.appendSlice("where");
+            },
+            .KwWhile => {
+                try buf2.appendSlice("while");
             },
             .KwWith => {
                 try buf2.appendSlice("with");
@@ -2277,10 +2320,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
             .MalformedOpaqueNameWithoutName,
-            .MalformedSingleQuoteEmpty,
-            .MalformedSingleQuoteTooLong,
-            .MalformedSingleQuoteUnclosed,
-            .MalformedSingleQuoteInvalidEscapeSequence,
+            .MalformedSingleQuote,
             .MalformedStringPart,
             => {
                 return error.Unsupported;

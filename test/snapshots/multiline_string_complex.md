@@ -54,23 +54,9 @@ x = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - multiline_string_complex.md:37:7:37:9
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
+MISSING METHOD - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**multiline_string_complex.md:37:7:37:9:**
-```roc
-		0 - \\
-```
-		    ^^
-
-It has the type:
-    _Str_
-
-But I expected it to be:
-    _Num(_size)_
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
 **multiline_string_complex.md:40:6:40:8:**
@@ -80,10 +66,26 @@ This expression is used in an unexpected way:
 	    ^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But I expected it to be:
-    _Bool_
+
+    Bool
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**multiline_string_complex.md:37:3:37:4:**
+```roc
+		0 - \\
+```
+		^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -216,18 +218,22 @@ NO CHANGE
 		(p-assign (ident "value3"))
 		(e-string
 			(e-literal (string "This is a string"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-literal (string "With multiple lines"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-lookup-local
 				(p-assign (ident "value1")))))
 	(d-let
 		(p-assign (ident "value4"))
 		(e-string
 			(e-literal (string "This is a string"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-literal (string "With multiple lines"))
-			(e-literal (string "\n"))
+			(e-literal (string "
+"))
 			(e-lookup-local
 				(p-assign (ident "value2")))))
 	(d-let
@@ -260,7 +266,8 @@ NO CHANGE
 		(p-assign (ident "x"))
 		(e-block
 			(e-string
-				(e-literal (string "\n"))))))
+				(e-literal (string "
+"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -270,13 +277,13 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Str, e: Error }"))
 		(expr (type "Str"))))
 ~~~

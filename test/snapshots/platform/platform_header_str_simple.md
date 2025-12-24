@@ -1,37 +1,31 @@
 # META
 ~~~ini
-description=Simple plaform module
+description=Simple platform module with for-clause syntax
 type=file
 ~~~
 # SOURCE
 ~~~roc
 platform ""
-	requires {} { main : Str -> Str }
-	exposes []
-	packages {}
-	provides { entrypoint: "roc__entrypoint" }
+    requires {
+        main : Str -> Str
+    }
+    exposes []
+    packages {}
+    provides { entrypoint: "roc__entrypoint" }
 
 entrypoint : Str -> Str
 entrypoint = main
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - platform_header_str_simple.md:8:14:8:18
+NIL
 # PROBLEMS
-**UNDEFINED VARIABLE**
-Nothing is named `main` in this scope.
-Is there an `import` or `exposing` missing up-top?
-
-**platform_header_str_simple.md:8:14:8:18:**
-```roc
-entrypoint = main
-```
-             ^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
-KwRequires,OpenCurly,CloseCurly,OpenCurly,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,CloseCurly,
+KwRequires,OpenCurly,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
+CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
 KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
@@ -43,9 +37,10 @@ EndOfFile,
 ~~~clojure
 (file
 	(platform (name "")
-		(rigids)
-		(ty-record
-			(anno-record-field (name "main")
+		(requires
+			(requires-entry
+				(type-aliases)
+				(entrypoint "main")
 				(ty-fn
 					(ty (name "Str"))
 					(ty (name "Str")))))
@@ -66,14 +61,24 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform ""
+	requires {
+		main : Str -> Str
+	}
+	exposes []
+	packages {}
+	provides { entrypoint: "roc__entrypoint" }
+
+entrypoint : Str -> Str
+entrypoint = main
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "entrypoint"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-lookup-required
+			(required-ident "main"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -85,5 +90,5 @@ NO CHANGE
 	(defs
 		(patt (type "Str -> Str")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "Str -> Str"))))
 ~~~

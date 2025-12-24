@@ -56,6 +56,7 @@ const Num = @import("types.zig").Num;
 const NominalType = @import("types.zig").NominalType;
 const Tuple = @import("types.zig").Tuple;
 const Rank = @import("types.zig").Rank;
+const StaticDispatchConstraint = @import("types.zig").StaticDispatchConstraint;
 const Ident = base.Ident;
 
 /// Manages the generalization process for type variables.
@@ -204,6 +205,18 @@ pub const Generalizer = struct {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                } else if (self.hasNumeralConstraint(resolved.desc.content)) {
+                    // Flex var with numeric constraint - don't generalize at ANY rank.
+                    // This ensures numeric literals like `x = 15` stay monomorphic so that
+                    // later usage like `List.get(list, x)` can constrain x to U64.
+                    // Without this, let-generalization would create a fresh copy at each use,
+                    // leaving the original as an unconstrained flex var that defaults to Dec
+                    // at runtime, causing panics when used as integer indices (GitHub #8666).
+                    //
+                    // Note: Polymorphic functions like `|a| a + 1` still work correctly because
+                    // the numeric literal `1` inside the lambda body gets its own type variable
+                    // that will be instantiated fresh for each call to the function.
+                    try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Rank unchanged - safe to generalize
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
@@ -213,6 +226,24 @@ pub const Generalizer = struct {
 
         // Clear the rank we just processed from the main pool
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
+    }
+
+    /// Check if a type content is a flex var with a from_numeral constraint.
+    /// Numeric flex vars should not be generalized so that later usages can
+    /// constrain them to a specific numeric type (e.g., I64, Dec, etc.).
+    fn hasNumeralConstraint(self: *Self, content: Content) bool {
+        switch (content) {
+            .flex => |flex| {
+                const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
+                for (constraints) |constraint| {
+                    if (constraint.origin == .from_numeral) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            else => return false,
+        }
     }
 
     // adjust rank //
@@ -297,131 +328,113 @@ pub const Generalizer = struct {
                 return group_rank;
             },
             .alias => |alias| {
+                // THEORY: Here, we don't need to recurse into the backing type because:
+                // 1. We visit the type arguments (args)
+                // 2. Anything in the RHS of the alias is either:
+                //    - A reference to an arg (already visited via args)
+                //    - A concrete type (doesn't need rank adjustment)
+                // So traversing the backing var would be redundant.
+                //
+                // We use top_level as a default, as the type container itself
+                // does not contribute to the rank calculation.
                 var next_rank = Rank.top_level;
                 var args_iter = self.store.iterAliasArgs(alias);
                 while (args_iter.next()) |arg_var| {
                     next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                 }
-                next_rank = next_rank.max(try self.adjustRank(self.store.getAliasBackingVar(alias), group_rank, vars_to_generalize));
                 return next_rank;
             },
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .str, .empty_record, .empty_tag_union => return Rank.top_level,
-                    .list_unbound => {
-                        // Unbounds are special-cased: An unbound represents a
-                        // flex var _at the same rank_ as the  unbound list. So,
-                        // if we actually had that, it would recurse and unwrap
-                        // to group_rank. So we just return that directly here.
-                        return group_rank;
-                    },
-                    .box => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
-                    },
-                    .list => |inner_var| {
-                        return Rank.top_level.max(try self.adjustRank(inner_var, group_rank, vars_to_generalize));
+                    .empty_record, .empty_tag_union => {
+                        // THEORY: Empty records/tag unions never need to be generalized
+                        return .top_level;
                     },
                     .tuple => |tuple| {
-                        var next_rank = Rank.top_level;
-                        for (self.store.sliceVars(tuple.elems)) |arg_var| {
-                            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
-                    },
-                    .num => |num| {
-                        switch (num) {
-                            .num_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .int_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-                            .frac_poly => |poly_var| {
-                                return Rank.top_level.max(try self.adjustRank(poly_var, group_rank, vars_to_generalize));
-                            },
-
-                            // Unbound - optimizations like list_unbound
-                            .num_unbound, .int_unbound, .frac_unbound => return group_rank,
-
-                            // Concrete - fully determined types with no variables
-                            .int_precision, .frac_precision, .num_compact => return Rank.top_level,
+                        if (tuple.elems.len() > 0) {
+                            const elems = self.store.sliceVars(tuple.elems);
+                            var next_rank = try self.adjustRank(elems[0], group_rank, vars_to_generalize);
+                            for (elems[1..]) |arg_var| {
+                                next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
+                            }
+                            return next_rank;
+                        } else {
+                            // THEORY: Empty tuples never need to be generalized
+                            return .top_level;
                         }
                     },
                     .nominal_type => |nominal| {
+                        // THEORY: Here, we don't need to recurse into the backing type because:
+                        // 1. We visit the type arguments (args)
+                        // 2. Anything in the RHS of the nominal type is either:
+                        //    - A reference to an arg (already visited via args)
+                        //    - A concrete type (doesn't need rank adjustment)
+                        // So traversing the backing var would be redundant.
+                        //
+                        // We use top_level as a default, as the type container itself
+                        // does not contribute to the rank calculation.
                         var next_rank = Rank.top_level;
                         var args_iter = self.store.iterNominalArgs(nominal);
                         while (args_iter.next()) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
-                        next_rank = next_rank.max(try self.adjustRank(self.store.getNominalBackingVar(nominal), group_rank, vars_to_generalize));
                         return next_rank;
                     },
                     .fn_pure => |func| {
-                        var next_rank = Rank.top_level;
+                        var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
                         for (self.store.sliceVars(func.args)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
-                        next_rank = next_rank.max(try self.adjustRank(func.ret, group_rank, vars_to_generalize));
                         return next_rank;
                     },
                     .fn_effectful => |func| {
-                        var next_rank = Rank.top_level;
+                        var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
                         for (self.store.sliceVars(func.args)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
-                        next_rank = next_rank.max(try self.adjustRank(func.ret, group_rank, vars_to_generalize));
                         return next_rank;
                     },
                     .fn_unbound => |func| {
-                        var next_rank = Rank.top_level;
+                        var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
                         for (self.store.sliceVars(func.args)) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
-                        next_rank = next_rank.max(try self.adjustRank(func.ret, group_rank, vars_to_generalize));
-
-                        next_rank = blk: {
-                            // Unbounds are special-cased: An unbound represents a
-                            // flex var _at the same rank_ as the unbound fn. So,
-                            // if we actually had that, it would recurse and unwrap
-                            // to group_rank. So we just return that directly here.
-                            break :blk next_rank.max(group_rank);
-                        };
-
                         return next_rank;
                     },
                     .record => |record| {
-                        var next_rank = Rank.top_level;
+                        var next_rank = try self.adjustRank(record.ext, group_rank, vars_to_generalize);
                         for (self.store.getRecordFieldsSlice(record.fields).items(.var_)) |rec_var| {
                             next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
                         }
-                        next_rank = next_rank.max(try self.adjustRank(record.ext, group_rank, vars_to_generalize));
                         return next_rank;
                     },
                     .record_unbound => |record_fields| {
-                        var next_rank = Rank.top_level;
-                        for (self.store.getRecordFieldsSlice(record_fields).items(.var_)) |rec_var| {
-                            next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
-                        }
-                        next_rank = blk: {
+                        var next_rank = blk: {
                             // Unbounds are special-cased: An unbound represents a
                             // flex var _at the same rank_ as the unbound record. So,
                             // if we actually had that, it would recurse and unwrap
                             // to group_rank. So we just return that directly here.
-                            break :blk next_rank.max(group_rank);
+                            break :blk group_rank;
                         };
+                        for (self.store.getRecordFieldsSlice(record_fields).items(.var_)) |rec_var| {
+                            next_rank = next_rank.max(try self.adjustRank(rec_var, group_rank, vars_to_generalize));
+                        }
                         return next_rank;
                     },
                     .tag_union => |tag_union| {
-                        var next_rank = Rank.top_level;
+                        var next_rank = try self.adjustRank(tag_union.ext, group_rank, vars_to_generalize);
                         for (self.store.getTagsSlice(tag_union.tags).items(.args)) |arg_range| {
                             for (self.store.sliceVars(arg_range)) |tag_arg_var| {
                                 next_rank = next_rank.max(try self.adjustRank(tag_arg_var, group_rank, vars_to_generalize));
                             }
                         }
-                        next_rank = next_rank.max(try self.adjustRank(tag_union.ext, group_rank, vars_to_generalize));
                         return next_rank;
                     },
                 }
+            },
+            .recursion_var => |rec_var| {
+                // Adjust rank by checking the structure the recursion var points to
+                return try self.adjustRank(rec_var.structure, group_rank, vars_to_generalize);
             },
             .err => return group_rank,
         };

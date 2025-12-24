@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 import http.Client as Http exposing [Request, Response]
 import json.Json
-import utils.Result exposing [Result]
+import utils.Try exposing [Try]
 
 processRequest : Request -> Response
 processRequest = |req| Http.defaultResponse
@@ -15,7 +15,7 @@ processRequest = |req| Http.defaultResponse
 parseJson : Str -> Json.Value
 parseJson = |input| Json.parse(input)
 
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi : Http.Request -> Try(Http.Response, Json.Error)
 handleApi = |request| {
     result = Json.decode(request.body)
     match result {
@@ -28,12 +28,12 @@ config : Json.Config
 config = Json.defaultConfig
 
 # Test nested type qualification
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
 
 # Test function with multiple type parameters
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-combineResults = |result1, result2|
+combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)
+combineTrys = |result1, result2|
     match result1 {
         Ok(value1) =>
             match(result2) {
@@ -44,10 +44,7 @@ combineResults = |result1, result2|
     }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - can_import_type_annotations.md:1:1:1:56
-MODULE NOT FOUND - can_import_type_annotations.md:2:1:2:17
-DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:38
-MODULE NOT FOUND - can_import_type_annotations.md:3:1:3:38
+DUPLICATE DEFINITION - can_import_type_annotations.md:3:1:3:32
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 UNDEFINED VARIABLE - can_import_type_annotations.md:6:24:6:44
@@ -57,58 +54,25 @@ UNDEFINED VARIABLE - can_import_type_annotations.md:13:14:13:25
 UNDEFINED VARIABLE - can_import_type_annotations.md:15:24:15:36
 UNDEFINED VARIABLE - can_import_type_annotations.md:21:10:21:28
 MODULE NOT IMPORTED - can_import_type_annotations.md:24:18:24:36
-MODULE NOT IMPORTED - can_import_type_annotations.md:24:64:24:81
+MODULE NOT IMPORTED - can_import_type_annotations.md:24:61:24:78
 UNDEFINED VARIABLE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `http.Client` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_type_annotations.md:1:1:1:56:**
-```roc
-import http.Client as Http exposing [Request, Response]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-**MODULE NOT FOUND**
-The module `json.Json` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_type_annotations.md:2:1:2:17:**
-```roc
-import json.Json
-```
-^^^^^^^^^^^^^^^^
-
-
 **DUPLICATE DEFINITION**
-The name `Result` is being redeclared in this scope.
+The name `Try` is being redeclared in this scope.
 
 The redeclaration is here:
-**can_import_type_annotations.md:3:1:3:38:**
+**can_import_type_annotations.md:3:1:3:32:**
 ```roc
-import utils.Result exposing [Result]
+import utils.Try exposing [Try]
 ```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-But `Result` was already defined here:
+But `Try` was already defined here:
 **can_import_type_annotations.md:1:1:1:1:**
 ```roc
 import http.Client as Http exposing [Request, Response]
 ```
 ^
-
-
-**MODULE NOT FOUND**
-The module `utils.Result` was not found in this Roc project.
-
-You're attempting to use this module here:
-**can_import_type_annotations.md:3:1:3:38:**
-```roc
-import utils.Result exposing [Result]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 **UNDECLARED TYPE**
@@ -206,7 +170,7 @@ There is no module with the name `Json.Parser` imported into this Roc file.
 You're attempting to use this module here:
 **can_import_type_annotations.md:24:18:24:36:**
 ```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 ```
                  ^^^^^^^^^^^^^^^^^^
 
@@ -215,11 +179,11 @@ advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error
 There is no module with the name `Json.Parser` imported into this Roc file.
 
 You're attempting to use this module here:
-**can_import_type_annotations.md:24:64:24:81:**
+**can_import_type_annotations.md:24:61:24:78:**
 ```roc
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 ```
-                                                               ^^^^^^^^^^^^^^^^^
+                                                            ^^^^^^^^^^^^^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -276,9 +240,9 @@ EndOfFile,
 				(exposed-upper-ident (text "Request"))
 				(exposed-upper-ident (text "Response"))))
 		(s-import (raw "json.Json"))
-		(s-import (raw "utils.Result")
+		(s-import (raw "utils.Try")
 			(exposing
-				(exposed-upper-ident (text "Result"))))
+				(exposed-upper-ident (text "Try"))))
 		(s-type-anno (name "processRequest")
 			(ty-fn
 				(ty (name "Request"))
@@ -305,7 +269,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Http.Request"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Http.Response"))
 					(ty (name "Json.Error")))))
 		(s-decl
@@ -349,7 +313,7 @@ EndOfFile,
 				(ty (name "Json.Parser.Config"))
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Json.Value"))
 					(ty (name "Json.Parser.Error")))))
 		(s-decl
@@ -362,24 +326,24 @@ EndOfFile,
 					(e-ident (raw "Json.Parser.parseWith"))
 					(e-ident (raw "parserConfig"))
 					(e-ident (raw "input")))))
-		(s-type-anno (name "combineResults")
+		(s-type-anno (name "combineTrys")
 			(ty-fn
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-var (raw "a"))
 					(ty-var (raw "err")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-var (raw "b"))
 					(ty-var (raw "err")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-tuple
 						(ty-var (raw "a"))
 						(ty-var (raw "b")))
 					(ty-var (raw "err")))))
 		(s-decl
-			(p-ident (raw "combineResults"))
+			(p-ident (raw "combineTrys"))
 			(e-lambda
 				(args
 					(p-ident (raw "result1"))
@@ -419,7 +383,7 @@ EndOfFile,
 ~~~roc
 import http.Client as Http exposing [Request, Response]
 import json.Json
-import utils.Result exposing [Result]
+import utils.Try exposing [Try]
 
 processRequest : Request -> Response
 processRequest = |req| Http.defaultResponse
@@ -427,7 +391,7 @@ processRequest = |req| Http.defaultResponse
 parseJson : Str -> Json.Value
 parseJson = |input| Json.parse(input)
 
-handleApi : Http.Request -> Result(Http.Response, Json.Error)
+handleApi : Http.Request -> Try(Http.Response, Json.Error)
 handleApi = |request| {
 	result = Json.decode(request.body)
 	match result {
@@ -440,12 +404,12 @@ config : Json.Config
 config = Json.defaultConfig
 
 # Test nested type qualification
-advancedParser : Json.Parser.Config, Str -> Result(Json.Value, Json.Parser.Error)
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
 advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
 
 # Test function with multiple type parameters
-combineResults : Result(a, err), Result(b, err) -> Result((a, b), err)
-combineResults = |result1, result2|
+combineTrys : Try(a, err), Try(b, err) -> Try((a, b), err)
+combineTrys = |result1, result2|
 	match result1 {
 		Ok(value1) =>
 			match (result2) {
@@ -483,52 +447,48 @@ combineResults = |result1, result2|
 				(ty-lookup (name "Value") (external-module "json.Json")))))
 	(d-let
 		(p-assign (ident "handleApi"))
-		(e-closure
-			(captures
-				(capture (ident "data"))
-				(capture (ident "err")))
-			(e-lambda
-				(args
-					(p-assign (ident "request")))
-				(e-block
-					(s-let
-						(p-assign (ident "result"))
-						(e-call
-							(e-runtime-error (tag "ident_not_in_scope"))
-							(e-dot-access (field "body")
-								(receiver
-									(e-lookup-local
-										(p-assign (ident "request")))))))
-					(e-match
-						(match
-							(cond
+		(e-lambda
+			(args
+				(p-assign (ident "request")))
+			(e-block
+				(s-let
+					(p-assign (ident "result"))
+					(e-call
+						(e-runtime-error (tag "ident_not_in_scope"))
+						(e-dot-access (field "body")
+							(receiver
 								(e-lookup-local
-									(p-assign (ident "result"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Ok")
-											(args
-												(e-call
-													(e-runtime-error (tag "ident_not_in_scope"))
-													(e-lookup-local
-														(p-assign (ident "data"))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Err")
-											(args
+									(p-assign (ident "request")))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "result"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Ok")
+										(args
+											(e-call
+												(e-runtime-error (tag "ident_not_in_scope"))
 												(e-lookup-local
-													(p-assign (ident "err")))))))))))))
+													(p-assign (ident "data"))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-lookup-local
+												(p-assign (ident "err"))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Request") (external-module "http.Client"))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Response") (external-module "http.Client"))
 					(ty-lookup (name "Error") (external-module "json.Json"))))))
 	(d-let
@@ -552,78 +512,72 @@ combineResults = |result1, result2|
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Value") (external-module "json.Json"))
 					(ty-malformed)))))
 	(d-let
-		(p-assign (ident "combineResults"))
-		(e-closure
-			(captures
-				(capture (ident "value1"))
-				(capture (ident "value2"))
-				(capture (ident "err"))
-				(capture (ident "err")))
-			(e-lambda
-				(args
-					(p-assign (ident "result1"))
-					(p-assign (ident "result2")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result1"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-match
-										(match
-											(cond
-												(e-lookup-local
-													(p-assign (ident "result2"))))
-											(branches
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-applied-tag)))
-													(value
-														(e-tag (name "Ok")
-															(args
-																(e-tuple
-																	(elems
-																		(e-lookup-local
-																			(p-assign (ident "value1")))
-																		(e-lookup-local
-																			(p-assign (ident "value2")))))))))
-												(branch
-													(patterns
-														(pattern (degenerate false)
-															(p-applied-tag)))
-													(value
-														(e-tag (name "Err")
-															(args
-																(e-lookup-local
-																	(p-assign (ident "err"))))))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Err")
-										(args
+		(p-assign (ident "combineTrys"))
+		(e-lambda
+			(args
+				(p-assign (ident "result1"))
+				(p-assign (ident "result2")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "result1"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-match
+									(match
+										(cond
 											(e-lookup-local
-												(p-assign (ident "err"))))))))))))
+												(p-assign (ident "result2"))))
+										(branches
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-applied-tag)))
+												(value
+													(e-tag (name "Ok")
+														(args
+															(e-tuple
+																(elems
+																	(e-lookup-local
+																		(p-assign (ident "value1")))
+																	(e-lookup-local
+																		(p-assign (ident "value2")))))))))
+											(branch
+												(patterns
+													(pattern (degenerate false)
+														(p-applied-tag)))
+												(value
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "err"))))))))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-applied-tag)))
+							(value
+								(e-tag (name "Err")
+									(args
+										(e-lookup-local
+											(p-assign (ident "err")))))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "err")))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-rigid-var (name "b"))
 					(ty-rigid-var-lookup (ty-rigid-var (name "err"))))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-tuple
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
@@ -634,9 +588,9 @@ combineResults = |result1, result2|
 			(exposed (name "Response") (wildcard false))))
 	(s-import (module "json.Json")
 		(exposes))
-	(s-import (module "utils.Result")
+	(s-import (module "utils.Try")
 		(exposes
-			(exposed (name "Result") (wildcard false)))))
+			(exposed (name "Try") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

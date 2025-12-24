@@ -84,6 +84,8 @@ pub const windows = if (is_windows) struct {
 
 /// POSIX shared memory functions
 pub const posix = if (!is_windows) struct {
+    // Note: mmap returns MAP_FAILED ((void*)-1) on error, NOT NULL
+    // So we declare it as non-optional and check against MAP_FAILED
     pub extern "c" fn mmap(
         addr: ?*anyopaque,
         len: usize,
@@ -91,7 +93,7 @@ pub const posix = if (!is_windows) struct {
         flags: c_int,
         fd: c_int,
         offset: std.c.off_t,
-    ) ?*anyopaque;
+    ) *anyopaque;
 
     pub extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
     pub extern "c" fn close(fd: c_int) c_int;
@@ -101,6 +103,7 @@ pub const posix = if (!is_windows) struct {
     pub const PROT_READ = 0x01;
     pub const PROT_WRITE = 0x02;
     pub const MAP_SHARED = 0x0001;
+    pub const MAP_FAILED: *anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
 } else struct {};
 
 /// Shared memory errors
@@ -310,10 +313,13 @@ pub fn mapMemory(handle: Handle, size: usize, base_addr: ?*anyopaque) SharedMemo
                 posix.MAP_SHARED,
                 handle,
                 0,
-            ) orelse {
-                std.log.err("POSIX: Failed to map shared memory (size: {})", .{size});
+            );
+            // mmap returns MAP_FAILED ((void*)-1) on error, not NULL
+            if (ptr == posix.MAP_FAILED) {
+                const errno = std.c._errno().*;
+                std.log.err("POSIX: Failed to map shared memory (size: {}, fd: {}, errno: {})", .{ size, handle, errno });
                 return error.MmapFailed;
-            };
+            }
             return ptr;
         },
         else => return error.UnsupportedPlatform,

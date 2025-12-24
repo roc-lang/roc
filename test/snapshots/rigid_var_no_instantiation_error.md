@@ -39,6 +39,9 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 **DOES NOT EXIST**
 `Bool.true` does not exist.
 
+`Bool` is in scope, but it has no associated `true`.
+
+It's referenced here:
 **rigid_var_no_instantiation_error.md:17:21:17:30:**
 ```roc
     result2 = swap((Bool.true, [1, 2, 3]))
@@ -255,7 +258,7 @@ main! = |_| {
 								(p-assign (ident "swap")))
 							(e-tuple
 								(elems
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
+									(e-runtime-error (tag "nested_value_not_found"))
 									(e-list
 										(elems
 											(e-num (value "1"))

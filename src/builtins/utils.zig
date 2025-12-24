@@ -3,6 +3,7 @@
 //! This module provides essential infrastructure for builtin operations,
 //! including memory allocation interfaces, overflow detection utilities,
 //! debug functions, and common types used throughout the builtin modules.
+//!
 //! It serves as the foundation layer that other builtin modules depend on
 //! for low-level operations and host interface functions.
 const std = @import("std");
@@ -16,9 +17,42 @@ const RocDbg = @import("host_abi.zig").RocDbg;
 const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
 const RocCrashed = @import("host_abi.zig").RocCrashed;
 
-const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
-const DEBUG_ALLOC = false;
+
+/// Performs a pointer cast with debug-mode alignment verification.
+///
+/// In debug builds, verifies that the pointer is properly aligned for the target type
+/// and panics with detailed diagnostic information if alignment is incorrect.
+/// In release builds, this is equivalent to `@ptrCast(@alignCast(ptr))`.
+///
+/// Usage:
+/// ```
+/// const typed_ptr: *usize = alignedPtrCast(*usize, raw_ptr, @src());
+/// ```
+///
+/// The `src` parameter should always be `@src()` at the call site - this captures
+/// the file, function, and line number to aid in reproducing alignment bugs.
+pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
+    if (comptime builtin.mode == .Debug) {
+        const ptr_info = @typeInfo(T);
+        const alignment = switch (ptr_info) {
+            .pointer => |p| p.alignment,
+            else => @compileError("alignedPtrCast target must be a pointer type"),
+        };
+        const ptr_int = @intFromPtr(ptr);
+        if (alignment > 0 and ptr_int % alignment != 0) {
+            // Alignment errors indicate a bug in the caller.
+            // We use unreachable here because:
+            // 1. We don't have access to roc_ops in this utility function
+            // 2. This is a debug-only check (comptime builtin.mode == .Debug)
+            // 3. On non-WASM, this will trigger a trap with a stack trace
+            // 4. The @src() parameter helps identify the call site in logs
+            _ = src; // Used for debugging context
+            unreachable;
+        }
+    }
+    return @ptrCast(@alignCast(ptr));
+}
 
 /// Tracks allocations for testing purposes with C ABI compatibility. Uses a single global testing allocator to track allocations. If we need multiple independent allocators we will need to modify this and use comptime.
 pub const TestEnv = struct {
@@ -50,7 +84,7 @@ pub const TestEnv = struct {
                 .roc_dbg = rocDbgFn,
                 .roc_expect_failed = rocExpectFailedFn,
                 .roc_crashed = rocCrashedFn,
-                .host_fns = undefined, // No host functions in tests
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // No host functions in tests
             };
         }
         return &self.ops.?;
@@ -69,7 +103,12 @@ pub const TestEnv = struct {
                 4 => self.allocator.free(@as([]align(4) u8, @alignCast(slice))),
                 8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
-                else => @panic("Unsupported alignment in test deallocator cleanup"),
+                else => {
+                    // Use unreachable since we can't call roc_ops.crash in deinit
+                    // This should never happen in properly written tests
+                    std.debug.print("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
+                    unreachable;
+                },
             }
         }
 
@@ -90,9 +129,14 @@ pub const TestEnv = struct {
             4 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"4", roc_alloc.length),
             8 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", roc_alloc.length),
             16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", roc_alloc.length),
-            else => @panic("Unsupported alignment in test allocator"),
+            else => {
+                // Use unreachable since we can't call roc_ops.crash in test allocator
+                std.debug.print("Unsupported alignment in test allocator: {d}\n", .{roc_alloc.alignment});
+                unreachable;
+            },
         } catch {
-            @panic("Test allocation failed");
+            std.debug.print("Test allocation failed\n", .{});
+            unreachable;
         };
 
         // Cast the pointer to *anyopaque
@@ -104,7 +148,8 @@ pub const TestEnv = struct {
             .alignment = roc_alloc.alignment,
         }) catch {
             self.allocator.free(ptr);
-            @panic("Failed to track test allocation");
+            std.debug.print("Failed to track test allocation\n", .{});
+            unreachable;
         };
 
         roc_alloc.answer = result;
@@ -123,33 +168,65 @@ pub const TestEnv = struct {
                 4 => self.allocator.free(@as([]align(4) u8, @alignCast(slice))),
                 8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
-                else => @panic("Unsupported alignment in test deallocator"),
+                else => {
+                    std.debug.print("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
+                    unreachable;
+                },
             }
         }
     }
 
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        _ = env;
-        _ = roc_realloc;
-        @panic("Test realloc not implemented yet");
+        const self: *TestEnv = @ptrCast(@alignCast(env));
+
+        // Look up the old allocation
+        if (self.allocation_map.fetchRemove(roc_realloc.answer)) |entry| {
+            const old_bytes: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+            const old_slice = old_bytes[0..entry.value.size];
+
+            // Reallocate with the same alignment
+            const new_ptr = switch (entry.value.alignment) {
+                1 => self.allocator.realloc(old_slice, roc_realloc.new_length),
+                2 => self.allocator.realloc(@as([]align(2) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                4 => self.allocator.realloc(@as([]align(4) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                8 => self.allocator.realloc(@as([]align(8) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), roc_realloc.new_length),
+                else => {
+                    std.debug.print("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
+                    unreachable;
+                },
+            } catch {
+                std.debug.print("Test reallocation failed\n", .{});
+                unreachable;
+            };
+
+            const result: *anyopaque = @ptrCast(new_ptr.ptr);
+
+            // Update the allocation map with the new pointer and size
+            self.allocation_map.put(result, AllocationInfo{
+                .size = roc_realloc.new_length,
+                .alignment = entry.value.alignment,
+            }) catch {
+                self.allocator.free(new_ptr);
+                std.debug.print("Failed to track test reallocation\n", .{});
+                unreachable;
+            };
+
+            roc_realloc.answer = result;
+        } else {
+            std.debug.print("Test realloc: pointer not found in allocation map\n", .{});
+            unreachable;
+        }
     }
 
-    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-        _ = env;
-        const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
-        std.debug.print("DBG: {s}\n", .{message});
-    }
+    fn rocDbgFn(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
 
-    fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-        _ = env;
-        const message = @as([*]u8, @ptrCast(roc_expect.utf8_bytes))[0..roc_expect.len];
-        std.debug.print("EXPECT FAILED: {s}\n", .{message});
-    }
+    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-        _ = env;
+    fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
         const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-        @panic(message);
+        std.debug.print("Roc crashed: {s}\n", .{message});
+        unreachable;
     }
 };
 
@@ -175,6 +252,16 @@ pub const Dec = fn (?[*]u8) callconv(.c) void;
 /// - It makes the "constant" check very efficient
 /// - It's safe since normal refcounts should never reach 0 while still being referenced
 pub const REFCOUNT_STATIC_DATA: isize = 0;
+
+/// Sentinel value written to freed refcount slots to detect use-after-free.
+/// When memory is freed in debug mode, the refcount slot is poisoned with this value.
+/// Any subsequent attempt to incref/decref this memory will trigger a panic.
+/// This value is only used in debug builds and has zero overhead in release.
+/// Uses a recognizable pattern that works on both 32-bit and 64-bit platforms.
+const POISON_VALUE: isize = @bitCast(if (@sizeOf(usize) == 8)
+    @as(usize, 0xDEADBEEFDEADBEEF)
+else
+    @as(usize, 0xDEADBEEF));
 /// No-op reference count decrement function.
 /// Used as a callback when elements don't contain refcounted data or in testing scenarios
 /// where reference counting operations should be skipped. Matches the `Dec` function type
@@ -209,27 +296,29 @@ const Refcount = enum {
 const RC_TYPE: Refcount = .atomic;
 
 /// Increments reference count of an RC pointer by specified amount
-pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.c) void {
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
     if (RC_TYPE == .none) return;
-
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("| increment {*}: ", .{ptr_to_refcount});
-    }
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = ptr_to_refcount.*;
+
+    // Debug-only assertions to catch refcount bugs early.
+    if (builtin.mode == .Debug) {
+        if (refcount == POISON_VALUE) {
+            roc_ops.crash("Use-after-free: incref on already-freed memory");
+            return;
+        }
+        if (refcount <= 0 and !rcConstant(refcount)) {
+            roc_ops.crash("Invalid incref: incrementing non-positive refcount");
+            return;
+        }
+    }
+
     if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
         switch (RC_TYPE) {
             .normal => {
-                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const old = @as(usize, @bitCast(refcount));
-                    const new = old + @as(usize, @intCast(amount));
-
-                    std.debug.print("{} + {} = {}!\n", .{ old, amount, new });
-                }
-
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
@@ -261,6 +350,9 @@ pub fn decrefRcPtrC(
 }
 
 /// Safely decrements reference count for a potentially null pointer
+/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
+/// It should NOT be used for seamless slices with non-zero start offsets,
+/// as those have misaligned bytes pointers. Use RocList.decref instead.
 pub fn decrefCheckNullC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -268,7 +360,7 @@ pub fn decrefCheckNullC(
     roc_ops: *RocOps,
 ) callconv(.c) void {
     if (bytes_or_null) |bytes| {
-        const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
+        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
         return @call(
             .always_inline,
             decref_ptr_to_refcount,
@@ -289,8 +381,30 @@ pub fn decrefDataPtrC(
     const bytes = bytes_or_null orelse return;
 
     const data_ptr = @intFromPtr(bytes);
+
+    // Verify original pointer is properly aligned
+    // Use roc_ops.crash() instead of std.debug.panic for WASM compatibility
+    if (comptime builtin.mode == .Debug) {
+        if (data_ptr % @alignOf(usize) != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "decrefDataPtrC: data_ptr=0x{x} not {d}-byte aligned", .{ data_ptr, @alignOf(usize) }) catch "decrefDataPtrC: alignment error";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
+
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const unmasked_ptr = data_ptr & ~tag_mask;
+
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (unmasked_ptr % @alignOf(isize) != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "decrefDataPtrC: unmasked=0x{x} (data=0x{x}) not {d}-byte aligned", .{ unmasked_ptr, data_ptr, @alignOf(isize) }) catch "decrefDataPtrC: unmasked alignment error";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(unmasked_ptr));
     const rc_ptr = isizes - 1;
@@ -304,16 +418,39 @@ pub fn decrefDataPtrC(
 pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
+    roc_ops: *RocOps,
 ) callconv(.c) void {
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
+
+    // Verify original pointer is properly aligned (can fail if seamless slice encoding produces bad pointer)
+    if (comptime builtin.mode == .Debug) {
+        if (ptr % @alignOf(usize) != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: ORIGINAL ptr=0x{x} is not {d}-byte aligned", .{ ptr, @alignOf(usize) }) catch "increfDataPtrC: original alignment error";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
+
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
+    const rc_addr = masked_ptr - @sizeOf(usize);
 
-    const isizes: *isize = @as(*isize, @ptrFromInt(masked_ptr - @sizeOf(usize)));
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (rc_addr % @alignOf(isize) != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: rc_addr=0x{x} (ptr=0x{x}, masked=0x{x}) is not {d}-byte aligned", .{ rc_addr, ptr, masked_ptr, @alignOf(isize) }) catch "increfDataPtrC: rc_addr alignment error";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
 
-    return increfRcPtrC(isizes, inc_amount);
+    const isizes: *isize = @as(*isize, @ptrFromInt(rc_addr));
+
+    return increfRcPtrC(isizes, inc_amount, roc_ops);
 }
 
 /// Frees memory for a data pointer regardless of reference count
@@ -330,6 +467,16 @@ pub fn freeDataPtrC(
     const ptr = @intFromPtr(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
+
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (masked_ptr % @alignOf(isize) != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "freeDataPtrC: masked_ptr=0x{x} (ptr=0x{x}) is not {d}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) }) catch "freeDataPtrC: alignment error";
+            roc_ops.crash(msg);
+            return;
+        }
+    }
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
@@ -364,34 +511,40 @@ pub fn decref(
 
     const bytes = bytes_or_null orelse return;
 
-    const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(bytes)));
+    const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
 
     decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops);
 }
 
 inline fn free_ptr_to_refcount(
     refcount_ptr: [*]isize,
-    alignment: u32,
+    element_alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
 ) void {
     if (RC_TYPE == .none) return;
+
+    // Debug-only: Poison the refcount slot before freeing to detect use-after-free.
+    // Any subsequent access to this refcount will see POISON_VALUE and panic.
+    if (builtin.mode == .Debug) {
+        refcount_ptr[0] = POISON_VALUE;
+    }
+
     const ptr_width = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-    const extra_bytes = @max(required_space, alignment);
+    const extra_bytes = @max(required_space, element_alignment);
     const allocation_ptr = @as([*]u8, @ptrCast(refcount_ptr)) - (extra_bytes - @sizeOf(usize));
 
+    // Use the same alignment calculation as allocateWithRefcount
+    const allocation_alignment = @max(ptr_width, element_alignment);
+
     var roc_dealloc_args = RocDealloc{
-        .alignment = alignment,
+        .alignment = allocation_alignment,
         .ptr = allocation_ptr,
     };
 
     // NOTE: we don't even check whether the refcount is "infinity" here!
     roc_ops.roc_dealloc(&roc_dealloc_args, roc_ops.env);
-
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("💀 freed {*}\n", .{allocation_ptr});
-    }
 }
 
 inline fn decref_ptr_to_refcount(
@@ -402,26 +555,29 @@ inline fn decref_ptr_to_refcount(
 ) void {
     if (RC_TYPE == .none) return;
 
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("| decrement {*}: ", .{refcount_ptr});
-    }
-
     // Due to RC alignment tmust take into account pointer size.
     const ptr_width = @sizeOf(usize);
     const alignment = @max(ptr_width, element_alignment);
 
     // Ensure that the refcount is not whole program lifetime.
     const refcount: isize = refcount_ptr[0];
+
+    // Debug-only assertions to catch refcount bugs early.
+    // Use roc_ops.crash() instead of @panic for WASM compatibility.
+    if (builtin.mode == .Debug) {
+        if (refcount == POISON_VALUE) {
+            roc_ops.crash("Use-after-free: decref on already-freed memory");
+            return;
+        }
+        if (refcount <= 0 and !rcConstant(refcount)) {
+            roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
+            return;
+        }
+    }
+
     if (!rcConstant(refcount)) {
         switch (RC_TYPE) {
             .normal => {
-                if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-                    const old = @as(usize, @bitCast(refcount));
-                    const new = @as(usize, @bitCast(refcount_ptr[0] -% 1));
-
-                    std.debug.print("{} - 1 = {}!\n", .{ old, new });
-                }
-
                 refcount_ptr[0] = refcount -% 1;
                 if (refcount == 1) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_ops);
@@ -443,6 +599,7 @@ inline fn decref_ptr_to_refcount(
 /// Handles tag bits in the pointer and extracts the reference count
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
+    roc_ops: *RocOps,
 ) callconv(.c) bool {
     const bytes = bytes_or_null orelse return true;
 
@@ -450,13 +607,19 @@ pub fn isUnique(
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
 
+    // Verify alignment before @ptrFromInt
+    if (comptime builtin.mode == .Debug) {
+        if (masked_ptr % @alignOf(isize) != 0) {
+            var buf: [128]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "isUnique: masked_ptr=0x{x} (ptr=0x{x}) is not {d}-byte aligned", .{ masked_ptr, ptr, @alignOf(isize) }) catch "isUnique: alignment error";
+            roc_ops.crash(msg);
+            return false;
+        }
+    }
+
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
 
     const refcount = (isizes - 1)[0];
-
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("| is unique {*}\n", .{isizes - 1});
-    }
 
     return rcUnique(refcount);
 }
@@ -490,6 +653,28 @@ pub inline fn rcConstant(refcount: isize) bool {
         .none => {
             return true;
         },
+    }
+}
+
+/// Debug-only assertion that a data pointer has a valid refcount.
+/// Panics if the refcount is poisoned (use-after-free) or invalid (underflow).
+/// Compiles to nothing in release builds - zero overhead.
+///
+/// Use this at key points in slice-creating or refcount-manipulating functions
+/// to catch bugs early during development.
+pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
+    if (builtin.mode != .Debug) return;
+    if (data_ptr) |ptr| {
+        const rc_ptr: [*]isize = alignedPtrCast([*]isize, ptr - @sizeOf(usize), @src());
+        const rc = rc_ptr[0];
+        if (rc == POISON_VALUE) {
+            roc_ops.crash("assertValidRefcount: Use-after-free detected");
+            return;
+        }
+        if (rc <= 0 and !rcConstant(rc)) {
+            roc_ops.crash("assertValidRefcount: Invalid refcount (underflow or corruption)");
+            return;
+        }
     }
 }
 
@@ -583,12 +768,9 @@ pub fn allocateWithRefcount(
 
     const new_bytes = @as([*]u8, @ptrCast(roc_alloc_args.answer));
 
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
-    }
-
     const data_ptr = new_bytes + extra_bytes;
-    const refcount_ptr = @as([*]usize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(data_ptr)) - ptr_width));
+
+    const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
     return data_ptr;
@@ -605,15 +787,16 @@ pub const CSlice = extern struct {
 /// Returns a pointer to the data portion, not the allocation start
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
-    alignment: u32,
+    element_alignment: u32,
     old_length: usize,
     new_length: usize,
     element_width: usize,
     elements_refcounted: bool,
+    roc_ops: *RocOps,
 ) [*]u8 {
     const ptr_width: usize = @sizeOf(usize);
     const required_space: usize = if (elements_refcounted) (2 * ptr_width) else ptr_width;
-    const extra_bytes = @max(required_space, alignment);
+    const extra_bytes = @max(required_space, element_alignment);
 
     const old_width = extra_bytes + old_length * element_width;
     const new_width = extra_bytes + new_length * element_width;
@@ -624,11 +807,16 @@ pub fn unsafeReallocate(
 
     const old_allocation = source_ptr - extra_bytes;
 
-    const roc_realloc_args = RocRealloc{
-        .alignment = alignment,
+    // Use the same alignment calculation as allocateWithRefcount
+    const allocation_alignment = @max(ptr_width, element_alignment);
+
+    var roc_realloc_args = RocRealloc{
+        .alignment = allocation_alignment,
         .new_length = new_width,
         .answer = old_allocation,
     };
+
+    roc_ops.roc_realloc(&roc_realloc_args, roc_ops.env);
 
     const new_source = @as([*]u8, @ptrCast(roc_realloc_args.answer)) + extra_bytes;
     return new_source;
@@ -661,16 +849,22 @@ pub fn dictPseudoSeed() callconv(.c) u64 {
 }
 
 test "increfC, refcounted data" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
     var mock_rc: isize = 17;
     const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2);
+    @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2, test_env.getOps());
     try std.testing.expectEqual(mock_rc, 19);
 }
 
 test "increfC, static data" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
     var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
     const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2);
+    @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2, test_env.getOps());
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
@@ -701,10 +895,9 @@ test "TestEnv basic functionality" {
     // Should start with no allocations
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 
-    // Get ops should work
+    // Get ops should work - verify we can get ops and it points back to our test env
     const ops = test_env.getOps();
-    // Function pointers are non-null by design, just verify we can get ops
-    _ = ops;
+    try std.testing.expectEqual(@as(*anyopaque, @ptrCast(&test_env)), ops.env);
 }
 
 test "TestEnv allocation tracking" {
@@ -771,11 +964,11 @@ test "isUnique with different scenarios" {
     const ops = test_env.getOps();
 
     // Test with null (should return true)
-    try std.testing.expect(@import("utils.zig").isUnique(null));
+    try std.testing.expect(@import("utils.zig").isUnique(null, ops));
 
     // Test with allocated memory
     const ptr = allocateWithRefcount(64, 8, false, ops);
-    try std.testing.expect(@import("utils.zig").isUnique(ptr));
+    try std.testing.expect(@import("utils.zig").isUnique(ptr, ops));
 }
 
 test "rcNone function" {

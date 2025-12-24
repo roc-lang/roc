@@ -128,6 +128,18 @@ pub const Expr = union(enum) {
         target_node_idx: u16,
         region: Region,
     },
+    /// Lookup of a required identifier from the platform's `requires` clause.
+    /// This represents a value that the app provides to the platform.
+    /// ```roc
+    /// platform "..."
+    ///     requires { main! : () => {} }
+    /// ...
+    /// main_for_host! = main!  # "main!" here is a required lookup
+    /// ```
+    e_lookup_required: struct {
+        /// Index into env.requires_types for this required identifier
+        requires_idx: ModuleEnv.RequiredType.SafeList.Idx,
+    },
     /// A sequence of zero or more elements of the same type
     /// ```roc
     /// ["one", "two", "three"]
@@ -220,7 +232,7 @@ pub const Expr = union(enum) {
     /// A qualified, nominal type
     ///
     /// ```roc
-    /// Result.Ok("success")       # Tags
+    /// Try.Ok("success")       # Tags
     /// Config.{ optimize : Bool}  # Records
     /// Point.(1.0, 2.0)           # Tuples
     /// Point.(1.0)                # Values
@@ -233,7 +245,7 @@ pub const Expr = union(enum) {
     /// An external qualified, nominal type
     ///
     /// ```roc
-    /// OtherModule.Result.Ok("success")       # Tags
+    /// OtherModule.Try.Ok("success")       # Tags
     /// OtherModule.Config.{ optimize : Bool}  # Records
     /// OtherModule.Point.(1.0, 2.0)           # Tuples
     /// OtherModule.Point.(1.0)                # Values
@@ -303,6 +315,7 @@ pub const Expr = union(enum) {
     e_dot_access: struct {
         receiver: Expr.Idx, // Expression before the dot (e.g., `list` in `list.map`)
         field_name: Ident.Idx, // Identifier after the dot (e.g., `map` in `list.map`)
+        field_name_region: base.Region, // Region of just the field/method name for error reporting
         args: ?Expr.Span, // Optional arguments for method calls (e.g., `fn` in `list.map(fn)`)
     },
     /// Runtime error expression that crashes when executed.
@@ -366,6 +379,71 @@ pub const Expr = union(enum) {
     /// ```
     e_anno_only: struct {},
 
+    /// Early return expression that exits the enclosing function with a value.
+    /// This is used when `return` appears as the final expression in a block.
+    /// Unlike a normal expression, evaluating this causes the function to return
+    /// immediately with the contained value.
+    ///
+    /// ```roc
+    /// if condition {
+    ///     return value  # Early return from enclosing function
+    /// }
+    /// ```
+    e_return: struct {
+        expr: Expr.Idx,
+    },
+
+    /// Type variable dispatch expression for calling methods on type variable aliases.
+    /// This is created when the user writes `Thing.method(args)` inside a function body
+    /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
+    ///
+    /// The actual function to call is resolved during type-checking once the type variable
+    /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
+    /// then `Thing.len(x)` becomes `List.len(x)`.
+    ///
+    /// ```roc
+    /// default_value : |thing| thing where thing implements Default
+    /// default_value = |thing|
+    ///     Thing : thing
+    ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
+    /// ```
+    e_type_var_dispatch: struct {
+        /// Reference to the s_type_var_alias statement that introduced this type alias
+        type_var_alias_stmt: CIR.Statement.Idx,
+        /// The method name being called (e.g., "default" in Thing.default())
+        method_name: Ident.Idx,
+        /// Arguments to the method call (may be empty for no-arg methods)
+        args: Expr.Span,
+    },
+
+    /// For expression that iterates over a list and executes a body for each element.
+    /// The for expression evaluates to the empty record `{}`.
+    /// This is the expression form of a for loop, allowing it to be used in expression contexts.
+    ///
+    /// ```roc
+    /// for_each! = |items, cb!| for item in items { cb!(item) }
+    /// ```
+    e_for: struct {
+        patt: CIR.Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+    },
+
+    /// A hosted function that will be provided by the platform at runtime.
+    /// This represents a lambda/function whose implementation is provided by the host application
+    /// via the RocOps.hosted_fns array.
+    ///
+    /// ```roc
+    /// # Stdout.line! is a hosted function provided by the platform
+    /// line! : Str => {}
+    /// ```
+    e_hosted_lambda: struct {
+        symbol_name: base.Ident.Idx,
+        index: u32, // Index into RocOps.hosted_fns (assigned during canonicalization)
+        args: CIR.Pattern.Span,
+        body: Expr.Idx,
+    },
+
     /// A low-level builtin operation.
     /// This represents a lambda/function that will be implemented by the compiler backend.
     /// Like e_anno_only, it has no Roc implementation, but unlike e_anno_only,
@@ -386,19 +464,64 @@ pub const Expr = union(enum) {
     pub const LowLevel = enum {
         // String operations
         str_is_empty,
+        str_is_eq,
+        str_concat,
+        str_contains,
+        str_trim,
+        str_trim_start,
+        str_trim_end,
+        str_caseless_ascii_equals,
+        str_with_ascii_lowercased,
+        str_with_ascii_uppercased,
+        str_starts_with,
+        str_ends_with,
+        str_repeat,
+        str_with_prefix,
+        str_drop_prefix,
+        str_drop_suffix,
+        str_count_utf8_bytes,
+        str_with_capacity,
+        str_reserve,
+        str_release_excess_capacity,
+        str_to_utf8,
+        str_from_utf8_lossy,
+        str_from_utf8,
+        str_split_on,
+        str_join_with,
+        str_inspekt,
+
+        // Numeric to_str operations
+        u8_to_str,
+        i8_to_str,
+        u16_to_str,
+        i16_to_str,
+        u32_to_str,
+        i32_to_str,
+        u64_to_str,
+        i64_to_str,
+        u128_to_str,
+        i128_to_str,
+        dec_to_str,
+        f32_to_str,
+        f64_to_str,
 
         // List operations
         list_len,
         list_is_empty,
         list_get_unsafe,
+        list_append_unsafe,
         list_concat,
+        list_with_capacity,
+        list_sort_with,
+        list_drop_at,
+        list_sublist,
+        list_append,
 
         // Set operations
-        set_is_empty,
+        // set_is_empty,
 
         // Bool operations
         bool_is_eq,
-        bool_is_ne,
 
         // Numeric type checking operations
         num_is_zero, // All numeric types
@@ -407,7 +530,6 @@ pub const Expr = union(enum) {
 
         // Numeric comparison operations
         num_is_eq, // All integer types + Dec (NOT F32/F64 due to float imprecision)
-        num_is_ne, // Dec only (intentionally separate from is_eq for clarity)
         num_is_gt, // All numeric types
         num_is_gte, // All numeric types
         num_is_lt, // All numeric types
@@ -415,19 +537,621 @@ pub const Expr = union(enum) {
 
         // Numeric arithmetic operations
         num_negate, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs, // Signed types only: I8, I16, I32, I64, I128, Dec, F32, F64
+        num_abs_diff, // All numeric types (signed returns unsigned counterpart)
         num_plus, // All numeric types
         num_minus, // All numeric types
         num_times, // All numeric types
         num_div_by, // All numeric types
+        num_div_trunc_by, // All numeric types
         num_rem_by, // All numeric types
+        num_mod_by, // Integer types only: U8, I8, U16, I16, U32, I32, U64, I64, U128, I128
+
+        // Bitwise shift operations (integer types only)
+        num_shift_left_by, // Int a, U8 -> Int a
+        num_shift_right_by, // Int a, U8 -> Int a (arithmetic shift for signed, logical for unsigned)
+        num_shift_right_zf_by, // Int a, U8 -> Int a (zero-fill/logical shift)
 
         // Numeric parsing operations
-        num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
-        num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
+        num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
+        num_from_str, // Parse Str -> Try(num, [BadNumStr])
+
+        // Numeric conversion operations (U8)
+        u8_to_i8_wrap, // U8 -> I8 (wrapping)
+        u8_to_i8_try, // U8 -> Try(I8, [OutOfRange])
+        u8_to_i16, // U8 -> I16 (safe)
+        u8_to_i32, // U8 -> I32 (safe)
+        u8_to_i64, // U8 -> I64 (safe)
+        u8_to_i128, // U8 -> I128 (safe)
+        u8_to_u16, // U8 -> U16 (safe)
+        u8_to_u32, // U8 -> U32 (safe)
+        u8_to_u64, // U8 -> U64 (safe)
+        u8_to_u128, // U8 -> U128 (safe)
+        u8_to_f32, // U8 -> F32 (safe)
+        u8_to_f64, // U8 -> F64 (safe)
+        u8_to_dec, // U8 -> Dec (safe)
+
+        // Numeric conversion operations (I8)
+        i8_to_i16, // I8 -> I16 (safe)
+        i8_to_i32, // I8 -> I32 (safe)
+        i8_to_i64, // I8 -> I64 (safe)
+        i8_to_i128, // I8 -> I128 (safe)
+        i8_to_u8_wrap, // I8 -> U8 (wrapping)
+        i8_to_u8_try, // I8 -> Try(U8, [OutOfRange])
+        i8_to_u16_wrap, // I8 -> U16 (wrapping)
+        i8_to_u16_try, // I8 -> Try(U16, [OutOfRange])
+        i8_to_u32_wrap, // I8 -> U32 (wrapping)
+        i8_to_u32_try, // I8 -> Try(U32, [OutOfRange])
+        i8_to_u64_wrap, // I8 -> U64 (wrapping)
+        i8_to_u64_try, // I8 -> Try(U64, [OutOfRange])
+        i8_to_u128_wrap, // I8 -> U128 (wrapping)
+        i8_to_u128_try, // I8 -> Try(U128, [OutOfRange])
+        i8_to_f32, // I8 -> F32 (safe)
+        i8_to_f64, // I8 -> F64 (safe)
+        i8_to_dec, // I8 -> Dec (safe)
+
+        // Numeric conversion operations (U16)
+        u16_to_i8_wrap, // U16 -> I8 (wrapping)
+        u16_to_i8_try, // U16 -> Try(I8, [OutOfRange])
+        u16_to_i16_wrap, // U16 -> I16 (wrapping)
+        u16_to_i16_try, // U16 -> Try(I16, [OutOfRange])
+        u16_to_i32, // U16 -> I32 (safe)
+        u16_to_i64, // U16 -> I64 (safe)
+        u16_to_i128, // U16 -> I128 (safe)
+        u16_to_u8_wrap, // U16 -> U8 (wrapping)
+        u16_to_u8_try, // U16 -> Try(U8, [OutOfRange])
+        u16_to_u32, // U16 -> U32 (safe)
+        u16_to_u64, // U16 -> U64 (safe)
+        u16_to_u128, // U16 -> U128 (safe)
+        u16_to_f32, // U16 -> F32 (safe)
+        u16_to_f64, // U16 -> F64 (safe)
+        u16_to_dec, // U16 -> Dec (safe)
+
+        // Numeric conversion operations (I16)
+        i16_to_i8_wrap, // I16 -> I8 (wrapping)
+        i16_to_i8_try, // I16 -> Try(I8, [OutOfRange])
+        i16_to_i32, // I16 -> I32 (safe)
+        i16_to_i64, // I16 -> I64 (safe)
+        i16_to_i128, // I16 -> I128 (safe)
+        i16_to_u8_wrap, // I16 -> U8 (wrapping)
+        i16_to_u8_try, // I16 -> Try(U8, [OutOfRange])
+        i16_to_u16_wrap, // I16 -> U16 (wrapping)
+        i16_to_u16_try, // I16 -> Try(U16, [OutOfRange])
+        i16_to_u32_wrap, // I16 -> U32 (wrapping)
+        i16_to_u32_try, // I16 -> Try(U32, [OutOfRange])
+        i16_to_u64_wrap, // I16 -> U64 (wrapping)
+        i16_to_u64_try, // I16 -> Try(U64, [OutOfRange])
+        i16_to_u128_wrap, // I16 -> U128 (wrapping)
+        i16_to_u128_try, // I16 -> Try(U128, [OutOfRange])
+        i16_to_f32, // I16 -> F32 (safe)
+        i16_to_f64, // I16 -> F64 (safe)
+        i16_to_dec, // I16 -> Dec (safe)
+
+        // Numeric conversion operations (U32)
+        u32_to_i8_wrap, // U32 -> I8 (wrapping)
+        u32_to_i8_try, // U32 -> Try(I8, [OutOfRange])
+        u32_to_i16_wrap, // U32 -> I16 (wrapping)
+        u32_to_i16_try, // U32 -> Try(I16, [OutOfRange])
+        u32_to_i32_wrap, // U32 -> I32 (wrapping)
+        u32_to_i32_try, // U32 -> Try(I32, [OutOfRange])
+        u32_to_i64, // U32 -> I64 (safe)
+        u32_to_i128, // U32 -> I128 (safe)
+        u32_to_u8_wrap, // U32 -> U8 (wrapping)
+        u32_to_u8_try, // U32 -> Try(U8, [OutOfRange])
+        u32_to_u16_wrap, // U32 -> U16 (wrapping)
+        u32_to_u16_try, // U32 -> Try(U16, [OutOfRange])
+        u32_to_u64, // U32 -> U64 (safe)
+        u32_to_u128, // U32 -> U128 (safe)
+        u32_to_f32, // U32 -> F32 (safe)
+        u32_to_f64, // U32 -> F64 (safe)
+        u32_to_dec, // U32 -> Dec (safe)
+
+        // Numeric conversion operations (I32)
+        i32_to_i8_wrap, // I32 -> I8 (wrapping)
+        i32_to_i8_try, // I32 -> Try(I8, [OutOfRange])
+        i32_to_i16_wrap, // I32 -> I16 (wrapping)
+        i32_to_i16_try, // I32 -> Try(I16, [OutOfRange])
+        i32_to_i64, // I32 -> I64 (safe)
+        i32_to_i128, // I32 -> I128 (safe)
+        i32_to_u8_wrap, // I32 -> U8 (wrapping)
+        i32_to_u8_try, // I32 -> Try(U8, [OutOfRange])
+        i32_to_u16_wrap, // I32 -> U16 (wrapping)
+        i32_to_u16_try, // I32 -> Try(U16, [OutOfRange])
+        i32_to_u32_wrap, // I32 -> U32 (wrapping)
+        i32_to_u32_try, // I32 -> Try(U32, [OutOfRange])
+        i32_to_u64_wrap, // I32 -> U64 (wrapping)
+        i32_to_u64_try, // I32 -> Try(U64, [OutOfRange])
+        i32_to_u128_wrap, // I32 -> U128 (wrapping)
+        i32_to_u128_try, // I32 -> Try(U128, [OutOfRange])
+        i32_to_f32, // I32 -> F32 (safe)
+        i32_to_f64, // I32 -> F64 (safe)
+        i32_to_dec, // I32 -> Dec (safe)
+
+        // Numeric conversion operations (U64)
+        u64_to_i8_wrap, // U64 -> I8 (wrapping)
+        u64_to_i8_try, // U64 -> Try(I8, [OutOfRange])
+        u64_to_i16_wrap, // U64 -> I16 (wrapping)
+        u64_to_i16_try, // U64 -> Try(I16, [OutOfRange])
+        u64_to_i32_wrap, // U64 -> I32 (wrapping)
+        u64_to_i32_try, // U64 -> Try(I32, [OutOfRange])
+        u64_to_i64_wrap, // U64 -> I64 (wrapping)
+        u64_to_i64_try, // U64 -> Try(I64, [OutOfRange])
+        u64_to_i128, // U64 -> I128 (safe)
+        u64_to_u8_wrap, // U64 -> U8 (wrapping)
+        u64_to_u8_try, // U64 -> Try(U8, [OutOfRange])
+        u64_to_u16_wrap, // U64 -> U16 (wrapping)
+        u64_to_u16_try, // U64 -> Try(U16, [OutOfRange])
+        u64_to_u32_wrap, // U64 -> U32 (wrapping)
+        u64_to_u32_try, // U64 -> Try(U32, [OutOfRange])
+        u64_to_u128, // U64 -> U128 (safe)
+        u64_to_f32, // U64 -> F32 (safe)
+        u64_to_f64, // U64 -> F64 (safe)
+        u64_to_dec, // U64 -> Dec (safe)
+
+        // Numeric conversion operations (I64)
+        i64_to_i8_wrap, // I64 -> I8 (wrapping)
+        i64_to_i8_try, // I64 -> Try(I8, [OutOfRange])
+        i64_to_i16_wrap, // I64 -> I16 (wrapping)
+        i64_to_i16_try, // I64 -> Try(I16, [OutOfRange])
+        i64_to_i32_wrap, // I64 -> I32 (wrapping)
+        i64_to_i32_try, // I64 -> Try(I32, [OutOfRange])
+        i64_to_i128, // I64 -> I128 (safe)
+        i64_to_u8_wrap, // I64 -> U8 (wrapping)
+        i64_to_u8_try, // I64 -> Try(U8, [OutOfRange])
+        i64_to_u16_wrap, // I64 -> U16 (wrapping)
+        i64_to_u16_try, // I64 -> Try(U16, [OutOfRange])
+        i64_to_u32_wrap, // I64 -> U32 (wrapping)
+        i64_to_u32_try, // I64 -> Try(U32, [OutOfRange])
+        i64_to_u64_wrap, // I64 -> U64 (wrapping)
+        i64_to_u64_try, // I64 -> Try(U64, [OutOfRange])
+        i64_to_u128_wrap, // I64 -> U128 (wrapping)
+        i64_to_u128_try, // I64 -> Try(U128, [OutOfRange])
+        i64_to_f32, // I64 -> F32 (safe)
+        i64_to_f64, // I64 -> F64 (safe)
+        i64_to_dec, // I64 -> Dec (safe)
+
+        // Numeric conversion operations (U128)
+        u128_to_i8_wrap, // U128 -> I8 (wrapping)
+        u128_to_i8_try, // U128 -> Try(I8, [OutOfRange])
+        u128_to_i16_wrap, // U128 -> I16 (wrapping)
+        u128_to_i16_try, // U128 -> Try(I16, [OutOfRange])
+        u128_to_i32_wrap, // U128 -> I32 (wrapping)
+        u128_to_i32_try, // U128 -> Try(I32, [OutOfRange])
+        u128_to_i64_wrap, // U128 -> I64 (wrapping)
+        u128_to_i64_try, // U128 -> Try(I64, [OutOfRange])
+        u128_to_i128_wrap, // U128 -> I128 (wrapping)
+        u128_to_i128_try, // U128 -> Try(I128, [OutOfRange])
+        u128_to_u8_wrap, // U128 -> U8 (wrapping)
+        u128_to_u8_try, // U128 -> Try(U8, [OutOfRange])
+        u128_to_u16_wrap, // U128 -> U16 (wrapping)
+        u128_to_u16_try, // U128 -> Try(U16, [OutOfRange])
+        u128_to_u32_wrap, // U128 -> U32 (wrapping)
+        u128_to_u32_try, // U128 -> Try(U32, [OutOfRange])
+        u128_to_u64_wrap, // U128 -> U64 (wrapping)
+        u128_to_u64_try, // U128 -> Try(U64, [OutOfRange])
+        u128_to_f32, // U128 -> F32 (safe)
+        u128_to_f64, // U128 -> F64 (safe)
+        u128_to_dec_try_unsafe, // U128 -> { success: Bool, val: Dec }
+
+        // Numeric conversion operations (I128)
+        i128_to_i8_wrap, // I128 -> I8 (wrapping)
+        i128_to_i8_try, // I128 -> Try(I8, [OutOfRange])
+        i128_to_i16_wrap, // I128 -> I16 (wrapping)
+        i128_to_i16_try, // I128 -> Try(I16, [OutOfRange])
+        i128_to_i32_wrap, // I128 -> I32 (wrapping)
+        i128_to_i32_try, // I128 -> Try(I32, [OutOfRange])
+        i128_to_i64_wrap, // I128 -> I64 (wrapping)
+        i128_to_i64_try, // I128 -> Try(I64, [OutOfRange])
+        i128_to_u8_wrap, // I128 -> U8 (wrapping)
+        i128_to_u8_try, // I128 -> Try(U8, [OutOfRange])
+        i128_to_u16_wrap, // I128 -> U16 (wrapping)
+        i128_to_u16_try, // I128 -> Try(U16, [OutOfRange])
+        i128_to_u32_wrap, // I128 -> U32 (wrapping)
+        i128_to_u32_try, // I128 -> Try(U32, [OutOfRange])
+        i128_to_u64_wrap, // I128 -> U64 (wrapping)
+        i128_to_u64_try, // I128 -> Try(U64, [OutOfRange])
+        i128_to_u128_wrap, // I128 -> U128 (wrapping)
+        i128_to_u128_try, // I128 -> Try(U128, [OutOfRange])
+        i128_to_f32, // I128 -> F32 (safe)
+        i128_to_f64, // I128 -> F64 (safe)
+        i128_to_dec_try_unsafe, // I128 -> { success: Bool, val: Dec }
+
+        // Numeric conversion operations (F32)
+        f32_to_i8_trunc, // F32 -> I8 (truncating)
+        f32_to_i8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I8 }
+        f32_to_i16_trunc, // F32 -> I16 (truncating)
+        f32_to_i16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I16 }
+        f32_to_i32_trunc, // F32 -> I32 (truncating)
+        f32_to_i32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I32 }
+        f32_to_i64_trunc, // F32 -> I64 (truncating)
+        f32_to_i64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I64 }
+        f32_to_i128_trunc, // F32 -> I128 (truncating)
+        f32_to_i128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: I128 }
+        f32_to_u8_trunc, // F32 -> U8 (truncating)
+        f32_to_u8_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U8 }
+        f32_to_u16_trunc, // F32 -> U16 (truncating)
+        f32_to_u16_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U16 }
+        f32_to_u32_trunc, // F32 -> U32 (truncating)
+        f32_to_u32_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U32 }
+        f32_to_u64_trunc, // F32 -> U64 (truncating)
+        f32_to_u64_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U64 }
+        f32_to_u128_trunc, // F32 -> U128 (truncating)
+        f32_to_u128_try_unsafe, // F32 -> { is_int: Bool, in_range: Bool, val: U128 }
+        f32_to_f64, // F32 -> F64 (safe widening)
+
+        // Numeric conversion operations (F64)
+        f64_to_i8_trunc, // F64 -> I8 (truncating)
+        f64_to_i8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I8 }
+        f64_to_i16_trunc, // F64 -> I16 (truncating)
+        f64_to_i16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I16 }
+        f64_to_i32_trunc, // F64 -> I32 (truncating)
+        f64_to_i32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I32 }
+        f64_to_i64_trunc, // F64 -> I64 (truncating)
+        f64_to_i64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I64 }
+        f64_to_i128_trunc, // F64 -> I128 (truncating)
+        f64_to_i128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: I128 }
+        f64_to_u8_trunc, // F64 -> U8 (truncating)
+        f64_to_u8_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U8 }
+        f64_to_u16_trunc, // F64 -> U16 (truncating)
+        f64_to_u16_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U16 }
+        f64_to_u32_trunc, // F64 -> U32 (truncating)
+        f64_to_u32_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U32 }
+        f64_to_u64_trunc, // F64 -> U64 (truncating)
+        f64_to_u64_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U64 }
+        f64_to_u128_trunc, // F64 -> U128 (truncating)
+        f64_to_u128_try_unsafe, // F64 -> { is_int: Bool, in_range: Bool, val: U128 }
+        f64_to_f32_wrap, // F64 -> F32 (lossy narrowing)
+        f64_to_f32_try_unsafe, // F64 -> { success: Bool, val: F32 }
+
+        // Numeric conversion operations (Dec)
+        dec_to_i8_trunc, // Dec -> I8 (truncating)
+        dec_to_i8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I8 }
+        dec_to_i16_trunc, // Dec -> I16 (truncating)
+        dec_to_i16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I16 }
+        dec_to_i32_trunc, // Dec -> I32 (truncating)
+        dec_to_i32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I32 }
+        dec_to_i64_trunc, // Dec -> I64 (truncating)
+        dec_to_i64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: I64 }
+        dec_to_i128_trunc, // Dec -> I128 (truncating)
+        dec_to_i128_try_unsafe, // Dec -> { is_int: Bool, val: I128 } - always in range
+        dec_to_u8_trunc, // Dec -> U8 (truncating)
+        dec_to_u8_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U8 }
+        dec_to_u16_trunc, // Dec -> U16 (truncating)
+        dec_to_u16_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U16 }
+        dec_to_u32_trunc, // Dec -> U32 (truncating)
+        dec_to_u32_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U32 }
+        dec_to_u64_trunc, // Dec -> U64 (truncating)
+        dec_to_u64_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U64 }
+        dec_to_u128_trunc, // Dec -> U128 (truncating)
+        dec_to_u128_try_unsafe, // Dec -> { is_int: Bool, in_range: Bool, val: U128 }
+        dec_to_f32_wrap, // Dec -> F32 (lossy narrowing)
+        dec_to_f32_try_unsafe, // Dec -> { success: Bool, val: F32 }
+        dec_to_f64, // Dec -> F64 (lossy conversion)
+
+        /// Ownership semantics for each argument of a low-level operation.
+        /// See src/builtins/OWNERSHIP.md for detailed documentation.
+        pub const ArgOwnership = enum {
+            /// Function reads argument without affecting refcount. Caller retains ownership.
+            /// Interpreter should decref after call.
+            borrow,
+            /// Function takes ownership of argument. Caller loses access.
+            /// Interpreter should NOT decref after call.
+            consume,
+        };
+
+        /// Returns the ownership semantics for each argument of this low-level operation.
+        /// The returned slice has one entry per argument.
+        ///
+        /// Important: DO NOT ADD an else branch to this switch statement
+        /// we expect a compile error if a new case is added and ownership semantics are not defined here.
+        pub fn getArgOwnership(self: LowLevel) []const ArgOwnership {
+            return switch (self) {
+                // String operations - borrowing (read-only)
+                .str_is_empty, .str_is_eq, .str_contains, .str_starts_with, .str_ends_with, .str_count_utf8_bytes, .str_caseless_ascii_equals => &.{ .borrow, .borrow },
+
+                // String operations - consuming (take ownership)
+                .str_concat => &.{ .consume, .borrow }, // first consumed, second borrowed
+                .str_trim, .str_trim_start, .str_trim_end => &.{.consume},
+                .str_with_ascii_lowercased, .str_with_ascii_uppercased => &.{.consume},
+                .str_repeat => &.{ .borrow, .borrow }, // string borrowed, count is value type
+                .str_with_prefix => &.{ .consume, .borrow },
+                .str_with_capacity => &.{.borrow}, // capacity is value type
+                .str_reserve => &.{ .consume, .borrow },
+                .str_release_excess_capacity => &.{.consume},
+                .str_join_with => &.{ .consume, .borrow }, // list consumed, separator borrowed
+
+                // String operations - borrowing with seamless slice result (incref internally)
+                .str_split_on => &.{ .borrow, .borrow },
+                .str_to_utf8 => &.{.borrow},
+                .str_drop_prefix, .str_drop_suffix => &.{ .borrow, .borrow },
+
+                // String parsing - list consumed
+                .str_from_utf8, .str_from_utf8_lossy => &.{.consume},
+
+                // Str.inspect - borrows the value to render it
+                .str_inspekt => &.{.borrow},
+
+                // Numeric to_str - value types (no ownership)
+                .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
+
+                // List operations - borrowing
+                .list_len, .list_is_empty, .list_get_unsafe => &.{.borrow},
+
+                // List operations - consuming
+                .list_concat => &.{ .consume, .consume },
+                .list_with_capacity => &.{.borrow}, // capacity is value type
+                .list_sort_with => &.{.consume},
+                .list_append_unsafe => &.{.consume},
+                .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
+                .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
+                .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
+
+                // Bool operations - value types
+                .bool_is_eq => &.{ .borrow, .borrow },
+
+                // Numeric operations - all value types (no heap allocation)
+                .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
+                .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
+
+                // Numeric parsing - string borrowed
+                .num_from_numeral => &.{.borrow},
+                .num_from_str => &.{.borrow},
+
+                // All numeric conversions are value types (no heap allocation).
+                // Explicitly listed to get compile errors when new LowLevel variants are added.
+                .u8_to_i8_wrap,
+                .u8_to_i8_try,
+                .u8_to_i16,
+                .u8_to_i32,
+                .u8_to_i64,
+                .u8_to_i128,
+                .u8_to_u16,
+                .u8_to_u32,
+                .u8_to_u64,
+                .u8_to_u128,
+                .u8_to_f32,
+                .u8_to_f64,
+                .u8_to_dec,
+                .i8_to_i16,
+                .i8_to_i32,
+                .i8_to_i64,
+                .i8_to_i128,
+                .i8_to_u8_wrap,
+                .i8_to_u8_try,
+                .i8_to_u16_wrap,
+                .i8_to_u16_try,
+                .i8_to_u32_wrap,
+                .i8_to_u32_try,
+                .i8_to_u64_wrap,
+                .i8_to_u64_try,
+                .i8_to_u128_wrap,
+                .i8_to_u128_try,
+                .i8_to_f32,
+                .i8_to_f64,
+                .i8_to_dec,
+                .u16_to_i8_wrap,
+                .u16_to_i8_try,
+                .u16_to_i16_wrap,
+                .u16_to_i16_try,
+                .u16_to_i32,
+                .u16_to_i64,
+                .u16_to_i128,
+                .u16_to_u8_wrap,
+                .u16_to_u8_try,
+                .u16_to_u32,
+                .u16_to_u64,
+                .u16_to_u128,
+                .u16_to_f32,
+                .u16_to_f64,
+                .u16_to_dec,
+                .i16_to_i8_wrap,
+                .i16_to_i8_try,
+                .i16_to_i32,
+                .i16_to_i64,
+                .i16_to_i128,
+                .i16_to_u8_wrap,
+                .i16_to_u8_try,
+                .i16_to_u16_wrap,
+                .i16_to_u16_try,
+                .i16_to_u32_wrap,
+                .i16_to_u32_try,
+                .i16_to_u64_wrap,
+                .i16_to_u64_try,
+                .i16_to_u128_wrap,
+                .i16_to_u128_try,
+                .i16_to_f32,
+                .i16_to_f64,
+                .i16_to_dec,
+                .u32_to_i8_wrap,
+                .u32_to_i8_try,
+                .u32_to_i16_wrap,
+                .u32_to_i16_try,
+                .u32_to_i32_wrap,
+                .u32_to_i32_try,
+                .u32_to_i64,
+                .u32_to_i128,
+                .u32_to_u8_wrap,
+                .u32_to_u8_try,
+                .u32_to_u16_wrap,
+                .u32_to_u16_try,
+                .u32_to_u64,
+                .u32_to_u128,
+                .u32_to_f32,
+                .u32_to_f64,
+                .u32_to_dec,
+                .i32_to_i8_wrap,
+                .i32_to_i8_try,
+                .i32_to_i16_wrap,
+                .i32_to_i16_try,
+                .i32_to_i64,
+                .i32_to_i128,
+                .i32_to_u8_wrap,
+                .i32_to_u8_try,
+                .i32_to_u16_wrap,
+                .i32_to_u16_try,
+                .i32_to_u32_wrap,
+                .i32_to_u32_try,
+                .i32_to_u64_wrap,
+                .i32_to_u64_try,
+                .i32_to_u128_wrap,
+                .i32_to_u128_try,
+                .i32_to_f32,
+                .i32_to_f64,
+                .i32_to_dec,
+                .u64_to_i8_wrap,
+                .u64_to_i8_try,
+                .u64_to_i16_wrap,
+                .u64_to_i16_try,
+                .u64_to_i32_wrap,
+                .u64_to_i32_try,
+                .u64_to_i64_wrap,
+                .u64_to_i64_try,
+                .u64_to_i128,
+                .u64_to_u8_wrap,
+                .u64_to_u8_try,
+                .u64_to_u16_wrap,
+                .u64_to_u16_try,
+                .u64_to_u32_wrap,
+                .u64_to_u32_try,
+                .u64_to_u128,
+                .u64_to_f32,
+                .u64_to_f64,
+                .u64_to_dec,
+                .i64_to_i8_wrap,
+                .i64_to_i8_try,
+                .i64_to_i16_wrap,
+                .i64_to_i16_try,
+                .i64_to_i32_wrap,
+                .i64_to_i32_try,
+                .i64_to_i128,
+                .i64_to_u8_wrap,
+                .i64_to_u8_try,
+                .i64_to_u16_wrap,
+                .i64_to_u16_try,
+                .i64_to_u32_wrap,
+                .i64_to_u32_try,
+                .i64_to_u64_wrap,
+                .i64_to_u64_try,
+                .i64_to_u128_wrap,
+                .i64_to_u128_try,
+                .i64_to_f32,
+                .i64_to_f64,
+                .i64_to_dec,
+                .u128_to_i8_wrap,
+                .u128_to_i8_try,
+                .u128_to_i16_wrap,
+                .u128_to_i16_try,
+                .u128_to_i32_wrap,
+                .u128_to_i32_try,
+                .u128_to_i64_wrap,
+                .u128_to_i64_try,
+                .u128_to_i128_wrap,
+                .u128_to_i128_try,
+                .u128_to_u8_wrap,
+                .u128_to_u8_try,
+                .u128_to_u16_wrap,
+                .u128_to_u16_try,
+                .u128_to_u32_wrap,
+                .u128_to_u32_try,
+                .u128_to_u64_wrap,
+                .u128_to_u64_try,
+                .u128_to_f32,
+                .u128_to_f64,
+                .u128_to_dec_try_unsafe,
+                .i128_to_i8_wrap,
+                .i128_to_i8_try,
+                .i128_to_i16_wrap,
+                .i128_to_i16_try,
+                .i128_to_i32_wrap,
+                .i128_to_i32_try,
+                .i128_to_i64_wrap,
+                .i128_to_i64_try,
+                .i128_to_u8_wrap,
+                .i128_to_u8_try,
+                .i128_to_u16_wrap,
+                .i128_to_u16_try,
+                .i128_to_u32_wrap,
+                .i128_to_u32_try,
+                .i128_to_u64_wrap,
+                .i128_to_u64_try,
+                .i128_to_u128_wrap,
+                .i128_to_u128_try,
+                .i128_to_f32,
+                .i128_to_f64,
+                .i128_to_dec_try_unsafe,
+                .f32_to_i8_trunc,
+                .f32_to_i8_try_unsafe,
+                .f32_to_i16_trunc,
+                .f32_to_i16_try_unsafe,
+                .f32_to_i32_trunc,
+                .f32_to_i32_try_unsafe,
+                .f32_to_i64_trunc,
+                .f32_to_i64_try_unsafe,
+                .f32_to_i128_trunc,
+                .f32_to_i128_try_unsafe,
+                .f32_to_u8_trunc,
+                .f32_to_u8_try_unsafe,
+                .f32_to_u16_trunc,
+                .f32_to_u16_try_unsafe,
+                .f32_to_u32_trunc,
+                .f32_to_u32_try_unsafe,
+                .f32_to_u64_trunc,
+                .f32_to_u64_try_unsafe,
+                .f32_to_u128_trunc,
+                .f32_to_u128_try_unsafe,
+                .f32_to_f64,
+                .f64_to_i8_trunc,
+                .f64_to_i8_try_unsafe,
+                .f64_to_i16_trunc,
+                .f64_to_i16_try_unsafe,
+                .f64_to_i32_trunc,
+                .f64_to_i32_try_unsafe,
+                .f64_to_i64_trunc,
+                .f64_to_i64_try_unsafe,
+                .f64_to_i128_trunc,
+                .f64_to_i128_try_unsafe,
+                .f64_to_u8_trunc,
+                .f64_to_u8_try_unsafe,
+                .f64_to_u16_trunc,
+                .f64_to_u16_try_unsafe,
+                .f64_to_u32_trunc,
+                .f64_to_u32_try_unsafe,
+                .f64_to_u64_trunc,
+                .f64_to_u64_try_unsafe,
+                .f64_to_u128_trunc,
+                .f64_to_u128_try_unsafe,
+                .f64_to_f32_wrap,
+                .f64_to_f32_try_unsafe,
+                .dec_to_i8_trunc,
+                .dec_to_i8_try_unsafe,
+                .dec_to_i16_trunc,
+                .dec_to_i16_try_unsafe,
+                .dec_to_i32_trunc,
+                .dec_to_i32_try_unsafe,
+                .dec_to_i64_trunc,
+                .dec_to_i64_try_unsafe,
+                .dec_to_i128_trunc,
+                .dec_to_i128_try_unsafe,
+                .dec_to_u8_trunc,
+                .dec_to_u8_try_unsafe,
+                .dec_to_u16_trunc,
+                .dec_to_u16_try_unsafe,
+                .dec_to_u32_trunc,
+                .dec_to_u32_try_unsafe,
+                .dec_to_u64_trunc,
+                .dec_to_u64_try_unsafe,
+                .dec_to_u128_trunc,
+                .dec_to_u128_try_unsafe,
+                .dec_to_f32_wrap,
+                .dec_to_f32_try_unsafe,
+                .dec_to_f64,
+                => &.{.borrow},
+            };
+        }
     };
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Span = extern struct { span: DataSpan };
 
     /// A single branch of an if expression.
     /// Contains a condition expression and the body to execute if the condition is true.
@@ -444,7 +1168,7 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
     };
 
     /// A closure, which is a lambda expression that captures variables
@@ -504,12 +1228,9 @@ pub const Expr = union(enum) {
             ge, // >=
             eq, // ==
             ne, // !=
-            pow, // ^
             div_trunc, // //
             @"and", // and
             @"or", // or
-            pipe_forward, // |>
-            null_coalesce, // ?
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
@@ -734,6 +1455,23 @@ pub const Expr = union(enum) {
                     try tree.endNode(field_begin, field_attrs);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_required => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-required");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const requires_items = ir.requires_types.items.items;
+                const idx = e.requires_idx.toU32();
+                if (idx < requires_items.len) {
+                    const required_type = requires_items[idx];
+                    const ident_name = ir.getIdent(required_type.ident);
+                    try tree.pushStringPair("required-ident", ident_name);
                 }
 
                 try tree.endNode(begin, attrs);
@@ -1069,6 +1807,25 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .e_hosted_lambda => |hosted| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-hosted-lambda");
+                const symbol_name = ir.common.getIdent(hosted.symbol_name);
+                try tree.pushStringPair("symbol", symbol_name);
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                const args_begin = tree.beginNode();
+                try tree.pushStaticAtom("args");
+                const args_attrs = tree.beginNode();
+                for (ir.store.slicePatterns(hosted.args)) |arg_idx| {
+                    try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+                try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
             .e_low_level_lambda => |low_level| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-low-level-lambda");
@@ -1123,6 +1880,55 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_return => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add inner expression
+                try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_type_var_dispatch => |tvd| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-type-var-dispatch");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                // Add method name
+                const method_text = ir.getIdent(tvd.method_name);
+                try tree.pushStringPair("method", method_text);
+
+                const attrs = tree.beginNode();
+
+                // Add arguments if any
+                for (ir.store.exprSlice(tvd.args)) |arg_idx| {
+                    try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_for => |for_expr| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-for");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                // Add pattern
+                try ir.store.getPattern(for_expr.patt).pushToSExprTree(ir, tree, for_expr.patt);
+
+                // Add list expression
+                try ir.store.getExpr(for_expr.expr).pushToSExprTree(ir, tree, for_expr.expr);
+
+                // Add body expression
+                try ir.store.getExpr(for_expr.body).pushToSExprTree(ir, tree, for_expr.body);
+
+                try tree.endNode(begin, attrs);
+            },
         }
     }
 
@@ -1152,7 +1958,7 @@ pub const Expr = union(enum) {
         exhaustive: TypeVar,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
 
         /// A single branch within a match expression.
         /// Contains patterns to match against, an optional guard condition,
@@ -1211,7 +2017,7 @@ pub const Expr = union(enum) {
             }
 
             pub const Idx = enum(u32) { _ };
-            pub const Span = struct { span: DataSpan };
+            pub const Span = extern struct { span: DataSpan };
         };
 
         /// A pattern within a match branch, which may be part of an OR pattern.
@@ -1234,7 +2040,7 @@ pub const Expr = union(enum) {
             degenerate: bool,
 
             pub const Idx = enum(u32) { _ };
-            pub const Span = struct { span: base.DataSpan };
+            pub const Span = extern struct { span: base.DataSpan };
         };
 
         pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
@@ -1268,6 +2074,6 @@ pub const Expr = union(enum) {
         scope_depth: u32,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: base.DataSpan };
+        pub const Span = extern struct { span: base.DataSpan };
     };
 };

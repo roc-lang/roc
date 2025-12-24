@@ -6,8 +6,6 @@ const can = @import("can");
 const collections = @import("collections");
 
 const ModuleEnv = can.ModuleEnv;
-const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
 
 /// Wrapper for a loaded compiled builtin module that tracks the buffer
 pub const LoadedModule = struct {
@@ -20,10 +18,8 @@ pub const LoadedModule = struct {
         // Most other data (like the SafeList contents) points into the buffer
         self.env.imports.map.deinit(self.gpa);
 
-        // Free the buffer (the env points into this buffer for most data)
+        // Free the buffer (the env was deserialized in-place into this buffer)
         self.gpa.free(self.buffer);
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
     }
 };
 
@@ -46,46 +42,13 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
     @memcpy(buffer, bin_data);
 
-    // Cast to the serialized structure
+    // Cast to the serialized structure and deserialize
     const serialized_ptr = @as(
         *ModuleEnv.Serialized,
         @ptrCast(@alignCast(buffer.ptr)),
     );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*;
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind,
-        .all_defs = serialized_ptr.all_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .exports = serialized_ptr.exports,
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
-        .module_name = module_name,
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
-        .evaluation_order = null,
-        // Well-known identifiers for type checking - look them up in the deserialized common env
-        // These must exist in the Builtin module which defines them
-        .from_int_digits_ident = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-        .from_dec_digits_ident = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
-        .try_ident = common.findIdent("Try") orelse unreachable,
-        .out_of_range_ident = common.findIdent("OutOfRange") orelse unreachable,
-        .builtin_module_ident = common.findIdent("Builtin") orelse unreachable,
-        .plus_ident = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
-    };
+    const base_ptr: i64 = @intCast(@intFromPtr(buffer.ptr));
+    const env = try serialized_ptr.deserialize(base_ptr, gpa, source, module_name);
 
     return LoadedModule{
         .env = env,

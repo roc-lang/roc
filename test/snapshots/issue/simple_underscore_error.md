@@ -12,7 +12,7 @@ foo = 42
 ~~~
 # EXPECTED
 UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
-TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
+MISSING METHOD - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
 **UNDERSCORE IN TYPE ALIAS**
 Underscores are not allowed in type alias declarations.
@@ -25,19 +25,19 @@ BadType := _
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **simple_underscore_error.md:4:7:4:9:**
 ```roc
 foo = 42
 ```
       ^^
 
-It has the type:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-But the type annotation says it should have the type:
-    _BadType_
+    BadType
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -86,5 +86,5 @@ NO CHANGE
 		(nominal (type "BadType")
 			(ty-header (name "BadType"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "BadType"))))
 ~~~

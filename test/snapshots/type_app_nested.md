@@ -7,23 +7,23 @@ type=file
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-processNested : List(Result(Str, Err)) -> List(Str)
+processNested : List(Try(Str, Err)) -> List(Str)
 processNested = |_list| ["one","two"]
 
 main! = |_| processNested([])
 ~~~
 # EXPECTED
-UNDECLARED TYPE - type_app_nested.md:3:34:3:37
+UNDECLARED TYPE - type_app_nested.md:3:31:3:34
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Err_ is not declared in this scope.
 
 This type is referenced here:
-**type_app_nested.md:3:34:3:37:**
+**type_app_nested.md:3:31:3:34:**
 ```roc
-processNested : List(Result(Str, Err)) -> List(Str)
+processNested : List(Try(Str, Err)) -> List(Str)
 ```
-                                 ^^^
+                              ^^^
 
 
 # TOKENS
@@ -54,7 +54,7 @@ EndOfFile,
 				(ty-apply
 					(ty (name "List"))
 					(ty-apply
-						(ty (name "Result"))
+						(ty (name "Try"))
 						(ty (name "Str"))
 						(ty (name "Err"))))
 				(ty-apply
@@ -83,7 +83,7 @@ EndOfFile,
 ~~~roc
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
-processNested : List(Result(Str, Err)) -> List(Str)
+processNested : List(Try(Str, Err)) -> List(Str)
 processNested = |_list| ["one", "two"]
 
 main! = |_| processNested([])
@@ -105,7 +105,7 @@ main! = |_| processNested([])
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
-					(ty-apply (name "Result") (builtin)
+					(ty-apply (name "Try") (builtin)
 						(ty-lookup (name "Str") (builtin))
 						(ty-malformed)))
 				(ty-apply (name "List") (builtin)

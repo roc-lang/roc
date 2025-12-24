@@ -201,17 +201,6 @@ pub const CacheModule = struct {
         }
     }
 
-    /// Convenience functions for reading/writing cache files
-    pub fn writeToFile(
-        allocator: Allocator,
-        cache_data: []const u8,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) !void {
-        _ = allocator;
-        try filesystem.writeFile(file_path, cache_data);
-    }
-
     /// Convenience function for reading cache files
     pub fn readFromFile(
         allocator: Allocator,
@@ -248,7 +237,7 @@ pub const CacheModule = struct {
             switch (self) {
                 .mapped => |m| {
                     // Use the unaligned pointer for munmap
-                    if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .wasi) {
+                    if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
                         const page_aligned_ptr = @as([*]align(std.heap.page_size_min) const u8, @alignCast(m.unaligned_ptr));
                         std.posix.munmap(page_aligned_ptr[0..m.unaligned_len]);
                     }
@@ -265,7 +254,7 @@ pub const CacheModule = struct {
         filesystem: anytype,
     ) !CacheData {
         // Try to use memory mapping on supported platforms
-        if (comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .wasi) {
+        if (comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
             // Open the file
             const file = std.fs.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
                 // Fall back to regular reading on open error
@@ -324,7 +313,7 @@ pub const CacheModule = struct {
 
             if (offset >= file_size_usize) {
                 // File is too small to contain aligned data
-                if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .wasi) {
+                if (comptime @hasDecl(std.posix, "munmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
                     std.posix.munmap(result);
                 }
                 const data = try readFromFile(allocator, file_path, filesystem);

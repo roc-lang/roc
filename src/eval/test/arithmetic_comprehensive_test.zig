@@ -32,18 +32,17 @@
 
 const std = @import("std");
 const helpers = @import("helpers.zig");
-const runExpectInt = helpers.runExpectInt;
+const runExpectI64 = helpers.runExpectI64;
 const runExpectF32 = helpers.runExpectF32;
 const runExpectF64 = helpers.runExpectF64;
 const runExpectDec = helpers.runExpectDec;
+const runExpectStr = helpers.runExpectStr;
 
-// ============================================================================
 // U8 Tests (Unsigned 8-bit: 0 to 255)
 // Uses values > 127 to prove they're not I8
-// ============================================================================
 
 test "U8: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 200
@@ -53,7 +52,7 @@ test "U8: plus" {
         \\}
     , 250, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 255
@@ -63,7 +62,7 @@ test "U8: plus" {
         \\}
     , 255, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 128
@@ -75,7 +74,7 @@ test "U8: plus" {
 }
 
 test "U8: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 200
@@ -85,7 +84,7 @@ test "U8: minus" {
         \\}
     , 150, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 255
@@ -95,7 +94,7 @@ test "U8: minus" {
         \\}
     , 155, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 240
@@ -107,7 +106,7 @@ test "U8: minus" {
 }
 
 test "U8: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 15
@@ -117,7 +116,7 @@ test "U8: times" {
         \\}
     , 255, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 128
@@ -127,7 +126,7 @@ test "U8: times" {
         \\}
     , 128, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 16
@@ -139,7 +138,7 @@ test "U8: times" {
 }
 
 test "U8: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 240
@@ -149,7 +148,7 @@ test "U8: div_by" {
         \\}
     , 120, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 255
@@ -159,7 +158,7 @@ test "U8: div_by" {
         \\}
     , 17, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 200
@@ -171,7 +170,7 @@ test "U8: div_by" {
 }
 
 test "U8: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 200
@@ -181,7 +180,7 @@ test "U8: rem_by" {
         \\}
     , 5, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 255
@@ -191,7 +190,7 @@ test "U8: rem_by" {
         \\}
     , 15, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U8
         \\    a = 128
@@ -202,13 +201,11 @@ test "U8: rem_by" {
     , 2, .no_trace);
 }
 
-// ============================================================================
 // U16 Tests (Unsigned 16-bit: 0 to 65535)
 // Uses values > 32767 to prove they're not I16
-// ============================================================================
 
 test "U16: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 40000
@@ -218,7 +215,7 @@ test "U16: plus" {
         \\}
     , 60000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 65535
@@ -228,7 +225,7 @@ test "U16: plus" {
         \\}
     , 65535, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 32768
@@ -240,7 +237,7 @@ test "U16: plus" {
 }
 
 test "U16: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 50000
@@ -250,7 +247,7 @@ test "U16: minus" {
         \\}
     , 40000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 65535
@@ -260,7 +257,7 @@ test "U16: minus" {
         \\}
     , 35535, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 50000
@@ -272,7 +269,7 @@ test "U16: minus" {
 }
 
 test "U16: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 256
@@ -282,7 +279,7 @@ test "U16: times" {
         \\}
     , 65280, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 32768
@@ -292,7 +289,7 @@ test "U16: times" {
         \\}
     , 32768, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 255
@@ -304,7 +301,7 @@ test "U16: times" {
 }
 
 test "U16: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 60000
@@ -314,7 +311,7 @@ test "U16: div_by" {
         \\}
     , 20000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 65535
@@ -324,7 +321,7 @@ test "U16: div_by" {
         \\}
     , 255, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 40000
@@ -336,7 +333,7 @@ test "U16: div_by" {
 }
 
 test "U16: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 50000
@@ -346,7 +343,7 @@ test "U16: rem_by" {
         \\}
     , 80, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 65535
@@ -356,7 +353,7 @@ test "U16: rem_by" {
         \\}
     , 255, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U16
         \\    a = 40000
@@ -367,13 +364,11 @@ test "U16: rem_by" {
     , 4, .no_trace);
 }
 
-// ============================================================================
 // U32 Tests (Unsigned 32-bit: 0 to 4294967295)
 // Uses values > 2147483647 to prove they're not I32
-// ============================================================================
 
 test "U32: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 3000000000
@@ -383,7 +378,7 @@ test "U32: plus" {
         \\}
     , 4000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 2147483648
@@ -393,7 +388,7 @@ test "U32: plus" {
         \\}
     , 4294967295, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 4294967295
@@ -405,7 +400,7 @@ test "U32: plus" {
 }
 
 test "U32: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 3000000000
@@ -415,7 +410,7 @@ test "U32: minus" {
         \\}
     , 2000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 4294967295
@@ -425,7 +420,7 @@ test "U32: minus" {
         \\}
     , 2147483647, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 3000000000
@@ -437,7 +432,7 @@ test "U32: minus" {
 }
 
 test "U32: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 65536
@@ -447,7 +442,7 @@ test "U32: times" {
         \\}
     , 4294901760, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 2147483648
@@ -457,7 +452,7 @@ test "U32: times" {
         \\}
     , 2147483648, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 1000000
@@ -469,7 +464,7 @@ test "U32: times" {
 }
 
 test "U32: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 4000000000
@@ -479,7 +474,7 @@ test "U32: div_by" {
         \\}
     , 4000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 4294967295
@@ -489,7 +484,7 @@ test "U32: div_by" {
         \\}
     , 65535, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 3000000000
@@ -501,7 +496,7 @@ test "U32: div_by" {
 }
 
 test "U32: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 3000000000
@@ -511,7 +506,7 @@ test "U32: rem_by" {
         \\}
     , 0, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 4294967295
@@ -521,7 +516,7 @@ test "U32: rem_by" {
         \\}
     , 65535, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U32
         \\    a = 2147483648
@@ -532,13 +527,11 @@ test "U32: rem_by" {
     , 2, .no_trace);
 }
 
-// ============================================================================
 // U64 Tests (Unsigned 64-bit: 0 to 18446744073709551615)
 // Uses values > 9223372036854775807 to prove they're not I64
-// ============================================================================
 
 test "U64: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 10000000000000000000
@@ -548,7 +541,7 @@ test "U64: plus" {
         \\}
     , 15000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 9223372036854775808
@@ -558,7 +551,7 @@ test "U64: plus" {
         \\}
     , 18446744073709551615, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 18446744073709551615
@@ -570,7 +563,7 @@ test "U64: plus" {
 }
 
 test "U64: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 15000000000000000000
@@ -580,7 +573,7 @@ test "U64: minus" {
         \\}
     , 10000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 18446744073709551615
@@ -590,7 +583,7 @@ test "U64: minus" {
         \\}
     , 9223372036854775807, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 12000000000000000000
@@ -602,7 +595,7 @@ test "U64: minus" {
 }
 
 test "U64: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 4294967296
@@ -612,7 +605,7 @@ test "U64: times" {
         \\}
     , 18446744069414584320, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 9223372036854775808
@@ -622,7 +615,7 @@ test "U64: times" {
         \\}
     , 9223372036854775808, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 1000000000
@@ -634,7 +627,7 @@ test "U64: times" {
 }
 
 test "U64: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 15000000000000000000
@@ -644,7 +637,7 @@ test "U64: div_by" {
         \\}
     , 15000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 18446744073709551615
@@ -654,7 +647,7 @@ test "U64: div_by" {
         \\}
     , 4294967295, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 10000000000000000000
@@ -666,7 +659,7 @@ test "U64: div_by" {
 }
 
 test "U64: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 10000000000000000000
@@ -676,7 +669,7 @@ test "U64: rem_by" {
         \\}
     , 0, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 18446744073709551615
@@ -686,7 +679,7 @@ test "U64: rem_by" {
         \\}
     , 4294967295, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U64
         \\    a = 9223372036854775808
@@ -697,13 +690,11 @@ test "U64: rem_by" {
     , 8, .no_trace);
 }
 
-// ============================================================================
 // U128 Tests (Unsigned 128-bit: 0 to 340282366920938463463374607431768211455)
 // Uses values > max U64 to prove they're not U64
-// ============================================================================
 
 test "U128: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 100000000000000000000000000000
@@ -713,7 +704,7 @@ test "U128: plus" {
         \\}
     , 150000000000000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 18446744073709551616
@@ -723,7 +714,7 @@ test "U128: plus" {
         \\}
     , 36893488147419103231, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 170141183460469231731687303715884105727
@@ -735,7 +726,7 @@ test "U128: plus" {
 }
 
 test "U128: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 150000000000000000000000000000
@@ -745,7 +736,7 @@ test "U128: minus" {
         \\}
     , 100000000000000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 36893488147419103231
@@ -755,7 +746,7 @@ test "U128: minus" {
         \\}
     , 18446744073709551615, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 100000000000000000000000000000
@@ -767,7 +758,7 @@ test "U128: minus" {
 }
 
 test "U128: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 13043817825332782212
@@ -777,7 +768,7 @@ test "U128: times" {
         \\}
     , 170141183460469231722567801800623612944, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 10000000000000000000
@@ -787,7 +778,7 @@ test "U128: times" {
         \\}
     , 100000000000000000000000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 1000000000000000000000
@@ -799,7 +790,7 @@ test "U128: times" {
 }
 
 test "U128: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 100000000000000000000000000000
@@ -809,7 +800,7 @@ test "U128: div_by" {
         \\}
     , 10000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 170141183460469231722567801800623612944
@@ -819,7 +810,7 @@ test "U128: div_by" {
         \\}
     , 13043817825332782212, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 36893488147419103231
@@ -831,7 +822,7 @@ test "U128: div_by" {
 }
 
 test "U128: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 100000000000000000000000000000
@@ -841,7 +832,7 @@ test "U128: rem_by" {
         \\}
     , 10, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 170141183460469231722567801800623612944
@@ -851,7 +842,7 @@ test "U128: rem_by" {
         \\}
     , 0, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : U128
         \\    a = 36893488147419103231
@@ -862,13 +853,11 @@ test "U128: rem_by" {
     , 255, .no_trace);
 }
 
-// ============================================================================
 // I8 Tests (Signed 8-bit: -128 to 127)
 // Uses negative numbers to prove they're signed
-// ============================================================================
 
 test "I8: negate" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -127
@@ -876,7 +865,7 @@ test "I8: negate" {
         \\}
     , 127, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = 127
@@ -884,7 +873,7 @@ test "I8: negate" {
         \\}
     , -127, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -50
@@ -894,7 +883,7 @@ test "I8: negate" {
 }
 
 test "I8: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -100
@@ -904,7 +893,7 @@ test "I8: plus" {
         \\}
     , -120, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -50
@@ -914,7 +903,7 @@ test "I8: plus" {
         \\}
     , 20, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = 127
@@ -926,7 +915,7 @@ test "I8: plus" {
 }
 
 test "I8: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -50
@@ -936,7 +925,7 @@ test "I8: minus" {
         \\}
     , -120, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = 100
@@ -946,7 +935,7 @@ test "I8: minus" {
         \\}
     , 127, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -64
@@ -958,7 +947,7 @@ test "I8: minus" {
 }
 
 test "I8: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -16
@@ -968,7 +957,7 @@ test "I8: times" {
         \\}
     , -128, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -10
@@ -978,7 +967,7 @@ test "I8: times" {
         \\}
     , 100, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = 127
@@ -990,7 +979,7 @@ test "I8: times" {
 }
 
 test "I8: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -128
@@ -1000,7 +989,7 @@ test "I8: div_by" {
         \\}
     , -64, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = 127
@@ -1010,7 +999,7 @@ test "I8: div_by" {
         \\}
     , -127, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -100
@@ -1022,7 +1011,7 @@ test "I8: div_by" {
 }
 
 test "I8: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -128
@@ -1032,7 +1021,7 @@ test "I8: rem_by" {
         \\}
     , -2, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = 127
@@ -1042,7 +1031,7 @@ test "I8: rem_by" {
         \\}
     , 7, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I8
         \\    a = -100
@@ -1053,13 +1042,11 @@ test "I8: rem_by" {
     , -2, .no_trace);
 }
 
-// ============================================================================
 // I16 Tests (Signed 16-bit: -32768 to 32767)
 // Uses values < -128 or operations producing such values to prove they're not I8
-// ============================================================================
 
 test "I16: negate" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -32767
@@ -1067,7 +1054,7 @@ test "I16: negate" {
         \\}
     , 32767, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = 32767
@@ -1075,7 +1062,7 @@ test "I16: negate" {
         \\}
     , -32767, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -10000
@@ -1085,7 +1072,7 @@ test "I16: negate" {
 }
 
 test "I16: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -20000
@@ -1095,7 +1082,7 @@ test "I16: plus" {
         \\}
     , -30000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -32768
@@ -1105,7 +1092,7 @@ test "I16: plus" {
         \\}
     , -1, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = 32767
@@ -1117,7 +1104,7 @@ test "I16: plus" {
 }
 
 test "I16: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -10000
@@ -1127,7 +1114,7 @@ test "I16: minus" {
         \\}
     , -30000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = 30000
@@ -1137,7 +1124,7 @@ test "I16: minus" {
         \\}
     , 32767, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -16384
@@ -1149,7 +1136,7 @@ test "I16: minus" {
 }
 
 test "I16: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -256
@@ -1159,7 +1146,7 @@ test "I16: times" {
         \\}
     , -32768, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -100
@@ -1169,7 +1156,7 @@ test "I16: times" {
         \\}
     , 32700, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = 181
@@ -1181,7 +1168,7 @@ test "I16: times" {
 }
 
 test "I16: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -32768
@@ -1191,7 +1178,7 @@ test "I16: div_by" {
         \\}
     , -16384, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = 32767
@@ -1201,7 +1188,7 @@ test "I16: div_by" {
         \\}
     , -32767, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -30000
@@ -1213,7 +1200,7 @@ test "I16: div_by" {
 }
 
 test "I16: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -32768
@@ -1223,7 +1210,7 @@ test "I16: rem_by" {
         \\}
     , -98, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = 32767
@@ -1233,7 +1220,7 @@ test "I16: rem_by" {
         \\}
     , 67, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I16
         \\    a = -10000
@@ -1244,13 +1231,11 @@ test "I16: rem_by" {
     , -16, .no_trace);
 }
 
-// ============================================================================
 // I32 Tests (Signed 32-bit: -2147483648 to 2147483647)
 // Uses values < -32768 to prove they're not I16
-// ============================================================================
 
 test "I32: negate" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -2147483647
@@ -1258,7 +1243,7 @@ test "I32: negate" {
         \\}
     , 2147483647, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = 2147483647
@@ -1266,7 +1251,7 @@ test "I32: negate" {
         \\}
     , -2147483647, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -1000000000
@@ -1276,7 +1261,7 @@ test "I32: negate" {
 }
 
 test "I32: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -1000000000
@@ -1286,7 +1271,7 @@ test "I32: plus" {
         \\}
     , -1500000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -2147483648
@@ -1296,7 +1281,7 @@ test "I32: plus" {
         \\}
     , -1, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = 2147483647
@@ -1308,7 +1293,7 @@ test "I32: plus" {
 }
 
 test "I32: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -1000000000
@@ -1318,7 +1303,7 @@ test "I32: minus" {
         \\}
     , -1500000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = 2000000000
@@ -1328,7 +1313,7 @@ test "I32: minus" {
         \\}
     , 2147483647, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -1073741824
@@ -1340,7 +1325,7 @@ test "I32: minus" {
 }
 
 test "I32: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -65536
@@ -1350,7 +1335,7 @@ test "I32: times" {
         \\}
     , -2147483648, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -10000
@@ -1360,7 +1345,7 @@ test "I32: times" {
         \\}
     , 2147480000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = 46340
@@ -1372,7 +1357,7 @@ test "I32: times" {
 }
 
 test "I32: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -2147483648
@@ -1382,7 +1367,7 @@ test "I32: div_by" {
         \\}
     , -1073741824, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = 2147483647
@@ -1392,7 +1377,7 @@ test "I32: div_by" {
         \\}
     , -2147483647, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -1500000000
@@ -1404,7 +1389,7 @@ test "I32: div_by" {
 }
 
 test "I32: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -2147483648
@@ -1414,7 +1399,7 @@ test "I32: rem_by" {
         \\}
     , -2, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = 2147483647
@@ -1424,7 +1409,7 @@ test "I32: rem_by" {
         \\}
     , 65535, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I32
         \\    a = -1000000000
@@ -1435,13 +1420,11 @@ test "I32: rem_by" {
     , -18944, .no_trace);
 }
 
-// ============================================================================
 // I64 Tests (Signed 64-bit: -9223372036854775808 to 9223372036854775807)
 // Uses values < -2147483648 to prove they're not I32
-// ============================================================================
 
 test "I64: negate" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -9223372036854775807
@@ -1449,7 +1432,7 @@ test "I64: negate" {
         \\}
     , 9223372036854775807, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = 9223372036854775807
@@ -1457,7 +1440,7 @@ test "I64: negate" {
         \\}
     , -9223372036854775807, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -5000000000000
@@ -1467,7 +1450,7 @@ test "I64: negate" {
 }
 
 test "I64: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -5000000000000
@@ -1477,7 +1460,7 @@ test "I64: plus" {
         \\}
     , -8000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -9223372036854775808
@@ -1487,7 +1470,7 @@ test "I64: plus" {
         \\}
     , -1, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = 9223372036854775807
@@ -1499,7 +1482,7 @@ test "I64: plus" {
 }
 
 test "I64: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -5000000000000
@@ -1509,7 +1492,7 @@ test "I64: minus" {
         \\}
     , -8000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = 9000000000000000000
@@ -1519,7 +1502,7 @@ test "I64: minus" {
         \\}
     , 9223372036854775807, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -4611686018427387904
@@ -1531,7 +1514,7 @@ test "I64: minus" {
 }
 
 test "I64: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -4294967296
@@ -1541,7 +1524,7 @@ test "I64: times" {
         \\}
     , -9223372036854775808, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -1000000000
@@ -1551,7 +1534,7 @@ test "I64: times" {
         \\}
     , 9223372000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = 3037000499
@@ -1563,7 +1546,7 @@ test "I64: times" {
 }
 
 test "I64: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -9223372036854775808
@@ -1573,7 +1556,7 @@ test "I64: div_by" {
         \\}
     , -4611686018427387904, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = 9223372036854775807
@@ -1583,7 +1566,7 @@ test "I64: div_by" {
         \\}
     , -9223372036854775807, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -8000000000000
@@ -1595,7 +1578,7 @@ test "I64: div_by" {
 }
 
 test "I64: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -9223372036854775808
@@ -1605,7 +1588,7 @@ test "I64: rem_by" {
         \\}
     , -8, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = 9223372036854775807
@@ -1615,7 +1598,7 @@ test "I64: rem_by" {
         \\}
     , 4294967295, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I64
         \\    a = -5000000000000
@@ -1626,13 +1609,11 @@ test "I64: rem_by" {
     , -658067456, .no_trace);
 }
 
-// ============================================================================
 // I128 Tests (Signed 128-bit: -170141183460469231731687303715884105728 to 170141183460469231731687303715884105727)
 // Uses values < min I64 to prove they're not I64
-// ============================================================================
 
 test "I128: negate" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -85070591730234615865843651857942052864
@@ -1640,7 +1621,7 @@ test "I128: negate" {
         \\}
     , 85070591730234615865843651857942052864, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = 170141183460469231731687303715884105727
@@ -1648,7 +1629,7 @@ test "I128: negate" {
         \\}
     , -170141183460469231731687303715884105727, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -100000000000000000000000
@@ -1658,7 +1639,7 @@ test "I128: negate" {
 }
 
 test "I128: plus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -100000000000000000000000
@@ -1668,7 +1649,7 @@ test "I128: plus" {
         \\}
     , -150000000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -170141183460469231731687303715884105728
@@ -1678,7 +1659,7 @@ test "I128: plus" {
         \\}
     , -1, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = 170141183460469231731687303715884105727
@@ -1690,7 +1671,7 @@ test "I128: plus" {
 }
 
 test "I128: minus" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -100000000000000000000000
@@ -1700,7 +1681,7 @@ test "I128: minus" {
         \\}
     , -150000000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = 85070591730234615865843651857942052863
@@ -1710,7 +1691,7 @@ test "I128: minus" {
         \\}
     , 85070591730234615865843651857942052864, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -85070591730234615865843651857942052864
@@ -1722,7 +1703,7 @@ test "I128: minus" {
 }
 
 test "I128: times" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -18446744073709551616
@@ -1732,7 +1713,7 @@ test "I128: times" {
         \\}
     , -170141183460469231731687303715884105728, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -10000000000000000000
@@ -1742,7 +1723,7 @@ test "I128: times" {
         \\}
     , 170141183460000000000000000000, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = 13043817825332782212
@@ -1754,7 +1735,7 @@ test "I128: times" {
 }
 
 test "I128: div_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -170141183460469231731687303715884105728
@@ -1764,7 +1745,7 @@ test "I128: div_by" {
         \\}
     , -85070591730234615865843651857942052864, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = 170141183460469231731687303715884105727
@@ -1774,7 +1755,7 @@ test "I128: div_by" {
         \\}
     , -170141183460469231731687303715884105727, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -100000000000000000000000
@@ -1786,7 +1767,7 @@ test "I128: div_by" {
 }
 
 test "I128: rem_by" {
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -170141183460469231731687303715884105728
@@ -1796,7 +1777,7 @@ test "I128: rem_by" {
         \\}
     , -29, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = 170141183460469231731687303715884105727
@@ -1806,7 +1787,7 @@ test "I128: rem_by" {
         \\}
     , 18446744073709551615, .no_trace);
 
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    a : I128
         \\    a = -100000000000000000000000
@@ -1817,9 +1798,7 @@ test "I128: rem_by" {
     , -200376420520689664, .no_trace);
 }
 
-// ============================================================================
 // NOTE: F32, F64, and Dec Tests
-// ============================================================================
 //
 // Floating-point and decimal arithmetic tests are not yet implemented because
 // the interpreter does not currently support arithmetic operations on fractional
@@ -1845,9 +1824,7 @@ test "I128: rem_by" {
 //     , -3.14, .no_trace);
 // }
 //
-// ============================================================================
 // F32 Tests (32-bit floating point)
-// ============================================================================
 
 test "F32: negate" {
     try runExpectF32(
@@ -1987,9 +1964,7 @@ test "F32: div_by" {
     , 0.3333333, .no_trace);
 }
 
-// ============================================================================
 // F64 Tests (64-bit floating point)
-// ============================================================================
 
 test "F64: negate" {
     try runExpectF64(
@@ -2145,10 +2120,8 @@ test "F64: div_by" {
     , 0.3333333333333333, .no_trace);
 }
 
-// ============================================================================
 // Dec Tests (Fixed-point decimal: 18 decimal places precision)
 // Dec is stored as i128 with 18 decimal places (10^18 = 1.0)
-// ============================================================================
 
 test "Dec: negate" {
     // 3.14dec stored as 3.14 * 10^18 = 3140000000000000000
@@ -2309,4 +2282,80 @@ test "Dec: div_by" {
         \\    a / b
         \\}
     , 333333333333333333, .no_trace);
+}
+
+// Dec: to_str
+
+test "Dec: to_str" {
+    // Simple whole number
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 100.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "100.0", .no_trace);
+
+    // Positive decimal
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 123.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "123.45", .no_trace);
+
+    // Negative decimal
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = -123.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "-123.45", .no_trace);
+
+    // Whole number without trailing zeros in decimal part
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 123.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "123.0", .no_trace);
+
+    // Negative whole number
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = -123.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "-123.0", .no_trace);
+
+    // Decimal less than 1
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 0.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "0.45", .no_trace);
+
+    // Negative decimal less than 1
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = -0.45dec
+        \\    Dec.to_str(a)
+        \\}
+    , "-0.45", .no_trace);
+
+    // Zero
+    try runExpectStr(
+        \\{
+        \\    a : Dec
+        \\    a = 0.0dec
+        \\    Dec.to_str(a)
+        \\}
+    , "0.0", .no_trace);
 }

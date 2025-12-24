@@ -19,21 +19,9 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - hello_world_with_block.md:6:1:6:17
 UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**hello_world_with_block.md:6:1:6:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?

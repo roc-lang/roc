@@ -21,20 +21,8 @@ process! = |x| print_number!(multiply(x, 2))
 main! = process!(42)
 ~~~
 # EXPECTED
-MODULE NOT FOUND - function_no_annotation.md:3:1:3:17
 UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**function_no_annotation.md:3:1:3:17:**
-```roc
-import pf.Stdout
-```
-^^^^^^^^^^^^^^^^
-
-
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -164,13 +152,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size), Num(_size2) -> Num(_size3)"))
+		(patt (type "a, a -> a"))
 		(patt (type "_arg -> Error"))
-		(patt (type "Num(_size) -> Error"))
+		(patt (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "Num(_size), Num(_size2) -> Num(_size3)"))
+		(expr (type "a, a -> a"))
 		(expr (type "_arg -> Error"))
-		(expr (type "Num(_size) -> Error"))
+		(expr (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))))
 ~~~

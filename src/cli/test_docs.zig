@@ -86,13 +86,6 @@ test "roc docs generates nested package documentation" {
         \\
     );
 
-    // Create output directory path
-    const output_dir = try std.fs.path.join(gpa, &[_][]const u8{ tmp_path, "generated-docs" });
-    defer gpa.free(output_dir);
-
-    const root_path = try std.fs.path.join(gpa, &[_][]const u8{ tmp_path, "root.roc" });
-    defer gpa.free(root_path);
-
     // Note: We would call main.rocDocs(gpa, args) here, but it requires
     // a full build environment setup. Instead, we test the individual
     // helper functions in separate tests below.
@@ -103,9 +96,6 @@ test "roc docs generates nested package documentation" {
     tmp.dir.access("bar/main.roc", .{}) catch unreachable;
     tmp.dir.access("baz/main.roc", .{}) catch unreachable;
     tmp.dir.access("qux/main.roc", .{}) catch unreachable;
-
-    _ = root_path;
-    _ = output_dir;
 }
 
 test "generatePackageIndex creates valid HTML" {

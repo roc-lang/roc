@@ -55,5 +55,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ answer: Num(_size), launchTheNukes!: {} -> _ret }"))
+(expr (type "{ answer: a, launchTheNukes!: {} -> _ret } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~

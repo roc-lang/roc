@@ -25,6 +25,33 @@ test "roc check writes parse errors to stderr" {
     try testing.expect(has_error);
 }
 
+test "roc check displays correct file path in parse error messages" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_parse_error.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code) due to parse error
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains error information
+    try testing.expect(result.stderr.len > 0);
+
+    // 3. Stderr contains the actual file path, not mangled bytes
+    // The error message should include "has_parse_error.roc" in the location indicator
+    const has_file_path = std.mem.indexOf(u8, result.stderr, "has_parse_error.roc") != null;
+    try testing.expect(has_file_path);
+
+    // 4. Stderr should NOT contain sequences of 0xaa bytes (indicates path encoding issue)
+    // When paths are mangled, they appear as repeated 0xaa bytes in the output
+    const mangled_path_pattern = [_]u8{ 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
+    const has_mangled_path = std.mem.indexOf(u8, result.stderr, &mangled_path_pattern) != null;
+    try testing.expect(!has_mangled_path);
+}
+
 test "roc check succeeds on valid file" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -167,7 +194,8 @@ test "roc fmt reformats file in place" {
     // Get absolute path to roc binary
     const cwd_path = try cwd.realpathAlloc(gpa, ".");
     defer gpa.free(cwd_path);
-    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Run roc fmt on the temp file
@@ -227,13 +255,13 @@ test "roc fmt --stdin formats unformatted input" {
     // Get absolute path to roc binary
     const cwd_path = try cwd.realpathAlloc(gpa, ".");
     defer gpa.free(cwd_path);
-    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     // Run roc fmt --stdin with input piped in
@@ -282,13 +310,13 @@ test "roc fmt --stdin does not change well-formatted input" {
     // Get absolute path to roc binary
     const cwd_path = try cwd.realpathAlloc(gpa, ".");
     defer gpa.free(cwd_path);
-    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(gpa, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer gpa.free(roc_path);
 
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     // Run roc fmt --stdin with input piped in
@@ -320,4 +348,267 @@ test "roc fmt --stdin does not change well-formatted input" {
 
     // 2. Stdout contains the same content as input (no changes)
     try testing.expectEqualStrings(input_content, stdout);
+}
+
+test "roc check reports type error - annotation mismatch" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code) due to type error
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains type error information
+    try testing.expect(result.stderr.len > 0);
+
+    // 3. Error message mentions type mismatch or error
+    const has_type_error = std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.indexOf(u8, result.stderr, "error") != null or
+        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    try testing.expect(has_type_error);
+}
+
+test "roc check reports type error - plus operator with incompatible types" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_plus_operator.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code) due to type error
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains type error information
+    try testing.expect(result.stderr.len > 0);
+
+    // 3. Error message mentions missing method or type error
+    const has_type_error = std.mem.indexOf(u8, result.stderr, "MISSING METHOD") != null or
+        std.mem.indexOf(u8, result.stderr, "TYPE MISMATCH") != null or
+        std.mem.indexOf(u8, result.stderr, "error") != null or
+        std.mem.indexOf(u8, result.stderr, "Found") != null;
+    try testing.expect(has_type_error);
+}
+
+test "roc test/int/app.roc runs successfully" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc test/str/app.roc runs successfully" {
+    // Skip on Windows - test/str platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/str/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+// roc build tests
+
+test "roc build creates executable from test/int/app.roc" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create a temp directory for the output
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(gpa, &.{ "build", output_arg }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command succeeded (zero exit code)
+    if (result.term != .Exited or result.term.Exited != 0) {
+        std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ result.term, result.stdout, result.stderr });
+    }
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // 2. Output file was created
+    const stat = tmp_dir.dir.statFile("test_app") catch |err| {
+        std.debug.print("Failed to stat output file: {}\nstderr: {s}\n", .{ err, result.stderr });
+        return err;
+    };
+
+    // 3. Output file is executable (non-zero size)
+    try testing.expect(stat.size > 0);
+
+    // 4. Stdout contains success message
+    try testing.expect(result.stdout.len > 5);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
+}
+
+test "roc build executable runs correctly" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create a temp directory for the output
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    // Build the app
+    const build_result = try util.runRoc(gpa, &.{ "build", output_arg }, "test/int/app.roc");
+    defer gpa.free(build_result.stdout);
+    defer gpa.free(build_result.stderr);
+
+    if (build_result.term != .Exited or build_result.term.Exited != 0) {
+        std.debug.print("roc build failed with exit code: {}\nstdout: {s}\nstderr: {s}\n", .{ build_result.term, build_result.stdout, build_result.stderr });
+    }
+    try testing.expect(build_result.term == .Exited and build_result.term.Exited == 0);
+
+    // Run the built executable
+    const run_result = try std.process.Child.run(.{
+        .allocator = gpa,
+        .argv = &.{output_path},
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer gpa.free(run_result.stdout);
+    defer gpa.free(run_result.stderr);
+
+    // Verify that:
+    // 1. Executable ran successfully
+    try testing.expect(run_result.term == .Exited and run_result.term.Exited == 0);
+
+    // 2. Output contains expected success message
+    const has_success = std.mem.indexOf(u8, run_result.stdout, "SUCCESS") != null or
+        std.mem.indexOf(u8, run_result.stdout, "PASSED") != null;
+    try testing.expect(has_success);
+}
+
+test "roc build fails with file not found error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"build"}, "nonexistent_file.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code)
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains file not found error
+    const has_error = std.mem.indexOf(u8, result.stderr, "FileNotFound") != null or
+        std.mem.indexOf(u8, result.stderr, "not found") != null or
+        std.mem.indexOf(u8, result.stderr, "NOT FOUND") != null or
+        std.mem.indexOf(u8, result.stderr, "Failed") != null;
+    try testing.expect(has_error);
+}
+
+test "roc build fails with invalid target error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "build", "--target=invalid_target_name" }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code)
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains invalid target error
+    const has_error = std.mem.indexOf(u8, result.stderr, "Invalid target") != null or
+        std.mem.indexOf(u8, result.stderr, "invalid") != null;
+    try testing.expect(has_error);
+}
+
+test "roc build glibc target gives helpful error on non-Linux" {
+    const testing = std.testing;
+    const builtin = @import("builtin");
+    const gpa = testing.allocator;
+
+    // This test only applies on non-Linux platforms
+    if (builtin.os.tag == .linux) {
+        return; // Skip on Linux where glibc cross-compilation is supported
+    }
+
+    const result = try util.runRoc(gpa, &.{ "build", "--target=x64glibc" }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed (non-zero exit code)
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 2. Stderr contains helpful error message about glibc not being supported
+    const has_glibc_error = std.mem.indexOf(u8, result.stderr, "glibc") != null;
+    try testing.expect(has_glibc_error);
+
+    // 3. Stderr suggests using musl instead
+    const suggests_musl = std.mem.indexOf(u8, result.stderr, "musl") != null;
+    try testing.expect(suggests_musl);
+}
+
+test "roc test with nested list chunks does not panic on layout upgrade" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // This test verifies that nested list operations with layout upgrades
+    // (from list_of_zst to concrete list types) don't cause integer overflow panics.
+    // The expect in the test file is designed to fail, but execution should not panic.
+    const result = try util.runRoc(gpa, &.{"test"}, "test/cli/issue8699.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command failed with exit code 1 (test failure, not panic)
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // 2. Stderr contains "FAIL" indicating a test failure (not a panic/crash)
+    const has_fail = std.mem.indexOf(u8, result.stderr, "FAIL") != null;
+    try testing.expect(has_fail);
+
+    // 3. Stderr should not contain "panic" or "overflow" (no crash occurred)
+    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "overflow") != null;
+    try testing.expect(!has_panic);
 }

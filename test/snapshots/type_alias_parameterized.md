@@ -15,21 +15,19 @@ swapPair = |(x, y)| (y, x)
 main! = |_| swapPair(1, 2)
 ~~~
 # EXPECTED
-TYPE MISMATCH - type_alias_parameterized.md:8:13:8:27
+TOO MANY ARGUMENTS - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO MANY ARGUMENTS**
+The function `swapPair` expects 1 argument, but 2 were provided:
 **type_alias_parameterized.md:8:13:8:27:**
 ```roc
 main! = |_| swapPair(1, 2)
 ```
             ^^^^^^^^^^^^^^
 
-It has the type:
-    _Num(_size), Num(_size2) -> _ret_
+The function has the signature:
 
-But I expected it to be:
-    _Pair(a, b) -> Pair(b, a)_
+    Pair(a, b) -> Pair(b, a)
 
 # TOKENS
 ~~~zig
@@ -149,7 +147,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Pair(a, b) -> Pair(b, a)"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "_arg -> Error")))
 	(type_decls
 		(alias (type "Pair(a, b)")
 			(ty-header (name "Pair")
@@ -158,5 +156,5 @@ NO CHANGE
 					(ty-rigid-var (name "b"))))))
 	(expressions
 		(expr (type "Pair(a, b) -> Pair(b, a)"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "_arg -> Error"))))
 ~~~

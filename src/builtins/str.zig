@@ -4,7 +4,20 @@
 //! operations for string manipulation, Unicode handling, formatting, and
 //! memory management. It defines the RocStr structure and associated functions
 //! that are called from compiled Roc code to handle string operations efficiently.
+//!
+//! ## Ownership Semantics
+//!
+//! See `OWNERSHIP.md` for the canonical terminology. Functions in this module
+//! follow these patterns:
+//!
+//! - **Borrow**: Function reads argument, caller retains ownership
+//! - **Consume**: Function takes ownership, caller loses access
+//! - **Copy-on-Write**: Consumes arg; if unique, mutates in place; if shared, allocates new
+//! - **Seamless Slice**: Result shares data with arg via incref'd slice
+//!
+//! Each function documents its ownership semantics in its doc comment.
 const std = @import("std");
+const builtin = @import("builtin");
 
 const RocList = @import("list.zig").RocList;
 const RocOps = @import("host_abi.zig").RocOps;
@@ -17,6 +30,23 @@ const mem = std.mem;
 const unicode = std.unicode;
 const testing = std.testing;
 const rcNone = @import("utils.zig").rcNone;
+
+/// Decref function for RocStr elements in a list.
+/// Used when decref-ing a List Str - each string element needs to be decreffed.
+/// The context parameter is expected to be a *RocOps.
+fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    if (element) |elem_ptr| {
+        const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, elem_ptr, @src());
+        if (context) |ctx| {
+            const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
+            str_ptr.decref(roc_ops);
+        } else {
+            // Context should never be null - this is a programming error
+            // We cannot call roc_ops.crash() because we don't have roc_ops
+            unreachable;
+        }
+    }
+}
 
 const InPlace = enum(u8) {
     InPlace,
@@ -78,7 +108,7 @@ pub const RocStr = extern struct {
 
     // This requires that the list is non-null.
     // It also requires that start and count define a slice that does not go outside the bounds of the list.
-    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode) RocStr {
+    pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode, roc_ops: *RocOps) RocStr {
         const start_byte = @as([*]u8, @ptrCast(list.bytes)) + start;
         if (list.isSeamlessSlice()) {
             return RocStr{
@@ -86,7 +116,7 @@ pub const RocStr = extern struct {
                 .length = count | SEAMLESS_SLICE_BIT,
                 .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr & (~SEAMLESS_SLICE_BIT),
             };
-        } else if (start == 0 and (update_mode == .InPlace or list.isUnique())) {
+        } else if (start == 0 and (update_mode == .InPlace or list.isUnique(roc_ops))) {
             // Rare case, we can take over the original list.
             return RocStr{
                 .bytes = start_byte,
@@ -112,6 +142,23 @@ pub const RocStr = extern struct {
         roc_ops: *RocOps,
     ) RocStr {
         return RocStr.init(slice.ptr, slice.len, roc_ops);
+    }
+
+    /// Create a small string from a slice. The slice must fit in a small string
+    /// (length < SMALL_STRING_SIZE). This does not require roc_ops since small
+    /// strings are stored inline and don't need heap allocation.
+    /// Asserts in debug mode if the slice is too large.
+    pub fn fromSliceSmall(slice: []const u8) RocStr {
+        std.debug.assert(slice.len < SMALL_STRING_SIZE);
+        var result = RocStr.empty();
+        @memcpy(result.asU8ptrMut()[0..slice.len], slice);
+        result.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(slice.len)) | 0b1000_0000;
+        return result;
+    }
+
+    /// Returns true if the given length would fit in a small string (stored inline).
+    pub fn fitsInSmallStr(length: usize) bool {
+        return length < SMALL_STRING_SIZE;
     }
 
     fn allocateBig(
@@ -191,15 +238,23 @@ pub const RocStr = extern struct {
         const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+
+        // Verify the computed allocation pointer is properly aligned
+        if (comptime builtin.mode == .Debug) {
+            if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
+                // This indicates memory corruption - the allocation pointer should always be aligned
+                unreachable;
+            }
+        }
+
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
-    pub fn incref(self: RocStr, n: usize) void {
+    pub fn incref(self: RocStr, n: usize, roc_ops: *RocOps) void {
         if (!self.isSmallStr()) {
-            const alloc_ptr = self.getAllocationPtr();
-            if (alloc_ptr != null) {
-                const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(alloc_ptr)));
-                @import("utils.zig").increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
+            if (self.getAllocationPtr()) |alloc_ptr| {
+                const isizes: [*]isize = utils.alignedPtrCast([*]isize, alloc_ptr, @src());
+                utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)), roc_ops);
             }
         }
     }
@@ -213,7 +268,7 @@ pub const RocStr = extern struct {
         }
     }
 
-    pub fn eq(self: RocStr, other: RocStr) bool {
+    pub fn eql(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
         if (self.bytes == other.bytes and self.length == other.length) {
             return true;
@@ -244,6 +299,25 @@ pub const RocStr = extern struct {
         return true;
     }
 
+    /// Compare this RocStr with a byte slice for equality.
+    pub fn eqlSlice(self: RocStr, slice: []const u8) bool {
+        const self_len = self.len();
+
+        if (self_len != slice.len) {
+            return false;
+        }
+
+        const self_bytes = self.asU8ptr();
+        var b: usize = 0;
+        while (b < self_len) : (b += 1) {
+            if (self_bytes[b] != slice[b]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     pub fn clone(
         str: RocStr,
         roc_ops: *RocOps,
@@ -252,12 +326,15 @@ pub const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            const new_str = RocStr.allocateBig(str.length, str.length, roc_ops);
+            // Use len() instead of .length to handle seamless slices correctly.
+            // For seamless slices, .length has the SEAMLESS_SLICE_BIT set.
+            const length = str.len();
+            const new_str = RocStr.allocateBig(length, length, roc_ops);
 
-            var old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
-            var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
+            const old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
+            const new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
 
-            @memcpy(new_bytes[0..str.length], old_bytes[0..str.length]);
+            @memcpy(new_bytes[0..length], old_bytes[0..length]);
 
             return new_str;
         }
@@ -289,6 +366,7 @@ pub const RocStr = extern struct {
                 new_capacity,
                 element_width,
                 false,
+                roc_ops,
             );
 
             return RocStr{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
@@ -422,8 +500,13 @@ pub const RocStr = extern struct {
         else
             self.bytes;
 
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(data_ptr)));
-        return (ptr - 1)[0];
+        if (data_ptr) |non_null_ptr| {
+            const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
+            return (ptr - 1)[0];
+        } else {
+            // This should never happen - indicates corrupted RocStr structure
+            unreachable;
+        }
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
@@ -477,7 +560,7 @@ pub fn init(
 // Str.equal
 /// TODO: Document strEqual.
 pub fn strEqual(self: RocStr, other: RocStr) callconv(.c) bool {
-    return self.eq(other);
+    return self.eql(other);
 }
 
 // Str.numberOfBytes
@@ -565,21 +648,11 @@ pub fn strSplitOn(
     const list = RocList.list_allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true, roc_ops);
 
     if (list.bytes) |bytes| {
-        const strings = @as([*]RocStr, @ptrCast(@alignCast(bytes)));
+        const strings: [*]RocStr = utils.alignedPtrCast([*]RocStr, bytes, @src());
         strSplitOnHelp(strings, string, delimiter, roc_ops);
     }
 
     return list;
-}
-
-fn initFromSmallStr(
-    slice_bytes: [*]u8,
-    len: usize,
-    _: usize,
-    // TODO we probable don't need this here
-    roc_ops: *RocOps,
-) RocStr {
-    return RocStr.init(slice_bytes, len, roc_ops);
 }
 
 /// TODO
@@ -590,7 +663,7 @@ pub fn strSplitOnHelp(
     roc_ops: *RocOps,
 ) void {
     if (delimiter.len() == 0) {
-        string.incref(1);
+        string.incref(1, roc_ops);
         array[0] = string;
         return;
     }
@@ -608,7 +681,7 @@ pub fn strSplitOnHelp(
     }
 
     // Correct refcount for all of the splits made.
-    string.incref(i); // i == array.len()
+    string.incref(i, roc_ops); // i == array.len()
 }
 
 // This is used for `Str.splitOn : Str, Str -> List Str
@@ -644,7 +717,20 @@ pub fn getCapacity(string: RocStr) callconv(.c) usize {
     return string.getCapacity();
 }
 
-/// TODO: Document substringUnsafeC.
+/// Str.substring - extracts a substring without bounds checking.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string
+///
+/// **IMPORTANT**: This function does NOT call incref. The returned seamless
+/// slice shares the input's allocation, but the caller is responsible for
+/// ensuring the refcount is correct. This is typically used internally where
+/// the caller handles refcount management.
+///
+/// For small strings: creates a new small string (copy).
+/// For heap strings at start=0 with unique refcount: shrinks in place.
+/// Otherwise: creates a seamless slice pointing into the original string.
 pub fn substringUnsafeC(
     string: RocStr,
     start_u64: u64,
@@ -657,7 +743,7 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
-/// TODO
+/// See substringUnsafeC for ownership documentation.
 pub fn substringUnsafe(
     string: RocStr,
     start: usize,
@@ -724,6 +810,64 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
     return true;
 }
 
+/// Str.drop_prefix - Returns string with prefix removed, or original if no match.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - `prefix`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+///
+/// If prefix doesn't match, returns the original string with refcount incremented.
+/// If prefix matches, returns a seamless slice of the remaining portion.
+pub fn strDropPrefix(
+    string: RocStr,
+    prefix: RocStr,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    if (!startsWith(string, prefix)) {
+        // Prefix doesn't match, return original (with incref)
+        string.incref(1, roc_ops);
+        return string;
+    }
+
+    const prefix_len = prefix.len();
+    const new_len = string.len() - prefix_len;
+
+    // Increment refcount for the seamless slice we're about to create.
+    // This is safe even for small strings (incref is a no-op for them).
+    string.incref(1, roc_ops);
+    return substringUnsafe(string, prefix_len, new_len, roc_ops);
+}
+
+/// Str.drop_suffix - Returns string with suffix removed, or original if no match.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - `suffix`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+///
+/// If suffix doesn't match, returns the original string with refcount incremented.
+/// If suffix matches, returns a seamless slice of the remaining portion.
+pub fn strDropSuffix(
+    string: RocStr,
+    suffix: RocStr,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    if (!endsWith(string, suffix)) {
+        // Suffix doesn't match, return original (with incref)
+        string.incref(1, roc_ops);
+        return string;
+    }
+
+    const suffix_len = suffix.len();
+    const new_len = string.len() - suffix_len;
+
+    // Increment refcount for the seamless slice we're about to create.
+    // This is safe even for small strings (incref is a no-op for them).
+    string.incref(1, roc_ops);
+    return substringUnsafe(string, 0, new_len, roc_ops);
+}
+
 // Str.repeat
 /// TODO: Document repeatC.
 pub fn repeatC(
@@ -770,7 +914,15 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
     return true;
 }
 
-/// Str.concat
+/// Str.concat - concatenates two strings.
+///
+/// ## Ownership
+/// - `arg1`: **consumes** - may be reallocated if capacity insufficient
+/// - `arg2`: **borrows** - caller retains ownership (not decrefd here)
+/// - Returns: **independent** or **copy-on-write** depending on arg1's capacity
+///
+/// Note: arg1 is owned and may be returned directly if arg2 is empty,
+/// or reallocated to accommodate the combined content.
 pub fn strConcatC(
     arg1: RocStr,
     arg2: RocStr,
@@ -779,7 +931,7 @@ pub fn strConcatC(
     return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO
+/// See strConcatC for ownership documentation.
 pub fn strConcat(
     arg1: RocStr,
     arg2: RocStr,
@@ -800,6 +952,11 @@ pub fn strConcat(
     }
 }
 
+/// Str.contains
+pub fn strContains(haystack: RocStr, needle: RocStr) callconv(.c) bool {
+    return std.mem.indexOf(u8, haystack.asSlice(), needle.asSlice()) != null;
+}
+
 /// TODO: Document RocListStr.
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
@@ -807,22 +964,37 @@ pub const RocListStr = extern struct {
     list_capacity_or_alloc_ptr: usize,
 };
 
-/// Str.joinWith
+/// Str.joinWith - joins a list of strings with a separator.
+///
+/// ## Ownership
+/// - `list`: **consumes** - elements are borrowed, list is consumed
+/// - `separator`: **borrows** - caller retains ownership
+/// - Returns: **independent** - new allocation containing joined result
 pub fn strJoinWithC(
     list: RocList,
     separator: RocStr,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
+    const list_elements: ?[*]RocStr = if (list.bytes) |bytes|
+        utils.alignedPtrCast([*]RocStr, bytes, @src())
+    else
+        null;
     const roc_list_str = RocListStr{
-        .list_elements = @as(?[*]RocStr, @ptrCast(@alignCast(list.bytes))),
+        .list_elements = list_elements,
         .list_length = list.length,
         .list_capacity_or_alloc_ptr = list.capacity_or_alloc_ptr,
     };
 
-    return @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
+    const result = @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
+
+    // Decref the consumed list. Since elements are strings (refcounted), we pass
+    // elements_refcounted=true and provide strDecref to decref each element.
+    list.decref(@alignOf(RocStr), @sizeOf(RocStr), true, @ptrCast(roc_ops), &strDecref, roc_ops);
+
+    return result;
 }
 
-/// TODO
+/// See strJoinWithC for ownership documentation.
 pub fn strJoinWith(
     list: RocListStr,
     separator: RocStr,
@@ -864,7 +1036,18 @@ pub fn strJoinWith(
     }
 }
 
-/// Str.toUtf8
+/// Str.toUtf8 - converts a string to a list of UTF-8 bytes.
+///
+/// ## Ownership
+/// - `arg`: **borrows** - caller retains ownership
+/// - Returns: **seamless-slice** - shares underlying data with input string
+///
+/// For heap strings, the returned list shares the same underlying allocation
+/// as the input string. This function calls `incref` on the allocation to
+/// account for the new reference. Small strings are copied to a new allocation.
+///
+/// The caller must decref the argument after call (we borrowed it but added
+/// a reference to its data via the returned list).
 pub fn strToUtf8C(
     arg: RocStr,
     roc_ops: *RocOps,
@@ -886,13 +1069,16 @@ inline fn strToBytes(
 
         return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = length };
     } else {
+        // The returned list shares the same underlying allocation as the string.
+        // We must incref the allocation since there's now an additional reference to it.
+        arg.incref(1, roc_ops);
         const is_seamless_slice = arg.length & SEAMLESS_SLICE_BIT;
         return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = arg.capacity_or_alloc_ptr | is_seamless_slice };
     }
 }
 
 /// TODO
-pub const FromUtf8Result = extern struct {
+pub const FromUtf8Try = extern struct {
     byte_index: u64,
     string: RocStr,
     is_ok: bool,
@@ -904,7 +1090,7 @@ pub fn fromUtf8C(
     list: RocList,
     update_mode: UpdateMode,
     roc_ops: *RocOps,
-) callconv(.c) FromUtf8Result {
+) callconv(.c) FromUtf8Try {
     return fromUtf8(list, update_mode, roc_ops);
 }
 
@@ -986,6 +1172,8 @@ pub fn fromUtf8Lossy(
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (list.len() == 0) {
+        // Free the empty list since we consume ownership
+        list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
         return RocStr.empty();
     }
 
@@ -1006,6 +1194,10 @@ pub fn fromUtf8Lossy(
         end_index += utf8EncodeLossy(c, ptr[end_index..]);
     }
     str.setLen(end_index);
+
+    // Free the input list since we consume ownership
+    list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
+
     return str;
 }
 
@@ -1016,10 +1208,10 @@ pub fn fromUtf8(
     // TODO seems odd that we need this here
     // maybe we should pass in undefined or something to list.decref?
     roc_ops: *RocOps,
-) FromUtf8Result {
+) FromUtf8Try {
     if (list.len() == 0) {
         list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
-        return FromUtf8Result{
+        return FromUtf8Try{
             .is_ok = true,
             .string = RocStr.empty(),
             .byte_index = 0,
@@ -1030,8 +1222,8 @@ pub fn fromUtf8(
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
-        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode);
-        return FromUtf8Result{
+        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
+        return FromUtf8Try{
             .is_ok = true,
             .string = string,
             .byte_index = 0,
@@ -1042,7 +1234,7 @@ pub fn fromUtf8(
 
         list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, roc_ops);
 
-        return FromUtf8Result{
+        return FromUtf8Try{
             .is_ok = false,
             .string = RocStr.empty(),
             .byte_index = @intCast(temp.index),
@@ -1162,7 +1354,7 @@ pub fn validateUtf8Bytes(
     bytes: [*]u8,
     length: usize,
     roc_ops: *RocOps,
-) FromUtf8Result {
+) FromUtf8Try {
     return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable, roc_ops);
 }
 
@@ -1170,7 +1362,7 @@ pub fn validateUtf8Bytes(
 pub fn validateUtf8BytesX(
     str: RocList,
     roc_ops: *RocOps,
-) FromUtf8Result {
+) FromUtf8Try {
     return fromUtf8(str, .Immutable, roc_ops);
 }
 
@@ -1189,8 +1381,8 @@ pub fn sliceHelp(
 }
 
 /// TODO
-pub fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
-    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
+pub fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Try {
+    return FromUtf8Try{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
 }
 
 // NOTE on memory: the validate function consumes a RC token of the input. Since
@@ -1219,7 +1411,17 @@ pub fn isWhitespace(codepoint: u21) bool {
     };
 }
 
-/// TODO: Document strTrim.
+/// Str.trim - removes leading and trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: shrinks in place (same allocation)
+/// - Otherwise: creates seamless slice pointing to trimmed region
 pub fn strTrim(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1272,7 +1474,17 @@ pub fn strTrim(
     }
 }
 
-/// TODO: Document strTrimStart.
+/// Str.trim_start - removes leading whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: returns same allocation unchanged
+/// - Otherwise: creates seamless slice pointing to trimmed region
 pub fn strTrimStart(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1324,7 +1536,17 @@ pub fn strTrimStart(
     }
 }
 
-/// TODO: Document strTrimEnd.
+/// Str.trim_end - removes trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if unique
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique: shrinks length in place (same allocation)
+/// - Shared: creates seamless slice pointing to trimmed region
 pub fn strTrimEnd(
     input_string: RocStr,
     roc_ops: *RocOps,
@@ -1409,6 +1631,15 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
 }
 
 /// Str.with_ascii_lowercased
+///
+/// Returns a string with all ASCII letters converted to lowercase.
+///
+/// ## Ownership
+/// - `string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if input was unique
+///
+/// If the input string is unique, modifies in place and returns it.
+/// If shared, decrefs the input and allocates a new string.
 pub fn strWithAsciiLowercased(
     string: RocStr,
     roc_ops: *RocOps,
@@ -1428,6 +1659,15 @@ pub fn strWithAsciiLowercased(
 }
 
 /// Str.with_ascii_uppercased
+///
+/// Returns a string with all ASCII letters converted to uppercase.
+///
+/// ## Ownership
+/// - `string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if input was unique
+///
+/// If the input string is unique, modifies in place and returns it.
+/// If shared, decrefs the input and allocates a new string.
 pub fn strWithAsciiUppercased(
     string: RocStr,
     roc_ops: *RocOps,
@@ -1456,7 +1696,7 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
 }
 
 fn decStr(ptr: ?[*]u8) callconv(.c) void {
-    const str_ptr = @as(*RocStr, @ptrCast(@alignCast(ptr orelse unreachable)));
+    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, ptr orelse unreachable, @src());
     str_ptr.decref();
 }
 
@@ -1626,7 +1866,7 @@ pub fn strReleaseExcessCapacity(
     }
 }
 
-fn expectOk(result: FromUtf8Result) !void {
+fn expectOk(result: FromUtf8Try) !void {
     try std.testing.expectEqual(result.is_ok, true);
 }
 
@@ -1649,7 +1889,7 @@ test "RocStr.eq: small, equal" {
     const str2_ptr: [*]u8 = &str2;
     var roc_str2 = RocStr.init(str2_ptr, str2_len, test_env.getOps());
 
-    try std.testing.expect(roc_str1.eq(roc_str2));
+    try std.testing.expect(roc_str1.eql(roc_str2));
 
     roc_str1.decref(test_env.getOps());
     roc_str2.decref(test_env.getOps());
@@ -1674,7 +1914,7 @@ test "RocStr.eq: small, not equal, different length" {
         roc_str2.decref(test_env.getOps());
     }
 
-    try std.testing.expect(!roc_str1.eq(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str2));
 }
 
 test "RocStr.eq: small, not equal, same length" {
@@ -1696,7 +1936,7 @@ test "RocStr.eq: small, not equal, same length" {
         roc_str2.decref(test_env.getOps());
     }
 
-    try std.testing.expect(!roc_str1.eq(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str2));
 }
 
 test "RocStr.eq: large, equal" {
@@ -1712,7 +1952,7 @@ test "RocStr.eq: large, equal" {
         roc_str2.decref(test_env.getOps());
     }
 
-    try std.testing.expect(roc_str1.eq(roc_str2));
+    try std.testing.expect(roc_str1.eql(roc_str2));
 }
 
 test "RocStr.eq: large, different lengths, unequal" {
@@ -1729,7 +1969,7 @@ test "RocStr.eq: large, different lengths, unequal" {
         roc_str2.decref(test_env.getOps());
     }
 
-    try std.testing.expect(!roc_str1.eq(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str2));
 }
 
 test "RocStr.eq: large, different content, unequal" {
@@ -1746,7 +1986,7 @@ test "RocStr.eq: large, different content, unequal" {
         roc_str2.decref(test_env.getOps());
     }
 
-    try std.testing.expect(!roc_str1.eq(roc_str2));
+    try std.testing.expect(!roc_str1.eql(roc_str2));
 }
 
 test "RocStr.eq: large, garbage after end, equal" {
@@ -1769,7 +2009,7 @@ test "RocStr.eq: large, garbage after end, equal" {
         roc_str2.decref(test_env.getOps());
     }
 
-    try std.testing.expect(roc_str1.eq(roc_str2));
+    try std.testing.expect(roc_str1.eql(roc_str2));
 }
 
 test "strSplitHelp: empty delimiter" {
@@ -1806,7 +2046,7 @@ test "strSplitHelp: empty delimiter" {
     }
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
+    try std.testing.expect(array[0].eql(expected[0]));
 }
 
 test "strSplitHelp: no delimiter" {
@@ -1843,7 +2083,7 @@ test "strSplitHelp: no delimiter" {
     }
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
+    try std.testing.expect(array[0].eql(expected[0]));
 }
 
 test "strSplitHelp: empty start" {
@@ -1885,8 +2125,8 @@ test "strSplitHelp: empty start" {
     }
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
-    try std.testing.expect(array[1].eq(expected[1]));
+    try std.testing.expect(array[0].eql(expected[0]));
+    try std.testing.expect(array[1].eql(expected[1]));
 }
 
 test "strSplitHelp: empty end" {
@@ -1930,9 +2170,9 @@ test "strSplitHelp: empty end" {
     }
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
-    try std.testing.expect(array[1].eq(expected[1]));
-    try std.testing.expect(array[2].eq(expected[2]));
+    try std.testing.expect(array[0].eql(expected[0]));
+    try std.testing.expect(array[1].eql(expected[1]));
+    try std.testing.expect(array[2].eql(expected[2]));
 }
 
 test "strSplitHelp: string equals delimiter" {
@@ -1966,8 +2206,8 @@ test "strSplitHelp: string equals delimiter" {
     }
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
-    try std.testing.expect(array[1].eq(expected[1]));
+    try std.testing.expect(array[0].eql(expected[0]));
+    try std.testing.expect(array[1].eql(expected[1]));
 }
 
 test "strSplitHelp: delimiter on sides" {
@@ -2010,9 +2250,9 @@ test "strSplitHelp: delimiter on sides" {
     }
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
-    try std.testing.expect(array[1].eq(expected[1]));
-    try std.testing.expect(array[2].eq(expected[2]));
+    try std.testing.expect(array[0].eql(expected[0]));
+    try std.testing.expect(array[1].eql(expected[1]));
+    try std.testing.expect(array[2].eql(expected[2]));
 }
 
 test "strSplitHelp: three pieces" {
@@ -2054,9 +2294,9 @@ test "strSplitHelp: three pieces" {
     }
 
     try std.testing.expectEqual(expected_array.len, array.len);
-    try std.testing.expect(array[0].eq(expected_array[0]));
-    try std.testing.expect(array[1].eq(expected_array[1]));
-    try std.testing.expect(array[2].eq(expected_array[2]));
+    try std.testing.expect(array[0].eql(expected_array[0]));
+    try std.testing.expect(array[1].eql(expected_array[1]));
+    try std.testing.expect(array[2].eql(expected_array[2]));
 }
 
 test "strSplitHelp: overlapping delimiter 1" {
@@ -2083,8 +2323,8 @@ test "strSplitHelp: overlapping delimiter 1" {
     // strings are all small so we ignore freeing the memory
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
-    try std.testing.expect(array[1].eq(expected[1]));
+    try std.testing.expect(array[0].eql(expected[0]));
+    try std.testing.expect(array[1].eql(expected[1]));
 }
 
 test "strSplitHelp: overlapping delimiter 2" {
@@ -2112,9 +2352,9 @@ test "strSplitHelp: overlapping delimiter 2" {
     // strings are all small so we ignore freeing the memory
 
     try std.testing.expectEqual(array.len, expected.len);
-    try std.testing.expect(array[0].eq(expected[0]));
-    try std.testing.expect(array[1].eq(expected[1]));
-    try std.testing.expect(array[2].eq(expected[2]));
+    try std.testing.expect(array[0].eql(expected[0]));
+    try std.testing.expect(array[1].eql(expected[1]));
+    try std.testing.expect(array[2].eql(expected[2]));
 }
 
 test "countSegments: long delimiter" {
@@ -2238,7 +2478,7 @@ test "substringUnsafe: start" {
 
     const actual = substringUnsafe(str, 0, 3, test_env.getOps());
 
-    try std.testing.expect(RocStr.eq(actual, expected));
+    try std.testing.expect(RocStr.eql(actual, expected));
 }
 
 test "substringUnsafe: middle" {
@@ -2253,7 +2493,7 @@ test "substringUnsafe: middle" {
 
     const actual = substringUnsafe(str, 1, 3, test_env.getOps());
 
-    try std.testing.expect(RocStr.eq(actual, expected));
+    try std.testing.expect(RocStr.eql(actual, expected));
 }
 
 test "substringUnsafe: end" {
@@ -2268,7 +2508,7 @@ test "substringUnsafe: end" {
 
     const actual = substringUnsafe(str, 23, 37 - 23, test_env.getOps());
 
-    try std.testing.expect(RocStr.eq(actual, expected));
+    try std.testing.expect(RocStr.eql(actual, expected));
 }
 
 test "startsWith: food starts with foo" {
@@ -2375,7 +2615,7 @@ test "RocStr.concat: small concat small" {
 
     defer result.decref(test_env.getOps());
 
-    try std.testing.expect(roc_str3.eq(result));
+    try std.testing.expect(roc_str3.eql(result));
 }
 
 test "RocStr.joinWith: result is big" {
@@ -2414,7 +2654,7 @@ test "RocStr.joinWith: result is big" {
 
     defer result.decref(test_env.getOps());
 
-    try std.testing.expect(roc_result.eq(result));
+    try std.testing.expect(roc_result.eql(result));
 }
 
 test "validateUtf8Bytes: ascii" {
@@ -2486,14 +2726,14 @@ test "fromUtf8Lossy: ascii, emoji" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r💖c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
     const expected = RocStr.fromSlice("r💖c", test_env.getOps());
     defer expected.decref(test_env.getOps());
-    try std.testing.expect(expected.eq(res));
+    try std.testing.expect(expected.eql(res));
 }
 
 fn expectErr(
@@ -2697,56 +2937,56 @@ test "fromUtf8Lossy: invalid start byte" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\x80c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
     const expected = RocStr.fromSlice("r�c", test_env.getOps());
     defer expected.decref(test_env.getOps());
-    try std.testing.expect(expected.eq(res));
+    try std.testing.expect(expected.eql(res));
 }
 
 test "fromUtf8Lossy: overlong encoding" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
     const expected = RocStr.fromSlice("r💖�c", test_env.getOps());
     defer expected.decref(test_env.getOps());
-    try std.testing.expect(expected.eq(res));
+    try std.testing.expect(expected.eql(res));
 }
 
 test "fromUtf8Lossy: expected continuation" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xCFc", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
     const expected = RocStr.fromSlice("r�c", test_env.getOps());
     defer expected.decref(test_env.getOps());
-    try std.testing.expect(expected.eq(res));
+    try std.testing.expect(expected.eql(res));
 }
 
 test "fromUtf8Lossy: unexpected end" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    var list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xCF", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
     const expected = RocStr.fromSlice("r�", test_env.getOps());
     defer expected.decref(test_env.getOps());
-    try std.testing.expect(expected.eq(res));
+    try std.testing.expect(expected.eql(res));
 }
 
 test "fromUtf8Lossy: encodes surrogate" {
@@ -2758,14 +2998,14 @@ test "fromUtf8Lossy: encodes surrogate" {
     // becomes 0b1110_1101 0b10_1000_00 0b10_11_1101
     //           1110_wwww   10_xxxx_yy   10_yy_zzzz
     //         0xED        0x90         0xBD
-    var list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
-    defer list.decref(@alignOf(u8), @sizeOf(u8), false, null, &rcNone, test_env.getOps());
+    const list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false, test_env.getOps());
+    // fromUtf8Lossy consumes ownership of the list - no manual decref needed
 
     const res = fromUtf8Lossy(list, test_env.getOps());
     defer res.decref(test_env.getOps());
     const expected = RocStr.fromSlice("r�c", test_env.getOps());
     defer expected.decref(test_env.getOps());
-    try std.testing.expect(expected.eq(res));
+    try std.testing.expect(expected.eql(res));
 }
 
 test "isWhitespace" {
@@ -2788,7 +3028,7 @@ test "withAsciiLowercased: small str" {
     defer str_result.decref(test_env.getOps());
 
     try std.testing.expect(str_result.isSmallStr());
-    try std.testing.expect(str_result.eq(expected));
+    try std.testing.expect(str_result.eql(expected));
 }
 
 test "withAsciiLowercased: non small str" {
@@ -2805,7 +3045,7 @@ test "withAsciiLowercased: non small str" {
     const str_result = strWithAsciiLowercased(original, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
-    try std.testing.expect(str_result.eq(expected));
+    try std.testing.expect(str_result.eql(expected));
 }
 
 test "withAsciiLowercased: seamless slice" {
@@ -2824,7 +3064,7 @@ test "withAsciiLowercased: seamless slice" {
     const str_result = strWithAsciiLowercased(original, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
-    try std.testing.expect(str_result.eq(expected));
+    try std.testing.expect(str_result.eql(expected));
 }
 
 test "withAsciiUppercased: small str" {
@@ -2841,7 +3081,7 @@ test "withAsciiUppercased: small str" {
     defer str_result.decref(test_env.getOps());
 
     try std.testing.expect(str_result.isSmallStr());
-    try std.testing.expect(str_result.eq(expected));
+    try std.testing.expect(str_result.eql(expected));
 }
 
 test "withAsciiUppercased: non small str" {
@@ -2858,7 +3098,7 @@ test "withAsciiUppercased: non small str" {
     const str_result = strWithAsciiUppercased(original, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
-    try std.testing.expect(str_result.eq(expected));
+    try std.testing.expect(str_result.eql(expected));
 }
 
 test "withAsciiUppercased: seamless slice" {
@@ -2877,7 +3117,7 @@ test "withAsciiUppercased: seamless slice" {
     const str_result = strWithAsciiUppercased(original, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
-    try std.testing.expect(str_result.eq(expected));
+    try std.testing.expect(str_result.eql(expected));
 }
 
 test "caselessAsciiEquals: same str" {
@@ -2959,7 +3199,7 @@ test "strTrim: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
     const trimmedEmpty = strTrim(RocStr.empty(), test_env.getOps());
-    try std.testing.expect(trimmedEmpty.eq(RocStr.empty()));
+    try std.testing.expect(trimmedEmpty.eql(RocStr.empty()));
 }
 
 test "strTrim: null byte" {
@@ -2981,7 +3221,7 @@ test "strTrim: null byte" {
     const trimmed = strTrim(original.clone(test_env.getOps()), test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
-    try std.testing.expect(original.eq(trimmed));
+    try std.testing.expect(original.eql(trimmed));
 }
 
 test "strTrim: blank" {
@@ -2994,7 +3234,7 @@ test "strTrim: blank" {
     const trimmed = strTrim(original, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(RocStr.empty()));
+    try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
 
 test "strTrim: large to large" {
@@ -3015,7 +3255,7 @@ test "strTrim: large to large" {
     const trimmed = strTrim(original, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
 }
 
 test "strTrim: large to small sized slice" {
@@ -3037,7 +3277,7 @@ test "strTrim: large to small sized slice" {
     const trimmed = strTrim(original, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(!trimmed.isSmallStr());
 }
 
@@ -3059,7 +3299,7 @@ test "strTrim: small to small" {
 
     const trimmed = strTrim(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
 }
 
@@ -3068,7 +3308,7 @@ test "strTrimStart: empty" {
     defer test_env.deinit();
 
     const trimmedEmpty = strTrimStart(RocStr.empty(), test_env.getOps());
-    try std.testing.expect(trimmedEmpty.eq(RocStr.empty()));
+    try std.testing.expect(trimmedEmpty.eql(RocStr.empty()));
 }
 
 test "strTrimStart: blank" {
@@ -3081,7 +3321,7 @@ test "strTrimStart: blank" {
 
     const trimmed = strTrimStart(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(RocStr.empty()));
+    try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
 
 test "strTrimStart: large to large" {
@@ -3102,7 +3342,7 @@ test "strTrimStart: large to large" {
 
     const trimmed = strTrimStart(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
 }
 
 test "strTrimStart: large to small" {
@@ -3124,7 +3364,7 @@ test "strTrimStart: large to small" {
     const trimmed = strTrimStart(original, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(!trimmed.isSmallStr());
 }
 
@@ -3146,7 +3386,7 @@ test "strTrimStart: small to small" {
 
     const trimmed = strTrimStart(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
 }
 
@@ -3154,7 +3394,7 @@ test "strTrimEnd: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
     const trimmedEmpty = strTrimEnd(RocStr.empty(), test_env.getOps());
-    try std.testing.expect(trimmedEmpty.eq(RocStr.empty()));
+    try std.testing.expect(trimmedEmpty.eql(RocStr.empty()));
 }
 
 test "strTrimEnd: blank" {
@@ -3166,7 +3406,7 @@ test "strTrimEnd: blank" {
 
     const trimmed = strTrimEnd(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(RocStr.empty()));
+    try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
 
 test "strTrimEnd: large to large" {
@@ -3186,7 +3426,7 @@ test "strTrimEnd: large to large" {
 
     const trimmed = strTrimEnd(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
 }
 
 test "strTrimEnd: large to small" {
@@ -3208,7 +3448,7 @@ test "strTrimEnd: large to small" {
     const trimmed = strTrimEnd(original, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(!trimmed.isSmallStr());
 }
 
@@ -3230,7 +3470,7 @@ test "strTrimEnd: small to small" {
 
     const trimmed = strTrimEnd(original, test_env.getOps());
 
-    try std.testing.expect(trimmed.eq(expected));
+    try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
 }
 

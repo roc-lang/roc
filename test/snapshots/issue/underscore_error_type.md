@@ -38,7 +38,7 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
-TYPE MISMATCH - underscore_error_type.md:4:7:4:9
+MISSING METHOD - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:14:7:14:32
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
@@ -121,19 +121,19 @@ BadTuple := (_, U32)
 
 Underscores in type annotations mean "I don't care about this type", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **underscore_error_type.md:4:7:4:9:**
 ```roc
 foo = 42
 ```
       ^^
 
-It has the type:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-But the type annotation says it should have the type:
-    _BadType_
+    BadType
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -144,10 +144,12 @@ bar = [1, 2, 3]
       ^^^^^^^^^
 
 It has the type:
-    _List(Num(_size))_
+
+    List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But the type annotation says it should have the type:
-    _BadList_
+
+    BadList
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -158,10 +160,13 @@ baz = { field: "hi", other: 5 }
       ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _{ field: Str, other: Num(_size) }_
+
+    { field: Str, other: a }
+      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But the type annotation says it should have the type:
-    _BadRecord_
+
+    BadRecord
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -172,10 +177,12 @@ qux = |x| x
       ^^^^^
 
 It has the type:
-    _a -> a_
+
+    a -> a
 
 But the type annotation says it should have the type:
-    _BadFunction_
+
+    BadFunction
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -186,10 +193,12 @@ quux = ("hello", 42)
        ^^^^^^^^^^^^^
 
 It has the type:
-    _(Str, Num(_size))_
+
+    (Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But the type annotation says it should have the type:
-    _BadTuple_
+
+    BadTuple
 
 # TOKENS
 ~~~zig
@@ -404,7 +413,7 @@ quux = ("hello", 42)
 		(nominal (type "BadTuple")
 			(ty-header (name "BadTuple"))))
 	(expressions
-		(expr (type "Error"))
+		(expr (type "BadType"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

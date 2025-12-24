@@ -9,7 +9,8 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
-INVALID BOOL OPERATION - binop_omnibus__single__no_spaces.md:1:21:1:21
+NOT IMPLEMENTED - binop_omnibus__single__no_spaces.md:1:1:1:13
+MISSING METHOD - binop_omnibus__single__no_spaces.md:1:32:1:34
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -22,18 +23,31 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
     ^^^
 
 
-**INVALID BOOL OPERATION**
-I'm having trouble with this bool operation:
-**binop_omnibus__single__no_spaces.md:1:21:**
+**NOT IMPLEMENTED**
+This feature is not yet implemented: unsupported operator
+
+**binop_omnibus__single__no_spaces.md:1:1:1:13:**
+```roc
+Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
+```
+^^^^^^^^^^^^
+
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**binop_omnibus__single__no_spaces.md:1:32:1:34:**
 ```roc
 Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
                                ^^
 
-Both sides of `and` must be _Bool_ values, but the right side is:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-Note: Roc does not have "truthiness" where other values like strings, numbers or lists are automatically converted to bools. You must do that conversion yourself!
+    Bool
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -68,11 +82,7 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 ~~~clojure
 (e-binop (op "or")
 	(e-binop (op "gt")
-		(e-binop (op "null_coalesce")
-			(e-tag (name "Err")
-				(args
-					(e-runtime-error (tag "ident_not_in_scope"))))
-			(e-num (value "12")))
+		(e-runtime-error (tag "not_implemented"))
 		(e-binop (op "mul")
 			(e-num (value "5"))
 			(e-num (value "5"))))
@@ -86,5 +96,5 @@ Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "Bool"))
 ~~~

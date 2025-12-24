@@ -603,6 +603,7 @@ EndOfFile,
 ~~~roc
 # Define a polymorphic container with static dispatch
 Container(a) := [Empty, Value(a)].{
+	# Method with annotation
 	map : Container(a), (a -> b) -> Container(b)
 	map = |container, f| {
 		match container {
@@ -610,12 +611,16 @@ Container(a) := [Empty, Value(a)].{
 			Empty => Empty
 		}
 	}
+
+	# Method without annotation (inferred)
 	get_or = |container, default| {
 		match container {
 			Container.Value(val) => val
 			Container.Empty => default
 		}
 	}
+
+	# Chained method dispatch
 	flat_map : Container(a), (a -> Container(b)) -> Container(b)
 	flat_map = |container, f| {
 		match container {
@@ -716,38 +721,35 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "Container.map"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "f")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Value")
-											(args
-												(e-call
-													(e-lookup-local
-														(p-assign (ident "f")))
-													(e-lookup-local
-														(p-assign (ident "val"))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Empty"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "f")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Value")
+										(args
+											(e-call
+												(e-lookup-local
+													(p-assign (ident "f")))
+												(e-lookup-local
+													(p-assign (ident "val"))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Empty")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Container") (local)
@@ -760,68 +762,62 @@ main = {
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "Container.get_or"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "default")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "val")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "default"))))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "default")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal
+											(p-applied-tag))))
+								(value
+									(e-lookup-local
+										(p-assign (ident "val")))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-nominal
+											(p-applied-tag))))
+								(value
+									(e-lookup-local
+										(p-assign (ident "default")))))))))))
 	(d-let
 		(p-assign (ident "Container.flat_map"))
-		(e-closure
-			(captures
-				(capture (ident "val")))
-			(e-lambda
-				(args
-					(p-assign (ident "container"))
-					(p-assign (ident "f")))
-				(e-block
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "container"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-call
-											(e-lookup-local
-												(p-assign (ident "f")))
-											(e-lookup-local
-												(p-assign (ident "val"))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-applied-tag)))
-									(value
-										(e-tag (name "Empty"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "container"))
+				(p-assign (ident "f")))
+			(e-block
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "container"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "f")))
+										(e-lookup-local
+											(p-assign (ident "val"))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-tag (name "Empty")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Container") (local)
@@ -1018,29 +1014,36 @@ main = {
 				(e-lambda
 					(args
 						(p-assign (ident "f")))
-					(e-lambda
-						(args
-							(p-assign (ident "container")))
+					(e-closure
+						(captures
+							(capture (ident "f")))
 						(e-lambda
 							(args
-								(p-assign (ident "default")))
-							(e-block
-								(s-let
-									(p-assign (ident "mapped"))
-									(e-dot-access (field "map")
-										(receiver
-											(e-lookup-local
-												(p-assign (ident "container"))))
-										(args
-											(e-lookup-local
-												(p-assign (ident "f"))))))
-								(e-dot-access (field "get_or")
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "mapped"))))
+								(p-assign (ident "container")))
+							(e-closure
+								(captures
+									(capture (ident "container"))
+									(capture (ident "f")))
+								(e-lambda
 									(args
-										(e-lookup-local
-											(p-assign (ident "default"))))))))))
+										(p-assign (ident "default")))
+									(e-block
+										(s-let
+											(p-assign (ident "mapped"))
+											(e-dot-access (field "map")
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "container"))))
+												(args
+													(e-lookup-local
+														(p-assign (ident "f"))))))
+										(e-dot-access (field "get_or")
+											(receiver
+												(e-lookup-local
+													(p-assign (ident "mapped"))))
+											(args
+												(e-lookup-local
+													(p-assign (ident "default"))))))))))))
 			(s-let
 				(p-assign (ident "num_container"))
 				(e-nominal (nominal "Container")
@@ -1224,7 +1227,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, [True]_others), processed: Num(_size4), transformed: Num(_size5) }")))
+		(patt (type "{ chained: a, final: a, id_results: (e, Str, [True, .._others]), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1238,5 +1241,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: Num(_size), final: Num(_size2), id_results: (Num(_size3), Str, [True]_others), processed: Num(_size4), transformed: Num(_size5) }"))))
+		(expr (type "{ chained: a, final: a, id_results: (e, Str, [True, .._others]), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))))
 ~~~

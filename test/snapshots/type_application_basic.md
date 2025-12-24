@@ -13,21 +13,9 @@ processList = |list| list.len()
 main! = |_| processList(["one","two","three"])
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - type_application_basic.md:4:22:4:32
+NIL
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `len` on a type that doesn't support methods:
-**type_application_basic.md:4:22:4:32:**
-```roc
-processList = |list| list.len()
-```
-                     ^^^^^^^^^^
-
-This type doesn't support methods:
-    _List(Str)_
-
-
-
+NIL
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
@@ -132,9 +120,9 @@ main! = |_| processList(["one", "two", "three"])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> Error"))
-		(patt (type "_arg -> Error")))
+		(patt (type "List(Str) -> U64"))
+		(patt (type "_arg -> U64")))
 	(expressions
-		(expr (type "List(Str) -> Error"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "List(Str) -> U64"))
+		(expr (type "_arg -> U64"))))
 ~~~

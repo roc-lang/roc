@@ -24,7 +24,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **type_annotation_missing_parens.md:2:1:2:1:**
@@ -35,13 +35,12 @@ Other valid examples:
 
 
 **TOO FEW ARGS**
-The type _List_ expects  argument, but got  instead.
+The type _List_ expects 1 argument, but got 0 instead.
 **type_annotation_missing_parens.md:1:8:1:12:**
 ```roc
 nums : List U8
 ```
        ^^^^
-
 
 
 # TOKENS

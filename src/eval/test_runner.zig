@@ -6,6 +6,8 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
+const types = @import("types");
+const import_mapping_mod = types.import_mapping;
 const reporting = @import("reporting");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const eval_mod = @import("mod.zig");
@@ -45,6 +47,7 @@ fn testRocDealloc(dealloc_args: *RocDealloc, env: *anyopaque) callconv(.c) void 
     const size_storage_bytes = @max(dealloc_args.alignment, @alignOf(usize));
     const size_ptr: *const usize = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
+
     const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(dealloc_args.ptr) - size_storage_bytes);
     const log2_align = std.math.log2_int(u32, @intCast(dealloc_args.alignment));
     const align_enum: std.mem.Alignment = @enumFromInt(log2_align);
@@ -68,16 +71,22 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
+fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("testRocDbg not implemented yet");
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    const test_env: *TestRunner = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(test_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        @panic("failed to allocate expect failure message for test runner");
+    };
+    test_env.crash.recordCrash(formatted) catch {
+        test_env.allocator.free(formatted);
+        @panic("failed to record expect failure for test runner");
+    };
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {
@@ -141,11 +150,14 @@ pub const TestRunner = struct {
         allocator: std.mem.Allocator,
         cir: *ModuleEnv,
         builtin_types_param: BuiltinTypes,
+        other_modules: []const *const can.ModuleEnv,
+        builtin_module_env: ?*const can.ModuleEnv,
+        import_mapping: *const import_mapping_mod.ImportMapping,
     ) !TestRunner {
         return TestRunner{
             .allocator = allocator,
             .env = cir,
-            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, &[_]*const can.ModuleEnv{}),
+            .interpreter = try Interpreter.init(allocator, cir, builtin_types_param, builtin_module_env, other_modules, import_mapping, null),
             .crash = CrashContext.init(allocator),
             .roc_ops = null,
             .test_results = std.array_list.Managed(TestResult).init(allocator),
@@ -168,7 +180,7 @@ pub const TestRunner = struct {
                 .roc_dbg = testRocDbg,
                 .roc_expect_failed = testRocExpectFailed,
                 .roc_crashed = testRocCrashed,
-                .host_fns = undefined, // Not used in tests
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in tests
             };
         }
         self.crash.reset();
@@ -182,11 +194,11 @@ pub const TestRunner = struct {
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
         const ops = self.get_ops();
-        const result = try self.interpreter.evalMinimal(expr_idx, ops);
+        const result = try self.interpreter.eval(expr_idx, ops);
         const layout_cache = &self.interpreter.runtime_layout_store;
         defer result.decref(layout_cache, ops);
 
-        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .bool) {
+        if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int and result.layout.data.scalar.data.int == .u8) {
             const is_true = result.asBool();
             return if (is_true) Evaluation.passed else Evaluation.failed;
         }
@@ -322,7 +334,6 @@ pub const TestRunner = struct {
                 const explanation = switch (err) {
                     error.TypeMismatch => "The test expression has incompatible types and cannot be evaluated.",
                     error.DivisionByZero => "The test expression attempts to divide by zero.",
-                    error.NotImplemented => "The test uses a feature that is not yet implemented in the interpreter.",
                     error.ZeroSizedType => "The test expression results in a zero-sized type.",
                     else => "This usually indicates a bug in the test itself.",
                 };

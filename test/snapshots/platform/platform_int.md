@@ -1,12 +1,14 @@
 # META
 ~~~ini
-description=the int test platform
+description=the int test platform with for-clause syntax
 type=file
 ~~~
 # SOURCE
 ~~~roc
 platform ""
-    requires {} { multiplyInts : I64, I64 -> I64 }
+    requires {
+        multiplyInts : I64, I64 -> I64
+    }
     exposes []
     packages {}
     provides { multiplyInts: "multiplyInts" }
@@ -14,13 +16,24 @@ platform ""
 multiplyInts : I64, I64 -> I64
 ~~~
 # EXPECTED
-NIL
+EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:44
 # PROBLEMS
-NIL
+**EXPOSED BUT NOT DEFINED**
+The module header says that `multiplyInts` is exposed, but it is not defined anywhere in this module.
+
+**platform_int.md:7:16:7:44:**
+```roc
+    provides { multiplyInts: "multiplyInts" }
+```
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `multiplyInts` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
-KwRequires,OpenCurly,CloseCurly,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseCurly,
+KwRequires,OpenCurly,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,
+CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
 KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
@@ -31,9 +44,10 @@ EndOfFile,
 ~~~clojure
 (file
 	(platform (name "")
-		(rigids)
-		(ty-record
-			(anno-record-field (name "multiplyInts")
+		(requires
+			(requires-entry
+				(type-aliases)
+				(entrypoint "multiplyInts")
 				(ty-fn
 					(ty (name "I64"))
 					(ty (name "I64"))
@@ -54,7 +68,9 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 platform ""
-	requires {} { multiplyInts : I64, I64 -> I64 }
+	requires {
+		multiplyInts : I64, I64 -> I64
+	}
 	exposes []
 	packages {}
 	provides { multiplyInts: "multiplyInts" }
@@ -77,7 +93,7 @@ multiplyInts : I64, I64 -> I64
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))")))
+		(patt (type "I64, I64 -> I64")))
 	(expressions
-		(expr (type "Num(Int(Signed64)), Num(Int(Signed64)) -> Num(Int(Signed64))"))))
+		(expr (type "I64, I64 -> I64"))))
 ~~~

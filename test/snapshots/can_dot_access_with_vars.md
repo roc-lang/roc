@@ -12,21 +12,9 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - can_dot_access_with_vars.md:4:5:4:17
+NIL
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `map` on a type that doesn't support methods:
-**can_dot_access_with_vars.md:4:5:4:17:**
-```roc
-    list.map(fn)
-```
-    ^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _List(Num(_size))_
-
-
-
+NIL
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -97,5 +85,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "List(b) where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 ~~~

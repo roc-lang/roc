@@ -8,42 +8,9 @@ type=statement
 process_user! : { name : Str, age : U32, ..a } => Str
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - type_constrained_record.md:1:42:1:44
-PARSE ERROR - type_constrained_record.md:1:37:1:40
-MALFORMED TYPE - type_constrained_record.md:1:37:1:45
+NIL
 # PROBLEMS
-**UNEXPECTED TOKEN IN TYPE ANNOTATION**
-The token **..** is not expected in a type annotation.
-Type annotations should contain types like _Str_, _Num a_, or _List U64_.
-
-**type_constrained_record.md:1:42:1:44:**
-```roc
-process_user! : { name : Str, age : U32, ..a } => Str
-```
-                                         ^^
-
-
-**PARSE ERROR**
-A parsing error occurred: `expected_arrow`
-This is an unexpected parsing error. Please check your syntax.
-
-**type_constrained_record.md:1:37:1:40:**
-```roc
-process_user! : { name : Str, age : U32, ..a } => Str
-```
-                                    ^^^
-
-
-**MALFORMED TYPE**
-This type annotation is malformed or contains invalid syntax.
-
-**type_constrained_record.md:1:37:1:45:**
-```roc
-process_user! : { name : Str, age : U32, ..a } => Str
-```
-                                    ^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,DoubleDot,LowerIdent,CloseCurly,OpFatArrow,UpperIdent,
@@ -57,12 +24,14 @@ EndOfFile,
 			(anno-record-field (name "name")
 				(ty (name "Str")))
 			(anno-record-field (name "age")
-				(ty-malformed (tag "expected_arrow"))))
+				(ty (name "U32")))
+			(ty-record-ext
+				(ty-var (raw "a"))))
 		(ty (name "Str"))))
 ~~~
 # FORMATTED
 ~~~roc
-process_user! : { name : Str, age :  } => Str
+process_user! : { name : Str, age : U32 } => Str
 ~~~
 # CANONICALIZE
 ~~~clojure

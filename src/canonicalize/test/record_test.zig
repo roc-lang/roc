@@ -21,7 +21,7 @@ test "record literal uses record_unbound" {
         var env = try ModuleEnv.init(gpa, source);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -52,7 +52,7 @@ test "record literal uses record_unbound" {
         var env = try ModuleEnv.init(gpa, source2);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -83,7 +83,7 @@ test "record literal uses record_unbound" {
         var env = try ModuleEnv.init(gpa, source3);
         defer env.deinit();
 
-        try env.initCIRFields(gpa, "test");
+        try env.initCIRFields("test");
 
         var ast = try parse.parseExpr(&env.common, gpa);
         defer ast.deinit(gpa);
@@ -124,7 +124,7 @@ test "record_unbound basic functionality" {
     var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
-    try env.initCIRFields(gpa, "test");
+    try env.initCIRFields("test");
 
     var ast = try parse.parseExpr(&env.common, gpa);
     defer ast.deinit(gpa);
@@ -165,7 +165,7 @@ test "record_unbound with multiple fields" {
     var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
-    try env.initCIRFields(gpa, "test");
+    try env.initCIRFields("test");
 
     // Create record_unbound with multiple fields
     var ast = try parse.parseExpr(&env.common, gpa);
@@ -201,75 +201,158 @@ test "record_unbound with multiple fields" {
     }
 }
 
-test "record with extension variable" {
+const CIR = @import("../CIR.zig");
+const Pattern = CIR.Pattern;
+
+test "record pattern destructuring" {
     const gpa = std.testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, "");
+    // Test simple record destructuring: { x, y } = { x: 1, y: 2 }
+    const source = "{ x, y } = { x: 1, y: 2 }";
+
+    var env = try ModuleEnv.init(gpa, source);
     defer env.deinit();
 
-    try env.initCIRFields(gpa, "test");
+    try env.initCIRFields("test");
 
-    // Test that regular records have extension variables
-    // Create { x: 42, y: "hi" }* (open record)
-    const num_var = try env.types.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = .i32 } } });
-    const str_var = try env.types.freshFromContent(Content{ .structure = .str });
+    var ast = try parse.parseStatement(&env.common, gpa);
+    defer ast.deinit(gpa);
 
-    const fields = [_]types.RecordField{
-        .{ .name = try env.insertIdent(Ident.for_text("x")), .var_ = num_var },
-        .{ .name = try env.insertIdent(Ident.for_text("y")), .var_ = str_var },
-    };
-    const fields_range = try env.types.appendRecordFields(&fields);
-    const ext_var = try env.types.fresh(); // Open extension
-    const record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
-    const record_var = try env.types.freshFromContent(record_content);
+    var can = try Can.init(&env, &ast, null);
+    defer can.deinit();
 
-    // Verify the record has an extension variable
-    const resolved = env.types.resolveVar(record_var);
-    switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .record => |record| {
-                try std.testing.expect(record.fields.len() == 2);
+    // Enter a function scope so we can have local bindings
+    try can.scopeEnter(gpa, true);
 
-                // Check that extension is a flex var (open record)
-                const ext_resolved = env.types.resolveVar(record.ext);
-                switch (ext_resolved.desc.content) {
-                    .flex => {
-                        // Success! The record has an open extension
-                    },
-                    else => return error.ExpectedFlexVar,
-                }
-            },
-            else => return error.ExpectedRecord,
+    const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
+    const stmt = ast.store.getStatement(stmt_idx);
+
+    // The statement should be a declaration
+    switch (stmt) {
+        .decl => |decl| {
+            // Get the pattern from the declaration
+            const pattern_idx = decl.pattern;
+            const canonical_pattern_idx = try can.canonicalizePattern(pattern_idx) orelse {
+                return error.CanonicalizePatternError;
+            };
+
+            const canonical_pattern = env.store.getPattern(canonical_pattern_idx);
+
+            // Check that it's a record_destructure pattern
+            switch (canonical_pattern) {
+                .record_destructure => |rd| {
+                    // Get the destructs
+                    const destructs = env.store.sliceRecordDestructs(rd.destructs);
+                    try std.testing.expect(destructs.len == 2);
+
+                    // Check the first destruct (x)
+                    const destruct_x = env.store.getRecordDestruct(destructs[0]);
+                    try std.testing.expectEqualStrings("x", env.getIdent(destruct_x.label));
+
+                    // Check the second destruct (y)
+                    const destruct_y = env.store.getRecordDestruct(destructs[1]);
+                    try std.testing.expectEqualStrings("y", env.getIdent(destruct_y.label));
+
+                    // Verify that x and y are now in scope
+                    const x_ident = try env.insertIdent(Ident.for_text("x"));
+                    const y_ident = try env.insertIdent(Ident.for_text("y"));
+
+                    const x_lookup = can.scopeLookup(.ident, x_ident);
+                    const y_lookup = can.scopeLookup(.ident, y_ident);
+
+                    // Both should be found in scope
+                    switch (x_lookup) {
+                        .found => {},
+                        else => return error.XNotInScope,
+                    }
+                    switch (y_lookup) {
+                        .found => {},
+                        else => return error.YNotInScope,
+                    }
+                },
+                else => return error.ExpectedRecordDestructure,
+            }
         },
-        else => return error.ExpectedStructure,
+        else => return error.ExpectedDecl,
     }
+}
 
-    // Now test a closed record
-    const closed_ext_var = try env.types.freshFromContent(Content{ .structure = .empty_record });
-    const closed_record_content = Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = closed_ext_var } } };
-    const closed_record_var = try env.types.freshFromContent(closed_record_content);
+test "record pattern with sub-patterns" {
+    const gpa = std.testing.allocator;
 
-    // Verify the closed record has empty_record as extension
-    const closed_resolved = env.types.resolveVar(closed_record_var);
-    switch (closed_resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .record => |record| {
-                try std.testing.expect(record.fields.len() == 2);
+    // Test record destructuring with sub-patterns: { name: n, age: a } = person
+    const source = "{ name: n, age: a } = person";
 
-                // Check that extension is empty_record (closed record)
-                const ext_resolved = env.types.resolveVar(record.ext);
-                switch (ext_resolved.desc.content) {
-                    .structure => |ext_structure| switch (ext_structure) {
-                        .empty_record => {
-                            // Success! The record is closed
-                        },
-                        else => return error.ExpectedEmptyRecord,
-                    },
-                    else => return error.ExpectedStructure,
-                }
-            },
-            else => return error.ExpectedRecord,
+    var env = try ModuleEnv.init(gpa, source);
+    defer env.deinit();
+
+    try env.initCIRFields("test");
+
+    var ast = try parse.parseStatement(&env.common, gpa);
+    defer ast.deinit(gpa);
+
+    var can = try Can.init(&env, &ast, null);
+    defer can.deinit();
+
+    // Enter a function scope so we can have local bindings
+    try can.scopeEnter(gpa, true);
+
+    const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
+    const stmt = ast.store.getStatement(stmt_idx);
+
+    // The statement should be a declaration
+    switch (stmt) {
+        .decl => |decl| {
+            // Get the pattern from the declaration
+            const pattern_idx = decl.pattern;
+            const canonical_pattern_idx = try can.canonicalizePattern(pattern_idx) orelse {
+                return error.CanonicalizePatternError;
+            };
+
+            const canonical_pattern = env.store.getPattern(canonical_pattern_idx);
+
+            // Check that it's a record_destructure pattern
+            switch (canonical_pattern) {
+                .record_destructure => |rd| {
+                    // Get the destructs
+                    const destructs = env.store.sliceRecordDestructs(rd.destructs);
+                    try std.testing.expect(destructs.len == 2);
+
+                    // Check the first destruct (name: n)
+                    const destruct_name = env.store.getRecordDestruct(destructs[0]);
+                    try std.testing.expectEqualStrings("name", env.getIdent(destruct_name.label));
+                    // The ident should be the sub-pattern variable name
+                    try std.testing.expectEqualStrings("name", env.getIdent(destruct_name.ident));
+                    // Should have a SubPattern kind
+                    switch (destruct_name.kind) {
+                        .SubPattern => {},
+                        else => return error.ExpectedSubPattern,
+                    }
+
+                    // Check the second destruct (age: a)
+                    const destruct_age = env.store.getRecordDestruct(destructs[1]);
+                    try std.testing.expectEqualStrings("age", env.getIdent(destruct_age.label));
+
+                    // Verify that n and a are now in scope (the sub-pattern bindings)
+                    const n_ident = try env.insertIdent(Ident.for_text("n"));
+                    const a_ident = try env.insertIdent(Ident.for_text("a"));
+
+                    const n_lookup = can.scopeLookup(.ident, n_ident);
+                    const a_lookup = can.scopeLookup(.ident, a_ident);
+
+                    // Both should be found in scope
+                    switch (n_lookup) {
+                        .found => {},
+                        else => return error.NNotInScope,
+                    }
+                    switch (a_lookup) {
+                        .found => {},
+                        else => return error.ANotInScope,
+                    }
+                },
+                else => return error.ExpectedRecordDestructure,
+            }
         },
-        else => return error.ExpectedStructure,
+        else => return error.ExpectedDecl,
     }
 }

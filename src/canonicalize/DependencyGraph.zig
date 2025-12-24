@@ -200,6 +200,9 @@ fn collectExprDependencies(
                     .s_decl => |decl| {
                         try collectExprDependencies(cir, decl.expr, dependencies, allocator);
                     },
+                    .s_decl_gen => |decl| {
+                        try collectExprDependencies(cir, decl.expr, dependencies, allocator);
+                    },
                     .s_var => |var_stmt| {
                         try collectExprDependencies(cir, var_stmt.expr, dependencies, allocator);
                     },
@@ -218,10 +221,14 @@ fn collectExprDependencies(
                     .s_for => |for_stmt| {
                         try collectExprDependencies(cir, for_stmt.expr, dependencies, allocator);
                     },
+                    .s_while => |while_stmt| {
+                        try collectExprDependencies(cir, while_stmt.cond, dependencies, allocator);
+                        try collectExprDependencies(cir, while_stmt.body, dependencies, allocator);
+                    },
                     .s_return => |ret| {
                         try collectExprDependencies(cir, ret.expr, dependencies, allocator);
                     },
-                    .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_crash, .s_runtime_error => {},
+                    .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error => {},
                 }
             }
             // Recurse into the final expression
@@ -238,8 +245,8 @@ fn collectExprDependencies(
             try collectExprDependencies(cir, nominal.backing_expr, dependencies, allocator);
         },
 
-        // Literals have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only => {},
+        // Literals and hosted lambdas have no dependencies
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
         .e_low_level_lambda => |ll| {
             try collectExprDependencies(cir, ll.body, dependencies, allocator);
@@ -247,6 +254,9 @@ fn collectExprDependencies(
 
         // External lookups reference other modules - skip for now
         .e_lookup_external => {},
+
+        // Required lookups reference app-provided values - skip for dependency analysis
+        .e_lookup_required => {},
 
         .e_nominal_external => |nominal| {
             try collectExprDependencies(cir, nominal.backing_expr, dependencies, allocator);
@@ -261,6 +271,22 @@ fn collectExprDependencies(
 
         .e_expect => |expect| {
             try collectExprDependencies(cir, expect.body, dependencies, allocator);
+        },
+
+        .e_return => |ret| {
+            try collectExprDependencies(cir, ret.expr, dependencies, allocator);
+        },
+
+        .e_for => |for_expr| {
+            try collectExprDependencies(cir, for_expr.expr, dependencies, allocator);
+            try collectExprDependencies(cir, for_expr.body, dependencies, allocator);
+        },
+
+        .e_type_var_dispatch => |tvd| {
+            // Collect dependencies from the arguments
+            for (cir.store.exprSlice(tvd.args)) |arg_idx| {
+                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
+            }
         },
 
         .e_runtime_error => {},

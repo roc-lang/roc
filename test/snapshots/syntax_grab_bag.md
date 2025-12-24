@@ -147,7 +147,7 @@ match_time = |
 expect # Comment after expect keyword
 	blah == 1 # Comment after expect statement
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
 	var number = 123
@@ -224,25 +224,22 @@ UNDECLARED TYPE - syntax_grab_bag.md:45:8:45:10
 UNDECLARED TYPE - syntax_grab_bag.md:46:8:46:17
 UNDECLARED TYPE - syntax_grab_bag.md:52:4:52:6
 UNDECLARED TYPE - syntax_grab_bag.md:53:8:53:17
-MODULE NOT FOUND - syntax_grab_bag.md:4:1:4:42
-NOT IMPLEMENTED - :0:0:0:0
-MODULE NOT FOUND - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:14:1:14:82
+NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
 MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDEFINED VARIABLE - syntax_grab_bag.md:72:4:72:13
 UNUSED VARIABLE - syntax_grab_bag.md:97:3:97:8
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - syntax_grab_bag.md:108:7:108:12
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - syntax_grab_bag.md:111:4:111:9
 UNUSED VARIABLE - syntax_grab_bag.md:1:1:1:1
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - syntax_grab_bag.md:120:7:120:12
+UNDEFINED VARIABLE - syntax_grab_bag.md:121:37:121:40
 UNUSED VARIABLE - syntax_grab_bag.md:121:21:121:27
 UNUSED VARIABLE - syntax_grab_bag.md:127:4:128:9
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - syntax_grab_bag.md:130:18:130:23
+NOT IMPLEMENTED - syntax_grab_bag.md:133:9:133:14
 UNUSED VARIABLE - syntax_grab_bag.md:82:2:82:3
 UNDEFINED VARIABLE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
@@ -254,12 +251,13 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
 UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
 UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
-NOT IMPLEMENTED - :0:0:0:0
-NOT IMPLEMENTED - :0:0:0:0
+NOT IMPLEMENTED - syntax_grab_bag.md:188:18:188:32
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:26:189:33
+UNDEFINED VARIABLE - syntax_grab_bag.md:189:34:189:38
+UNDEFINED VARIABLE - syntax_grab_bag.md:190:2:190:14
 UNDEFINED VARIABLE - syntax_grab_bag.md:191:2:191:14
 DOES NOT EXIST - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
-UNUSED VARIABLE - syntax_grab_bag.md:165:2:165:14
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
 UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
@@ -268,8 +266,10 @@ UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
-TYPE MISMATCH - syntax_grab_bag.md:155:2:157:3
-UNUSED VALUE - syntax_grab_bag.md:155:2:157:3
+TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
+TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
+TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
 The type _Bar_ is not declared in this scope.
@@ -381,26 +381,9 @@ This type is referenced here:
 	      ^^^^^^^^^
 
 
-**MODULE NOT FOUND**
-The module `pf.Stdout` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:4:1:4:42:**
-```roc
-import pf.Stdout exposing [line!, write!]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
 **NOT IMPLEMENTED**
 This feature is not yet implemented: malformed import module name contains invalid control characters
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
-
-**MODULE NOT FOUND**
-The module `MALFORMED_IMPORT` was not found in this Roc project.
-
-You're attempting to use this module here:
 **syntax_grab_bag.md:6:1:12:4:**
 ```roc
 import # Comment after import keyword
@@ -412,16 +395,7 @@ import # Comment after import keyword
 		] # Comment after exposing close
 ```
 
-
-**MODULE NOT FOUND**
-The module `pkg.Something` was not found in this Roc project.
-
-You're attempting to use this module here:
-**syntax_grab_bag.md:14:1:14:82:**
-```roc
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
 **MODULE NOT FOUND**
@@ -486,7 +460,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**syntax_grab_bag.md:108:7:108:12:**
+```roc
+		[1, 2 | 5, 3, .. as rest] => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -503,7 +484,14 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**syntax_grab_bag.md:111:4:111:9:**
+```roc
+			2 | 5,
+```
+			^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -520,12 +508,25 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**syntax_grab_bag.md:120:7:120:12:**
+```roc
+		(1, 2 | 5, 3) => 123
+```
+		    ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize local_dispatch expression
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**UNDEFINED VARIABLE**
+Nothing is named `add` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:121:37:121:40:**
+```roc
+		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+```
+		                                  ^^^
+
 
 **UNUSED VARIABLE**
 Variable `rest` is not used anywhere in your code.
@@ -554,12 +555,26 @@ The unused variable is declared here:
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**syntax_grab_bag.md:130:18:130:23:**
+```roc
+		{ foo: 1, bar: 2 | 7 } => 12
+```
+		               ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **NOT IMPLEMENTED**
 This feature is not yet implemented: alternatives pattern outside match expression
 
+**syntax_grab_bag.md:133:9:133:14:**
+```roc
+			bar: 2 | 7, # After last record field
+```
+			     ^^^^^
+
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+
 
 **UNUSED VARIABLE**
 Variable `b` is not used anywhere in your code.
@@ -590,7 +605,7 @@ The type _String_ is not declared in this scope.
 This type is referenced here:
 **syntax_grab_bag.md:143:14:143:20:**
 ```roc
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 ```
              ^^^^^^
 
@@ -684,14 +699,49 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+This feature is not yet implemented: unsupported operator
+
+**syntax_grab_bag.md:188:18:188:32:**
+```roc
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+```
+	                ^^^^^^^^^^^^^^
 
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:189:26:189:33:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                        ^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:189:34:189:38:**
+```roc
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+	                                ^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `line!` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:190:2:190:14:**
+```roc
+	Stdout.line!(interpolated)?
+```
+	^^^^^^^^^^^^
+
 
 **UNDEFINED VARIABLE**
 Nothing is named `line!` in this scope.
@@ -724,18 +774,6 @@ The unused variable is declared here:
 	tag_with_payload = Ok(number)
 ```
 	^^^^^^^^^^^^^^^^
-
-
-**UNUSED VARIABLE**
-Variable `interpolated` is not used anywhere in your code.
-
-If you don't need this variable, prefix it with an underscore like `_interpolated` to suppress this warning.
-The unused variable is declared here:
-**syntax_grab_bag.md:165:2:165:14:**
-```roc
-	interpolated = "Hello, ${world}"
-```
-	^^^^^^^^^^^^
 
 
 **UNUSED VARIABLE**
@@ -806,7 +844,8 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _Num(Int(Unsigned64))_
+
+    U64
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -873,14 +912,14 @@ The pattern in the fourth branch of this `match` differs from previous ones:
   ^^^^^
 
 The fourth pattern has this type:
-    _Str_
+
+    Str
 
 But all the previous patterns have this type: 
-    _[Red][Blue, Green]_others_
+
+    [Red, ..[Blue, Green, .._others2]]
 
 All patterns in an `match` must have compatible types.
-
-
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -891,34 +930,116 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+
+    _d
+
+**TOO FEW ARGUMENTS**
+The function `match_time` expects 2 arguments, but 1 was provided:
+**syntax_grab_bag.md:155:2:157:3:**
+```roc
+	match_time(
+		..., # Single args with comment
+	)
+```
+
+The function has the signature:
+
+    [Red, ..[Blue, Green, .._others2]], _arg -> Error
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**syntax_grab_bag.md:155:2:157:3:**
+**syntax_grab_bag.md:175:26:175:27:**
 ```roc
-	match_time(
-		..., # Single args with comment
-	)
+		Stdout.line!("Adding ${n} to ${number}")
 ```
+		                       ^
 
 It has the type:
-    __arg -> _ret_
+
+    U64
 
 But I expected it to be:
-    _[Red][Blue, Green]_others, _arg -> Error_
+
+    Str
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**syntax_grab_bag.md:155:2:157:3:**
+**syntax_grab_bag.md:190:2:190:29:**
 ```roc
+	Stdout.line!(interpolated)?
+```
+	^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It has the type:
+
+    _d
+
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:144:9:196:2:**
+```roc
+main! = |_| { # Yeah I can leave a comment here
+	world = "World"
+	var number = 123
+	expect blah == 1
+	tag = Blue
+	return # Comment after return keyword
+		tag # Comment after return statement
+
+	# Just a random comment!
+
+	...
 	match_time(
 		..., # Single args with comment
 	)
+	some_func(
+		dbg # After debug
+			42, # After debug expr
+	)
+	crash # Comment after crash keyword
+		"Unreachable!" # Comment after crash statement
+	tag_with_payload = Ok(number)
+	interpolated = "Hello, ${world}"
+	list = [
+		add_one(
+			dbg # After dbg in list
+				number, # after dbg expr as arg
+		), # Comment one
+		456, # Comment two
+		789, # Comment three
+	]
+	for n in list {
+		Stdout.line!("Adding ${n} to ${number}")
+		number = number + n
+	}
+	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+	multiline_tuple = (
+		123,
+		"World",
+		tag1,
+		Ok(world), # This one has a comment
+		(nested, tuple),
+		[1, 2, 3],
+	)
+	bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+	static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+	Stdout.line!(interpolated)?
+	Stdout.line!(
+		"How about ${ # Comment after string interpolation open
+			Num.toStr(number) # Comment after string interpolation expr
+		} as a string?",
+	)
+} # Comment after top-level decl
 ```
 
 It has the type:
-    __d_
+
+    List(Error) => Error
+
+But the type annotation says it should have the type:
+
+    List(Error) -> Error
 
 # TOKENS
 ~~~zig
@@ -1435,7 +1556,7 @@ EndOfFile,
 					(ty (name "List"))
 					(ty (name "String")))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty-record)
 					(_))))
 		(s-decl
@@ -1589,20 +1710,20 @@ EndOfFile,
 											(e-int (raw "5")))))))
 						(s-decl
 							(p-ident (raw "static_dispatch_style"))
-							(e-field-access
+							(e-question-suffix
 								(e-field-access
-									(e-field-access
-										(e-question-suffix
-											(e-apply
-												(e-ident (raw "some_fn"))
-												(e-ident (raw "arg1"))))
-										(e-question-suffix
-											(e-apply
-												(e-ident (raw "static_dispatch_method")))))
 									(e-question-suffix
-										(e-apply
-											(e-ident (raw "next_static_dispatch_method")))))
-								(e-question-suffix
+										(e-field-access
+											(e-question-suffix
+												(e-field-access
+													(e-question-suffix
+														(e-apply
+															(e-ident (raw "some_fn"))
+															(e-ident (raw "arg1"))))
+													(e-apply
+														(e-ident (raw "static_dispatch_method")))))
+											(e-apply
+												(e-ident (raw "next_static_dispatch_method")))))
 									(e-ident (raw "record_field")))))
 						(e-question-suffix
 							(e-apply
@@ -1784,7 +1905,7 @@ match_time = |
 expect # Comment after expect keyword
 	blah == 1 # Comment after expect statement
 
-main! : List(String) -> Result({}, _)
+main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
 	var number = 123
@@ -1900,8 +2021,7 @@ expect {
 		(e-closure
 			(captures
 				(capture (ident "x"))
-				(capture (ident "x"))
-				(capture (ident "dude")))
+				(capture (ident "x")))
 			(e-lambda
 				(args
 					(p-assign (ident "a"))
@@ -1951,15 +2071,15 @@ expect {
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-str (text """))))
+										(p-str (text "foo"))))
 								(value
 									(e-num (value "100"))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
-										(p-str (text """)))
+										(p-str (text "foo")))
 									(pattern (degenerate false)
-										(p-str (text """))))
+										(p-str (text "bar"))))
 								(value
 									(e-num (value "200"))))
 							(branch
@@ -2047,7 +2167,10 @@ expect {
 													(required
 														(p-assign (ident "rest"))))))))
 								(value
-									(e-runtime-error (tag "not_implemented"))))
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-num (value "12"))
+										(e-num (value "34")))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
@@ -2266,11 +2389,7 @@ expect {
 						(p-assign (ident "bin_op_result"))
 						(e-binop (op "or")
 							(e-binop (op "gt")
-								(e-binop (op "null_coalesce")
-									(e-tag (name "Err")
-										(args
-											(e-runtime-error (tag "ident_not_in_scope"))))
-									(e-num (value "12")))
+								(e-runtime-error (tag "not_implemented"))
 								(e-binop (op "mul")
 									(e-num (value "5"))
 									(e-num (value "5"))))
@@ -2293,15 +2412,127 @@ expect {
 										(e-num (value "5")))))))
 					(s-let
 						(p-assign (ident "static_dispatch_style"))
-						(e-dot-access (field "unknown")
-							(receiver
-								(e-dot-access (field "unknown")
-									(receiver
-										(e-dot-access (field "unknown")
-											(receiver
-												(e-runtime-error (tag "not_implemented")))))))))
+						(e-match
+							(match
+								(cond
+									(e-dot-access (field "record_field")
+										(receiver
+											(e-match
+												(match
+													(cond
+														(e-dot-access (field "next_static_dispatch_method")
+															(receiver
+																(e-match
+																	(match
+																		(cond
+																			(e-dot-access (field "static_dispatch_method")
+																				(receiver
+																					(e-match
+																						(match
+																							(cond
+																								(e-call
+																									(e-runtime-error (tag "ident_not_in_scope"))
+																									(e-runtime-error (tag "ident_not_in_scope"))))
+																							(branches
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-lookup-local
+																											(p-assign (ident "#ok")))))
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-return
+																											(e-tag (name "Err")
+																												(args
+																													(e-lookup-local
+																														(p-assign (ident "#err"))))))))))))
+																				(args)))
+																		(branches
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-lookup-local
+																						(p-assign (ident "#ok")))))
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-return
+																						(e-tag (name "Err")
+																							(args
+																								(e-lookup-local
+																									(p-assign (ident "#err"))))))))))))
+															(args)))
+													(branches
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-lookup-local
+																	(p-assign (ident "#ok")))))
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-return
+																	(e-tag (name "Err")
+																		(args
+																			(e-lookup-local
+																				(p-assign (ident "#err"))))))))))))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err"))))))))))))
 					(s-expr
-						(e-runtime-error (tag "not_implemented")))
+						(e-match
+							(match
+								(cond
+									(e-call
+										(e-runtime-error (tag "ident_not_in_scope"))
+										(e-lookup-local
+											(p-assign (ident "interpolated")))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err"))))))))))))
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
@@ -2315,7 +2546,7 @@ expect {
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
 					(ty-malformed))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-record)
 					(ty-underscore)))))
 	(d-let
@@ -2423,7 +2654,7 @@ expect {
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "MALFORMED_IMPORT")
+	(s-import (module "#malformed_import_0")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
@@ -2458,10 +2689,10 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> Num(_size)"))
-		(patt (type "Error -> Num(Int(Unsigned64))"))
-		(patt (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(patt (type "List(Error) -> Error"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Error -> U64"))
+		(patt (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
+		(patt (type "Error"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls
@@ -2504,10 +2735,10 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> Num(_size)"))
-		(expr (type "Error -> Num(Int(Unsigned64))"))
-		(expr (type "[Red][Blue, Green]_others, _arg -> Error"))
-		(expr (type "List(Error) -> Error"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Error -> U64"))
+		(expr (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
+		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

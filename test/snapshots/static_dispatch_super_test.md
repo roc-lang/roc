@@ -8,12 +8,30 @@ type=expr
 some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - :0:0:0:0
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
+UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize suffix_single_question expression
+**UNDEFINED VARIABLE**
+Nothing is named `some_fn` in this scope.
+Is there an `import` or `exposing` missing up-top?
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+**static_dispatch_super_test.md:1:1:1:8:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `arg1` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**static_dispatch_super_test.md:1:9:1:13:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+        ^^^^
+
 
 # TOKENS
 ~~~zig
@@ -22,20 +40,20 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-field-access
+(e-question-suffix
 	(e-field-access
-		(e-field-access
-			(e-question-suffix
-				(e-apply
-					(e-ident (raw "some_fn"))
-					(e-ident (raw "arg1"))))
-			(e-question-suffix
-				(e-apply
-					(e-ident (raw "static_dispatch_method")))))
 		(e-question-suffix
-			(e-apply
-				(e-ident (raw "next_static_dispatch_method")))))
-	(e-question-suffix
+			(e-field-access
+				(e-question-suffix
+					(e-field-access
+						(e-question-suffix
+							(e-apply
+								(e-ident (raw "some_fn"))
+								(e-ident (raw "arg1"))))
+						(e-apply
+							(e-ident (raw "static_dispatch_method")))))
+				(e-apply
+					(e-ident (raw "next_static_dispatch_method")))))
 		(e-ident (raw "record_field"))))
 ~~~
 # FORMATTED
@@ -44,13 +62,101 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "unknown")
-	(receiver
-		(e-dot-access (field "unknown")
-			(receiver
-				(e-dot-access (field "unknown")
-					(receiver
-						(e-runtime-error (tag "not_implemented"))))))))
+(e-match
+	(match
+		(cond
+			(e-dot-access (field "record_field")
+				(receiver
+					(e-match
+						(match
+							(cond
+								(e-dot-access (field "next_static_dispatch_method")
+									(receiver
+										(e-match
+											(match
+												(cond
+													(e-dot-access (field "static_dispatch_method")
+														(receiver
+															(e-match
+																(match
+																	(cond
+																		(e-call
+																			(e-runtime-error (tag "ident_not_in_scope"))
+																			(e-runtime-error (tag "ident_not_in_scope"))))
+																	(branches
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-applied-tag)))
+																			(value
+																				(e-lookup-local
+																					(p-assign (ident "#ok")))))
+																		(branch
+																			(patterns
+																				(pattern (degenerate false)
+																					(p-applied-tag)))
+																			(value
+																				(e-return
+																					(e-tag (name "Err")
+																						(args
+																							(e-lookup-local
+																								(p-assign (ident "#err"))))))))))))
+														(args)))
+												(branches
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-applied-tag)))
+														(value
+															(e-lookup-local
+																(p-assign (ident "#ok")))))
+													(branch
+														(patterns
+															(pattern (degenerate false)
+																(p-applied-tag)))
+														(value
+															(e-return
+																(e-tag (name "Err")
+																	(args
+																		(e-lookup-local
+																			(p-assign (ident "#err"))))))))))))
+									(args)))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-return
+											(e-tag (name "Err")
+												(args
+													(e-lookup-local
+														(p-assign (ident "#err"))))))))))))))
+		(branches
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-lookup-local
+						(p-assign (ident "#ok")))))
+			(branch
+				(patterns
+					(pattern (degenerate false)
+						(p-applied-tag)))
+				(value
+					(e-return
+						(e-tag (name "Err")
+							(args
+								(e-lookup-local
+									(p-assign (ident "#err")))))))))))
 ~~~
 # TYPES
 ~~~clojure

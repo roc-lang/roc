@@ -19,7 +19,7 @@ PARSE ERROR - fuzz_crash_021.md:1:14:1:16
 PARSE ERROR - fuzz_crash_021.md:1:16:1:16
 PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 PARSE ERROR - fuzz_crash_021.md:4:1:4:1
-MALFORMED TYPE - fuzz_crash_021.md:3:14:3:15
+MALFORMED TYPE - fuzz_crash_021.md:3:1:3:11
 TYPE MODULE MISSING MATCHING TYPE - fuzz_crash_021.md:1:1:3:15
 # PROBLEMS
 **UNCLOSED STRING**
@@ -45,7 +45,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **fuzz_crash_021.md:1:4:1:5:**
@@ -135,11 +135,11 @@ This is an unexpected parsing error. Please check your syntax.
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
-**fuzz_crash_021.md:3:14:3:15:**
+**fuzz_crash_021.md:3:1:3:11:**
 ```roc
 Pair(a, b+ : (
 ```
-             ^
+^^^^^^^^^^
 
 
 **TYPE MODULE MISSING MATCHING TYPE**
@@ -189,17 +189,11 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir
-	(s-alias-decl
-		(ty-header (name ""))
-		(ty-malformed)))
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs)
-	(type_decls
-		(alias (type "")
-			(ty-header (name ""))))
 	(expressions))
 ~~~

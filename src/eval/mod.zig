@@ -20,7 +20,7 @@ pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluato
 pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 /// Utilities for loading compiled builtin modules
 pub const builtin_loading = @import("builtin_loading.zig");
-/// Centralized management of builtin modules (Bool, Result, Str)
+/// Centralized management of builtin modules (Bool, Try, Str)
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 const crash_context = @import("crash_context.zig");
 pub const CrashContext = crash_context.CrashContext;
@@ -42,4 +42,18 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
     std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
     std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
+    std.testing.refAllDecls(@import("test/stack_test.zig"));
+    std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_simple.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
+    std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
 }

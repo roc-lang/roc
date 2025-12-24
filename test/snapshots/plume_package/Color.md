@@ -30,7 +30,7 @@ rgba = |r, g, b, a| {
     Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
     bytes = str.to_utf8()
@@ -64,7 +64,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
     if str.is_named_color()
         Ok(Color.Named(str))
@@ -88,16 +88,16 @@ DOES NOT EXIST - Color.md:51:57:51:67
 DOES NOT EXIST - Color.md:51:75:51:85
 DOES NOT EXIST - Color.md:51:93:51:103
 DOES NOT EXIST - Color.md:68:14:68:27
-TYPE DOES NOT HAVE METHODS - Color.md:22:15:22:26
-TYPE DOES NOT HAVE METHODS - Color.md:29:13:29:26
-TYPE DOES NOT HAVE METHODS - Color.md:35:17:35:41
-TYPE DOES NOT HAVE METHODS - Color.md:36:21:36:45
-TYPE DOES NOT HAVE METHODS - Color.md:37:21:37:45
-TYPE DOES NOT HAVE METHODS - Color.md:38:21:38:45
-TYPE DOES NOT HAVE METHODS - Color.md:39:21:39:45
-TYPE DOES NOT HAVE METHODS - Color.md:40:21:40:45
-TYPE MISMATCH - Color.md:32:5:45:6
-TYPE DOES NOT HAVE METHODS - Color.md:62:8:62:28
+MISSING METHOD - Color.md:22:17:22:24
+MISSING METHOD - Color.md:35:19:35:39
+MISSING METHOD - Color.md:36:23:36:43
+MISSING METHOD - Color.md:37:23:37:43
+MISSING METHOD - Color.md:38:23:38:43
+MISSING METHOD - Color.md:39:23:39:43
+MISSING METHOD - Color.md:40:23:40:43
+MISSING METHOD - Color.md:62:12:62:26
+MISSING METHOD - Color.md:56:26:56:32
+MISSING METHOD - Color.md:57:32:57:38
 # PROBLEMS
 **MODULE HEADER DEPRECATED**
 The `module` header is deprecated.
@@ -203,6 +203,9 @@ The unused variable is declared here:
 **DOES NOT EXIST**
 `Set.from_list` does not exist.
 
+`Set` is in scope, but it has no associated `from_list`.
+
+It's referenced here:
 **Color.md:68:14:68:27:**
 ```roc
     colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -210,148 +213,145 @@ The unused variable is declared here:
              ^^^^^^^^^^^^^
 
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_frac` on a type that doesn't support methods:
-**Color.md:22:15:22:26:**
+**MISSING METHOD**
+This **to_frac** method is being called on a value whose type doesn't have that method:
+**Color.md:22:17:22:24:**
 ```roc
     rounded = a.to_frac() / 255.0
 ```
-              ^^^^^^^^^^^
+                ^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(Unsigned8))_
+The value's type, which does not have a method named **to_frac**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_utf8` on a type that doesn't support methods:
-**Color.md:29:13:29:26:**
-```roc
-    bytes = str.to_utf8()
-```
-            ^^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _Str_
-
-
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:35:17:35:41:**
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:35:19:35:39:**
 ```roc
                 a.is_char_in_hex_range()
 ```
-                ^^^^^^^^^^^^^^^^^^^^^^^^
+                  ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(_size))_
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:36:21:36:45:**
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:36:23:36:43:**
 ```roc
                 and b.is_char_in_hex_range()
 ```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
+                      ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(_size))_
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:37:21:37:45:**
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:37:23:37:43:**
 ```roc
                 and c.is_char_in_hex_range()
 ```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
+                      ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(_size))_
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:38:21:38:45:**
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:38:23:38:43:**
 ```roc
                 and d.is_char_in_hex_range()
 ```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
+                      ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(_size))_
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:39:21:39:45:**
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:39:23:39:43:**
 ```roc
                 and e.is_char_in_hex_range()
 ```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
+                      ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(_size))_
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_char_in_hex_range` on a type that doesn't support methods:
-**Color.md:40:21:40:45:**
+**MISSING METHOD**
+This **is_char_in_hex_range** method is being called on a value whose type doesn't have that method:
+**Color.md:40:23:40:43:**
 ```roc
                 and f.is_char_in_hex_range()
 ```
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
+                      ^^^^^^^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Num(Int(_size))_
+The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
+    U8
 
+**Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Color.md:32:5:45:6:**
-```roc
-    match bytes {
-        ['#', a, b, c, d, e, f] => {
-            is_valid =
-                a.is_char_in_hex_range()
-                and b.is_char_in_hex_range()
-                and c.is_char_in_hex_range()
-                and d.is_char_in_hex_range()
-                and e.is_char_in_hex_range()
-                and f.is_char_in_hex_range()
-
-            if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
-        }
-        _ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
-    }
-```
-
-It has the type:
-    _[InvalidHex(Str), Err([InvalidHex(Str)]_others)][Ok(Color)]_others2_
-
-But the type annotation says it should have the type:
-    _Try(Color, [InvalidHex(Str)])_
-
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `is_named_color` on a type that doesn't support methods:
-**Color.md:62:8:62:28:**
+**MISSING METHOD**
+This **is_named_color** method is being called on a value whose type doesn't have that method:
+**Color.md:62:12:62:26:**
 ```roc
     if str.is_named_color()
 ```
-       ^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^
 
-This type doesn't support methods:
-    _Str_
+The value's type, which does not have a method named **is_named_color**, is:
 
+    Str
 
+**Hint:** For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **to_str** method is being called on a value whose type doesn't have that method:
+**Color.md:56:26:56:32:**
+```roc
+expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
+```
+                         ^^^^^^
+
+The value's type, which does not have a method named **to_str**, is:
+
+    Color
+
+**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **to_str** method is being called on a value whose type doesn't have that method:
+**Color.md:57:32:57:38:**
+```roc
+expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
+```
+                               ^^^^^^
+
+The value's type, which does not have a method named **to_str**, is:
+
+    Color
+
+**Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -508,7 +508,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Color"))
 					(ty-tag-union
 						(tags
@@ -735,7 +735,7 @@ EndOfFile,
 			(ty-fn
 				(ty (name "Str"))
 				(ty-apply
-					(ty (name "Result"))
+					(ty (name "Try"))
 					(ty (name "Color"))
 					(ty-tag-union
 						(tags
@@ -816,7 +816,7 @@ rgba = |r, g, b, a| {
 	Color.RGBA(r, g, b, rounded)
 }
 
-hex : Str -> Result(Color, [InvalidHex(Str)])
+hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
 
 	bytes = str.to_utf8()
@@ -850,12 +850,12 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
-named : Str -> Result(Color, [UnknownColor(Str)])
+named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
 	if str.is_named_color()
 		Ok(Color.Named(str))
-			else
-				Err(UnknownColor("Unknown color ${str}"))
+	else
+		Err(UnknownColor("Unknown color ${str}"))
 
 is_named_color = |str| {
 	colors = Set.from_list(["AliceBlue", "AntiqueWhite", "Aqua"])
@@ -926,250 +926,230 @@ is_named_color = |str| {
 				(ty-lookup (name "Color") (local)))))
 	(d-let
 		(p-assign (ident "hex"))
-		(e-closure
-			(captures
-				(capture (ident "a"))
-				(capture (ident "b"))
-				(capture (ident "c"))
-				(capture (ident "d"))
-				(capture (ident "e"))
-				(capture (ident "f"))
-				(capture (ident "is_valid")))
-			(e-lambda
-				(args
-					(p-assign (ident "str")))
-				(e-block
-					(s-let
-						(p-assign (ident "bytes"))
-						(e-dot-access (field "to_utf8")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "str"))))
-							(args)))
-					(s-let
-						(p-assign (ident "is_char_in_hex_range"))
-						(e-lambda
-							(args
-								(p-assign (ident "b")))
+		(e-lambda
+			(args
+				(p-assign (ident "str")))
+			(e-block
+				(s-let
+					(p-assign (ident "bytes"))
+					(e-dot-access (field "to_utf8")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "str"))))
+						(args)))
+				(s-let
+					(p-assign (ident "is_char_in_hex_range"))
+					(e-lambda
+						(args
+							(p-assign (ident "b")))
+						(e-binop (op "or")
+							(e-binop (op "and")
+								(e-binop (op "ge")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-num (value "48")))
+								(e-binop (op "le")
+									(e-lookup-local
+										(p-assign (ident "b")))
+									(e-num (value "57"))))
 							(e-binop (op "or")
 								(e-binop (op "and")
 									(e-binop (op "ge")
 										(e-lookup-local
 											(p-assign (ident "b")))
-										(e-num (value "48")))
+										(e-num (value "97")))
 									(e-binop (op "le")
 										(e-lookup-local
 											(p-assign (ident "b")))
-										(e-num (value "57"))))
-								(e-binop (op "or")
-									(e-binop (op "and")
-										(e-binop (op "ge")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "97")))
-										(e-binop (op "le")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "102"))))
-									(e-binop (op "and")
-										(e-binop (op "ge")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "65")))
-										(e-binop (op "le")
-											(e-lookup-local
-												(p-assign (ident "b")))
-											(e-num (value "70"))))))))
-					(e-match
-						(match
-							(cond
-								(e-lookup-local
-									(p-assign (ident "bytes"))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-list
-												(patterns
-													(p-num (value "35"))
-													(p-assign (ident "a"))
-													(p-assign (ident "b"))
-													(p-assign (ident "c"))
-													(p-assign (ident "d"))
-													(p-assign (ident "e"))
-													(p-assign (ident "f"))))))
-									(value
-										(e-block
-											(s-let
-												(p-assign (ident "is_valid"))
+										(e-num (value "102"))))
+								(e-binop (op "and")
+									(e-binop (op "ge")
+										(e-lookup-local
+											(p-assign (ident "b")))
+										(e-num (value "65")))
+									(e-binop (op "le")
+										(e-lookup-local
+											(p-assign (ident "b")))
+										(e-num (value "70"))))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "bytes"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-list
+											(patterns
+												(p-num (value "35"))
+												(p-assign (ident "a"))
+												(p-assign (ident "b"))
+												(p-assign (ident "c"))
+												(p-assign (ident "d"))
+												(p-assign (ident "e"))
+												(p-assign (ident "f"))))))
+								(value
+									(e-block
+										(s-let
+											(p-assign (ident "is_valid"))
+											(e-binop (op "and")
+												(e-dot-access (field "is_char_in_hex_range")
+													(receiver
+														(e-lookup-local
+															(p-assign (ident "a"))))
+													(args))
 												(e-binop (op "and")
 													(e-dot-access (field "is_char_in_hex_range")
 														(receiver
 															(e-lookup-local
-																(p-assign (ident "a"))))
+																(p-assign (ident "b"))))
 														(args))
 													(e-binop (op "and")
 														(e-dot-access (field "is_char_in_hex_range")
 															(receiver
 																(e-lookup-local
-																	(p-assign (ident "b"))))
+																	(p-assign (ident "c"))))
 															(args))
 														(e-binop (op "and")
 															(e-dot-access (field "is_char_in_hex_range")
 																(receiver
 																	(e-lookup-local
-																		(p-assign (ident "c"))))
+																		(p-assign (ident "d"))))
 																(args))
 															(e-binop (op "and")
 																(e-dot-access (field "is_char_in_hex_range")
 																	(receiver
 																		(e-lookup-local
-																			(p-assign (ident "d"))))
+																			(p-assign (ident "e"))))
 																	(args))
-																(e-binop (op "and")
-																	(e-dot-access (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local
-																				(p-assign (ident "e"))))
-																		(args))
-																	(e-dot-access (field "is_char_in_hex_range")
-																		(receiver
-																			(e-lookup-local
-																				(p-assign (ident "f"))))
-																		(args))))))))
-											(e-if
-												(if-branches
-													(if-branch
-														(e-lookup-local
-															(p-assign (ident "is_valid")))
-														(e-tag (name "Ok")
-															(args
-																(e-nominal (nominal "Color")
-																	(e-tag (name "Hex")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "str"))))))))))
-												(if-else
-													(e-tag (name "Err")
-														(args
-															(e-tag (name "InvalidHex")
-																(args
-																	(e-string
-																		(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																(e-dot-access (field "is_char_in_hex_range")
+																	(receiver
 																		(e-lookup-local
-																			(p-assign (ident "str")))
-																		(e-literal (string ""))))))))))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-underscore)))
-									(value
-										(e-tag (name "Err")
-											(args
-												(e-tag (name "InvalidHex")
+																			(p-assign (ident "f"))))
+																	(args))))))))
+										(e-if
+											(if-branches
+												(if-branch
+													(e-lookup-local
+														(p-assign (ident "is_valid")))
+													(e-tag (name "Ok")
+														(args
+															(e-nominal (nominal "Color")
+																(e-tag (name "Hex")
+																	(args
+																		(e-lookup-local
+																			(p-assign (ident "str"))))))))))
+											(if-else
+												(e-tag (name "Err")
 													(args
-														(e-string
-															(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
-															(e-lookup-local
-																(p-assign (ident "str")))
-															(e-literal (string "")))))))))))))))
+														(e-tag (name "InvalidHex")
+															(args
+																(e-string
+																	(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got "))
+																	(e-lookup-local
+																		(p-assign (ident "str")))
+																	(e-literal (string ""))))))))))))
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-underscore)))
+								(value
+									(e-tag (name "Err")
+										(args
+											(e-tag (name "InvalidHex")
+												(args
+													(e-string
+														(e-literal (string "Expected Hex must start with # and be 7 characters long, got "))
+														(e-lookup-local
+															(p-assign (ident "str")))
+														(e-literal (string ""))))))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "InvalidHex")
 							(ty-lookup (name "Str") (builtin))))))))
 	(d-let
 		(p-assign (ident "to_str"))
-		(e-closure
-			(captures
-				(capture (ident "r"))
-				(capture (ident "g"))
-				(capture (ident "b"))
-				(capture (ident "r"))
-				(capture (ident "g"))
-				(capture (ident "b"))
-				(capture (ident "a"))
-				(capture (ident "inner"))
-				(capture (ident "inner")))
-			(e-lambda
-				(args
-					(p-assign (ident "color")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "color"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-string
-										(e-literal (string "rgb("))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "r"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "g"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "b"))))
-										(e-literal (string ")")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-string
-										(e-literal (string "rgba("))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "r"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "g"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "b"))))
-										(e-literal (string ", "))
-										(e-call
-											(e-runtime-error (tag "qualified_ident_does_not_exist"))
-											(e-lookup-local
-												(p-assign (ident "a"))))
-										(e-literal (string ")")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-lookup-local
-										(p-assign (ident "inner")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-nominal
-											(p-applied-tag))))
-								(value
-									(e-lookup-local
-										(p-assign (ident "inner"))))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "color")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "color"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-string
+									(e-literal (string "rgb("))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "r"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "g"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "b"))))
+									(e-literal (string ")")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-string
+									(e-literal (string "rgba("))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "r"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "g"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "b"))))
+									(e-literal (string ", "))
+									(e-call
+										(e-runtime-error (tag "qualified_ident_does_not_exist"))
+										(e-lookup-local
+											(p-assign (ident "a"))))
+									(e-literal (string ")")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-lookup-local
+									(p-assign (ident "inner")))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal
+										(p-applied-tag))))
+							(value
+								(e-lookup-local
+									(p-assign (ident "inner")))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Color") (local))
@@ -1207,7 +1187,7 @@ is_named_color = |str| {
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
-				(ty-apply (name "Result") (builtin)
+				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Color") (local))
 					(ty-tag-union
 						(ty-tag-name (name "UnknownColor")
@@ -1221,7 +1201,7 @@ is_named_color = |str| {
 				(s-let
 					(p-assign (ident "colors"))
 					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))
+						(e-runtime-error (tag "nested_value_not_found"))
 						(e-list
 							(elems
 								(e-string
@@ -1301,9 +1281,9 @@ is_named_color = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(patt (type "Str -> Error"))
+		(patt (type "U8, U8, U8 -> Color"))
+		(patt (type "U8, U8, U8, U8 -> Color"))
+		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(patt (type "Color -> Error"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
@@ -1311,9 +1291,9 @@ is_named_color = |str| {
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
 	(expressions
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)), Num(Int(Unsigned8)) -> Color"))
-		(expr (type "Str -> Error"))
+		(expr (type "U8, U8, U8 -> Color"))
+		(expr (type "U8, U8, U8, U8 -> Color"))
+		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(expr (type "Color -> Error"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(expr (type "_arg -> Error"))))

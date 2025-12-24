@@ -44,10 +44,12 @@ value = "test"
         ^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But the type annotation says it should have the type:
-    _BadDerived_
+
+    BadDerived
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -58,10 +60,12 @@ goodValue = "test"
             ^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But the type annotation says it should have the type:
-    _GoodDerived_
+
+    GoodDerived
 
 # TOKENS
 ~~~zig

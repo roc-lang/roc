@@ -13,35 +13,19 @@ mapList = |list, fn| list.map(fn)
 main! = |_| mapList([1,2,3,4,5])
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - type_app_with_vars.md:4:22:4:34
-TYPE MISMATCH - type_app_with_vars.md:6:13:6:33
+TOO FEW ARGUMENTS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `map` on a type that doesn't support methods:
-**type_app_with_vars.md:4:22:4:34:**
-```roc
-mapList = |list, fn| list.map(fn)
-```
-                     ^^^^^^^^^^^^
-
-This type doesn't support methods:
-    _List(a)_
-
-
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**TOO FEW ARGUMENTS**
+The function `mapList` expects 2 arguments, but 1 was provided:
 **type_app_with_vars.md:6:13:6:33:**
 ```roc
 main! = |_| mapList([1,2,3,4,5])
 ```
             ^^^^^^^^^^^^^^^^^^^^
 
-It has the type:
-    _List(Num(_size)) -> _ret_
+The function has the signature:
 
-But I expected it to be:
-    _List(a), (a -> b) -> Error_
+    List(a), (a -> b) -> List(b)
 
 # TOKENS
 ~~~zig
@@ -160,9 +144,9 @@ main! = |_| mapList([1, 2, 3, 4, 5])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(a), (a -> b) -> Error"))
-		(patt (type "_arg -> _ret")))
+		(patt (type "List(a), (a -> b) -> List(b)"))
+		(patt (type "_arg -> Error")))
 	(expressions
-		(expr (type "List(a), (a -> b) -> Error"))
-		(expr (type "_arg -> _ret"))))
+		(expr (type "List(a), (a -> b) -> List(b)"))
+		(expr (type "_arg -> Error"))))
 ~~~

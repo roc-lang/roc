@@ -16,9 +16,10 @@ match ... {
 ~~~
 # EXPECTED
 INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
+MISSING METHOD - pattern_alternatives_mixed.md:2:10:2:11
 # PROBLEMS
 **INCOMPATIBLE MATCH PATTERNS**
-The pattern first pattern in this second`match` differs from previous ones:
+The pattern first pattern in this third`match` differs from previous ones:
 **pattern_alternatives_mixed.md:1:1:**
 ```roc
 match ... {
@@ -30,17 +31,31 @@ match ... {
 	_ => "other"
 }
 ```
- ^^^^^^^
+ ^^^^^
 
-The second pattern has this type:
-    _Str_
+The third pattern has this type:
+
+    [Ok(_a), .._others]
 
 But all the previous patterns have this type: 
-    _Num(_size)_
+
+    Str
 
 All patterns in an `match` must have compatible types.
 
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**pattern_alternatives_mixed.md:2:10:2:11:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	        ^
 
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -127,9 +142,9 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-str (text """)))
+						(p-str (text "hello")))
 					(pattern (degenerate false)
-						(p-str (text """))))
+						(p-str (text "world"))))
 				(value
 					(e-string
 						(e-literal (string "greetings")))))

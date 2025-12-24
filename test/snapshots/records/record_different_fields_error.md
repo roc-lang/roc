@@ -61,6 +61,7 @@ UNUSED VARIABLE - record_different_fields_error.md:3:5:3:14
 UNUSED VARIABLE - record_different_fields_error.md:6:5:6:21
 UNUSED VALUE - record_different_fields_error.md:4:5:4:15
 UNUSED VALUE - record_different_fields_error.md:4:17:4:25
+UNUSED VALUE - record_different_fields_error.md:5:10:5:15
 UNUSED VALUE - record_different_fields_error.md:5:17:5:24
 UNUSED VALUE - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
@@ -555,7 +556,8 @@ This expression produces a value, but it's not being used:
     ^^^^^^^^^^
 
 It has the type:
-    _[PascalCase]_others_
+
+    [PascalCase, .._others]
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -566,7 +568,20 @@ This expression produces a value, but it's not being used:
                 ^^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
+
+**UNUSED VALUE**
+This expression produces a value, but it's not being used:
+**record_different_fields_error.md:5:10:5:15:**
+```roc
+    kebab-case: "kebab",
+```
+         ^^^^^
+
+It has the type:
+
+    _a
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -577,7 +592,8 @@ This expression produces a value, but it's not being used:
                 ^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -588,7 +604,8 @@ This expression produces a value, but it's not being used:
                   ^^^^^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 # TOKENS
 ~~~zig

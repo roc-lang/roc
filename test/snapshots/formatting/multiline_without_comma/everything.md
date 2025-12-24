@@ -371,7 +371,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:17:11:17:12:**
@@ -529,7 +529,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:22:1:22:2:**
@@ -753,7 +753,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:27:11:27:12:**
@@ -911,7 +911,7 @@ Use:
 
 Other valid examples:
     `Dict(Str, Num)`
-    `Result(a, Str)`
+    `Try(a, Str)`
     `Maybe(List(U64))`
 
 **everything.md:33:1:33:2:**
@@ -1772,11 +1772,7 @@ h = |x, y| {
 		(p-assign (ident "h"))
 		(e-closure
 			(captures
-				(capture (ident "h"))
-				(capture (ident "a"))
-				(capture (ident "a"))
-				(capture (ident "a"))
-				(capture (ident "a")))
+				(capture (ident "h")))
 			(e-lambda
 				(args
 					(p-assign (ident "x"))
@@ -1905,7 +1901,7 @@ h = |x, y| {
 (inferred-types
 	(defs
 		(patt (type "e -> e"))
-		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c")))
+		(patt (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c")))
 	(type_decls
 		(alias (type "A(a)")
 			(ty-header (name "A")
@@ -1922,5 +1918,5 @@ h = |x, y| {
 			(ty-header (name "F"))))
 	(expressions
 		(expr (type "e -> e"))
-		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j, [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c))]j -> c"))))
+		(expr (type "[Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j], [Z1((c, d)), Z2(c, f), Z3({ a: c, b: i }), Z4(List(c)), ..j] -> c"))))
 ~~~

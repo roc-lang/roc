@@ -15,8 +15,9 @@ if bool {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - if_then_else_9.md:1:4:1:8
-INVALID IF CONDITION - if_then_else_9.md:3:11:3:11
-INCOMPATIBLE IF BRANCHES - if_then_else_9.md:1:1:1:1
+MISSING METHOD - if_then_else_9.md:3:11:3:13
+MISSING METHOD - if_then_else_9.md:2:2:2:3
+MISSING METHOD - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `bool` in this scope.
@@ -29,43 +30,43 @@ if bool {
    ^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**if_then_else_9.md:3:11:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**if_then_else_9.md:3:11:3:13:**
 ```roc
 } else if 10 { # Comment after else open
 ```
           ^^
 
-Right now, it has the type:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+    Bool
 
-**INCOMPATIBLE IF BRANCHES**
-The type of the second branch of this `if` does not match the previous branches:
-**if_then_else_9.md:1:1:**
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**if_then_else_9.md:2:2:2:3:**
 ```roc
-if bool {
 	1
-} else if 10 { # Comment after else open
-	A
-} else { # Comment after else open
-	3
-}
 ```
- ^
+	^
 
-The second branch has this type:
-    _[A]_others_
+The value's type, which does not have a method named **from_numeral**, is:
 
-But the previous branch has this type:
-    _Num(_size)_
+    [A, .._others]
 
-All branches in an `if` must have compatible types.
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**if_then_else_9.md:6:2:6:3:**
+```roc
+	3
+```
+	^
 
-Note: You can wrap branches in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+The value's type, which does not have a method named **from_numeral**, is:
+
+    [A, .._others]
 
 # TOKENS
 ~~~zig
@@ -116,5 +117,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "[A, .._others]"))
 ~~~

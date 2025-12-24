@@ -8,21 +8,9 @@ type=expr
 List.map
 ~~~
 # EXPECTED
-DOES NOT EXIST - simple_external_lookup.md:1:1:1:9
+NIL
 # PROBLEMS
-**DOES NOT EXIST**
-`List.map` does not exist.
-
-`List` is in scope, but it has no associated `map`.
-
-It's referenced here:
-**simple_external_lookup.md:1:1:1:9:**
-```roc
-List.map
-```
-^^^^^^^^
-
-
+NIL
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceDotLowerIdent,
@@ -38,9 +26,10 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "nested_value_not_found"))
+(e-lookup-external
+	(builtin))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "List(a), (a -> b) -> List(b)"))
 ~~~

@@ -96,8 +96,13 @@ pub const TypeAnno = union(enum) {
         diagnostic: CIR.Diagnostic.Idx, // The error that occurred
     },
 
-    pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: DataSpan };
+    pub const Idx = enum(u32) {
+        /// Placeholder value indicating the anno hasn't been set yet.
+        /// Used during forward reference resolution.
+        placeholder = 0,
+        _,
+    };
+    pub const Span = extern struct { span: DataSpan };
 
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
@@ -325,7 +330,7 @@ pub const TypeAnno = union(enum) {
         ty: TypeAnno.Idx,
 
         pub const Idx = enum(u32) { _ };
-        pub const Span = struct { span: DataSpan };
+        pub const Span = extern struct { span: DataSpan };
     };
 
     /// Either a locally declare type, or an external type
@@ -360,6 +365,7 @@ pub const TypeAnno = union(enum) {
     /// A record in a type annotation
     pub const Record = struct {
         fields: RecordField.Span, // The field definitions
+        ext: ?TypeAnno.Idx, // Optional extension variable for open records
     };
 
     /// A tag union in a type annotation
@@ -375,12 +381,9 @@ pub const TypeAnno = union(enum) {
 
     /// A builtin type
     pub const Builtin = enum {
-        str,
         list,
         box,
         num,
-        frac,
-        int,
         u8,
         u16,
         u32,
@@ -398,12 +401,9 @@ pub const TypeAnno = union(enum) {
         /// Convert a builtin type to it's name
         pub fn toBytes(self: @This()) []const u8 {
             switch (self) {
-                .str => return "Str",
                 .list => return "List",
                 .box => return "Box",
                 .num => return "Num",
-                .frac => return "Frac",
-                .int => return "Int",
                 .u8 => return "U8",
                 .u16 => return "U16",
                 .u32 => return "U32",
@@ -422,12 +422,9 @@ pub const TypeAnno = union(enum) {
 
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "Str")) return .str;
             if (std.mem.eql(u8, bytes, "List")) return .list;
             if (std.mem.eql(u8, bytes, "Box")) return .box;
             if (std.mem.eql(u8, bytes, "Num")) return .num;
-            if (std.mem.eql(u8, bytes, "Frac")) return .frac;
-            if (std.mem.eql(u8, bytes, "Int")) return .int;
             if (std.mem.eql(u8, bytes, "U8")) return .u8;
             if (std.mem.eql(u8, bytes, "U16")) return .u16;
             if (std.mem.eql(u8, bytes, "U32")) return .u32;
@@ -442,6 +439,28 @@ pub const TypeAnno = union(enum) {
             if (std.mem.eql(u8, bytes, "F64")) return .f64;
             if (std.mem.eql(u8, bytes, "Dec")) return .dec;
             return null;
+        }
+
+        /// Check if an identifier index matches any builtin type name.
+        /// This is more efficient than fromBytes() as it compares indices directly.
+        pub fn isBuiltinTypeIdent(ident: base.Ident.Idx, idents: anytype) bool {
+            return ident == idents.list or
+                ident == idents.box or
+                ident == idents.str or
+                ident == idents.num or
+                ident == idents.u8 or
+                ident == idents.u16 or
+                ident == idents.u32 or
+                ident == idents.u64 or
+                ident == idents.u128 or
+                ident == idents.i8 or
+                ident == idents.i16 or
+                ident == idents.i32 or
+                ident == idents.i64 or
+                ident == idents.i128 or
+                ident == idents.f32 or
+                ident == idents.f64 or
+                ident == idents.dec;
         }
     };
 };

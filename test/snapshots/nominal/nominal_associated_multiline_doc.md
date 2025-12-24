@@ -56,7 +56,13 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Foo := [A, B].{
+	# # This is a multi-line doc comment
+	# # for a nested type declaration
+	# # that spans multiple lines
 	Bar := [X, Y, Z]
+
+	# # Multi-line documentation
+	# # for an associated value
 	defaultValue = 42
 }
 ~~~
@@ -82,12 +88,12 @@ Foo := [A, B].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Num(_size)")))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
 			(ty-header (name "Foo.Bar"))))
 	(expressions
-		(expr (type "Num(_size)"))))
+		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~

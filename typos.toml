@@ -21,3 +21,5 @@ extend-ignore-identifiers-re = [".*_SME_.*"]
 HSA = "HSA"
 typ = "typ"
 ba = "ba"
+Trys = "Trys"
+sigfault = "sigfault"

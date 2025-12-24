@@ -11,6 +11,7 @@ mule []
 vavar t= '
 ~~~
 # EXPECTED
+UNCLOSED SINGLE QUOTE - fuzz_crash_031.md:4:10:4:11
 PARSE ERROR - fuzz_crash_031.md:1:1:1:5
 PARSE ERROR - fuzz_crash_031.md:1:6:1:7
 PARSE ERROR - fuzz_crash_031.md:1:7:1:8
@@ -19,6 +20,16 @@ UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 MISSING MAIN! FUNCTION - fuzz_crash_031.md:1:1:4:11
 # PROBLEMS
+**UNCLOSED SINGLE QUOTE**
+This single-quoted literal is missing a closing quote.
+
+**fuzz_crash_031.md:4:10:4:11:**
+```roc
+vavar t= '
+```
+         ^
+
+
 **PARSE ERROR**
 A parsing error occurred: `statement_unexpected_token`
 This is an unexpected parsing error. Please check your syntax.
@@ -104,7 +115,7 @@ vavar t= '
 # TOKENS
 ~~~zig
 LowerIdent,OpenSquare,CloseSquare,
-LowerIdent,LowerIdent,OpAssign,MalformedSingleQuoteUnclosed,
+LowerIdent,LowerIdent,OpAssign,MalformedSingleQuote,
 EndOfFile,
 ~~~
 # PARSE

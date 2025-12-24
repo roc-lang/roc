@@ -9,6 +9,7 @@ const std = @import("std");
 const base = @import("base");
 const types_mod = @import("types.zig");
 const import_mapping_mod = @import("import_mapping.zig");
+const debug = @import("debug.zig");
 
 const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
@@ -61,23 +62,70 @@ next_name_index: u32,
 name_counters: std.EnumMap(TypeContext, u32),
 flex_var_names_map: std.AutoHashMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
-static_dispatch_constraints: std.array_list.Managed(types_mod.StaticDispatchConstraint),
+static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
+static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
+buf_tmp: std.array_list.Managed(u8),
 scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 /// Mapping from fully-qualified type identifiers to their display names based on top-level imports.
 /// This allows error messages to show "Str" instead of "Builtin.Str" for auto-imported types,
 /// "Bar" instead of "Foo.Bar" for nested imports, and aliases like "Baz" instead of "Foo".
-import_mapping: std.AutoHashMap(Ident.Idx, Ident.Idx),
+import_mapping: ?*const import_mapping_mod.ImportMapping,
+/// The allocator used to create owned fields
+gpa: std.mem.Allocator,
+
+const ByteWrite = std.array_list.Managed(u8).Writer;
 
 const FlexVarNameRange = struct { start: usize, end: usize };
 
-/// Initialize a TypeWriter with immutable types and idents references.
-pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, idents: *const Ident.Store) std.mem.Allocator.Error!TypeWriter {
-    // Build import mapping using shared module
-    // Note: We need mutable access to insert display names into the ident store
-    const mutable_idents = @constCast(idents);
-    var import_mapping = try import_mapping_mod.createImportMapping(gpa, mutable_idents);
-    errdefer import_mapping.deinit();
+const StaticDispatchTmp = struct {
+    fn_name: Ident.Idx,
 
+    /// Start of the type name in buf_tmp
+    type_name_start: usize,
+    /// End of the type name in buf_tmp
+    type_name_end: usize,
+
+    start: usize,
+    len: usize,
+
+    /// Ctx to be provided to sort function
+    const SortCtx = struct {
+        buf_tmp: *const std.array_list.Managed(u8),
+        idents: *const Ident.Store,
+    };
+
+    /// A function to be passed into std.mem.sort to sort fields by name
+    fn sort(ctx: SortCtx, a: StaticDispatchTmp, b: StaticDispatchTmp) bool {
+        const a_type_name = ctx.buf_tmp.items[a.type_name_start..a.type_name_end];
+        const b_type_name = ctx.buf_tmp.items[b.type_name_start..b.type_name_end];
+        const type_ord = std.mem.order(u8, a_type_name, b_type_name);
+        switch (type_ord) {
+            .eq => {
+                return std.mem.order(
+                    u8,
+                    ctx.idents.getText(a.fn_name),
+                    ctx.idents.getText(b.fn_name),
+                ) == .lt;
+            },
+            else => {
+                return type_ord == .lt;
+            },
+        }
+    }
+};
+
+/// A constraint paired with its dispatcher variable (the type that has the constraint)
+const ConstraintWithDispatcher = struct {
+    dispatcher_var: Var,
+    constraint: types_mod.StaticDispatchConstraint,
+};
+
+pub fn initFromParts(
+    gpa: std.mem.Allocator,
+    types_store: *const TypesStore,
+    idents: *const Ident.Store,
+    import_mapping: ?*const import_mapping_mod.ImportMapping,
+) std.mem.Allocator.Error!TypeWriter {
     return .{
         .types = types_store,
         .idents = idents,
@@ -88,9 +136,12 @@ pub fn initFromParts(gpa: std.mem.Allocator, types_store: *const TypesStore, ide
         .name_counters = std.EnumMap(TypeContext, u32).init(.{}),
         .flex_var_names_map = std.AutoHashMap(Var, FlexVarNameRange).init(gpa),
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
-        .static_dispatch_constraints = try std.array_list.Managed(types_mod.StaticDispatchConstraint).initCapacity(gpa, 32),
+        .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
+        .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
+        .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
         .import_mapping = import_mapping,
+        .gpa = gpa,
     };
 }
 
@@ -102,8 +153,16 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names_map.deinit();
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
+    self.static_dispatch_constraints_tmp.deinit();
+    self.buf_tmp.deinit();
     self.scratch_record_fields.deinit();
-    self.import_mapping.deinit();
+    // import_mapping is borrowed, not owned, so don't deinit it
+}
+
+/// Update the import_mapping pointer. This is needed when the owning struct
+/// is returned by value, which invalidates the original pointer.
+pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mapping_mod.ImportMapping) void {
+    self.import_mapping = import_mapping;
 }
 
 /// Reset type writer state
@@ -114,15 +173,26 @@ pub fn reset(self: *TypeWriter) void {
     self.flex_var_names_map.clearRetainingCapacity();
     self.flex_var_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
+    self.static_dispatch_constraints_tmp.clearRetainingCapacity();
+    self.buf_tmp.clearRetainingCapacity();
     self.scratch_record_fields.clearRetainingCapacity();
 
     self.next_name_index = 0;
     self.name_counters = std.EnumMap(TypeContext, u32).init(.{});
 }
 
+fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
+    for (self.seen.items) |seen| {
+        if (seen == var_) return true;
+    }
+    return false;
+}
+
+const Format = enum { one_line, wrap };
+
 /// Writes the current var into the the writers buffer and returns a bytes slice
-pub fn writeGet(self: *TypeWriter, var_: Var) std.mem.Allocator.Error![]const u8 {
-    try self.write(var_);
+pub fn writeGet(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Error![]const u8 {
+    try self.write(var_, format);
     return self.get();
 }
 
@@ -134,192 +204,138 @@ pub fn get(self: *const TypeWriter) []const u8 {
 
 /// Writes a type variable to the buffer, formatting it as a human-readable string.
 /// This clears any existing content in the buffer before writing.
-pub fn write(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
+pub fn write(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Error!void {
     self.reset();
-    try self.writeVar(var_, var_);
+
+    var writer = self.buf.writer();
+    try self.writeVar(&writer, var_, var_);
 
     if (self.static_dispatch_constraints.items.len > 0) {
-        _ = try self.buf.writer().write(" where [");
-        for (self.static_dispatch_constraints.items, 0..) |constraint, i| {
-            if (i > 0) {
-                _ = try self.buf.writer().write(", ");
-            }
-
-            // TODO: Find a better way to do this
-            const dispatcher_var = blk: {
-                const fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
-                std.debug.assert(fn_resolved == .structure);
-
-                const fn_args = switch (fn_resolved.structure) {
-                    .fn_effectful => |func| func.args,
-                    .fn_pure => |func| func.args,
-                    .fn_unbound => |func| func.args,
-                    else => {
-                        std.debug.assert(false);
-                        continue;
-                    },
-                };
-                std.debug.assert(fn_args.len() > 0);
-
-                break :blk self.types.sliceVars(fn_args)[0];
-            };
-
-            try self.writeVar(dispatcher_var, var_);
-            _ = try self.buf.writer().write(".");
-            _ = try self.buf.writer().write(self.idents.getText(constraint.fn_name));
-            _ = try self.buf.writer().write(" : ");
-            try self.writeVar(constraint.fn_var, var_);
-        }
-        _ = try self.buf.writer().write("]");
+        try self.writeWhereClause(&writer, var_, format);
     }
 }
 
-fn generateNextName(self: *TypeWriter) !void {
-    // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
-    // Skip any names that already exist in the identifier store
-    // We need at most one more name than the number of existing identifiers
-    const max_attempts = self.idents.interner.entry_count + 1;
-    var attempts: usize = 0;
-    while (attempts < max_attempts) : (attempts += 1) {
-        var n = self.next_name_index;
-        self.next_name_index += 1;
+/// Writes the where clause containing static dispatch constraints to the buffer.
+/// Formats constraints in one of three styles based on line length:
+/// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
+/// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
+/// 3. One per line: "\n  where [\n    a.plus : a -> a,\n    b.minus : b -> b,\n  ]"
+fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, format: Format) std.mem.Allocator.Error!void {
+    const var_len = self.buf.items.len;
+    var tmp_writer = self.buf_tmp.writer();
 
-        var name_buf: [8]u8 = undefined;
-        var name_len: usize = 0;
+    // Ensure we have enough temp storage to collect dispatch constraints
+    try self.static_dispatch_constraints_tmp.ensureUnusedCapacity(
+        self.static_dispatch_constraints.items.len + 2,
+    );
 
-        // Generate name in base-26: a, b, ..., z, aa, ab, ..., az, ba, ...
-        while (name_len < name_buf.len) {
-            name_buf[name_len] = @intCast('a' + (n % 26));
-            name_len += 1;
-            n = n / 26;
-            if (n == 0) break;
-            n -= 1;
-        }
+    // Pre-allocate buffer space for constraint strings.
+    // Allocate 60 bytes for a potential from_numeral constraint (common and ~60 bytes),
+    // plus 30 bytes per additional constraint (estimated average).
+    try self.buf_tmp.ensureUnusedCapacity(
+        60 + (self.static_dispatch_constraints.items.len - 1) * 30,
+    );
 
-        // Names are generated in reverse order, so reverse the buffer
-        std.mem.reverse(u8, name_buf[0..name_len]);
+    // Iterate over static dispatch constraints, generating their string representations
+    // into a tmp buffer. We don't write directly to the main buffer because we need to
+    // sort them alphabetically first and decide on formatting.
+    //
+    // Use a while loop with index instead of for loop over slice, because
+    // writeVar may collect additional constraints into this local display list
+    // while printing existing ones. This is NOT unification - we're just reading
+    // existing constraint data from nested types and gathering them for display.
+    // (e.g., `!=` desugars to `is_eq().not()` - when printing the `is_eq` constraint's
+    // return type `f`, we find that `f` has a `not` constraint which we also need to display)
+    var i: usize = 0;
+    var total_constraint_len: usize = 0;
+    while (i < self.static_dispatch_constraints.items.len) : (i += 1) {
+        const item = self.static_dispatch_constraints.items[i];
 
-        // Check if this name already exists in the identifier store
-        const candidate_name = name_buf[0..name_len];
-        const exists = self.idents.interner.contains(candidate_name);
+        const start = self.buf_tmp.items.len;
+        try self.writeVar(&tmp_writer, item.dispatcher_var, root_var);
+        const type_name_end = self.buf_tmp.items.len;
 
-        if (!exists) {
-            // This name is available, use it
-            for (candidate_name) |c| {
-                try self.buf.writer().writeByte(c);
-            }
-            break;
-        }
-        // Name already exists, try the next one
+        _ = try tmp_writer.write(".");
+        _ = try tmp_writer.write(self.idents.getText(item.constraint.fn_name));
+        _ = try tmp_writer.write(" : ");
+
+        try self.writeVar(&tmp_writer, item.constraint.fn_var, root_var);
+
+        const constraint_len = self.buf_tmp.items.len - start;
+        total_constraint_len += constraint_len;
+
+        try self.static_dispatch_constraints_tmp.append(.{
+            .fn_name = item.constraint.fn_name,
+            .type_name_start = start,
+            .type_name_end = type_name_end,
+            .start = start,
+            .len = constraint_len,
+        });
     }
 
-    // This should never happen in practice, but let's handle it gracefully
-    if (attempts >= max_attempts) {
-        _ = try self.buf.writer().write("var");
-        try self.buf.writer().print("{}", .{self.next_name_index});
-    }
-}
-
-fn generateContextualName(self: *TypeWriter, context: TypeContext) std.mem.Allocator.Error!void {
-    const base_name = switch (context) {
-        .NumContent => "size",
-        .ListContent => "elem",
-        .RecordExtension => "others",
-        .TagUnionExtension => "others",
-        .RecordFieldContent => "field",
-        .TupleFieldContent => "field",
-        .FunctionArgument => "arg",
-        .FunctionReturn => "ret",
-        .General => {
-            // Fall back to generic name generation
-            try self.generateNextName();
-            return;
+    // Sort constraints alphabetically by type name first, then by function name
+    std.mem.sort(
+        StaticDispatchTmp,
+        self.static_dispatch_constraints_tmp.items,
+        StaticDispatchTmp.SortCtx{
+            .buf_tmp = &self.buf_tmp,
+            .idents = self.idents,
         },
-    };
+        StaticDispatchTmp.sort,
+    );
 
-    // Try to generate a name with increasing counters until we find one that doesn't collide
-    var counter = self.name_counters.get(context) orelse 0;
-    var found = false;
+    // Calculate line lengths for different formatting options
 
-    // We need at most as many attempts as there are existing identifiers
-    const max_attempts = self.idents.interner.entry_count;
-    var attempts: usize = 0;
-    while (!found and attempts < max_attempts) : (attempts += 1) {
-        var buf: [32]u8 = undefined;
-        const candidate_name = if (counter == 0)
-            base_name
-        else blk: {
-            const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
-                // Buffer too small, fall back to generic name
-                try self.generateNextName();
-                return;
-            };
-            break :blk name;
-        };
+    // Length of all ", " between constraints
+    const separator_len = (self.static_dispatch_constraints.items.len - 1) * 2; // ", " between each
 
-        // Check if this name already exists in the identifier store
-        const exists = self.idents.interner.contains(candidate_name);
+    // Length of all constraints, separators, plus open/closing brackets
+    const constraints_len_if_on_same_line = total_constraint_len + separator_len + 2; // extra two the open/closing []
 
-        if (!exists) {
-            // This name is available, write it to the buffer
-            for (candidate_name) |c| {
-                try self.buf.append(c);
-            }
-            found = true;
-        } else {
-            // Try next counter
-            counter += 1;
+    const line_len_if_all_on_same_line = var_len + 7 + constraints_len_if_on_same_line; // " where " = 7 charts
+    const line_len_if_all_on_next_line = 8 + constraints_len_if_on_same_line; // "  where " = 8 chars
+
+    // Choose formatting style based on line length
+    if (line_len_if_all_on_same_line <= 80 or format == .one_line) {
+        // All constraints fit on the same line as the type
+        // Example: MyType where [plus : a, a -> a, minus : a, a -> a]
+        _ = try writer.write(" where [");
+        for (self.static_dispatch_constraints_tmp.items, 0..) |constraint, j| {
+            if (j > 0) _ = try writer.write(", ");
+            _ = try writer.write(self.buf_tmp.items[constraint.start..][0..constraint.len]);
         }
-    }
-
-    // If we couldn't find a unique contextual name, fall back to generic names
-    if (!found) {
-        try self.generateNextName();
-        return;
-    }
-
-    self.name_counters.put(context, counter + 1);
-}
-
-fn writeNameCheckingCollisions(self: *TypeWriter, candidate_name: []const u8) std.mem.Allocator.Error!void {
-    // Check if this name already exists in the identifier store
-    var exists = false;
-
-    // Check all identifiers in the store
-    var i: u32 = 0;
-    while (i < self.idents.interner.outer_indices.items.len) : (i += 1) {
-        const ident_idx = Ident.Idx{ .idx = @truncate(i), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const existing_name = self.getIdent(ident_idx);
-        if (std.mem.eql(u8, existing_name, candidate_name)) {
-            exists = true;
-            break;
+        _ = try writer.write("]");
+    } else if (line_len_if_all_on_next_line <= 80) {
+        // All constraints fit on the next line
+        // Example:
+        //   where [plus : a, a -> a, minus : a, a -> a]
+        _ = try writer.write("\n  where [");
+        for (self.static_dispatch_constraints_tmp.items, 0..) |constraint, j| {
+            if (j > 0) _ = try writer.write("\n     , ");
+            _ = try writer.write(self.buf_tmp.items[constraint.start..][0..constraint.len]);
         }
-    }
-
-    if (!exists) {
-        // This name is available, write it to the buffer
-        for (candidate_name) |c| {
-            try self.buf.append(c);
-        }
+        _ = try writer.write("]");
     } else {
-        // Name collision - we need to handle this differently
-        // For now, just fall back to generic name generation
-        try self.generateNextName();
+        // Each constraint on its own line
+        // Example:
+        //   where [
+        //     plus : a, a -> a,
+        //     minus : a, a -> a,
+        //   ]
+        _ = try writer.write("\n  where [\n    ");
+        for (self.static_dispatch_constraints_tmp.items, 0..) |constraint, j| {
+            if (j > 0) _ = try writer.write(",\n    ");
+            _ = try writer.write(self.buf_tmp.items[constraint.start..][0..constraint.len]);
+        }
+        _ = try writer.write(",\n  ]");
     }
-}
-
-fn hasSeenVar(self: *const TypeWriter, var_: Var) bool {
-    for (self.seen.items) |seen| {
-        if (seen == var_) return true;
-    }
-    return false;
 }
 
 /// Convert a var to a type string
-fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
+fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
     if (@intFromEnum(var_) >= self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
-        _ = try self.buf.writer().write("Error");
+        _ = try writer.write("Error");
         return;
     }
 
@@ -327,18 +343,18 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
 
     if (@intFromEnum(resolved.var_) >= self.types.slots.backing.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
-        _ = try self.buf.writer().write("Error");
+        _ = try writer.write("Error");
         return;
     }
 
     // Check if resolution returned an error descriptor - bail immediately
     if (resolved.desc.content == .err) {
-        _ = try self.buf.writer().write("Error");
+        _ = try writer.write("Error");
         return;
     }
 
     if (self.hasSeenVar(resolved.var_)) {
-        _ = try self.buf.writer().write("...");
+        _ = try writer.write("...");
     } else {
         try self.seen.append(resolved.var_);
         defer _ = self.seen.pop();
@@ -346,214 +362,197 @@ fn writeVarWithContext(self: *TypeWriter, var_: Var, context: TypeContext, root_
         switch (resolved.desc.content) {
             .flex => |flex| {
                 if (flex.name) |ident_idx| {
-                    _ = try self.buf.writer().write(self.getIdent(ident_idx));
+                    _ = try writer.write(self.getIdent(ident_idx));
                 } else {
-                    try self.writeFlexVarName(var_, context, root_var);
+                    try self.writeFlexVarName(writer, var_, context, root_var);
                 }
 
                 for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(var_, constraint);
                 }
             },
             .rigid => |rigid| {
-                _ = try self.buf.writer().write(self.getIdent(rigid.name));
+                _ = try writer.write(self.getIdent(rigid.name));
 
                 // Useful in debugging to see if a var is rigid or not
-                // _ = try self.buf.writer().write("[r]");
+                // _ = try writer.write("[r]");
 
                 for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(constraint);
+                    try self.appendStaticDispatchConstraint(var_, constraint);
                 }
             },
             .alias => |alias| {
-                try self.writeAlias(alias, root_var);
+                try self.writeAlias(writer, alias, root_var);
             },
             .structure => |flat_type| {
                 const should_wrap_in_parens = ((context == .FunctionArgument or context == .FunctionReturn) and (flat_type == .fn_effectful or flat_type == .fn_pure or flat_type == .fn_unbound));
                 if (should_wrap_in_parens) {
-                    _ = try self.buf.writer().write("(");
+                    _ = try writer.write("(");
                 }
 
-                try self.writeFlatType(flat_type, root_var);
+                try self.writeFlatType(writer, flat_type, root_var);
 
                 if (should_wrap_in_parens) {
-                    _ = try self.buf.writer().write(")");
+                    _ = try writer.write(")");
                 }
             },
+            .recursion_var => |rec_var| {
+                // Write the recursion var by writing the structure it points to
+                try self.writeVar(writer, rec_var.structure, root_var);
+            },
             .err => {
-                _ = try self.buf.writer().write("Error");
+                _ = try writer.write("Error");
             },
         }
 
         // Useful in debugging to see the idx of a var
-        // _ = try self.buf.writer().print("[{}]", .{@intFromEnum(resolved.var_)});
+        // _ = try writer.print("[{}]", .{@intFromEnum(resolved.var_)});
     }
 }
 
-fn writeVar(self: *TypeWriter, var_: Var, root_var: Var) std.mem.Allocator.Error!void {
-    try self.writeVarWithContext(var_, .General, root_var);
+fn writeVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, root_var: Var) std.mem.Allocator.Error!void {
+    try self.writeVarWithContext(writer, var_, .General, root_var);
 }
 
 /// Write an alias type
-fn writeAlias(self: *TypeWriter, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getDisplayName(alias.ident.ident_idx));
+fn writeAlias(self: *TypeWriter, writer: *ByteWrite, alias: Alias, root_var: Var) std.mem.Allocator.Error!void {
+    _ = try writer.write(self.getDisplayName(alias.ident.ident_idx));
     var args_iter = self.types.iterAliasArgs(alias);
     if (args_iter.count() > 0) {
-        _ = try self.buf.writer().write("(");
+        _ = try writer.write("(");
 
         // Write first arg without comma
         if (args_iter.next()) |arg_var| {
-            try self.writeVar(arg_var, root_var);
+            try self.writeVar(writer, arg_var, root_var);
         }
 
         // Write remaining args with comma prefix
         while (args_iter.next()) |arg_var| {
-            _ = try self.buf.writer().write(", ");
-            try self.writeVar(arg_var, root_var);
+            _ = try writer.write(", ");
+            try self.writeVar(writer, arg_var, root_var);
         }
-        _ = try self.buf.writer().write(")");
+        _ = try writer.write(")");
     }
 }
 
 /// Convert a flat type to a type string
-fn writeFlatType(self: *TypeWriter, flat_type: FlatType, root_var: Var) std.mem.Allocator.Error!void {
+fn writeFlatType(self: *TypeWriter, writer: *ByteWrite, flat_type: FlatType, root_var: Var) std.mem.Allocator.Error!void {
     switch (flat_type) {
-        .str => {
-            _ = try self.buf.writer().write("Str");
-        },
-        .box => |sub_var| {
-            _ = try self.buf.writer().write("Box(");
-            try self.writeVar(sub_var, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .list => |sub_var| {
-            _ = try self.buf.writer().write("List(");
-            try self.writeVarWithContext(sub_var, .ListContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .list_unbound => {
-            _ = try self.buf.writer().write("List(_");
-            try self.generateContextualName(.ListContent);
-            _ = try self.buf.writer().write(")");
-        },
         .tuple => |tuple| {
-            try self.writeTuple(tuple, root_var);
-        },
-        .num => |num| {
-            try self.writeNum(num, root_var);
+            try self.writeTuple(writer, tuple, root_var);
         },
         .nominal_type => |nominal_type| {
-            try self.writeNominalType(nominal_type, root_var);
+            try self.writeNominalType(writer, nominal_type, root_var);
         },
         .fn_pure => |func| {
-            try self.writeFuncWithArrow(func, " -> ", root_var);
+            try self.writeFuncWithArrow(writer, func, " -> ", root_var);
         },
         .fn_effectful => |func| {
-            try self.writeFuncWithArrow(func, " => ", root_var);
+            try self.writeFuncWithArrow(writer, func, " => ", root_var);
         },
         .fn_unbound => |func| {
-            try self.writeFuncWithArrow(func, " -> ", root_var);
+            try self.writeFuncWithArrow(writer, func, " -> ", root_var);
         },
         .record => |record| {
-            try self.writeRecord(record, root_var);
+            try self.writeRecord(writer, record, root_var);
         },
         .record_unbound => |fields| {
-            try self.writeRecordFields(fields, root_var);
+            try self.writeRecordFields(writer, fields, root_var);
         },
         .empty_record => {
-            _ = try self.buf.writer().write("{}");
+            _ = try writer.write("{}");
         },
         .tag_union => |tag_union| {
-            try self.writeTagUnion(tag_union, root_var);
+            try self.writeTagUnion(writer, tag_union, root_var);
         },
         .empty_tag_union => {
-            _ = try self.buf.writer().write("[]");
+            _ = try writer.write("[]");
         },
     }
 }
 
 /// Write a tuple type
-fn writeTuple(self: *TypeWriter, tuple: Tuple, root_var: Var) std.mem.Allocator.Error!void {
+fn writeTuple(self: *TypeWriter, writer: *ByteWrite, tuple: Tuple, root_var: Var) std.mem.Allocator.Error!void {
     const elems = self.types.sliceVars(tuple.elems);
-    _ = try self.buf.writer().write("(");
+    _ = try writer.write("(");
     for (elems, 0..) |elem, i| {
-        if (i > 0) _ = try self.buf.writer().write(", ");
-        try self.writeVarWithContext(elem, .TupleFieldContent, root_var);
+        if (i > 0) _ = try writer.write(", ");
+        try self.writeVarWithContext(writer, elem, .TupleFieldContent, root_var);
     }
-    _ = try self.buf.writer().write(")");
+    _ = try writer.write(")");
 }
 
 /// Write a nominal type
-fn writeNominalType(self: *TypeWriter, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getDisplayName(nominal_type.ident.ident_idx));
+fn writeNominalType(self: *TypeWriter, writer: *ByteWrite, nominal_type: NominalType, root_var: Var) std.mem.Allocator.Error!void {
+    _ = try writer.write(self.getDisplayName(nominal_type.ident.ident_idx));
 
     var args_iter = self.types.iterNominalArgs(nominal_type);
     if (args_iter.count() > 0) {
-        _ = try self.buf.writer().write("(");
+        _ = try writer.write("(");
 
         // Write first arg without comma
         if (args_iter.next()) |arg_var| {
-            try self.writeVar(arg_var, root_var);
+            try self.writeVar(writer, arg_var, root_var);
         }
         // Write remaining args with comma prefix
         while (args_iter.next()) |arg_var| {
-            _ = try self.buf.writer().write(", ");
-            try self.writeVar(arg_var, root_var);
+            _ = try writer.write(", ");
+            try self.writeVar(writer, arg_var, root_var);
         }
-        _ = try self.buf.writer().write(")");
+        _ = try writer.write(")");
     }
 }
 
 /// Write record fields without extension
-fn writeRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range, root_var: Var) std.mem.Allocator.Error!void {
+fn writeRecordFields(self: *TypeWriter, writer: *ByteWrite, fields: RecordField.SafeMultiList.Range, root_var: Var) std.mem.Allocator.Error!void {
     if (fields.isEmpty()) {
-        _ = try self.buf.writer().write("{}");
+        _ = try writer.write("{}");
         return;
     }
 
-    _ = try self.buf.writer().write("{ ");
+    _ = try writer.write("{ ");
 
     const fields_slice = self.types.getRecordFieldsSlice(fields);
 
     // Write first field - we already verified that there's at least one field
-    _ = try self.buf.writer().write(self.getIdent(fields_slice.items(.name)[0]));
-    _ = try self.buf.writer().write(": ");
-    try self.writeVarWithContext(fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
+    _ = try writer.write(self.getIdent(fields_slice.items(.name)[0]));
+    _ = try writer.write(": ");
+    try self.writeVarWithContext(writer, fields_slice.items(.var_)[0], .RecordFieldContent, root_var);
 
     // Write remaining fields
     for (fields_slice.items(.name)[1..], fields_slice.items(.var_)[1..]) |name, var_| {
-        _ = try self.buf.writer().write(", ");
-        _ = try self.buf.writer().write(self.getIdent(name));
-        _ = try self.buf.writer().write(": ");
-        try self.writeVarWithContext(var_, .RecordFieldContent, root_var);
+        _ = try writer.write(", ");
+        _ = try writer.write(self.getIdent(name));
+        _ = try writer.write(": ");
+        try self.writeVarWithContext(writer, var_, .RecordFieldContent, root_var);
     }
 
-    _ = try self.buf.writer().write(" }");
+    _ = try writer.write(" }");
 }
 
 /// Write a function type with a specific arrow (`->` or `=>`)
-fn writeFuncWithArrow(self: *TypeWriter, func: Func, arrow: []const u8, root_var: Var) std.mem.Allocator.Error!void {
+fn writeFuncWithArrow(self: *TypeWriter, writer: *ByteWrite, func: Func, arrow: []const u8, root_var: Var) std.mem.Allocator.Error!void {
     const args = self.types.sliceVars(func.args);
 
     // Write arguments
     if (args.len == 0) {
-        _ = try self.buf.writer().write("({})");
+        _ = try writer.write("({})");
     } else if (args.len == 1) {
-        try self.writeVarWithContext(args[0], .FunctionArgument, root_var);
+        try self.writeVarWithContext(writer, args[0], .FunctionArgument, root_var);
     } else {
         for (args, 0..) |arg, i| {
-            if (i > 0) _ = try self.buf.writer().write(", ");
-            try self.writeVarWithContext(arg, .FunctionArgument, root_var);
+            if (i > 0) _ = try writer.write(", ");
+            try self.writeVarWithContext(writer, arg, .FunctionArgument, root_var);
         }
     }
 
-    _ = try self.buf.writer().write(arrow);
+    _ = try writer.write(arrow);
 
-    try self.writeVarWithContext(func.ret, .FunctionReturn, root_var);
+    try self.writeVarWithContext(writer, func.ret, .FunctionReturn, root_var);
 }
 
 /// Write a record type
-fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocator.Error!void {
+fn writeRecord(self: *TypeWriter, writer: *ByteWrite, record: Record, root_var: Var) std.mem.Allocator.Error!void {
     const scratch_fields_top = self.scratch_record_fields.items.len;
     defer self.scratch_record_fields.shrinkRetainingCapacity(scratch_fields_top);
 
@@ -563,51 +562,51 @@ fn writeRecord(self: *TypeWriter, record: Record, root_var: Var) std.mem.Allocat
 
     std.mem.sort(types_mod.RecordField, gathered_fields, self.idents, comptime types_mod.RecordField.sortByNameAsc);
 
-    _ = try self.buf.writer().write("{ ");
+    _ = try writer.write("{ ");
 
     switch (ext) {
         .flex => |flex| {
             if (flex.payload.name) |ident_idx| {
-                _ = try self.buf.writer().write("..");
-                _ = try self.buf.writer().write(self.getIdent(ident_idx));
-                if (num_fields > 0) _ = try self.buf.writer().write(", ");
+                _ = try writer.write("..");
+                _ = try writer.write(self.getIdent(ident_idx));
+                if (num_fields > 0) _ = try writer.write(", ");
             } else if (true) {
                 // TODO: ^ here, we should consider polarity
 
-                _ = try self.buf.writer().write("..");
-                try self.writeFlexVarName(flex.var_, .RecordExtension, root_var);
-                if (num_fields > 0) _ = try self.buf.writer().write(", ");
+                _ = try writer.write("..");
+                try self.writeFlexVarName(writer, flex.var_, .RecordExtension, root_var);
+                if (num_fields > 0) _ = try writer.write(", ");
             }
 
             // Since don't recurse above, we must capture the static dispatch
             // constraints directly
             for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(constraint);
+                try self.appendStaticDispatchConstraint(flex.var_, constraint);
             }
         },
         .rigid => |rigid| {
-            _ = try self.buf.writer().write("..");
-            _ = try self.buf.writer().write(self.getIdent(rigid.name));
-            if (num_fields > 0) _ = try self.buf.writer().write(", ");
+            _ = try writer.write("..");
+            _ = try writer.write(self.getIdent(rigid.name));
+            if (num_fields > 0) _ = try writer.write(", ");
 
             // Since don't recurse above, we must capture the static dispatch
             // constraints directly
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(constraint);
+                try self.appendStaticDispatchConstraint(record.ext, constraint);
             }
         },
         .unbound, .invalid, .empty_record => {},
     }
 
     for (gathered_fields, 0..) |field, i| {
-        _ = try self.buf.writer().write(self.getIdent(field.name));
-        _ = try self.buf.writer().write(": ");
-        try self.writeVarWithContext(field.var_, .RecordFieldContent, root_var);
+        _ = try writer.write(self.getIdent(field.name));
+        _ = try writer.write(": ");
+        try self.writeVarWithContext(writer, field.var_, .RecordFieldContent, root_var);
 
-        if (i != gathered_fields.len - 1) _ = try self.buf.writer().write(", ");
+        if (i != gathered_fields.len - 1) _ = try writer.write(", ");
     }
 
-    _ = try self.buf.writer().write(" }");
+    _ = try writer.write(" }");
 }
 
 /// Recursively unwrap all record fields
@@ -625,7 +624,9 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
     }
 
     var ext = initial_ext;
+    var guard = debug.IterationGuard.init("TypeWriter.gatherRecordFields");
     while (true) {
+        guard.tick();
         const resolved = self.types.resolveVar(ext);
         switch (resolved.desc.content) {
             .flex => |flex| {
@@ -665,216 +666,134 @@ fn gatherRecordFields(self: *TypeWriter, fields: RecordField.SafeMultiList.Range
 }
 
 /// Write a tag union type
-fn writeTagUnion(self: *TypeWriter, tag_union: TagUnion, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write("[");
+fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, root_var: Var) std.mem.Allocator.Error!void {
+    _ = try writer.write("[");
 
     // Bounds check the tags range before iterating
     const tags_start_idx = @intFromEnum(tag_union.tags.start);
     const tags_len = self.types.tags.len();
     if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
         // Tags range is out of bounds - return error indicator
-        _ = try self.buf.writer().write("Error");
-        _ = try self.buf.writer().write("]");
+        _ = try writer.write("Error]");
         return;
     }
 
     var iter = tag_union.tags.iterIndices();
     while (iter.next()) |tag_idx| {
         if (@intFromEnum(tag_idx) > @intFromEnum(tag_union.tags.start)) {
-            _ = try self.buf.writer().write(", ");
+            _ = try writer.write(", ");
         }
 
         const tag = self.types.tags.get(tag_idx);
-        try self.writeTag(tag, root_var);
+        try self.writeTag(writer, tag, root_var);
     }
 
-    _ = try self.buf.writer().write("]");
-
-    // Show extension variable if it's not empty
+    // Write extension variable inside the brackets with ".." prefix
     const ext_resolved = self.types.resolveVar(tag_union.ext);
+    const has_tags = tag_union.tags.count > 0;
+
     switch (ext_resolved.desc.content) {
         .flex => |flex| {
+            if (has_tags) _ = try writer.write(", ");
+            _ = try writer.write("..");
+
             if (flex.name) |ident_idx| {
-                _ = try self.buf.writer().write(self.getIdent(ident_idx));
+                _ = try writer.write(self.getIdent(ident_idx));
             } else if (true) {
                 // TODO: ^ here, we should consider polarity
-
-                try self.writeFlexVarName(tag_union.ext, .TagUnionExtension, root_var);
+                try self.writeFlexVarName(writer, tag_union.ext, .TagUnionExtension, root_var);
             }
 
+            _ = try writer.write("]");
+
             for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(constraint);
+                try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
             }
         },
         .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => {}, // Don't show empty extension
+            .empty_tag_union => {
+                // Closed union - just close the bracket
+                _ = try writer.write("]");
+            },
             else => {
-                try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+                // Extension is a non-empty structure (e.g., another tag union)
+                if (has_tags) _ = try writer.write(", ");
+                _ = try writer.write("..");
+                try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
+                _ = try writer.write("]");
             },
         },
         .rigid => |rigid| {
-            _ = try self.buf.writer().write(self.getIdent(rigid.name));
-            // _ = try self.buf.writer().write("[r]");
+            if (has_tags) _ = try writer.write(", ");
+            _ = try writer.write("..");
+            _ = try writer.write(self.getIdent(rigid.name));
+            _ = try writer.write("]");
 
             for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                try self.appendStaticDispatchConstraint(constraint);
+                try self.appendStaticDispatchConstraint(tag_union.ext, constraint);
             }
         },
         .err => {
             // Extension resolved to error - write error indicator
-            _ = try self.buf.writer().write("Error");
+            if (has_tags) _ = try writer.write(", ");
+            _ = try writer.write("..Error]");
         },
         .alias => {
-            try self.writeVarWithContext(tag_union.ext, .TagUnionExtension, root_var);
+            if (has_tags) _ = try writer.write(", ");
+            _ = try writer.write("..");
+            try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
+            _ = try writer.write("]");
+        },
+        .recursion_var => {
+            if (has_tags) _ = try writer.write(", ");
+            _ = try writer.write("..");
+            try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
+            _ = try writer.write("]");
         },
     }
 }
 
 /// Write a single tag
-fn writeTag(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
-    _ = try self.buf.writer().write(self.getIdent(tag.name));
+fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) std.mem.Allocator.Error!void {
+    _ = try writer.write(self.getIdent(tag.name));
     const args = self.types.sliceVars(tag.args);
     if (args.len > 0) {
-        _ = try self.buf.writer().write("(");
+        _ = try writer.write("(");
         for (args, 0..) |arg, i| {
-            if (i > 0) _ = try self.buf.writer().write(", ");
-            try self.writeVar(arg, root_var);
+            if (i > 0) _ = try writer.write(", ");
+            try self.writeVar(writer, arg, root_var);
         }
-        _ = try self.buf.writer().write(")");
+        _ = try writer.write(")");
     }
 }
 
-/// Convert a num type to a type string
-fn writeNum(self: *TypeWriter, num: Num, root_var: Var) std.mem.Allocator.Error!void {
-    switch (num) {
-        .num_poly => |poly_var| {
-            _ = try self.buf.writer().write("Num(");
-            try self.writeVarWithContext(poly_var, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .int_poly => |poly| {
-            _ = try self.buf.writer().write("Int(");
-            try self.writeVarWithContext(poly, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .frac_poly => |poly| {
-            _ = try self.buf.writer().write("Frac(");
-            try self.writeVarWithContext(poly, .NumContent, root_var);
-            _ = try self.buf.writer().write(")");
-        },
-        .num_unbound => |_| {
-            _ = try self.buf.writer().write("Num(_");
-            try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
-        },
-        .int_unbound => |_| {
-            _ = try self.buf.writer().write("Int(_");
-            try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
-        },
-        .frac_unbound => |_| {
-            _ = try self.buf.writer().write("Frac(_");
-            try self.generateContextualName(.NumContent);
-            _ = try self.buf.writer().write(")");
-        },
-        .int_precision => |prec| {
-            try self.writeIntType(prec, .precision);
-        },
-        .frac_precision => |prec| {
-            try self.writeFracType(prec, .precision);
-        },
-        .num_compact => |compact| {
-            switch (compact) {
-                .int => |prec| {
-                    try self.writeIntType(prec, .compacted);
-                },
-                .frac => |prec| {
-                    try self.writeFracType(prec, .compacted);
-                },
-            }
-        },
-    }
-}
-
-const NumPrecType = enum { precision, compacted };
-
-fn writeIntType(self: *TypeWriter, prec: Num.Int.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-    switch (num_type) {
-        .compacted => {
-            _ = switch (prec) {
-                .u8 => try self.buf.writer().write("Num(Int(Unsigned8))"),
-                .i8 => try self.buf.writer().write("Num(Int(Signed8))"),
-                .u16 => try self.buf.writer().write("Num(Int(Unsigned16))"),
-                .i16 => try self.buf.writer().write("Num(Int(Signed16))"),
-                .u32 => try self.buf.writer().write("Num(Int(Unsigned32))"),
-                .i32 => try self.buf.writer().write("Num(Int(Signed32))"),
-                .u64 => try self.buf.writer().write("Num(Int(Unsigned64))"),
-                .i64 => try self.buf.writer().write("Num(Int(Signed64))"),
-                .u128 => try self.buf.writer().write("Num(Int(Unsigned128))"),
-                .i128 => try self.buf.writer().write("Num(Int(Signed128))"),
-            };
-        },
-        .precision => {
-            _ = switch (prec) {
-                .u8 => try self.buf.writer().write("Unsigned8"),
-                .i8 => try self.buf.writer().write("Signed8"),
-                .u16 => try self.buf.writer().write("Unsigned16"),
-                .i16 => try self.buf.writer().write("Signed16"),
-                .u32 => try self.buf.writer().write("Unsigned32"),
-                .i32 => try self.buf.writer().write("Signed32"),
-                .u64 => try self.buf.writer().write("Unsigned64"),
-                .i64 => try self.buf.writer().write("Signed64"),
-                .u128 => try self.buf.writer().write("Unsigned128"),
-                .i128 => try self.buf.writer().write("Signed128"),
-            };
-        },
-    }
-}
-
-fn writeFracType(self: *TypeWriter, prec: Num.Frac.Precision, num_type: NumPrecType) std.mem.Allocator.Error!void {
-    switch (num_type) {
-        .compacted => {
-            _ = switch (prec) {
-                .f32 => try self.buf.writer().write("Num(Frac(Float32))"),
-                .f64 => try self.buf.writer().write("Num(Frac(Float64))"),
-                .dec => try self.buf.writer().write("Num(Frac(Decimal))"),
-            };
-        },
-        .precision => {
-            _ = switch (prec) {
-                .f32 => try self.buf.writer().write("Float32"),
-                .f64 => try self.buf.writer().write("Float64"),
-                .dec => try self.buf.writer().write("Decimal"),
-            };
-        },
-    }
-}
-
-/// Append a constraint to the list, if it doesn't already exist
-fn appendStaticDispatchConstraint(self: *TypeWriter, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
-    for (self.static_dispatch_constraints.items) |constraint| {
-        if (constraint.fn_name == constraint_to_add.fn_name and constraint.fn_var == constraint_to_add.fn_var) {
+/// Append a constraint with its dispatcher var to the list, if it doesn't already exist
+fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
+    for (self.static_dispatch_constraints.items) |item| {
+        if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;
         }
     }
-    _ = try self.static_dispatch_constraints.append(constraint_to_add);
+    _ = try self.static_dispatch_constraints.append(.{
+        .dispatcher_var = dispatcher_var,
+        .constraint = constraint_to_add,
+    });
 }
 
 /// Generate a name for a flex var that may appear multiple times in the type
-pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
+pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) std.mem.Allocator.Error!void {
     const resolved_var = self.types.resolveVar(var_).var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
     if (@intFromEnum(resolved_var) >= self.types.slots.backing.len()) {
-        _ = try self.buf.writer().write("_");
-        try self.generateContextualName(context);
+        _ = try writer.write("_");
+        try self.generateContextualName(writer, context);
         return;
     }
-
     // Check if we've seen this flex var before.
     if (self.flex_var_names_map.get(resolved_var)) |range| {
         // If so, then use that name
-        _ = try self.buf.writer().write(
+        _ = try writer.write(
             self.flex_var_names.items[range.start..range.end],
         );
     } else {
@@ -883,24 +802,28 @@ pub fn writeFlexVarName(self: *TypeWriter, var_: Var, context: TypeContext, root
         const occurrences = try self.countVarOccurrences(resolved_var, root_var);
         if (occurrences <= 1) {
             // If it appears once, then generate and write the name
-            _ = try self.buf.writer().write("_");
-            try self.generateContextualName(context);
+            _ = try writer.write("_");
+            try self.generateContextualName(writer, context);
         } else {
             // If it appears more than once, then we have to track the name we
             // assign it so it appears consistently across the type str
 
-            // Generate a new general var name. We do not use the context here
-            // because that may be the current context the var appears in, but
-            // the var may later appear in a different context
-            const buf_start = self.buf.items.len;
-            try self.generateContextualName(.General);
-            const buf_end = self.buf.items.len;
+            // Generate a new general var name directly to the output writer.
+            // We do not use the context here because that may be the current
+            // context the var appears in, but the var may later appear in a
+            // different context
+            const name_start = self.flex_var_names.items.len;
+            var flex_writer = self.flex_var_names.writer();
+            try self.generateContextualName(&flex_writer, .General);
+            const name_end = self.flex_var_names.items.len;
 
-            // Then write down the name we generated for later
-            const flex_start = self.flex_var_names.items.len;
-            try self.flex_var_names.appendSlice(self.buf.items[buf_start..buf_end]);
-            const flex_end = self.flex_var_names.items.len;
-            try self.flex_var_names_map.put(resolved_var, .{ .start = flex_start, .end = flex_end });
+            const contextual_name = self.flex_var_names.items[name_start..name_end];
+
+            // Write the name to the output
+            _ = try writer.write(contextual_name);
+
+            // Record the name range for this var
+            try self.flex_var_names_map.put(resolved_var, .{ .start = name_start, .end = name_end });
         }
     }
 }
@@ -965,16 +888,17 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
         },
+        .recursion_var => |rec_var| {
+            // Count the structure the recursion var points to
+            try self.countVar(search_var, rec_var.structure, count);
+        },
         .err => {},
     }
 }
 
 fn countVarInFlatType(self: *TypeWriter, search_var: Var, flat_type: FlatType, count: *usize) std.mem.Allocator.Error!void {
     switch (flat_type) {
-        .str, .empty_record, .empty_tag_union => {},
-        .box => |sub_var| try self.countVar(search_var, sub_var, count),
-        .list => |sub_var| try self.countVar(search_var, sub_var, count),
-        .list_unbound, .num => {},
+        .empty_record, .empty_tag_union => {},
         .tuple => |tuple| {
             const elems = self.types.sliceVars(tuple.elems);
             for (elems) |elem| {
@@ -1039,9 +963,133 @@ pub fn getIdent(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
 /// If the identifier is in the import_mapping, returns the mapped name.
 /// Otherwise, returns the original identifier text.
 fn getDisplayName(self: *const TypeWriter, idx: Ident.Idx) []const u8 {
-    if (self.import_mapping.get(idx)) |display_idx| {
-        return self.idents.getText(display_idx);
+    if (self.import_mapping) |mapping| {
+        if (mapping.get(idx)) |display_idx| {
+            return self.idents.getText(display_idx);
+        }
     }
 
-    return self.idents.getText(idx);
+    const name = self.idents.getText(idx);
+
+    // Strip "Builtin." prefix from builtin types for display
+    // Types like "Builtin.Try" should display as "Try", "Builtin.Num.Numeral" as "Numeral"
+    if (std.mem.startsWith(u8, name, "Builtin.")) {
+        const without_builtin = name[8..]; // Skip "Builtin."
+        // Also strip "Num." if present (e.g., "Builtin.Num.Numeral" -> "Numeral")
+        if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+            return without_builtin[4..]; // Skip "Num."
+        }
+        return without_builtin;
+    }
+
+    // Strip "Num." prefix from builtin number types for display
+    // Number types are stored as "Num.U8", "Num.F32", etc. but should display as "U8", "F32"
+    if (std.mem.startsWith(u8, name, "Num.")) {
+        return name[4..]; // Skip "Num."
+    }
+
+    return name;
+}
+
+fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeContext) std.mem.Allocator.Error!void {
+    const base_name = switch (context) {
+        .NumContent => "size",
+        .ListContent => "elem",
+        .RecordExtension => "others",
+        .TagUnionExtension => "others",
+        .RecordFieldContent => "field",
+        .TupleFieldContent => "field",
+        .FunctionArgument => "arg",
+        .FunctionReturn => "ret",
+        .General => {
+            // Fall back to generic name generation
+            try self.generateNextName(writer);
+            return;
+        },
+    };
+
+    // Try to generate a name with increasing counters until we find one that doesn't collide
+    var counter = self.name_counters.get(context) orelse 0;
+    var found = false;
+
+    // We need at most as many attempts as there are existing identifiers
+    const max_attempts = self.idents.interner.entry_count;
+    var attempts: usize = 0;
+    while (!found and attempts < max_attempts) : (attempts += 1) {
+        var buf: [32]u8 = undefined;
+        const candidate_name = if (counter == 0)
+            base_name
+        else blk: {
+            const name = std.fmt.bufPrint(&buf, "{s}{}", .{ base_name, counter + 1 }) catch {
+                // Buffer too small, fall back to generic name
+                try self.generateNextName(writer);
+                return;
+            };
+            break :blk name;
+        };
+
+        // Check if this name already exists in the identifier store
+        const exists = self.idents.interner.contains(candidate_name);
+
+        if (!exists) {
+            // This name is available, write it to the buffer
+            _ = try writer.write(candidate_name);
+            found = true;
+        } else {
+            // Try next counter
+            counter += 1;
+        }
+    }
+
+    // If we couldn't find a unique contextual name, fall back to generic names
+    if (!found) {
+        try self.generateNextName(writer);
+        return;
+    }
+
+    self.name_counters.put(context, counter + 1);
+}
+
+fn generateNextName(self: *TypeWriter, writer: *ByteWrite) !void {
+    // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
+    // Skip any names that already exist in the identifier store
+    // We need at most one more name than the number of existing identifiers
+    const max_attempts = self.idents.interner.entry_count + 1;
+    var attempts: usize = 0;
+    while (attempts < max_attempts) : (attempts += 1) {
+        var n = self.next_name_index;
+        self.next_name_index += 1;
+
+        var name_buf: [8]u8 = undefined;
+        var name_len: usize = 0;
+
+        // Generate name in base-26: a, b, ..., z, aa, ab, ..., az, ba, ...
+        while (name_len < name_buf.len) {
+            name_buf[name_len] = @intCast('a' + (n % 26));
+            name_len += 1;
+            n = n / 26;
+            if (n == 0) break;
+            n -= 1;
+        }
+
+        // Names are generated in reverse order, so reverse the buffer
+        std.mem.reverse(u8, name_buf[0..name_len]);
+
+        // Check if this name already exists in the identifier store
+        const candidate_name = name_buf[0..name_len];
+        const exists = self.idents.interner.contains(candidate_name);
+
+        if (!exists) {
+            // This name is available, use it
+            _ = try writer.write(candidate_name);
+            break;
+        }
+        // Name already exists, try the next one
+    }
+
+    // This should never happen in practice, but let's handle it gracefully
+    if (attempts >= max_attempts) {
+        _ = try writer.write("var");
+        try writer.print("{}", .{self.next_name_index});
+    }
 }

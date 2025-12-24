@@ -58,10 +58,14 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {}
-fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {}
+fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
+    @panic("Polymorphism tests should never trigger dbg");
+}
+fn testRocExpectFailed(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+    @panic("Polymorphism tests should never trigger expect failures");
+}
 fn testRocCrashed(_: *const RocCrashed, _: *anyopaque) callconv(.c) void {
-    // Polymorphism tests never trigger crashes; retain the callback to satisfy RocOps.
+    @panic("Polymorphism tests should never trigger crashes");
 }
 
 fn makeOps(host: *TestHost) RocOps {
@@ -73,7 +77,7 @@ fn makeOps(host: *TestHost) RocOps {
         .roc_dbg = testRocDbg,
         .roc_expect_failed = testRocExpectFailed,
         .roc_crashed = testRocCrashed,
-        .host_fns = undefined,
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
 }
 
@@ -85,15 +89,15 @@ test "interpreter poly: return a function then call (int)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
@@ -106,15 +110,15 @@ test "interpreter poly: return a function then call (string)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"hi"
@@ -130,15 +134,15 @@ test "interpreter captures (monomorphic): adder" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
 }
@@ -151,15 +155,15 @@ test "interpreter captures (monomorphic): constant function" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"hi"
@@ -175,15 +179,15 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("41", rendered);
 }
@@ -196,15 +200,15 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var_point);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\"ok"
@@ -221,12 +225,12 @@ test "interpreter higher-order: apply f then call with 41" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -241,12 +245,12 @@ test "interpreter higher-order: apply f twice" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -261,12 +265,12 @@ test "interpreter higher-order: pass constructed closure and apply" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("41", rendered);
@@ -281,12 +285,12 @@ test "interpreter higher-order: construct then pass then call" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -301,12 +305,12 @@ test "interpreter higher-order: compose id with +1" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -321,12 +325,12 @@ test "interpreter higher-order: return poly fn using captured +n" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("42", rendered);
@@ -334,7 +338,6 @@ test "interpreter higher-order: return poly fn using captured +n" {
 
 // Recursion via block let-binding using a named recursive closure
 test "interpreter recursion: simple countdown" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ rec = (|n| if n == 0 { 0 } else { rec(n - 1) + 1 }) rec(2) }
     //     ;
@@ -342,19 +345,18 @@ test "interpreter recursion: simple countdown" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("2", rendered);
 }
 
 test "interpreter if: else-if chain selects middle branch" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ n = 1 if n == 0 { "zero" } else if n == 1 { "one" } else { "other" } }
     //     ;
@@ -362,12 +364,12 @@ test "interpreter if: else-if chain selects middle branch" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     const expected =
@@ -384,19 +386,18 @@ test "interpreter var and reassign" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer std.testing.allocator.free(rendered);
     try std.testing.expectEqualStrings("2", rendered);
 }
 
 test "interpreter logical or is short-circuiting" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\if ((1 == 1) or { crash "nope" }) { "ok" } else { "bad" }
     //     ;
@@ -404,12 +405,12 @@ test "interpreter logical or is short-circuiting" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     const expected =
@@ -419,7 +420,6 @@ test "interpreter logical or is short-circuiting" {
 }
 
 test "interpreter logical and is short-circuiting" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\if ((1 == 0) and { crash "nope" }) { "bad" } else { "ok" }
     //     ;
@@ -427,12 +427,12 @@ test "interpreter logical and is short-circuiting" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     const expected =
@@ -442,7 +442,6 @@ test "interpreter logical and is short-circuiting" {
 }
 
 test "interpreter recursion: factorial 5 -> 120" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ fact = (|n| if n == 0 { 1 } else { n * fact(n - 1) }) fact(5) }
     //     ;
@@ -450,12 +449,12 @@ test "interpreter recursion: factorial 5 -> 120" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("120", rendered);
@@ -466,7 +465,6 @@ test "interpreter recursion: factorial 5 -> 120" {
 // support in Interpreter.translateTypeVar.
 
 test "interpreter recursion: fibonacci 5 -> 5" {
-    return error.SkipZigTest; // Comparison operators not yet implemented
     //     const roc_src =
     //         \\{ fib = (|n| if n == 0 { 0 } else if n == 1 { 1 } else { fib(n - 1) + fib(n - 2) }) fib(5) }
     //     ;
@@ -474,12 +472,12 @@ test "interpreter recursion: fibonacci 5 -> 5" {
     //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     //     defer interp2.deinit();
 
     //     var host = TestHost{ .allocator = std.testing.allocator };
     //     var ops = makeOps(&host);
-    //     const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer std.testing.allocator.free(rendered);
     //     try std.testing.expectEqualStrings("5", rendered);
@@ -495,15 +493,15 @@ test "interpreter tag union: one-arg tag Ok(42)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\Ok(42)
@@ -519,15 +517,15 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, &[_]*const can.ModuleEnv{});
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
     defer interp2.deinit();
 
     var host = TestHost{ .allocator = std.testing.allocator };
     var ops = makeOps(&host);
-    const result = try interp2.evalMinimal(resources.expr_idx, &ops);
+    const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
-    const rendered = try interp2.renderValueRocWithType(result, rt_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer std.testing.allocator.free(rendered);
     const expected =
         \\Point(1, 2)

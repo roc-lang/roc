@@ -44,47 +44,51 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - Adv.md:17:13:17:32
-MISSING METHOD - Adv.md:23:13:23:33
-TYPE DOES NOT HAVE METHODS - Adv.md:28:13:28:32
+MISSING METHOD - Adv.md:17:28:17:31
+MISSING METHOD - Adv.md:23:17:23:28
+MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**Adv.md:17:13:17:32:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**Adv.md:17:28:17:31:**
 ```roc
 	next_val = val.update_str(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^
+	                          ^^^
 
-It has the type:
-    _Adv, Num(_size) -> _ret_
+The value's type, which does not have a method named **from_numeral**, is:
 
-But I expected it to be:
-    _Adv, Str -> Adv_
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
-This **update_strr** method is being called on the type **Adv**, which has no method with that name:
-**Adv.md:23:13:23:33:**
+This **update_strr** method is being called on a value whose type doesn't have that method:
+**Adv.md:23:17:23:28:**
 ```roc
 	next_val = val.update_strr(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^^
+	               ^^^^^^^^^^^
 
+The value's type, which does not have a method named **update_strr**, is:
 
-**Hint: **For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
+    Adv
 
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `update` on a type that doesn't support methods:
-**Adv.md:28:13:28:32:**
+**Hint:** For this to work, the type would need to have a method named **update_strr** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **update** method is being called on a value whose type doesn't have that method:
+**Adv.md:28:21:28:27:**
 ```roc
 	next_val = "Hello".update(100)
 ```
-	           ^^^^^^^^^^^^^^^^^^^
+	                   ^^^^^^
 
-This type doesn't support methods:
-    _Str_
+The value's type, which does not have a method named **update**, is:
 
+    Str
 
+**Hint:** For this to work, the type would need to have a method named **update** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -286,10 +290,13 @@ EndOfFile,
 Adv := [Val(U64, Str)].{
 	to_str : Adv -> Str
 	to_str = |Adv.Val(_, s)| s
+
 	to_u64 : Adv -> U64
 	to_u64 = |Adv.Val(u, _)| u
+
 	update_str : Adv, Str -> Adv
 	update_str = |Adv.Val(u64, _), next_str| Adv.Val(u64, next_str)
+
 	update_u64 : Adv, U64 -> Adv
 	update_u64 = |Adv.Val(_, str), next_u64| Adv.Val(next_u64, str)
 }
@@ -323,51 +330,42 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "Adv.to_str"))
-		(e-closure
-			(captures
-				(capture (ident "s")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "s")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "s"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.to_u64"))
-		(e-closure
-			(captures
-				(capture (ident "u")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag)))
-				(e-lookup-local
-					(p-assign (ident "u")))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag)))
+			(e-lookup-local
+				(p-assign (ident "u"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "Adv.update_str"))
-		(e-closure
-			(captures
-				(capture (ident "u64")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "next_str")))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-lookup-local
-								(p-assign (ident "u64")))
-							(e-lookup-local
-								(p-assign (ident "next_str"))))))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag))
+				(p-assign (ident "next_str")))
+			(e-nominal (nominal "Adv")
+				(e-tag (name "Val")
+					(args
+						(e-lookup-local
+							(p-assign (ident "u64")))
+						(e-lookup-local
+							(p-assign (ident "next_str")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
@@ -375,21 +373,18 @@ main = {
 				(ty-lookup (name "Adv") (local)))))
 	(d-let
 		(p-assign (ident "Adv.update_u64"))
-		(e-closure
-			(captures
-				(capture (ident "str")))
-			(e-lambda
-				(args
-					(p-nominal
-						(p-applied-tag))
-					(p-assign (ident "next_u64")))
-				(e-nominal (nominal "Adv")
-					(e-tag (name "Val")
-						(args
-							(e-lookup-local
-								(p-assign (ident "next_u64")))
-							(e-lookup-local
-								(p-assign (ident "str"))))))))
+		(e-lambda
+			(args
+				(p-nominal
+					(p-applied-tag))
+				(p-assign (ident "next_u64")))
+			(e-nominal (nominal "Adv")
+				(e-tag (name "Val")
+					(args
+						(e-lookup-local
+							(p-assign (ident "next_u64")))
+						(e-lookup-local
+							(p-assign (ident "str")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Adv") (local))
@@ -502,23 +497,23 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "Adv -> Str"))
-		(patt (type "Adv -> Num(Int(Unsigned64))"))
+		(patt (type "Adv -> U64"))
 		(patt (type "Adv, Str -> Adv"))
-		(patt (type "Adv, Num(Int(Unsigned64)) -> Adv"))
+		(patt (type "Adv, U64 -> Adv"))
+		(patt (type "Adv"))
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "(Str, Num(Int(Unsigned64)))")))
+		(patt (type "(Str, U64)")))
 	(type_decls
 		(nominal (type "Adv")
 			(ty-header (name "Adv"))))
 	(expressions
 		(expr (type "Adv -> Str"))
-		(expr (type "Adv -> Num(Int(Unsigned64))"))
+		(expr (type "Adv -> U64"))
 		(expr (type "Adv, Str -> Adv"))
-		(expr (type "Adv, Num(Int(Unsigned64)) -> Adv"))
+		(expr (type "Adv, U64 -> Adv"))
+		(expr (type "Adv"))
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "(Str, Num(Int(Unsigned64)))"))))
+		(expr (type "(Str, U64)"))))
 ~~~

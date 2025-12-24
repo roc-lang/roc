@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const tracy = @import("tracy");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
@@ -18,6 +19,7 @@ const Ident = base.Ident;
 const Region = base.Region;
 const Var = types.Var;
 const TypeScope = types.TypeScope;
+const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const RecordField = layout_mod.RecordField;
@@ -28,6 +30,10 @@ const RecordIdx = layout_mod.RecordIdx;
 const TupleField = layout_mod.TupleField;
 const TupleData = layout_mod.TupleData;
 const TupleIdx = layout_mod.TupleIdx;
+const TagUnionVariant = layout_mod.TagUnionVariant;
+const TagUnionData = layout_mod.TagUnionData;
+const TagUnionIdx = layout_mod.TagUnionIdx;
+const TagUnionLayout = layout_mod.TagUnionLayout;
 const SizeAlign = layout_mod.SizeAlign;
 const Work = work.Work;
 
@@ -54,12 +60,41 @@ pub const Store = struct {
     record_data: collections.SafeList(RecordData),
     tuple_fields: TupleField.SafeMultiList,
     tuple_data: collections.SafeList(TupleData),
+    tag_union_variants: TagUnionVariant.SafeMultiList,
+    tag_union_data: collections.SafeList(TagUnionData),
 
     // Cache to avoid duplicate work
     layouts_by_var: collections.ArrayListMap(Var, Idx),
 
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
+
+    // Identifier for "Builtin.Str" to recognize the string type without string comparisons
+    // (null when compiling Builtin module itself or when Builtin.Str isn't available)
+    builtin_str_ident: ?Ident.Idx,
+    // Identifier for unqualified "Str" in the Builtin module (if it exists in this env)
+    builtin_str_plain_ident: ?Ident.Idx,
+
+    // Cached List ident to avoid repeated string lookups (null if List doesn't exist in this env)
+    list_ident: ?Ident.Idx,
+
+    // Cached Box ident to avoid repeated string lookups (null if Box doesn't exist in this env)
+    box_ident: ?Ident.Idx,
+
+    // Cached numeric type idents to avoid repeated string lookups
+    u8_ident: ?Ident.Idx,
+    i8_ident: ?Ident.Idx,
+    u16_ident: ?Ident.Idx,
+    i16_ident: ?Ident.Idx,
+    u32_ident: ?Ident.Idx,
+    i32_ident: ?Ident.Idx,
+    u64_ident: ?Ident.Idx,
+    i64_ident: ?Ident.Idx,
+    u128_ident: ?Ident.Idx,
+    i128_ident: ?Ident.Idx,
+    f32_ident: ?Ident.Idx,
+    f64_ident: ?Ident.Idx,
+    dec_ident: ?Ident.Idx,
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
@@ -70,10 +105,9 @@ pub const Store = struct {
     pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
         // opaque_ptr (tag 0) -> 2
-        // bool (tag 1) -> 0
-        // str (tag 2) -> 1
-        // int (tag 3) with precision p -> 3 + p
-        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
+        // str (tag 1) -> 1
+        // int (tag 2) with precision p -> 3 + p
+        // frac (tag 3) with precision p -> 13 + (p - 2) = 11 + p
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -83,13 +117,12 @@ pub const Store = struct {
         const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
 
         // Create masks for different tag ranges
-        // is_numeric: 1 when tag >= 3, else 0
-        const is_numeric = @as(u7, @intFromBool(tag >= 3));
+        // is_numeric: 1 when tag >= 2, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 2));
 
         // Calculate the base index based on tag mappings
         const base_idx = switch (scalar.tag) {
             .opaque_ptr => @as(u7, 2),
-            .bool => @as(u7, 0),
             .str => @as(u7, 1),
             .int => @as(u7, 3),
             .frac => @as(u7, 11), // 13 - 2 = 11, so 11 + p gives correct result
@@ -105,6 +138,7 @@ pub const Store = struct {
     pub fn init(
         env: *ModuleEnv,
         type_store: *const types_store.Store,
+        builtin_str_ident: ?Ident.Idx,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -142,8 +176,27 @@ pub const Store = struct {
             .record_data = try collections.SafeList(RecordData).initCapacity(env.gpa, 256),
             .tuple_fields = try TupleField.SafeMultiList.initCapacity(env.gpa, 256),
             .tuple_data = try collections.SafeList(TupleData).initCapacity(env.gpa, 256),
+            .tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(env.gpa, 64),
+            .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(env.gpa, 64),
             .layouts_by_var = layouts_by_var,
             .work = try Work.initCapacity(env.gpa, 32),
+            .builtin_str_ident = builtin_str_ident,
+            .builtin_str_plain_ident = env.idents.str,
+            .list_ident = env.idents.list,
+            .box_ident = env.idents.box,
+            .u8_ident = env.idents.u8_type,
+            .i8_ident = env.idents.i8_type,
+            .u16_ident = env.idents.u16_type,
+            .i16_ident = env.idents.i16_type,
+            .u32_ident = env.idents.u32_type,
+            .i32_ident = env.idents.i32_type,
+            .u64_ident = env.idents.u64_type,
+            .i64_ident = env.idents.i64_type,
+            .u128_ident = env.idents.u128_type,
+            .i128_ident = env.idents.i128_type,
+            .f32_ident = env.idents.f32_type,
+            .f64_ident = env.idents.f64_type,
+            .dec_ident = env.idents.dec_type,
         };
     }
 
@@ -154,8 +207,26 @@ pub const Store = struct {
         self.record_data.deinit(self.env.gpa);
         self.tuple_fields.deinit(self.env.gpa);
         self.tuple_data.deinit(self.env.gpa);
+        self.tag_union_variants.deinit(self.env.gpa);
+        self.tag_union_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
+    }
+
+    /// Check if a constraint range contains a from_numeral constraint.
+    /// This is used to determine if an unbound type variable represents
+    /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
+    fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
+        // Empty constraints can't contain from_numeral
+        if (constraints.isEmpty()) {
+            return false;
+        }
+        for (self.types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            if (constraint.origin == .from_numeral) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Insert a Box layout with the given element layout.
@@ -186,9 +257,13 @@ pub const Store = struct {
 
     pub fn putRecord(
         self: *Self,
+        env: *ModuleEnv,
         field_layouts: []const Layout,
         field_names: []const Ident.Idx,
     ) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putRecord");
+        defer trace.end();
+
         var temp_fields = std.ArrayList(RecordField).empty;
         defer temp_fields.deinit(self.env.gpa);
 
@@ -219,10 +294,15 @@ pub const Store = struct {
             }
         };
 
+        // Handle empty records specially to avoid NonEmptyRange with count=0
+        if (temp_fields.items.len == 0) {
+            return self.getEmptyRecordLayout();
+        }
+
         std.mem.sort(
             RecordField,
             temp_fields.items,
-            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
+            AlignmentSortCtx{ .store = self, .env = env, .target_usize = self.targetUsize() },
             AlignmentSortCtx.lessThan,
         );
 
@@ -262,6 +342,9 @@ pub const Store = struct {
 
     /// Insert a tuple layout from concrete element layouts
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.putTuple");
+        defer trace.end();
+
         // Collect fields
         var temp_fields = std.ArrayList(TupleField).empty;
         defer temp_fields.deinit(self.env.gpa);
@@ -332,6 +415,14 @@ pub const Store = struct {
         return self.tuple_data.get(@enumFromInt(idx.int_idx));
     }
 
+    pub fn getTagUnionData(self: *const Self, idx: TagUnionIdx) *const TagUnionData {
+        return self.tag_union_data.get(@enumFromInt(idx.int_idx));
+    }
+
+    pub fn getTagUnionVariants(self: *const Self, data: *const TagUnionData) TagUnionVariant.SafeMultiList.Slice {
+        return self.tag_union_variants.sliceRange(data.getVariants());
+    }
+
     pub fn getRecordFieldOffset(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) u32 {
         const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
@@ -360,7 +451,7 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
     }
 
-    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name: []const u8) ?u32 {
+    pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
         const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
@@ -375,8 +466,7 @@ pub const Store = struct {
 
             current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
-            const current_field_name = self.env.getIdent(field.name);
-            if (std.mem.eql(u8, current_field_name, field_name)) {
+            if (field.name == field_name_idx) {
                 return current_offset;
             }
 
@@ -443,6 +533,23 @@ pub const Store = struct {
         return self.getEmptyRecordLayout();
     }
 
+    /// Get or create a zero-sized type layout
+    pub fn ensureZstLayout(self: *Self) !Idx {
+        // Check if we already have a ZST layout
+        const len: u32 = @intCast(self.layouts.len());
+        for (0..len) |i| {
+            const idx: Idx = @enumFromInt(i);
+            const layout = self.getLayout(idx);
+            if (layout.tag == .zst) {
+                return idx;
+            }
+        }
+
+        // Create new ZST layout
+        const zst_layout = Layout.zst();
+        return try self.insertLayout(zst_layout);
+    }
+
     /// Get the size in bytes of a layout, given the store's target usize.
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)
@@ -453,13 +560,12 @@ pub const Store = struct {
             .scalar => switch (layout.data.scalar.tag) {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
-                .bool => 1, // bool is 1 byte
                 .str => 3 * target_usize.size(), // ptr, byte length, capacity
                 .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list => 3 * target_usize.size(), // ptr, length, capacity
-            .list_of_zst => target_usize.size(), // Zero-sized lists might be different
+            .list_of_zst => 3 * target_usize.size(), // list_of_zst has same header structure as list
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
             .closure => {
@@ -471,7 +577,15 @@ pub const Store = struct {
                 const captures_size = self.layoutSize(captures_layout);
                 return aligned_captures_offset + captures_size;
             },
+            .tag_union => self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size,
+            .zst => 0, // Zero-sized types have size 0
         };
+    }
+
+    /// Check if a layout is zero-sized
+    /// This simply checks if the layout has size 0
+    pub fn isZeroSized(self: *const Self, layout: Layout) bool {
+        return self.layoutSize(layout) == 0;
     }
 
     /// Add the tag union's tags to self.pending_tags,
@@ -495,7 +609,9 @@ pub const Store = struct {
             const resolved_ext = self.types_store.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
-                    .empty_tag_union => break,
+                    .empty_tag_union => {
+                        break;
+                    },
                     .tag_union => |ext_tag_union| {
                         if (ext_tag_union.tags.len() > 0) {
                             num_tags += ext_tag_union.tags.len();
@@ -517,6 +633,8 @@ pub const Store = struct {
                 .alias => |alias| {
                     current_ext = self.types_store.getAliasBackingVar(alias);
                 },
+                // flex and rigid are valid terminal extensions for open unions
+                .flex, .rigid => break,
                 else => return LayoutError.InvalidRecordExtension,
             }
         }
@@ -834,536 +952,743 @@ pub const Store = struct {
 
         // To make this function stack-safe, we use a manual stack instead of recursing.
         // We reuse that stack from call to call to avoid reallocating it.
-        self.work.clearRetainingCapacity();
+        // NOTE: We do NOT clear work fields here because addTypeVar can be called
+        // recursively (e.g., when processing tag union variant payloads), and nested
+        // calls must not destroy the work state from outer calls.
 
-        var iterations: u32 = 0;
-        const max_iterations = 10000; // Safety limit to prevent infinite loops
         var layout_idx: Idx = undefined;
 
+        // Debug-only: track vars visited via TypeScope lookup to detect cycles.
+        // Cycles in layout computation indicate a bug in type checking - they should
+        // have been detected earlier. In release builds we skip this check entirely.
+        var scope_lookup_visited: if (@import("builtin").mode == .Debug) [32]Var else void = if (@import("builtin").mode == .Debug) undefined else {};
+        var scope_lookup_count: if (@import("builtin").mode == .Debug) u8 else void = if (@import("builtin").mode == .Debug) 0 else {};
+
         outer: while (true) {
-            iterations += 1;
-            if (iterations > max_iterations) {
-                @panic("Layout computation exceeded iteration limit - possible infinite loop");
-            }
+            // Flag to skip layout computation if we hit cache or detect a cycle
+            var skip_layout_computation = false;
 
-            var layout = switch (current.desc.content) {
-                .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => Layout.str(),
-                    .box => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .box,
-                        });
-                        // Push a pending Box container and "recurse" on the elem type
-                        current = self.types_store.resolveVar(elem_var);
-                        continue;
-                    },
-                    .list => |elem_var| {
-                        const elem_content = self.types_store.resolveVar(elem_var).desc.content;
-                        if (elem_content == .flex or elem_content == .rigid) {
-                            // For unbound lists (empty lists), use list of zero-sized type
-                            const layout = Layout.listOfZst();
-                            const idx = try self.insertLayout(layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                            return idx;
-                        } else {
-                            // Otherwise, add this to the stack of pending work
-                            try self.work.pending_containers.append(self.env.gpa, .{
-                                .var_ = current.var_,
-                                .container = .list,
-                            });
+            // Check cache at every iteration - critical for recursive types
+            // where the inner reference may resolve to the same var as the outer type
+            if (self.layouts_by_var.get(current.var_)) |cached_idx| {
+                layout_idx = cached_idx;
+                skip_layout_computation = true;
+            } else if (self.work.in_progress_vars.contains(current.var_)) {
+                // Cycle detection: this var is already being processed.
+                // If we're inside a List or Box container, we can safely return opaquePtr()
+                // since the recursive reference will be heap-allocated.
+                if (self.work.pending_containers.len > 0) {
+                    const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                    if (pending_item.container == .box or pending_item.container == .list) {
+                        // Recursive reference inside List/Box - use opaque pointer
+                        layout_idx = try self.insertLayout(Layout.opaquePtr());
+                        skip_layout_computation = true;
+                    } else {
+                        // Recursive reference outside of List/Box container - this is an error
+                        return LayoutError.TypeContainedMismatch;
+                    }
+                } else {
+                    // Recursive reference with no containers - this is an error
+                    return LayoutError.TypeContainedMismatch;
+                }
+            } else if (current.desc.content == .structure) blk: {
+                // Early cycle detection for nominal types from other modules.
+                // These have different vars but same identity (ident + origin_module).
+                const flat_type = current.desc.content.structure;
+                if (flat_type != .nominal_type) break :blk;
+                const nominal_type = flat_type.nominal_type;
+                const nominal_key = work.NominalKey{
+                    .ident_idx = nominal_type.ident.ident_idx,
+                    .origin_module = nominal_type.origin_module,
+                };
 
-                            // Push a pending List container and "recurse" on the elem type
-                            current = self.types_store.resolveVar(elem_var);
-                            continue;
-                        }
-                    },
-                    .list_unbound => {
-                        // For unbound lists (empty lists), use list of zero-sized type
-                        const layout = Layout.listOfZst();
-                        const idx = try self.insertLayout(layout);
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, idx);
-                        return idx;
-                    },
-                    .nominal_type => |nominal_type| {
-                        // TODO special-case the builtin Num type here.
-                        // If we have one of those, then convert it to a Num layout,
-                        // or to a runtime error if it's an invalid elem type.
-
-                        // From a layout perspective, nominal types are identical to type aliases:
-                        // all we care about is what's inside, so just unroll it.
-                        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
-                        const resolved = self.types_store.resolveVar(backing_var);
-
-                        current = resolved;
-                        continue;
-                    },
-                    .num => |initial_num| {
-                        var num = initial_num;
-
-                        while (true) {
-                            switch (num) {
-                                // TODO: Unwrap number to get the root precision or requiremnets
-                                .num_compact => |compact| switch (compact) {
-                                    .int => |precision| break :flat_type Layout.int(precision),
-                                    .frac => |precision| break :flat_type Layout.frac(precision),
-                                },
-                                .int_precision => |precision| break :flat_type Layout.int(precision),
-                                .frac_precision => |precision| break :flat_type Layout.frac(precision),
-                                // For polymorphic types, use default precision
-                                .num_unbound => |_| {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                },
-                                .int_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                },
-                                .frac_unbound => {
-                                    // TODO: Should we consider requirements here?
-                                    break :flat_type Layout.frac(types.Num.Frac.Precision.default);
-                                },
-                                .num_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .int_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.int(types.Num.Int.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
-                                .frac_poly => |var_| {
-                                    const next_type = self.types_store.resolveVar(var_).desc.content;
-                                    if (next_type == .structure and next_type.structure == .num) {
-                                        num = next_type.structure.num;
-                                    } else if (next_type == .flex) {
-                                        break :flat_type Layout.frac(types.Num.Frac.Precision.default);
-                                    } else {
-                                        return LayoutError.InvalidRecordExtension;
-                                    }
-                                },
+                if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
+                    // This nominal type is already being processed - we have a cycle.
+                    // Use the cached placeholder index for the nominal.
+                    // The placeholder will be updated with the real layout once
+                    // the nominal's backing type is fully computed.
+                    if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
+                        // We have a placeholder - but we need to check if we're inside a List/Box.
+                        // If we are, we can use the placeholder index directly since the List/Box
+                        // will reference it by index, and it will be updated later.
+                        // If we're NOT inside a List/Box, this is a direct recursive reference which is invalid.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                layout_idx = cached_idx;
+                                skip_layout_computation = true;
+                                break :blk;
                             }
                         }
-                    },
-                    .tuple => |tuple_type| {
-                        const num_fields = try self.gatherTupleFields(tuple_type);
+                        // For record/tuple fields (not inside List/Box), we also use the cached placeholder.
+                        // The placeholder will be updated by the time we need the actual layout.
+                        layout_idx = cached_idx;
+                        skip_layout_computation = true;
+                        break :blk;
+                    }
 
-                        if (num_fields == 0) {
-                            continue :flat_type .empty_record; // Empty tuple is like empty record
-                        }
+                    // No cached placeholder - this is an error
+                    return LayoutError.TypeContainedMismatch;
+                }
+            }
 
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .{
-                                .tuple = .{
-                                    .num_fields = @intCast(num_fields),
-                                    .pending_fields = @intCast(num_fields),
-                                    .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
+            // Declare layout outside the if so it's accessible in container finalization
+            var layout: Layout = undefined;
+
+            if (!skip_layout_computation) {
+                // Mark this var as in-progress before processing.
+                // Note: We don't add aliases to in_progress_vars because aliases are transparent
+                // wrappers that just continue to their backing type. The alias handling code
+                // does `current = backing; continue;` without ever completing the alias entry,
+                // which would cause spurious cycle detection when the alias var is encountered
+                // again. See issue #8708.
+                if (current.desc.content != .alias) {
+                    try self.work.in_progress_vars.put(current.var_, {});
+                }
+
+                layout = switch (current.desc.content) {
+                    .structure => |flat_type| flat_type: switch (flat_type) {
+                        .nominal_type => |nominal_type| {
+                            // Special-case Builtin.Str: it has a tag union backing type, but
+                            // should have RocStr layout (3 pointers).
+                            // Check if this nominal type's identifier matches Builtin.Str
+                            const is_builtin_str = blk: {
+                                if (self.builtin_str_ident) |builtin_str| {
+                                    if (nominal_type.ident.ident_idx == builtin_str) break :blk true;
+                                }
+                                if (nominal_type.origin_module == self.env.idents.builtin_module) {
+                                    if (self.builtin_str_plain_ident) |plain_str| {
+                                        if (nominal_type.ident.ident_idx == plain_str) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
+                            if (is_builtin_str) {
+                                // This is Builtin.Str - use string layout
+                                break :flat_type Layout.str();
+                            }
+
+                            // Special handling for Builtin.Box
+                            const is_builtin_box = if (self.box_ident) |box_ident|
+                                nominal_type.origin_module == self.env.idents.builtin_module and
+                                    nominal_type.ident.ident_idx == box_ident
+                            else
+                                false;
+                            if (is_builtin_box) {
+                                // Extract the element type from the type arguments
+                                const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                                std.debug.assert(type_args.len == 1); // Box must have exactly 1 type parameter
+                                const elem_var = type_args[0];
+
+                                // Check if the element type is a known ZST (but NOT flex/rigid - those need opaque_ptr)
+                                const elem_resolved = self.types_store.resolveVar(elem_var);
+                                const elem_content = elem_resolved.desc.content;
+                                const is_elem_zst = switch (elem_content) {
+                                    .structure => |ft| switch (ft) {
+                                        .empty_record, .empty_tag_union => true,
+                                        else => false,
+                                    },
+                                    else => false,
+                                };
+
+                                if (is_elem_zst) {
+                                    // For ZST element types, use box of zero-sized type
+                                    break :flat_type Layout.boxOfZst();
+                                } else {
+                                    // Otherwise, add this to the stack of pending work
+                                    // (This includes flex/rigid which will resolve to opaque_ptr)
+                                    try self.work.pending_containers.append(self.env.gpa, .{
+                                        .var_ = current.var_,
+                                        .container = .box,
+                                    });
+
+                                    // Push a pending Box container and "recurse" on the elem type
+                                    current = elem_resolved;
+                                    continue;
+                                }
+                            }
+
+                            // Special handling for Builtin.List
+                            const is_builtin_list = if (self.list_ident) |list_ident|
+                                nominal_type.origin_module == self.env.idents.builtin_module and
+                                    nominal_type.ident.ident_idx == list_ident
+                            else
+                                false;
+                            if (is_builtin_list) {
+                                // Extract the element type from the type arguments
+                                const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                                std.debug.assert(type_args.len == 1); // List must have exactly 1 type parameter
+                                const elem_var = type_args[0];
+
+                                // Check if the element type is a known ZST
+                                // Treat flex/rigid as ZST ONLY if they are unconstrained.
+                                // Constrained flex types (e.g., numeric literals with constraints) should default to Dec.
+                                // Unconstrained flex types (e.g., empty list []) should use list_of_zst.
+                                const elem_resolved = self.types_store.resolveVar(elem_var);
+                                const elem_content = elem_resolved.desc.content;
+                                const is_elem_zst = switch (elem_content) {
+                                    .flex => |flex| flex.constraints.count == 0,
+                                    .rigid => |rigid| rigid.constraints.count == 0,
+                                    .structure => |ft| switch (ft) {
+                                        .empty_record, .empty_tag_union => true,
+                                        else => false,
+                                    },
+                                    else => false,
+                                };
+
+                                if (is_elem_zst) {
+                                    // For ZST element types, use list of zero-sized type
+                                    break :flat_type Layout.listOfZst();
+                                } else {
+                                    // Otherwise, add this to the stack of pending work
+                                    try self.work.pending_containers.append(self.env.gpa, .{
+                                        .var_ = current.var_,
+                                        .container = .list,
+                                    });
+
+                                    // Push a pending List container and "recurse" on the elem type
+                                    current = elem_resolved;
+                                    continue;
+                                }
+                            }
+
+                            // Special handling for built-in numeric types from Builtin module
+                            // These have empty tag union backings but need scalar layouts
+                            if (nominal_type.origin_module == self.env.idents.builtin_module) {
+                                const ident_idx = nominal_type.ident.ident_idx;
+                                const num_layout: ?Layout = blk: {
+                                    if (self.u8_ident) |u8_id| if (ident_idx == u8_id) break :blk Layout.int(types.Int.Precision.u8);
+                                    if (self.i8_ident) |i8_id| if (ident_idx == i8_id) break :blk Layout.int(types.Int.Precision.i8);
+                                    if (self.u16_ident) |u16_id| if (ident_idx == u16_id) break :blk Layout.int(types.Int.Precision.u16);
+                                    if (self.i16_ident) |i16_id| if (ident_idx == i16_id) break :blk Layout.int(types.Int.Precision.i16);
+                                    if (self.u32_ident) |u32_id| if (ident_idx == u32_id) break :blk Layout.int(types.Int.Precision.u32);
+                                    if (self.i32_ident) |i32_id| if (ident_idx == i32_id) break :blk Layout.int(types.Int.Precision.i32);
+                                    if (self.u64_ident) |u64_id| if (ident_idx == u64_id) break :blk Layout.int(types.Int.Precision.u64);
+                                    if (self.i64_ident) |i64_id| if (ident_idx == i64_id) break :blk Layout.int(types.Int.Precision.i64);
+                                    if (self.u128_ident) |u128_id| if (ident_idx == u128_id) break :blk Layout.int(types.Int.Precision.u128);
+                                    if (self.i128_ident) |i128_id| if (ident_idx == i128_id) break :blk Layout.int(types.Int.Precision.i128);
+                                    if (self.f32_ident) |f32_id| if (ident_idx == f32_id) break :blk Layout.frac(types.Frac.Precision.f32);
+                                    if (self.f64_ident) |f64_id| if (ident_idx == f64_id) break :blk Layout.frac(types.Frac.Precision.f64);
+                                    if (self.dec_ident) |dec_id| if (ident_idx == dec_id) break :blk Layout.frac(types.Frac.Precision.dec);
+                                    break :blk null;
+                                };
+
+                                if (num_layout) |num_layout_val| {
+                                    break :flat_type num_layout_val;
+                                }
+                            }
+
+                            // Cycle detection for recursive nominal types is done above (before this switch).
+                            // Here we need to:
+                            // 1. Reserve a placeholder layout for this nominal type
+                            // 2. Cache it so recursive references can find it
+                            // 3. Mark the nominal as in-progress
+                            // After the backing type is computed, we'll update the placeholder.
+                            const nominal_key = work.NominalKey{
+                                .ident_idx = nominal_type.ident.ident_idx,
+                                .origin_module = nominal_type.origin_module,
+                            };
+
+                            // Get the backing var before we modify current
+                            const backing_var = self.types_store.getNominalBackingVar(nominal_type);
+                            const resolved_backing = self.types_store.resolveVar(backing_var);
+
+                            // Reserve a placeholder layout and cache it for the nominal's var.
+                            // This allows recursive references to find this layout index.
+                            // We use Box(opaque_ptr) as placeholder because:
+                            // 1. It's non-scalar, so it gets inserted (not a sentinel)
+                            // 2. It's non-ZST, so isZeroSized() returns false
+                            // 3. It can be updated with updateLayout() once the real layout is known
+                            const reserved_idx = try self.insertLayout(Layout.box(.opaque_ptr));
+                            try self.layouts_by_var.put(self.env.gpa, current.var_, reserved_idx);
+
+                            // Mark this nominal type as in-progress.
+                            // Store both the nominal var (for cache lookup) and backing var (to know when to update).
+                            try self.work.in_progress_nominals.put(nominal_key, .{
+                                .nominal_var = current.var_,
+                                .backing_var = resolved_backing.var_,
+                            });
+
+                            // From a layout perspective, nominal types are identical to type aliases:
+                            // all we care about is what's inside, so just unroll it.
+                            current = resolved_backing;
+                            continue;
+                        },
+                        .tuple => |tuple_type| {
+                            const num_fields = try self.gatherTupleFields(tuple_type);
+
+                            if (num_fields == 0) {
+                                continue :flat_type .empty_record; // Empty tuple is like empty record
+                            }
+
+                            try self.work.pending_containers.append(self.env.gpa, .{
+                                .var_ = current.var_,
+                                .container = .{
+                                    .tuple = .{
+                                        .num_fields = @intCast(num_fields),
+                                        .pending_fields = @intCast(num_fields),
+                                        .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
+                                    },
                                 },
-                            },
-                        });
+                            });
 
-                        // Start working on the last pending field (we want to pop them).
-                        const last_field_idx = self.work.pending_tuple_fields.len - 1;
-                        const last_pending_field = self.work.pending_tuple_fields.get(last_field_idx);
-                        current = self.types_store.resolveVar(last_pending_field.var_);
-                        continue :outer;
-                    },
-                    .fn_pure => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .fn_effectful => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .fn_unbound => |func| {
-                        _ = func;
-                        // Create empty captures layout for generic function type
-                        const empty_captures_idx = try self.getEmptyRecordLayout();
-                        break :flat_type Layout.closure(empty_captures_idx);
-                    },
-                    .record => |record_type| {
-                        const num_fields = try self.gatherRecordFields(record_type);
+                            // Start working on the last pending field (we want to pop them).
+                            const last_field_idx = self.work.pending_tuple_fields.len - 1;
+                            const last_pending_field = self.work.pending_tuple_fields.get(last_field_idx);
+                            current = self.types_store.resolveVar(last_pending_field.var_);
+                            continue :outer;
+                        },
+                        .fn_pure, .fn_effectful, .fn_unbound => {
+                            // Create empty captures layout for generic function type
+                            const empty_captures_idx = try self.getEmptyRecordLayout();
+                            break :flat_type Layout.closure(empty_captures_idx);
+                        },
+                        .record => |record_type| {
+                            const num_fields = try self.gatherRecordFields(record_type);
 
-                        if (num_fields == 0) {
-                            continue :flat_type .empty_record;
-                        }
+                            if (num_fields == 0) {
+                                continue :flat_type .empty_record;
+                            }
 
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .{
-                                .record = .{
-                                    .num_fields = @intCast(num_fields),
-                                    .pending_fields = @intCast(num_fields),
-                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                            try self.work.pending_containers.append(self.env.gpa, .{
+                                .var_ = current.var_,
+                                .container = .{
+                                    .record = .{
+                                        .num_fields = @intCast(num_fields),
+                                        .pending_fields = @intCast(num_fields),
+                                        .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                    },
                                 },
-                            },
-                        });
+                            });
 
-                        // Start working on the last pending field (we want to pop them).
-                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+                            // Start working on the last pending field (we want to pop them).
+                            const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
 
-                        current = self.types_store.resolveVar(field.var_);
-                        continue;
-                    },
-                    .tag_union => |tag_union| {
-                        // Handle tag unions by computing the layout based on:
-                        // 1. Discriminant size (based on number of tags)
-                        // 2. Maximum payload size and alignment
+                            current = self.types_store.resolveVar(field.var_);
+                            continue;
+                        },
+                        .tag_union => |tag_union| {
+                            // Handle tag unions by computing the layout based on:
+                            // 1. Discriminant size (based on number of tags)
+                            // 2. Maximum payload size and alignment
 
-                        const pending_tags_top = self.work.pending_tags.len;
-                        defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
+                            const pending_tags_top = self.work.pending_tags.len;
+                            defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
 
-                        // Recursively get all tags by checking the tag extension
-                        const num_tags = try self.gatherTags(tag_union);
-                        const tags_slice = self.work.pending_tags.slice();
+                            // Recursively get all tags by checking the tag extension
+                            const num_tags = try self.gatherTags(tag_union);
+                            const tags_slice = self.work.pending_tags.slice();
 
-                        // Get the slices of tags
-                        const tags_args = tags_slice.items(.args)[pending_tags_top..];
+                            // Get the slices of tags
+                            const tags_args = tags_slice.items(.args)[pending_tags_top..];
 
-                        // Check if this is a Bool (2 tags with no payload) as a special case
-                        // This is a legitimate layout optimization for boolean tag unions
-                        // TODO: Is this necessary?
-                        if (num_tags == 2) {
-                            var is_bool = true;
+                            // Check if this is a Bool (2 tags with no payload) as a special case
+                            // This is a legitimate layout optimization for boolean tag unions
+                            // TODO: Is this necessary?
+                            if (num_tags == 2) {
+                                var is_bool = true;
+                                for (tags_args) |tag_args| {
+                                    const args_slice = self.types_store.sliceVars(tag_args);
+                                    if (args_slice.len != 0) {
+                                        is_bool = false;
+                                        break;
+                                    }
+                                }
+
+                                if (is_bool) {
+                                    // Bool layout: use predefined bool layout
+                                    // Break to fall through to pending container processing
+                                    break :flat_type Layout.boolType();
+                                }
+                            }
+
+                            // For general tag unions, we need to compute the layout
+                            // First, determine discriminant size based on number of tags
+                            if (num_tags == 0) {
+                                // Empty tag union - represents a zero-sized type
+                                // Break to fall through to pending container processing
+                                break :flat_type Layout.zst();
+                            }
+
+                            const discriminant_layout = if (num_tags <= 256)
+                                Layout.int(.u8)
+                            else if (num_tags <= 65536)
+                                Layout.int(.u16)
+                            else
+                                Layout.int(.u32);
+
+                            // If all tags have no payload, we just need the discriminant
+                            var has_payload = false;
                             for (tags_args) |tag_args| {
                                 const args_slice = self.types_store.sliceVars(tag_args);
-                                if (args_slice.len != 0) {
-                                    is_bool = false;
+                                if (args_slice.len > 0) {
+                                    has_payload = true;
                                     break;
                                 }
                             }
 
-                            if (is_bool) {
-                                // Bool layout: use predefined bool layout
-                                const layout = Layout.boolType();
-                                const bool_layout_idx = try self.insertLayout(layout);
-                                try self.layouts_by_var.put(self.env.gpa, current.var_, bool_layout_idx);
-                                return bool_layout_idx;
+                            if (!has_payload) {
+                                // Simple tag union with no payloads - just use discriminant
+                                // Break to fall through to pending container processing
+                                break :flat_type discriminant_layout;
                             }
-                        }
 
-                        // For general tag unions, we need to compute the layout
-                        // First, determine discriminant size based on number of tags
-                        const discriminant_layout = if (num_tags == 0)
-                            // Empty tag union - should not happen in practice
-                            return LayoutError.ZeroSizedType
-                        else if (num_tags <= 256)
-                            Layout.int(.u8)
-                        else if (num_tags <= 65536)
-                            Layout.int(.u16)
-                        else
-                            Layout.int(.u32);
+                            // Complex tag union with payloads
+                            // Create a proper tag_union layout that preserves all variant layouts
+                            // for correct reference counting at runtime.
+                            var max_payload_size: u32 = 0;
+                            var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
 
-                        // If all tags have no payload, we just need the discriminant
-                        var has_payload = false;
-                        for (tags_args) |tag_args| {
-                            const args_slice = self.types_store.sliceVars(tag_args);
-                            if (args_slice.len > 0) {
-                                has_payload = true;
-                                break;
+                            // Sort tags alphabetically by name to match interpreter's appendUnionTags ordering.
+                            // This ensures discriminant values are consistent between evaluation and layout.
+                            // TODO: Consider sorting tags in the type store instead for better performance,
+                            // which would eliminate the need for sorting here and in appendUnionTags.
+                            const tags_names = tags_slice.items(.name)[pending_tags_top..];
+                            const tags_args_slice = tags_slice.items(.args)[pending_tags_top..];
+
+                            // Create temporary array of tags for sorting
+                            var sorted_tags = try self.env.gpa.alloc(types.Tag, num_tags);
+                            defer self.env.gpa.free(sorted_tags);
+                            for (tags_names, tags_args_slice, 0..) |name, args, i| {
+                                sorted_tags[i] = .{ .name = name, .args = args };
                             }
-                        }
 
-                        if (!has_payload) {
-                            // Simple tag union with no payloads - just use discriminant
-                            const tag_layout_idx = try self.insertLayout(discriminant_layout);
-                            try self.layouts_by_var.put(self.env.gpa, current.var_, tag_layout_idx);
-                            return tag_layout_idx;
-                        }
+                            // Sort alphabetically by tag name
+                            std.mem.sort(types.Tag, sorted_tags, self.env.getIdentStore(), types.Tag.sortByNameAsc);
 
-                        // Complex tag union with payloads
-                        // Strategy: represent as a record { payload: MaxPayload, tag: Discriminant }
-                        // to ensure the payload receives its required alignment and the discriminant
-                        // can live in any trailing padding that remains.
-                        var max_payload_layout: ?Layout = null;
-                        var max_payload_size: u32 = 0;
-                        var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
-                        var max_payload_alignment_any: std.mem.Alignment = std.mem.Alignment.@"1";
+                            // Phase 1: Compute all variant layouts first.
+                            // This must happen BEFORE we record variants_start, because computing layouts
+                            // for nested tag unions will recursively append to tag_union_variants.
+                            var variant_layout_indices = try self.env.gpa.alloc(Idx, num_tags);
+                            defer self.env.gpa.free(variant_layout_indices);
 
-                        // Helper to update max with a candidate layout
-                        const updateMax = struct {
-                            fn go(
-                                store: *Self,
-                                candidate: Layout,
-                                curr_size: *u32,
-                                curr_alignment: *std.mem.Alignment,
-                                out_layout: *?Layout,
-                                max_alignment_any: *std.mem.Alignment,
-                            ) void {
-                                const size = store.layoutSize(candidate);
-                                const alignment = candidate.alignment(store.targetUsize());
-                                max_alignment_any.* = max_alignment_any.*.max(alignment);
-                                if (size > curr_size.* or (size == curr_size.* and alignment.toByteUnits() > curr_alignment.*.toByteUnits())) {
-                                    curr_size.* = size;
-                                    curr_alignment.* = alignment;
-                                    out_layout.* = candidate;
+                            for (sorted_tags, 0..) |tag, variant_i| {
+                                const tag_args = tag.args;
+                                const args_slice = self.types_store.sliceVars(tag_args);
+                                variant_layout_indices[variant_i] = if (args_slice.len == 0)
+                                    // No payload - use ZST
+                                    try self.ensureZstLayout()
+                                else if (args_slice.len == 1)
+                                    // Single arg - use its layout
+                                    // Use type_scope to look up rigid var mappings
+                                    try self.addTypeVar(args_slice[0], type_scope)
+                                else blk: {
+                                    // Multiple args - build tuple layout
+                                    var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
+                                    defer self.env.gpa.free(elem_layouts);
+                                    for (args_slice, 0..) |v, i| {
+                                        // Use type_scope to look up rigid var mappings
+                                        const elem_idx = try self.addTypeVar(v, type_scope);
+                                        elem_layouts[i] = self.getLayout(elem_idx);
+                                    }
+                                    break :blk try self.putTuple(elem_layouts);
+                                };
+                            }
+
+                            // Phase 2: Now that all nested layouts are created, record variants_start
+                            // and append our variant layouts. This ensures our variants are contiguous.
+                            const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+                            for (variant_layout_indices) |variant_layout_idx| {
+                                const variant_layout = self.getLayout(variant_layout_idx);
+                                const variant_size = self.layoutSize(variant_layout);
+                                const variant_alignment = variant_layout.alignment(self.targetUsize());
+                                if (variant_size > max_payload_size) {
+                                    max_payload_size = variant_size;
                                 }
+                                max_payload_alignment = max_payload_alignment.max(variant_alignment);
+
+                                // Store variant layout for runtime refcounting
+                                _ = try self.tag_union_variants.append(self.env.gpa, .{
+                                    .payload_layout = variant_layout_idx,
+                                });
                             }
-                        }.go;
 
-                        // For each tag, compute its payload layout: () => ZST, 1 arg => layout, >1 => tuple of arg layouts
-                        var temp_scope = TypeScope.init(self.env.gpa);
-                        defer temp_scope.deinit();
+                            // Calculate discriminant info
+                            const discriminant_size: u8 = if (num_tags <= 256) 1 else if (num_tags <= 65536) 2 else 4;
+                            const discriminant_alignment: std.mem.Alignment = switch (discriminant_size) {
+                                1 => .@"1",
+                                2 => .@"2",
+                                4 => .@"4",
+                                else => unreachable,
+                            };
 
-                        for (tags_slice.items(.args)) |tag_args| {
-                            const args_slice = self.types_store.sliceVars(tag_args);
-                            if (args_slice.len == 0) {
-                                // zero-sized payload; nothing to update
-                                continue;
-                            } else if (args_slice.len == 1) {
-                                const arg_var = args_slice[0];
-                                const arg_layout_idx = try self.addTypeVar(arg_var, &temp_scope);
-                                const layout_val = self.getLayout(arg_layout_idx);
-                                updateMax(self, layout_val, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
-                            } else {
-                                // Build tuple layout from argument layouts
-                                var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
-                                defer self.env.gpa.free(elem_layouts);
-                                for (args_slice, 0..) |v, i| {
-                                    const elem_idx = try self.addTypeVar(v, &temp_scope);
-                                    elem_layouts[i] = self.getLayout(elem_idx);
-                                }
-                                const tuple_idx = try self.putTuple(elem_layouts);
-                                const tuple_layout = self.getLayout(tuple_idx);
-                                updateMax(self, tuple_layout, &max_payload_size, &max_payload_alignment, &max_payload_layout, &max_payload_alignment_any);
-                            }
-                        }
+                            // Calculate total size: payload at offset 0, discriminant at aligned offset after payload
+                            const payload_end = max_payload_size;
+                            const discriminant_offset: u16 = @intCast(std.mem.alignForward(u32, payload_end, @intCast(discriminant_alignment.toByteUnits())));
+                            const total_size_unaligned = discriminant_offset + discriminant_size;
 
-                        const name_payload = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("payload"));
-                        const name_tag = try self.env.common.idents.insert(self.env.gpa, Ident.for_text("tag"));
+                            // Align total size to the tag union's alignment
+                            const tag_union_alignment = max_payload_alignment.max(discriminant_alignment);
+                            const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
 
-                        const payload_layout = max_payload_layout orelse blk: {
-                            const empty_idx = try self.ensureEmptyRecordLayout();
-                            break :blk self.getLayout(empty_idx);
-                        };
-
-                        var field_layouts = [_]Layout{
-                            payload_layout,
-                            discriminant_layout,
-                        };
-
-                        var field_names = [_]Ident.Idx{ name_payload, name_tag };
-
-                        const rec_idx = try self.putRecord(&field_layouts, &field_names);
-                        if (max_payload_alignment_any.toByteUnits() > 1) {
-                            const desired_alignment = max_payload_alignment_any;
-                            var rec_layout = self.getLayout(rec_idx);
-                            const current_alignment = rec_layout.alignment(self.targetUsize());
-                            if (desired_alignment.toByteUnits() > current_alignment.toByteUnits()) {
-                                std.debug.assert(rec_layout.tag == .record);
-                                const record_idx = rec_layout.data.record.idx;
-                                const new_layout = Layout.record(desired_alignment, record_idx);
-                                self.layouts.set(@enumFromInt(@intFromEnum(rec_idx)), new_layout);
-                            }
-                        }
-                        try self.layouts_by_var.put(self.env.gpa, current.var_, rec_idx);
-                        return rec_idx;
-                    },
-                    .record_unbound => |fields| {
-                        // For record_unbound, we need to gather fields directly since it has no Record struct
-                        var num_fields: usize = 0;
-
-                        if (fields.len() > 0) {
-                            num_fields = fields.len();
-                            const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
-                            for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
-                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
-                            }
-                        }
-
-                        if (num_fields == 0) {
-                            continue :flat_type .empty_record;
-                        }
-
-                        try self.work.pending_containers.append(self.env.gpa, .{
-                            .var_ = current.var_,
-                            .container = .{
-                                .record = .{
-                                    .num_fields = @intCast(num_fields),
-                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
-                                    .pending_fields = @intCast(num_fields),
+                            // Store TagUnionData
+                            const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+                            _ = try self.tag_union_data.append(self.env.gpa, .{
+                                .size = total_size,
+                                .discriminant_offset = discriminant_offset,
+                                .discriminant_size = discriminant_size,
+                                .variants = .{
+                                    .start = variants_start,
+                                    .count = @intCast(num_tags),
                                 },
-                            },
-                        });
+                            });
 
-                        // Start working on the last pending field (we want to pop them).
-                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+                            // Create and store tag_union layout
+                            const tag_union_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+                            const tag_union_idx = try self.insertLayout(tag_union_layout);
 
-                        current = self.types_store.resolveVar(field.var_);
+                            // Break to fall through to pending container processing instead of returning directly
+                            break :flat_type self.getLayout(tag_union_idx);
+                        },
+                        .record_unbound => |fields| {
+                            // For record_unbound, we need to gather fields directly since it has no Record struct
+                            var num_fields: usize = 0;
+
+                            if (fields.len() > 0) {
+                                num_fields = fields.len();
+                                const unbound_field_slice = self.types_store.getRecordFieldsSlice(fields);
+                                for (unbound_field_slice.items(.name), unbound_field_slice.items(.var_)) |name, var_| {
+                                    try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                                }
+                            }
+
+                            if (num_fields == 0) {
+                                continue :flat_type .empty_record;
+                            }
+
+                            try self.work.pending_containers.append(self.env.gpa, .{
+                                .var_ = current.var_,
+                                .container = .{
+                                    .record = .{
+                                        .num_fields = @intCast(num_fields),
+                                        .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                        .pending_fields = @intCast(num_fields),
+                                    },
+                                },
+                            });
+
+                            // Start working on the last pending field (we want to pop them).
+                            const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
+                            current = self.types_store.resolveVar(field.var_);
+                            continue;
+                        },
+                        .empty_record, .empty_tag_union => blk: {
+                            // Empty records and tag unions are zero-sized types. They get a ZST layout.
+                            // We only special-case List({}) and Box({}) because they need runtime representation.
+                            if (self.work.pending_containers.len > 0) {
+                                const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                                switch (pending_item.container) {
+                                    .list => {
+                                        // List({}) needs special runtime representation
+                                        _ = self.work.pending_containers.pop();
+                                        break :blk Layout.listOfZst();
+                                    },
+                                    .box => {
+                                        // Box({}) needs special runtime representation
+                                        _ = self.work.pending_containers.pop();
+                                        break :blk Layout.boxOfZst();
+                                    },
+                                    else => {
+                                        // For records and tuples, treat ZST fields normally
+                                        break :blk Layout.zst();
+                                    },
+                                }
+                            }
+                            // Not inside any container, just return ZST
+                            break :blk Layout.zst();
+                        },
+                    },
+                    .flex => |flex| blk: {
+                        // First, check if this flex var is mapped in the TypeScope
+                        if (type_scope.lookup(current.var_)) |mapped_var| {
+                            // Debug-only cycle detection: if we've visited this var before,
+                            // there's a cycle which indicates a bug in type checking.
+                            if (@import("builtin").mode == .Debug) {
+                                for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                    if (visited == current.var_) {
+                                        @panic("Cycle detected in layout computation for flex var - this is a type checking bug");
+                                    }
+                                }
+                                if (scope_lookup_count < 32) {
+                                    scope_lookup_visited[scope_lookup_count] = current.var_;
+                                    scope_lookup_count += 1;
+                                }
+                            }
+                            current = self.types_store.resolveVar(mapped_var);
+                            continue :outer;
+                        }
+
+                        // Check if this flex var has a from_numeral constraint, indicating
+                        // it's an unresolved numeric type that should default to Dec.
+                        if (self.hasFromNumeralConstraint(flex.constraints)) {
+                            break :blk Layout.default_num();
+                        }
+
+                        // Flex vars without from_numeral constraints are phantom types
+                        // (or have non-numeric constraints like is_eq that don't affect layout).
+                        // They can only be sent to the host if boxed.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
+                        break :blk Layout.zst();
+                    },
+                    .rigid => |rigid| blk: {
+                        // First, check if this rigid var is mapped in the TypeScope
+                        if (type_scope.lookup(current.var_)) |mapped_var| {
+                            // Debug-only cycle detection: if we've visited this var before,
+                            // there's a cycle which indicates a bug in type checking.
+                            if (@import("builtin").mode == .Debug) {
+                                for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                    if (visited == current.var_) {
+                                        @panic("Cycle detected in layout computation for rigid var - this is a type checking bug");
+                                    }
+                                }
+                                if (scope_lookup_count < 32) {
+                                    scope_lookup_visited[scope_lookup_count] = current.var_;
+                                    scope_lookup_count += 1;
+                                }
+                            }
+                            current = self.types_store.resolveVar(mapped_var);
+                            continue :outer;
+                        }
+
+                        // Check if this rigid var has a from_numeral constraint, indicating
+                        // it's an unresolved numeric type that should default to Dec.
+                        if (self.hasFromNumeralConstraint(rigid.constraints)) {
+                            break :blk Layout.default_num();
+                        }
+
+                        // Rigid vars without from_numeral constraints are phantom types
+                        // (or have non-numeric constraints like is_eq that don't affect layout).
+                        // They can only be sent to the host if boxed.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
+                        break :blk Layout.zst();
+                    },
+                    .alias => |alias| {
+                        // Follow the alias by updating the work item
+                        const backing_var = self.types_store.getAliasBackingVar(alias);
+                        current = self.types_store.resolveVar(backing_var);
                         continue;
                     },
-                    .empty_record, .empty_tag_union => blk: {
-                        // Empty records and tag unions are zero-sized, so we need to do something different
-                        // depending on the container we're working on (if any). For example, if we're
-                        // working on a record field, then we need to drop that field from the container.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.pop() orelse unreachable;
-                            switch (pending_item.container) {
-                                .list => {
-                                    // It turned out we were getting the layout for a List({})
-                                    break :blk Layout.listOfZst();
-                                },
-                                .box => {
-                                    // It turned out we were getting the layout for a Box({})
-                                    break :blk Layout.boxOfZst();
-                                },
-                                .record => |pending_record| {
-                                    // It turned out we were getting the layout for a record field
-                                    std.debug.assert(pending_record.pending_fields > 0);
-                                    var updated_record = pending_record;
-                                    updated_record.pending_fields -= 1;
+                    .recursion_var => |rec_var| blk: {
+                        // A recursion_var represents a self-reference in a recursive type.
+                        // For example, in `Simple(state) := [Node({children: List(Simple(state))})]`,
+                        // the inner `Simple(state)` is a recursion_var pointing back to the outer type.
+                        //
+                        // We cannot simply follow the structure, as that would cause infinite recursion.
+                        // Instead, check if this recursion_var has already been cached (meaning the
+                        // recursive type's layout was already computed), or if we're inside a container
+                        // that provides indirection (List/Box).
+                        const resolved_structure = self.types_store.resolveVar(rec_var.structure);
 
-                                    // The current field we're working on turned out to be zero-sized, so drop it.
-                                    _ = self.work.pending_record_fields.pop() orelse unreachable;
+                        // First, check if we've already computed the layout for the structure
+                        if (self.layouts_by_var.get(resolved_structure.var_)) |cached_idx| {
+                            // The recursive type's layout was already computed, use it
+                            break :blk self.getLayout(cached_idx);
+                        }
 
-                                    if (updated_record.pending_fields == 0) {
-                                        if (self.work.resolved_record_fields.len == updated_record.resolved_fields_start) {
-                                            // All fields were zero-sized, so the parent container turned
-                                            // out to be an empty record as well.
-                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-
-                                            continue :flat_type .empty_record;
-                                        } else {
-                                            // We finished the record we were working on.
-                                            break :blk try self.finishRecord(updated_record);
-                                        }
-                                    } else {
-                                        // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{
-                                            .var_ = pending_item.var_,
-                                            .container = .{ .record = updated_record },
-                                        });
-
-                                        // Get the next field to process
-                                        const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-                                        current = self.types_store.resolveVar(next_field.var_);
-                                        continue;
+                        // Check if the resolved structure is a nominal type that's in progress.
+                        // If so, use its reserved placeholder layout. This is critical for recursive
+                        // types inside List/Box containers - we need to use the actual placeholder
+                        // index (which will be updated later) instead of opaquePtr().
+                        if (resolved_structure.desc.content == .structure) {
+                            const flat_type = resolved_structure.desc.content.structure;
+                            if (flat_type == .nominal_type) {
+                                const nominal_type = flat_type.nominal_type;
+                                const nominal_key = work.NominalKey{
+                                    .ident_idx = nominal_type.ident.ident_idx,
+                                    .origin_module = nominal_type.origin_module,
+                                };
+                                if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
+                                    if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
+                                        // Use the placeholder - it will be updated with the real layout.
+                                        break :blk self.getLayout(cached_idx);
                                     }
-                                },
-                                .tuple => |pending_tuple| {
-                                    // It turned out we were getting the layout for a tuple field
-                                    std.debug.assert(pending_tuple.pending_fields > 0);
-                                    var updated_tuple = pending_tuple;
-                                    updated_tuple.pending_fields -= 1;
-
-                                    // The current field we're working on turned out to be zero-sized, so drop it.
-                                    _ = self.work.pending_tuple_fields.pop() orelse unreachable;
-
-                                    if (updated_tuple.pending_fields == 0) {
-                                        if (self.work.resolved_tuple_fields.len == updated_tuple.resolved_fields_start) {
-                                            // All fields were zero-sized, so the parent container turned
-                                            // out to be an empty tuple as well.
-                                            self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
-
-                                            continue :flat_type .empty_record; // Empty tuple is like empty record
-                                        } else {
-                                            // We finished the tuple we were working on.
-                                            break :blk try self.finishTuple(updated_tuple);
-                                        }
-                                    } else {
-                                        // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{
-                                            .var_ = pending_item.var_,
-                                            .container = .{ .tuple = updated_tuple },
-                                        });
-
-                                        // Get the next field to process
-                                        const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
-                                        current = self.types_store.resolveVar(next_field.var_);
-                                        continue;
-                                    }
-                                },
+                                }
                             }
                         }
 
-                        // Unboxed zero-sized types cannot have a layout
-                        return LayoutError.ZeroSizedType;
+                        // If we're inside a List or Box, the recursive reference will be heap-allocated,
+                        // so we can use opaque_ptr as a placeholder. The actual layout will be computed
+                        // when we return to process the outer type.
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                            if (pending_item.container == .box or pending_item.container == .list) {
+                                break :blk Layout.opaquePtr();
+                            }
+                        }
+
+                        // For recursion_var outside of containers, we need to follow it.
+                        // This should only happen if the structure hasn't been processed yet.
+                        current = resolved_structure;
+                        continue :outer;
                     },
-                },
-                .flex => |_| blk: {
-                    // First, check if this flex var is mapped in the TypeScope
-                    if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
-                        current = self.types_store.resolveVar(mapped_var);
-                        continue :outer;
-                    }
+                    .err => return LayoutError.TypeContainedMismatch,
+                };
 
-                    // Flex vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.len > 0) {
-                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                        if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.opaquePtr();
+                // We actually resolved a layout that wasn't zero-sized!
+                // First things first: add it to the cache.
+                layout_idx = try self.insertLayout(layout);
+                try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
+                // Remove from in_progress now that it's cached (no longer "in progress")
+                _ = self.work.in_progress_vars.swapRemove(current.var_);
+
+                // Check if any in-progress nominals need their reserved layouts updated.
+                // When a nominal type's backing type finishes, update the nominal's placeholder.
+                var nominals_to_remove = std.ArrayList(work.NominalKey){};
+                defer nominals_to_remove.deinit(self.env.gpa);
+
+                var nominal_iter = self.work.in_progress_nominals.iterator();
+                while (nominal_iter.next()) |entry| {
+                    const progress = entry.value_ptr.*;
+                    // Check if this nominal's backing type just finished.
+                    // The backing_var should match the var we just cached.
+                    if (progress.backing_var == current.var_) {
+                        // The backing type just finished! Update the nominal's placeholder.
+                        if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
+                            self.updateLayout(reserved_idx, layout);
                         }
+                        try nominals_to_remove.append(self.env.gpa, entry.key_ptr.*);
                     }
+                }
 
-                    // Flex vars appear in REPL/eval contexts where type constraints haven't been fully solved.
-                    // This is a known issue that needs proper constraint solving before layout computation.
-                    // For now, default to I64 for numeric flex vars.
-                    break :blk Layout.int(.i64);
-                },
-                .rigid => |_| blk: {
-                    // First, check if this rigid var is mapped in the TypeScope
-                    if (type_scope.lookup(current.var_)) |mapped_var| {
-                        // Found a mapping, resolve the mapped variable and continue
-                        current = self.types_store.resolveVar(mapped_var);
-                        continue :outer;
-                    }
-
-                    // Rigid vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.len > 0) {
-                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                        if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.opaquePtr();
-                        }
-                    }
-
-                    // Rigid vars should not appear unboxed in layout computation.
-                    // This is likely a bug in the type system.
-                    //
-                    // Unlike flex vars, rigid vars represent type parameters that should
-                    // have been instantiated. This is a bug that should be fixed.
-                    return LayoutError.BugUnboxedRigidVar;
-                },
-                .alias => |alias| {
-                    // Follow the alias by updating the work item
-                    const backing_var = self.types_store.getAliasBackingVar(alias);
-                    current = self.types_store.resolveVar(backing_var);
-                    continue;
-                },
-                .err => return LayoutError.TypeContainedMismatch,
-            };
-
-            // We actually resolved a layout that wasn't zero-sized!
-            // First things first: add it to the cache.
-            layout_idx = try self.insertLayout(layout);
-            try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
+                // Remove the nominals we updated
+                for (nominals_to_remove.items) |key| {
+                    _ = self.work.in_progress_nominals.swapRemove(key);
+                }
+            } // end if (!skip_layout_computation)
 
             // If this was part of a pending container that we're working on, update that container.
             while (self.work.pending_containers.len > 0) {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        layout = Layout.box(layout_idx);
+                        // Check if the element type is zero-sized (recursively)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (self.isZeroSized(elem_layout)) {
+                            layout = Layout.boxOfZst();
+                        } else {
+                            layout = Layout.box(layout_idx);
+                        }
                     },
                     .list => {
-                        layout = Layout.list(layout_idx);
+                        // Check if the element type is zero-sized (recursively)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (self.isZeroSized(elem_layout)) {
+                            layout = Layout.listOfZst();
+                        } else {
+                            layout = Layout.list(layout_idx);
+                        }
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
@@ -1417,6 +1742,29 @@ pub const Store = struct {
 
                 // Add the container's layout to our layouts_by_var cache for later use.
                 try self.layouts_by_var.put(self.env.gpa, pending_item.var_, layout_idx);
+
+                // Check if any in-progress nominals need their reserved layouts updated.
+                // This handles the case where a nominal's backing type is a container (e.g., tag union).
+                var nominals_to_remove_container = std.ArrayList(work.NominalKey){};
+                defer nominals_to_remove_container.deinit(self.env.gpa);
+
+                var nominal_iter_container = self.work.in_progress_nominals.iterator();
+                while (nominal_iter_container.next()) |entry| {
+                    const progress = entry.value_ptr.*;
+                    // Check if this nominal's backing type (container) just finished.
+                    if (progress.backing_var == pending_item.var_) {
+                        // The backing type (container) just finished! Update the nominal's placeholder.
+                        if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
+                            self.updateLayout(reserved_idx, layout);
+                        }
+                        try nominals_to_remove_container.append(self.env.gpa, entry.key_ptr.*);
+                    }
+                }
+
+                // Remove the nominals we updated
+                for (nominals_to_remove_container.items) |key| {
+                    _ = self.work.in_progress_nominals.swapRemove(key);
+                }
             }
 
             // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.
@@ -1424,18 +1772,34 @@ pub const Store = struct {
             std.debug.assert(self.work.pending_tuple_fields.len == 0);
 
             // No more pending containers; we're done!
+            // Note: Work fields (in_progress_vars, in_progress_nominals, pending_record_fields, etc.)
+            // are not cleared here because addTypeVar may be called recursively (e.g., from tag union
+            // variant processing). Individual entries are removed via swapRemove/pop when types
+            // finish processing, so these should be empty when the top-level call returns.
             return layout_idx;
         }
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
+        defer trace.end();
+
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            return idxFromScalar(layout.data.scalar);
+            const result = idxFromScalar(layout.data.scalar);
+            return result;
         }
 
         // For non-scalar types, insert as normal
         const safe_list_idx = try self.layouts.append(self.env.gpa, layout);
-        return @enumFromInt(@intFromEnum(safe_list_idx));
+        const result: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        return result;
+    }
+
+    /// Update an existing layout at the given index.
+    /// Used for recursive types where we reserve a slot first and fill it in later.
+    pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
+        const ptr = self.layouts.get(@enumFromInt(@intFromEnum(idx)));
+        ptr.* = layout;
     }
 };

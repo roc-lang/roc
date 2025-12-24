@@ -50,13 +50,12 @@ Container : a -> [Container(a)]
 
 
 **TOO MANY ARGS**
-The type _Container_ expects  argument, but got  instead.
+The type _Container_ expects 0 arguments, but got 1 instead.
 **nominal_associated_in_tuples.md:11:9:11:27:**
 ```roc
 boxed : Container(Foo.Bar)
 ```
         ^^^^^^^^^^^^^^^^^^
-
 
 
 # TOKENS

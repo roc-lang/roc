@@ -14,38 +14,37 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:3:27:3:29
-TYPE MISMATCH - lambda_annotation_mismatch_error.md:7:31:7:35
+MISSING METHOD - lambda_annotation_mismatch_error.md:3:27:3:29
+MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
++ - :0:0:0:0
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **lambda_annotation_mismatch_error.md:3:27:3:29:**
 ```roc
 string_function = |x| x + 42
 ```
                           ^^
 
-It has the type:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-But the type annotation says it should have the type:
-    _Str_
+    Str
 
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**lambda_annotation_mismatch_error.md:7:31:7:35:**
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**lambda_annotation_mismatch_error.md:3:23:3:29:**
 ```roc
-wrong_type_function = |x| x * 3.14
+string_function = |x| x + 42
 ```
-                              ^^^^
+                      ^^^^^^
 
-It has the type:
-    _Num(Frac(_size))_
+The value's type, which does not have a method named **plus**, is:
 
-But the type annotation says it should have the type:
-    _Num(Int(Signed64))_
+    Str
 
-**Hint:** This might be because the numeric literal is too large to fit in the target type.
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -123,9 +122,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error")))
+		(patt (type "Str -> Error"))
+		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "Str -> Error"))
+		(expr (type "I64 -> I64"))))
 ~~~

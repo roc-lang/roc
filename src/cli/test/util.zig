@@ -15,13 +15,13 @@ pub fn runRocCommand(allocator: std.mem.Allocator, args: []const []const u8) !Ro
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
-    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     // Build argv: [roc_path, ...args]
@@ -51,13 +51,13 @@ pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_
     // Get absolute path to roc binary from current working directory
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
-    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", "roc" });
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
     defer allocator.free(roc_path);
 
     // Skip test if roc binary doesn't exist
     std.fs.accessAbsolute(roc_path, .{}) catch {
         std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
-        return error.SkipZigTest;
     };
 
     const test_file = try std.fs.path.join(allocator, &.{ cwd_path, test_file_path });

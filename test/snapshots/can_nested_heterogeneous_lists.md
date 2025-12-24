@@ -8,26 +8,36 @@ type=expr
 [[1, "hello"], [2, 3]]
 ~~~
 # EXPECTED
-INCOMPATIBLE LIST ELEMENTS - can_nested_heterogeneous_lists.md:1:3:1:3
+MISSING METHOD - can_nested_heterogeneous_lists.md:1:3:1:4
+MISSING METHOD - can_nested_heterogeneous_lists.md:1:20:1:21
 # PROBLEMS
-**INCOMPATIBLE LIST ELEMENTS**
-The two elements in this list have incompatible types:
-**can_nested_heterogeneous_lists.md:1:3:**
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**can_nested_heterogeneous_lists.md:1:3:1:4:**
 ```roc
 [[1, "hello"], [2, 3]]
 ```
-  ^  ^^^^^^^
+  ^
 
-The first element has this type:
-    _Num(_size)_
+The value's type, which does not have a method named **from_numeral**, is:
 
-However, the second element has this type:
-    _Str_
+    Str
 
-All elements in a list must have compatible types.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
-Note: You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**can_nested_heterogeneous_lists.md:1:20:1:21:**
+```roc
+[[1, "hello"], [2, 3]]
+```
+                   ^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -65,5 +75,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(List(Error))"))
+(expr (type "List(List(Str))"))
 ~~~

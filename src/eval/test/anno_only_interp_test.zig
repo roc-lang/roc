@@ -28,6 +28,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     evaluator: ComptimeEvaluator,
     problems: *check.problem.Store,
     builtin_module: builtin_loading.LoadedModule,
+    checker: *Check,
+    imported_envs: []*const ModuleEnv,
 } {
     const gpa = test_allocator;
 
@@ -50,24 +52,46 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     var builtin_module = try builtin_loading.loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
     errdefer builtin_module.deinit();
 
-    try module_env.initCIRFields(gpa, "test");
-    const common_idents: Check.CommonIdents = .{
+    try module_env.initCIRFields("test");
+    const builtin_ctx: Check.BuiltinContext = .{
         .module_name = try module_env.insertIdent(base.Ident.for_text("test")),
-        .list = try module_env.insertIdent(base.Ident.for_text("List")),
-        .box = try module_env.insertIdent(base.Ident.for_text("Box")),
         .bool_stmt = builtin_indices.bool_type,
         .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
         .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
     };
 
-    var czer = try Can.init(module_env, &parse_ast, null);
+    // Create module_envs map for canonicalization (enables qualified calls to List, Str, etc.)
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs_map.deinit();
+
+    // Use shared function to populate ALL builtin types - ensures Builtin.roc is single source of truth
+    try Can.populateModuleEnvs(
+        &module_envs_map,
+        module_env,
+        builtin_module.env,
+        builtin_indices,
+    );
+
+    var czer = try Can.init(module_env, &parse_ast, &module_envs_map);
     defer czer.deinit();
 
     try czer.canonicalizeFile();
 
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
-    var checker = try Check.init(gpa, &module_env.types, module_env, &imported_envs, null, &module_env.store.regions, common_idents);
-    defer checker.deinit();
+    // Heap-allocate imported_envs so it outlives this function.
+    // The interpreter's all_module_envs is a slice that points to this memory.
+    const imported_envs = try gpa.alloc(*const ModuleEnv, 1);
+    errdefer gpa.free(imported_envs);
+    imported_envs[0] = builtin_module.env;
+
+    // Resolve imports - map each import to its index in imported_envs
+    module_env.imports.resolveImports(module_env, imported_envs);
+
+    const checker = try gpa.create(Check);
+    errdefer gpa.destroy(checker);
+    checker.* = try Check.init(gpa, &module_env.types, module_env, imported_envs, null, &module_env.store.regions, builtin_ctx);
+    errdefer checker.deinit();
 
     try checker.checkFile();
 
@@ -75,13 +99,15 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     problems.* = .{};
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    const evaluator = try ComptimeEvaluator.init(gpa, module_env, &.{}, problems, builtin_types);
+    const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
 
     return .{
         .module_env = module_env,
         .evaluator = evaluator,
         .problems = problems,
         .builtin_module = builtin_module,
+        .checker = checker,
+        .imported_envs = imported_envs,
     };
 }
 
@@ -89,11 +115,17 @@ fn cleanupEvalModule(result: anytype) void {
     var evaluator_mut = result.evaluator;
     evaluator_mut.deinit();
 
+    var checker_mut = result.checker;
+    checker_mut.deinit();
+    test_allocator.destroy(result.checker);
+
     var problems_mut = result.problems;
     problems_mut.deinit(test_allocator);
     test_allocator.destroy(result.problems);
     result.module_env.deinit();
     test_allocator.destroy(result.module_env);
+
+    test_allocator.free(result.imported_envs);
 
     var builtin_module_mut = result.builtin_module;
     builtin_module_mut.deinit();

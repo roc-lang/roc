@@ -94,15 +94,12 @@ fn readFileIntoWasm(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
     return error.FileNotFound;
 }
 
-fn writeFileWasm(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
-    _ = path;
-    _ = contents;
+fn writeFileWasm(_: []const u8, _: []const u8) Filesystem.WriteError!void {
     // Writing files is not supported in WASM playground
     return error.AccessDenied;
 }
 
-fn openDirWasm(absolute_path: []const u8) Filesystem.OpenError!Filesystem.Dir {
-    _ = absolute_path;
+fn openDirWasm(_: []const u8) Filesystem.OpenError!Filesystem.Dir {
     // Directory operations are not supported in WASM playground
     return error.FileNotFound;
 }
@@ -131,15 +128,12 @@ fn canonicalizeWasm(root_relative_path: []const u8, allocator: Allocator) Filesy
     return allocator.dupe(u8, root_relative_path) catch handleOom();
 }
 
-fn makePathWasm(path: []const u8) Filesystem.MakePathError!void {
-    _ = path;
+fn makePathWasm(_: []const u8) Filesystem.MakePathError!void {
     // Directory creation is not supported in WASM playground
     return error.AccessDenied;
 }
 
-fn renameWasm(old_path: []const u8, new_path: []const u8) Filesystem.RenameError!void {
-    _ = old_path;
-    _ = new_path;
+fn renameWasm(_: []const u8, _: []const u8) Filesystem.RenameError!void {
     // File operations are not supported in WASM playground
     return error.AccessDenied;
 }

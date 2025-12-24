@@ -25,10 +25,12 @@ yellow = Color.Yellow
          ^^^^^^^^^^^^
 
 The tag is:
-    _Yellow_
+
+    Yellow
 
 But the nominal type needs it to one of:
-    _[Blue, Green, Red]_
+
+    [Blue, Green, Red]
 
 # TOKENS
 ~~~zig

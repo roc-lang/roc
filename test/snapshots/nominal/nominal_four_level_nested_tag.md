@@ -118,16 +118,16 @@ value = Foo.Bar.Baz.Qux.Y
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux")))
+		(patt (type "Foo.Bar.Baz.Qux")))
 	(type_decls
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
-		(nominal (type "nominal_four_level_nested_tag.Foo.Bar")
+		(nominal (type "Foo.Bar")
 			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar")))
-		(nominal (type "nominal_four_level_nested_tag.Foo.Bar.Baz")
+		(nominal (type "Foo.Bar.Baz")
 			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar.Baz")))
-		(nominal (type "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux")
+		(nominal (type "Foo.Bar.Baz.Qux")
 			(ty-header (name "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux"))))
 	(expressions
-		(expr (type "nominal_four_level_nested_tag.Foo.Bar.Baz.Qux"))))
+		(expr (type "Foo.Bar.Baz.Qux"))))
 ~~~

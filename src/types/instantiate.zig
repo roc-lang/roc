@@ -9,7 +9,6 @@ const base = @import("base");
 const collections = @import("collections");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
-const TypeWriter = @import("TypeWriter.zig");
 
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
@@ -122,10 +121,6 @@ pub const Instantiator = struct {
                 const fresh_var = try self.store.freshFromContentWithRank(.{ .flex = Flex.init() }, self.current_rank);
                 try self.var_map.put(resolved_var, fresh_var);
 
-                // TODO: DELETE
-                var tw = try TypeWriter.initFromParts(self.store.gpa, self.store, self.idents);
-                defer tw.deinit();
-
                 // Copy the rigid var's constraints
                 const fresh_constraints = try self.instantiateStaticDispatchConstraints(rigid.constraints);
 
@@ -136,7 +131,7 @@ pub const Instantiator = struct {
                 };
 
                 // Update the placeholder fresh var with the real content
-                try self.store.setVarDesc(
+                try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
@@ -157,7 +152,7 @@ pub const Instantiator = struct {
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
                 // Update the placeholder fresh var with the real content
-                try self.store.setVarDesc(
+                try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
@@ -188,6 +183,11 @@ pub const Instantiator = struct {
                 const fresh_flat_type = try self.instantiateFlatType(flat_type);
                 break :blk Content{ .structure = fresh_flat_type };
             },
+            .recursion_var => |rec_var| blk: {
+                // Instantiate the structure the recursion var points to
+                const fresh_structure = try self.instantiateVar(rec_var.structure);
+                break :blk Content{ .recursion_var = .{ .structure = fresh_structure, .name = rec_var.name } };
+            },
             .err => Content.err,
         };
     }
@@ -216,12 +216,7 @@ pub const Instantiator = struct {
 
     fn instantiateFlatType(self: *Self, flat_type: FlatType) std.mem.Allocator.Error!FlatType {
         return switch (flat_type) {
-            .str => FlatType.str,
-            .box => |box_var| FlatType{ .box = try self.instantiateVar(box_var) },
-            .list => |list_var| FlatType{ .list = try self.instantiateVar(list_var) },
-            .list_unbound => FlatType.list_unbound,
             .tuple => |tuple| FlatType{ .tuple = try self.instantiateTuple(tuple) },
-            .num => |num| FlatType{ .num = try self.instantiateNum(num) },
             .nominal_type => |nominal| FlatType{ .nominal_type = try self.instantiateNominalType(nominal) },
             .fn_pure => |func| FlatType{ .fn_pure = try self.instantiateFunc(func) },
             .fn_effectful => |func| FlatType{ .fn_effectful = try self.instantiateFunc(func) },
@@ -247,15 +242,18 @@ pub const Instantiator = struct {
             try fresh_vars.append(self.store.gpa, fresh_elem);
         }
 
-        return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module)).structure.nominal_type;
+        return (try self.store.mkNominal(nominal.ident, fresh_backing_var, fresh_vars.items, nominal.origin_module, nominal.is_opaque)).structure.nominal_type;
     }
 
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
-        const elems_slice = self.store.sliceVars(tuple.elems);
+        // Use index-based iteration to avoid iterator invalidation
+        // (see comment in instantiateFunc for details)
         var fresh_elems = std.ArrayList(Var).empty;
         defer fresh_elems.deinit(self.store.gpa);
 
-        for (elems_slice) |elem_var| {
+        const elems_start: usize = @intFromEnum(tuple.elems.start);
+        for (0..tuple.elems.count) |i| {
+            const elem_var = self.store.vars.items.items[elems_start + i];
             const fresh_elem = try self.instantiateVar(elem_var);
             try fresh_elems.append(self.store.gpa, fresh_elem);
         }
@@ -263,28 +261,18 @@ pub const Instantiator = struct {
         const fresh_elems_range = try self.store.appendVars(fresh_elems.items);
         return Tuple{ .elems = fresh_elems_range };
     }
-
-    fn instantiateNum(self: *Self, num: Num) std.mem.Allocator.Error!Num {
-        return switch (num) {
-            .num_poly => |poly_var| Num{ .num_poly = try self.instantiateVar(poly_var) },
-            .int_poly => |poly_var| Num{ .int_poly = try self.instantiateVar(poly_var) },
-            .frac_poly => |poly_var| Num{ .frac_poly = try self.instantiateVar(poly_var) },
-            // Concrete types remain unchanged
-            .int_precision => |precision| Num{ .int_precision = precision },
-            .frac_precision => |precision| Num{ .frac_precision = precision },
-            .num_unbound => |unbound| Num{ .num_unbound = unbound },
-            .int_unbound => |unbound| Num{ .int_unbound = unbound },
-            .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
-            .num_compact => |compact| Num{ .num_compact = compact },
-        };
-    }
-
     fn instantiateFunc(self: *Self, func: Func) std.mem.Allocator.Error!Func {
-        const args_slice = self.store.sliceVars(func.args);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing ArrayList, but instantiateVar
+        // can recursively call appendVars which may reallocate the array,
+        // invalidating the slice pointer.
         var fresh_args = std.ArrayList(Var).empty;
         defer fresh_args.deinit(self.store.gpa);
 
-        for (args_slice) |arg_var| {
+        const args_start: usize = @intFromEnum(func.args.start);
+        for (0..func.args.count) |i| {
+            // Re-fetch the var on each iteration since the backing array may have moved
+            const arg_var = self.store.vars.items.items[args_start + i];
             const fresh_arg = try self.instantiateVar(arg_var);
             try fresh_args.append(self.store.gpa, fresh_arg);
         }
@@ -299,15 +287,24 @@ pub const Instantiator = struct {
     }
 
     fn instantiateRecordFields(self: *Self, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!RecordField.SafeMultiList.Range {
-        const fields_slice = self.store.getRecordFieldsSlice(fields);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing MultiArrayList, but instantiateVar
+        // can recursively call appendRecordFields which may reallocate the array,
+        // invalidating the slice pointers.
+        if (fields.count == 0) {
+            return try self.store.appendRecordFields(&.{});
+        }
 
         var fresh_fields = std.ArrayList(RecordField).empty;
         defer fresh_fields.deinit(self.store.gpa);
 
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-            const fresh_type = try self.instantiateVar(type_var);
+        const fields_start: usize = @intFromEnum(fields.start);
+        for (0..fields.count) |i| {
+            // Re-fetch the field data on each iteration since the backing array may have moved
+            const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
+            const fresh_type = try self.instantiateVar(field.var_);
             _ = try fresh_fields.append(self.store.gpa, RecordField{
-                .name = name,
+                .name = field.name,
                 .var_ = fresh_type,
             });
         }
@@ -316,15 +313,27 @@ pub const Instantiator = struct {
     }
 
     fn instantiateRecord(self: *Self, record: Record) std.mem.Allocator.Error!Record {
-        const fields_slice = self.store.getRecordFieldsSlice(record.fields);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing MultiArrayList, but instantiateVar
+        // can recursively call appendRecordFields which may reallocate the array,
+        // invalidating the slice pointers.
+        if (record.fields.count == 0) {
+            return Record{
+                .fields = try self.store.appendRecordFields(&.{}),
+                .ext = try self.instantiateVar(record.ext),
+            };
+        }
 
         var fresh_fields = std.ArrayList(RecordField).empty;
         defer fresh_fields.deinit(self.store.gpa);
 
-        for (fields_slice.items(.name), fields_slice.items(.var_)) |name, type_var| {
-            const fresh_type = try self.instantiateVar(type_var);
+        const fields_start: usize = @intFromEnum(record.fields.start);
+        for (0..record.fields.count) |i| {
+            // Re-fetch the field data on each iteration since the backing array may have moved
+            const field = self.store.record_fields.get(@enumFromInt(fields_start + i));
+            const fresh_type = try self.instantiateVar(field.var_);
             _ = try fresh_fields.append(self.store.gpa, RecordField{
-                .name = name,
+                .name = field.name,
                 .var_ = fresh_type,
             });
         }
@@ -337,19 +346,41 @@ pub const Instantiator = struct {
     }
 
     fn instantiateTagUnion(self: *Self, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const tags_slice = self.store.getTagsSlice(tag_union.tags);
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The slice would point into the backing MultiArrayList, but instantiateVar
+        // can recursively call appendTags which may reallocate the array,
+        // invalidating the slice pointers.
+        if (tag_union.tags.count == 0) {
+            return TagUnion{
+                .tags = try self.store.appendTags(&.{}),
+                .ext = try self.instantiateVar(tag_union.ext),
+            };
+        }
 
         var fresh_tags = std.ArrayList(Tag).empty;
         defer fresh_tags.deinit(self.store.gpa);
 
-        for (tags_slice.items(.name), tags_slice.items(.args)) |tag_name, tag_args| {
+        const tags_start: usize = @intFromEnum(tag_union.tags.start);
+        for (0..tag_union.tags.count) |tag_i| {
+            // Re-fetch the tag data on each iteration since the backing array may have moved
+            const tag = self.store.tags.get(@enumFromInt(tags_start + tag_i));
+            const tag_name = tag.name;
+            const tag_args = tag.args;
+
             var fresh_args = std.ArrayList(Var).empty;
             defer fresh_args.deinit(self.store.gpa);
 
-            const args_slice = self.store.sliceVars(tag_args);
-            for (args_slice) |arg_var| {
-                const fresh_arg = try self.instantiateVar(arg_var);
-                try fresh_args.append(self.store.gpa, fresh_arg);
+            // Skip the loop entirely for tags with no arguments.
+            // This avoids accessing tag_args.start which may be undefined when count is 0.
+            if (tag_args.count > 0) {
+                // Use index-based iteration to avoid iterator invalidation
+                // (see comment in instantiateFunc for details)
+                const args_start: usize = @intFromEnum(tag_args.start);
+                for (0..tag_args.count) |i| {
+                    const arg_var = self.store.vars.items.items[args_start + i];
+                    const fresh_arg = try self.instantiateVar(arg_var);
+                    try fresh_args.append(self.store.gpa, fresh_arg);
+                }
             }
 
             const fresh_args_range = try self.store.appendVars(fresh_args.items);
@@ -359,6 +390,10 @@ pub const Instantiator = struct {
                 .args = fresh_args_range,
             });
         }
+
+        // Sort the fresh tags alphabetically by name before appending.
+        // This ensures tag discriminants are consistent after instantiation.
+        std.mem.sort(Tag, fresh_tags.items, self.idents, comptime Tag.sortByNameAsc);
 
         const tags_range = try self.store.appendTags(fresh_tags.items);
         return TagUnion{
@@ -379,7 +414,11 @@ pub const Instantiator = struct {
             var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit(self.store.gpa);
 
-            for (self.store.sliceStaticDispatchConstraints(constraints)) |constraint| {
+            // Use index-based iteration to avoid iterator invalidation
+            // (see comment in instantiateFunc for details)
+            const constraints_start: usize = @intFromEnum(constraints.start);
+            for (0..constraints_len) |i| {
+                const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
                 const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
                 try fresh_constraints.append(self.store.gpa, fresh_constraint);
             }

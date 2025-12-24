@@ -254,15 +254,15 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Num(_size)"))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e -> e"))
-		(patt (type "_arg -> Num(_size)"))
-		(patt (type "Num(_size) -> Num(_size2)"))
-		(patt (type "_arg -> Num(_size)")))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "_arg -> Num(_size)"))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e -> e"))
-		(expr (type "_arg -> Num(_size)"))
-		(expr (type "Num(_size) -> Num(_size2)"))
-		(expr (type "_arg -> Num(_size)"))))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))))
 ~~~

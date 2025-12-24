@@ -1,4 +1,5 @@
 //! This module implements Hindley-Milner style type unification with extensions for:
+//!
 //! * flex/rigid variables
 //! * type aliases
 //! * tuples
@@ -46,6 +47,7 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
+const copy_import = @import("copy_import.zig");
 const Check = @import("check").Check;
 
 const problem_mod = @import("problem.zig");
@@ -53,6 +55,8 @@ const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
 const ModuleEnv = can.ModuleEnv;
+const AutoImportedType = can.Can.AutoImportedType;
+const CIR = can.CIR;
 
 const Region = base.Region;
 const Ident = base.Ident;
@@ -71,6 +75,7 @@ const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
+const RecursionVar = types_mod.RecursionVar;
 const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
@@ -78,7 +83,6 @@ const FlatType = types_mod.FlatType;
 const Builtin = types_mod.Builtin;
 const Tuple = types_mod.Tuple;
 const Num = types_mod.Num;
-const NumCompact = types_mod.Num.Compact;
 const Func = types_mod.Func;
 const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
@@ -131,6 +135,7 @@ pub fn unify(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     /// The "expected" variable
@@ -143,6 +148,7 @@ pub fn unify(
         types,
         problems,
         snapshots,
+        type_writer,
         unify_scratch,
         occurs_scratch,
         a,
@@ -173,6 +179,7 @@ pub fn unifyWithConf(
     types: *types_mod.Store,
     problems: *problem_mod.Store,
     snapshots: *snapshot_mod.Store,
+    type_writer: *types_mod.TypeWriter,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
     /// The "expected" variable
@@ -196,8 +203,8 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.deepCopyVar(types, a);
-                    const actual_snapshot = try snapshots.deepCopyVar(types, b);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
 
                     break :blk .{ .type_mismatch = .{
                         .types = .{
@@ -219,11 +226,6 @@ pub fn unifyWithConf(
                     // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
                     const literal_is_a = switch (a_resolved.desc.content) {
                         .structure => |structure| switch (structure) {
-                            .num => |num| switch (num) {
-                                .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
-                                else => false,
-                            },
-                            .list_unbound => true,
                             .record_unbound => true,
                             else => false,
                         },
@@ -232,7 +234,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
@@ -247,11 +249,6 @@ pub fn unifyWithConf(
                     // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
                     const literal_is_a = switch (a_resolved.desc.content) {
                         .structure => |structure| switch (structure) {
-                            .num => |num| switch (num) {
-                                .int_poly, .num_poly, .int_unbound, .num_unbound, .frac_unbound => true,
-                                else => false,
-                            },
-                            .list_unbound => true,
                             .record_unbound => true,
                             else => false,
                         },
@@ -260,7 +257,7 @@ pub fn unifyWithConf(
 
                     const literal_var = if (literal_is_a) a else b;
                     const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.deepCopyVar(types, expected_var);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
@@ -283,35 +280,35 @@ pub fn unifyWithConf(
                     if (unify_scratch.err) |unify_err| {
                         switch (unify_err) {
                             .recursion_anonymous => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .anonymous_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .recursion_infinite => |var_| {
-                                // TODO: Snapshot infinite recursion
-                                // const snapshot = snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .infinite_recursion = .{
                                     .var_ = var_,
+                                    .snapshot = snapshot,
                                 } };
                             },
                             .invalid_number_type => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_number_type = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_record_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_record_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
                                 } };
                             },
                             .invalid_tag_union_ext => |var_| {
-                                const snapshot = try snapshots.deepCopyVar(types, var_);
+                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
                                 break :blk .{ .invalid_tag_union_ext = .{
                                     .var_ = var_,
                                     .snapshot = snapshot,
@@ -319,11 +316,13 @@ pub fn unifyWithConf(
                             },
                         }
                     } else {
+                        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = try snapshots.deepCopyVar(types, a),
+                            .expected = expected_snapshot,
                             .actual_var = b,
-                            .actual = try snapshots.deepCopyVar(types, b),
+                            .actual = actual_snapshot,
                         } };
                     }
                 },
@@ -473,6 +472,9 @@ const Unifier = struct {
             .structure => |a_flat_type| {
                 try self.unifyStructure(vars, a_flat_type, vars.b.desc.content);
             },
+            .recursion_var => |a_rec_var| {
+                try self.unifyRecursionVar(vars, a_rec_var, vars.b.desc.content);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -562,6 +564,17 @@ const Unifier = struct {
 
                 self.merge(vars, b_content);
             },
+            .recursion_var => {
+                if (a_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_,
+                        .constraints = a_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+
+                self.merge(vars, b_content);
+            },
             .err => self.merge(vars, .err),
         }
     }
@@ -588,6 +601,7 @@ const Unifier = struct {
             .rigid => return error.TypeMismatch,
             .alias => return error.TypeMismatch,
             .structure => return error.TypeMismatch,
+            .recursion_var => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
     }
@@ -635,8 +649,16 @@ const Unifier = struct {
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+
+                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
+                // Because of this, we do not loose any rank information.
+                // This is essentially a custom `self.merge` strategy
+                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+            },
+            .recursion_var => |_| {
+                // Unify alias backing var with recursion var
+                try self.unifyGuarded(backing_var, vars.b.var_);
             },
             .err => self.merge(vars, .err),
         }
@@ -718,11 +740,78 @@ const Unifier = struct {
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.setVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+
+                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
+                // Because of this, we do not loose any rank information.
+                // This is essentially a custom `self.merge` strategy
+                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
+                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
+            },
+            .recursion_var => |b_rec_var| {
+                // When unifying structure with recursion var, unify with the structure
+                // the recursion var points to
+                try self.unifyGuarded(vars.a.var_, b_rec_var.structure);
+            },
+            .err => self.merge(vars, .err),
+        }
+    }
+
+    // Unify recursion var //
+
+    /// Unify when `a` is a recursion variable
+    ///
+    /// Equirecursive unification: Two recursive types unify if they are structurally
+    /// equal up to their recursion points. RecursionVar marks these recursion points
+    /// and prevents infinite expansion during unification.
+    ///
+    /// The key insight: when we encounter a RecursionVar, we unify with the structure
+    /// it points to. The existing cycle detection in unifyGuarded (via checkVarsEquiv)
+    /// ensures we don't infinitely recurse - if we've already unified these exact vars,
+    /// we return early.
+    fn unifyRecursionVar(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_rec_var: RecursionVar,
+        b_content: Content,
+    ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        switch (b_content) {
+            .flex => |b_flex| {
+                // RecursionVar can unify with flex - defer constraints and merge
+                if (b_flex.constraints.len() > 0) {
+                    // Record that we need to check constraints later
+                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                        .var_ = vars.b.var_,
+                        .constraints = b_flex.constraints,
+                    }) catch return Error.AllocatorError;
+                }
+                self.merge(vars, vars.a.desc.content);
+            },
+            .rigid => {
+                // RecursionVar cannot unify with rigid - rigid types have no structure to recurse into
+                return error.TypeMismatch;
+            },
+            .alias => |b_alias| {
+                // Unify with the alias backing var to preserve the alias structure
+                // This allows RecursionVar to work through type aliases
+                const backing_var = self.types_store.getAliasBackingVar(b_alias);
+                try self.unifyGuarded(vars.a.var_, backing_var);
+            },
+            .structure => {
+                // Unify the structure the recursion var points to with b's structure
+                // This is equirecursive unification: unfold one level and continue
+                try self.unifyGuarded(a_rec_var.structure, vars.b.var_);
+            },
+            .recursion_var => |b_rec_var| {
+                // Both are recursion vars - the heart of equirecursive unification
+                // We unify their structures. If they form a cycle, checkVarsEquiv
+                // in unifyGuarded will detect it and prevent infinite recursion.
+                try self.unifyGuarded(a_rec_var.structure, b_rec_var.structure);
             },
             .err => self.merge(vars, .err),
         }
@@ -739,57 +828,6 @@ const Unifier = struct {
         defer trace.end();
 
         switch (a_flat_type) {
-            .str => {
-                switch (b_flat_type) {
-                    .str => self.merge(vars, vars.b.desc.content),
-                    .nominal_type => |b_type| {
-                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
-                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-                        if (b_backing_resolved.desc.content == .err) {
-                            // Invalid nominal type - treat as transparent
-                            self.merge(vars, vars.a.desc.content);
-                            return;
-                        }
-                        return error.TypeMismatch;
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .box => |a_var| {
-                switch (b_flat_type) {
-                    .box => |b_var| {
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .list => |a_var| {
-                switch (b_flat_type) {
-                    .list => |b_var| {
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .list_unbound => {
-                        // When unifying list with list_unbound, list wins
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .list_unbound => {
-                switch (b_flat_type) {
-                    .list => |_| {
-                        // When unifying list_unbound with list, list wins
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .list_unbound => {
-                        // Both are list_unbound - stay unbound
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
             .tuple => |a_tuple| {
                 switch (b_flat_type) {
                     .tuple => |b_tuple| {
@@ -798,47 +836,10 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
-            .num => |a_num| {
-                switch (b_flat_type) {
-                    .num => |b_num| {
-                        try self.unifyNum(vars, a_num, b_num);
-                    },
-                    .nominal_type => |b_nominal| {
-                        // Check if the number literal can unify with this nominal type
-                        // by unifying the nominal type's from_*_digits method signature with the expected type
-                        switch (a_num) {
-                            .int_unbound, .num_unbound => {
-                                // Integer literal - unify with from_int_digits: List(U8) -> Try(Self, [OutOfRange])
-                                if (try self.nominalTypeHasFromIntDigits(b_nominal)) {
-                                    // Unification succeeded - the nominal type can accept integer literals
-                                    self.merge(vars, vars.b.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            .frac_unbound => {
-                                // Decimal literal - unify with from_dec_digits: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
-                                if (try self.nominalTypeHasFromDecDigits(b_nominal)) {
-                                    // Unification succeeded - the nominal type can accept decimal literals
-                                    self.merge(vars, vars.b.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            else => {
-                                // Concrete numeric types (U8, F64, etc.) don't unify with nominal types
-                                return error.TypeMismatch;
-                            },
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
             .nominal_type => |a_type| {
                 const a_backing_var = self.types_store.getNominalBackingVar(a_type);
                 const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
                 if (a_backing_resolved.desc.content == .err) {
-                    // Invalid nominal type - treat as transparent
                     self.merge(vars, vars.b.desc.content);
                     return;
                 }
@@ -848,7 +849,6 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            // Invalid nominal type - treat as transparent
                             self.merge(vars, vars.a.desc.content);
                             return;
                         }
@@ -860,44 +860,17 @@ const Unifier = struct {
                         try self.unifyTagUnionWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_tag_union, .a_is_nominal);
                     },
                     .empty_tag_union => {
-                        // Try to unify nominal tag union (a) with empty tag union (b)
-                        // Check if the nominal's backing is also an empty tag union
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!a_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
                         if (a_backing_resolved.desc.content == .structure and
                             a_backing_resolved.desc.content.structure == .empty_tag_union)
                         {
-                            // Both are empty, unify with the nominal
                             self.merge(vars, vars.a.desc.content);
                         } else {
-                            // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
-                        }
-                    },
-                    .num => |b_num| {
-                        // Check if the nominal type (a) can accept number literals (b)
-                        // based on whether it has the appropriate from_*_digits method
-                        switch (b_num) {
-                            .int_unbound, .num_unbound => {
-                                // Integer literal - check for from_int_digits
-                                if (try self.nominalTypeHasFromIntDigits(a_type)) {
-                                    // The nominal type can accept integer literals
-                                    self.merge(vars, vars.a.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            .frac_unbound => {
-                                // Decimal literal - check for from_dec_digits
-                                if (try self.nominalTypeHasFromDecDigits(a_type)) {
-                                    // The nominal type can accept decimal literals
-                                    self.merge(vars, vars.a.desc.content);
-                                } else {
-                                    return error.TypeMismatch;
-                                }
-                            },
-                            else => {
-                                // Concrete numeric types don't unify with nominal types
-                                return error.TypeMismatch;
-                            },
                         }
                     },
                     else => return error.TypeMismatch,
@@ -1056,6 +1029,11 @@ const Unifier = struct {
                         try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
                     },
                     .nominal_type => |b_type| {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
                         // Try to unify anonymous tag union (a) with nominal tag union (b)
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
@@ -1133,1013 +1111,6 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
-    /// Check if a nominal type has a from_int_digits method by unifying its signature
-    /// with the expected type: List(U8) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromIntDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        // Get the backing var (record extension) of the nominal type
-        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
-        const backing_resolved = self.types_store.resolveVar(backing_var);
-
-        // Check if the backing is a record
-        const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
-
-        // Use the pre-interned identifier from ModuleEnv for fast integer comparison
-        const from_int_digits_ident = self.module_env.from_int_digits_ident;
-
-        // Look for the from_int_digits field using fast integer comparison
-        const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
-        const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
-
-        for (field_names, 0..) |name_idx, i| {
-            if (name_idx == from_int_digits_ident) {
-                // Found the method - now check it's a function and unify with expected signature
-                const field_var = field_vars[i];
-                const field_resolved = self.types_store.resolveVar(field_var);
-
-                // Check that it's a function
-                switch (field_resolved.desc.content) {
-                    .structure => |structure| {
-                        switch (structure) {
-                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                                // Check it takes exactly 1 argument
-                                const args_slice = self.types_store.sliceVars(func.args);
-                                if (args_slice.len != 1) return false;
-
-                                // Create List(U8) type and unify with the argument
-                                const u8_var = self.types_store.register(.{ .content = .{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-                                const list_u8_var = self.types_store.register(.{ .content = .{ .structure = .{ .list = u8_var } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Attempt to unify the argument with List(U8)
-                                self.unifyGuarded(args_slice[0], list_u8_var) catch return false;
-
-                                // For the return type, we need Try(Self, [OutOfRange])
-                                // Create a fresh var for Self (the nominal type)
-                                const self_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = nominal_type } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Create [OutOfRange] tag union
-                                const out_of_range_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("OutOfRange")) catch return error.AllocatorError;
-                                const empty_payload_range = self.types_store.appendTags(&[_]Tag{.{ .name = out_of_range_ident, .args = Var.SafeList.Range.empty() }}) catch return error.AllocatorError;
-                                const empty_ext_var = self.types_store.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-                                const error_tag_union_var = self.types_store.register(.{ .content = .{ .structure = .{ .tag_union = .{ .tags = empty_payload_range, .ext = empty_ext_var } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Create Try(Self, [OutOfRange]) - Try is a nominal type with 2 type params
-                                const try_ident_text = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Try")) catch return error.AllocatorError;
-                                const try_type_ident = TypeIdent{ .ident_idx = try_ident_text };
-                                const builtin_module_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Builtin")) catch return error.AllocatorError;
-                                const try_vars_range = self.types_store.appendVars(&[_]Var{ self_var, error_tag_union_var }) catch return error.AllocatorError;
-                                const try_vars_nonempty = Var.SafeList.NonEmptyRange{ .nonempty = try_vars_range };
-                                const try_nominal = NominalType{
-                                    .ident = try_type_ident,
-                                    .vars = try_vars_nonempty,
-                                    .origin_module = builtin_module_ident,
-                                };
-                                const try_return_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = try_nominal } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Unify the return type with Try(Self, [OutOfRange])
-                                self.unifyGuarded(func.ret, try_return_var) catch return false;
-
-                                return true;
-                            },
-                            else => return false,
-                        }
-                    },
-                    else => return false,
-                }
-            }
-        }
-
-        return false;
-    }
-
-    /// Check if a nominal type has a from_dec_digits method by unifying its signature
-    /// with the expected type: (List(U8), List(U8)) -> Try(Self, [OutOfRange])
-    /// Returns true if unification succeeds, false otherwise.
-    fn nominalTypeHasFromDecDigits(
-        self: *Self,
-        nominal_type: NominalType,
-    ) Error!bool {
-        // Get the backing var (record extension) of the nominal type
-        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
-        const backing_resolved = self.types_store.resolveVar(backing_var);
-
-        // Check if the backing is a record
-        const backing_record = backing_resolved.desc.content.unwrapRecord() orelse return false;
-
-        // Use the pre-interned identifier from ModuleEnv for fast integer comparison
-        const from_dec_digits_ident = self.module_env.from_dec_digits_ident;
-
-        // Look for the from_dec_digits field using fast integer comparison
-        const fields_slice = self.types_store.getRecordFieldsSlice(backing_record.fields);
-        const field_names = fields_slice.items(.name);
-        const field_vars = fields_slice.items(.var_);
-
-        for (field_names, 0..) |name_idx, i| {
-            if (name_idx == from_dec_digits_ident) {
-                // Found the method - now check it's a function and unify with expected signature
-                const field_var = field_vars[i];
-                const field_resolved = self.types_store.resolveVar(field_var);
-
-                // Check that it's a function
-                switch (field_resolved.desc.content) {
-                    .structure => |structure| {
-                        switch (structure) {
-                            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                                // Check it takes exactly 2 arguments
-                                const args_slice = self.types_store.sliceVars(func.args);
-                                if (args_slice.len != 2) return false;
-
-                                // Create List(U8) type and unify with both arguments
-                                const u8_var1 = self.types_store.register(.{ .content = .{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-                                const list_u8_var1 = self.types_store.register(.{ .content = .{ .structure = .{ .list = u8_var1 } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-                                const u8_var2 = self.types_store.register(.{ .content = .{ .structure = .{ .num = .{ .num_compact = .{ .int = .u8 } } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-                                const list_u8_var2 = self.types_store.register(.{ .content = .{ .structure = .{ .list = u8_var2 } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Attempt to unify both arguments with List(U8)
-                                self.unifyGuarded(args_slice[0], list_u8_var1) catch return false;
-                                self.unifyGuarded(args_slice[1], list_u8_var2) catch return false;
-
-                                // For the return type, we need Try(Self, [OutOfRange])
-                                // Create a fresh var for Self (the nominal type)
-                                const self_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = nominal_type } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Create [OutOfRange] tag union
-                                const out_of_range_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("OutOfRange")) catch return error.AllocatorError;
-                                const empty_payload_range = self.types_store.appendTags(&[_]Tag{.{ .name = out_of_range_ident, .args = Var.SafeList.Range.empty() }}) catch return error.AllocatorError;
-                                const empty_ext_var = self.types_store.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-                                const error_tag_union_var = self.types_store.register(.{ .content = .{ .structure = .{ .tag_union = .{ .tags = empty_payload_range, .ext = empty_ext_var } } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Create Try(Self, [OutOfRange]) - Try is a nominal type with 2 type params
-                                const try_ident_text = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Try")) catch return error.AllocatorError;
-                                const try_type_ident = TypeIdent{ .ident_idx = try_ident_text };
-                                const builtin_module_ident = self.module_env.common.insertIdent(self.module_env.gpa, base.Ident.for_text("Builtin")) catch return error.AllocatorError;
-                                const try_vars_range = self.types_store.appendVars(&[_]Var{ self_var, error_tag_union_var }) catch return error.AllocatorError;
-                                const try_vars_nonempty = Var.SafeList.NonEmptyRange{ .nonempty = try_vars_range };
-                                const try_nominal = NominalType{
-                                    .ident = try_type_ident,
-                                    .vars = try_vars_nonempty,
-                                    .origin_module = builtin_module_ident,
-                                };
-                                const try_return_var = self.types_store.register(.{ .content = .{ .structure = .{ .nominal_type = try_nominal } }, .rank = Rank.generalized, .mark = Mark.none }) catch return error.AllocatorError;
-
-                                // Unify the return type with Try(Self, [OutOfRange])
-                                self.unifyGuarded(func.ret, try_return_var) catch return false;
-
-                                return true;
-                            },
-                            else => return false,
-                        }
-                    },
-                    else => return false,
-                }
-            }
-        }
-
-        return false;
-    }
-
-    fn unifyNum(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_num: Num,
-        b_num: Num,
-    ) Error!void {
-        switch (a_num) {
-            // Nums //
-            // Num(a)
-            // ^^^
-            .num_poly => |a_poly| {
-                switch (b_num) {
-                    .num_poly => |b_poly| {
-                        try self.unifyGuarded(a_poly, b_poly);
-                        self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = b_poly } } });
-                    },
-                    .num_unbound => |b_reqs| {
-                        try self.unifyPolyAndUnboundNums(vars, a_poly, b_reqs);
-                    },
-                    .num_compact => |b_num_compact| {
-                        try self.unifyPolyAndCompactNums(vars, a_poly, b_num_compact);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .num_unbound => |a_reqs| {
-                switch (b_num) {
-                    .num_poly => |b_poly| {
-                        try self.unifyUnboundAndPolyNums(vars, a_reqs, b_poly);
-                    },
-                    .num_unbound => |b_requirements| {
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .num_unbound = .{
-                                .int_requirements = a_reqs.int_requirements.unify(b_requirements.int_requirements),
-                                .frac_requirements = a_reqs.frac_requirements.unify(b_requirements.frac_requirements),
-                            },
-                        } } });
-                    },
-                    .num_compact => |b_num_compact| {
-                        try self.unifyUnboundAndCompactNums(
-                            vars,
-                            a_reqs,
-                            b_num_compact,
-                        );
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            // Ints
-            // Num(Int(a))
-            //     ^^^^^^
-            .int_poly => |a_poly_var| {
-                switch (b_num) {
-                    .int_poly => |b_poly_var| {
-                        try self.unifyGuarded(a_poly_var, b_poly_var);
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    .int_unbound => |b_reqs| {
-                        const a_num_resolved = self.resolvePolyNum(a_poly_var, .inside_int);
-                        switch (a_num_resolved) {
-                            .int_resolved => |a_prec| {
-                                const result = self.checkIntPrecisionRequirements(a_prec, b_reqs);
-                                switch (result) {
-                                    .ok => {},
-                                    .negative_unsigned => return error.NegativeUnsignedInt,
-                                    .too_large => return error.NumberDoesNotFit,
-                                }
-                                self.merge(vars, vars.a.desc.content);
-                            },
-                            .int_flex => {
-                                self.merge(vars, vars.b.desc.content);
-                            },
-                            else => return error.TypeMismatch,
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .int_unbound => |a_reqs| {
-                switch (b_num) {
-                    .int_poly => |b_poly_var| {
-                        const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_int);
-                        switch (b_num_resolved) {
-                            .int_resolved => |b_prec| {
-                                const result = self.checkIntPrecisionRequirements(b_prec, a_reqs);
-                                switch (result) {
-                                    .ok => {},
-                                    .negative_unsigned => return error.NegativeUnsignedInt,
-                                    .too_large => return error.NumberDoesNotFit,
-                                }
-                                self.merge(vars, vars.b.desc.content);
-                            },
-                            .int_flex => {
-                                self.merge(vars, vars.a.desc.content);
-                            },
-                            else => return error.TypeMismatch,
-                        }
-                    },
-                    .int_unbound => |b_reqs| {
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .int_unbound = a_reqs.unify(b_reqs),
-                        } } });
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            // Fracs //
-            // Num(Frac(a))
-            //     ^^^^^^^
-            .frac_poly => |a_poly_var| {
-                switch (b_num) {
-                    .frac_poly => |b_poly_var| {
-                        try self.unifyGuarded(a_poly_var, b_poly_var);
-                        self.merge(vars, vars.a.desc.content);
-                    },
-                    .frac_unbound => |b_reqs| {
-                        const a_num_resolved = self.resolvePolyNum(a_poly_var, .inside_frac);
-                        switch (a_num_resolved) {
-                            .frac_resolved => |a_prec| {
-                                const does_fit = self.checkFracPrecisionRequirements(a_prec, b_reqs);
-                                if (!does_fit) {
-                                    return error.NumberDoesNotFit;
-                                }
-                                self.merge(vars, vars.a.desc.content);
-                            },
-                            .frac_flex => {
-                                self.merge(vars, vars.b.desc.content);
-                            },
-                            else => return error.TypeMismatch,
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .frac_unbound => |a_reqs| {
-                switch (b_num) {
-                    .frac_poly => |b_poly_var| {
-                        const b_num_resolved = self.resolvePolyNum(b_poly_var, .inside_frac);
-                        switch (b_num_resolved) {
-                            .frac_resolved => |b_prec| {
-                                const does_fit = self.checkFracPrecisionRequirements(b_prec, a_reqs);
-                                if (!does_fit) {
-                                    return error.NumberDoesNotFit;
-                                }
-                                self.merge(vars, vars.b.desc.content);
-                            },
-                            .frac_flex => {
-                                self.merge(vars, vars.a.desc.content);
-                            },
-                            else => return error.TypeMismatch,
-                        }
-                    },
-                    .frac_unbound => |b_reqs| {
-                        self.merge(vars, .{ .structure = .{ .num = .{
-                            .frac_unbound = a_reqs.unify(b_reqs),
-                        } } });
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            // Precisions //
-            // This Num(Int(a)), Num(Int(Signed8)), Num(Frac(...))
-            //              ^            ^^^^^^^             ^^^
-            .int_precision => |a_prec| {
-                switch (b_num) {
-                    .int_precision => |b_prec| {
-                        if (a_prec == b_prec) {
-                            self.merge(vars, vars.b.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .frac_precision => |a_prec| {
-                switch (b_num) {
-                    .frac_precision => |b_prec| {
-                        if (a_prec == b_prec) {
-                            self.merge(vars, vars.b.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            // Compacted nums //
-            // The whole Num(Int(Signed8)), compacted into a single variable
-            //           ^^^^^^^^^^^^^^^^
-            .num_compact => |a_num_compact| {
-                switch (b_num) {
-                    .num_compact => |b_num_compact| {
-                        try self.unifyTwoCompactNums(vars, a_num_compact, b_num_compact);
-                    },
-                    .num_poly => |b_poly| {
-                        try self.unifyCompactAndPolyNums(
-                            vars,
-                            a_num_compact,
-                            b_poly,
-                        );
-                    },
-                    .num_unbound => |b_reqs| {
-                        try self.unifyCompactAndUnboundNums(
-                            vars,
-                            a_num_compact,
-                            b_reqs,
-                        );
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-        }
-    }
-
-    // number unification helpers //
-
-    // Unify when a is polymorphic and b is unbound with requirements
-    /// Preserves rigid variables from a, or merges requirements appropriately
-    fn unifyPolyAndUnboundNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_num_var: Var,
-        b_reqs: Num.NumRequirements,
-    ) Error!void {
-        const a_num_resolved = self.resolvePolyNum(a_num_var, .inside_num);
-        switch (a_num_resolved) {
-            // If the variable inside a was flex, then b wins
-            .num_flex => self.merge(vars, vars.b.desc.content),
-
-            // If the variable inside a was flex, then have it become unbound with requirements
-            .int_flex => {
-                const int_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .int_unbound = b_reqs.int_requirements },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = int_unbound } } });
-            },
-            .frac_flex => {
-                const frac_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = b_reqs.frac_requirements },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
-            },
-
-            // If the variable was rigid, then the rigid wins
-            .num_rigid => self.merge(vars, vars.a.desc.content),
-            .int_rigid => self.merge(vars, vars.a.desc.content),
-            .frac_rigid => self.merge(vars, vars.a.desc.content),
-
-            // If the variable inside a was unbound with recs, unify the reqs
-            .num_unbound => |a_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
-                .int_requirements = b_reqs.int_requirements.unify(a_reqs.int_requirements),
-                .frac_requirements = b_reqs.frac_requirements.unify(a_reqs.frac_requirements),
-            } } } }),
-            .int_unbound => |a_reqs| {
-                const poly_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .int_unbound = b_reqs.int_requirements.unify(a_reqs) },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
-            },
-            .frac_unbound => |a_reqs| {
-                const poly_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = b_reqs.frac_requirements.unify(a_reqs) },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
-            },
-
-            // If the variable inside an int with a precision
-            .int_resolved => |a_int| {
-                const result = self.checkIntPrecisionRequirements(a_int, b_reqs.int_requirements);
-                switch (result) {
-                    .ok => {},
-                    .negative_unsigned => return error.NegativeUnsignedInt,
-                    .too_large => return error.NumberDoesNotFit,
-                }
-                self.merge(vars, vars.b.desc.content);
-            },
-
-            // If the variable inside an frac with a precision or requirements
-            .frac_resolved => |a_frac| {
-                const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs.frac_requirements);
-                if (!does_fit) {
-                    return error.NumberDoesNotFit;
-                }
-                self.merge(vars, vars.b.desc.content);
-            },
-
-            // If the variable inside a wasn't a num, then this in an error
-            .err => |var_| {
-                return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
-            },
-        }
-    }
-
-    /// Unify when a is unbound with requirements and b is polymorphic
-    /// Preserves rigid variables from b, or merges requirements appropriately
-    fn unifyUnboundAndPolyNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_reqs: Num.NumRequirements,
-        b_num_var: Var,
-    ) Error!void {
-        const b_num_resolved = self.resolvePolyNum(b_num_var, .inside_num);
-        switch (b_num_resolved) {
-            // If the variable inside a was flex, then b wins
-            .num_flex => self.merge(vars, vars.a.desc.content),
-
-            // If the variable inside a was flex, then have it become unbound with requirements
-            .int_flex => {
-                const int_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .int_unbound = a_reqs.int_requirements },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = int_unbound } } });
-            },
-            .frac_flex => {
-                const frac_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = a_reqs.frac_requirements },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = frac_unbound } } });
-            },
-
-            // If the variable was rigid, then the rigid wins
-            .num_rigid => self.merge(vars, vars.b.desc.content),
-            .int_rigid => self.merge(vars, vars.b.desc.content),
-            .frac_rigid => self.merge(vars, vars.b.desc.content),
-
-            // If the variable inside a was unbound with recs, unify the reqs
-            .num_unbound => |b_reqs| self.merge(vars, .{ .structure = .{ .num = .{ .num_unbound = .{
-                .int_requirements = a_reqs.int_requirements.unify(b_reqs.int_requirements),
-                .frac_requirements = a_reqs.frac_requirements.unify(b_reqs.frac_requirements),
-            } } } }),
-            .int_unbound => |b_reqs| {
-                const poly_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .int_unbound = a_reqs.int_requirements.unify(b_reqs) },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
-            },
-            .frac_unbound => |b_reqs| {
-                const poly_unbound = self.fresh(vars, .{ .structure = .{
-                    .num = .{ .frac_unbound = a_reqs.frac_requirements.unify(b_reqs) },
-                } }) catch return Error.AllocatorError;
-                self.merge(vars, .{ .structure = .{ .num = .{ .num_poly = poly_unbound } } });
-            },
-
-            // If the variable inside an int with a precision
-            .int_resolved => |b_int| {
-                const result = self.checkIntPrecisionRequirements(b_int, a_reqs.int_requirements);
-                switch (result) {
-                    .ok => {},
-                    .negative_unsigned => return error.NegativeUnsignedInt,
-                    .too_large => return error.NumberDoesNotFit,
-                }
-                self.merge(vars, vars.a.desc.content);
-            },
-
-            // If the variable inside an frac with a precision or requirements
-            .frac_resolved => |b_frac| {
-                const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs.frac_requirements);
-                if (!does_fit) {
-                    return error.NumberDoesNotFit;
-                }
-                self.merge(vars, vars.a.desc.content);
-            },
-
-            // If the variable inside a wasn't a num, then this in an error
-            .err => |var_| {
-                return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
-            },
-        }
-    }
-
-    /// Unify when a is compact and b is polymorphic
-    /// Since a is compact, we must merge with it (unless b is rigid, which errors)
-    fn unifyCompactAndPolyNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_num: NumCompact,
-        b_num_var: Var,
-    ) Error!void {
-        const b_num_resolved = self.resolvePolyNum(b_num_var, .inside_num);
-        switch (a_num) {
-            .int => |a_int| {
-                switch (b_num_resolved) {
-                    // If the variable inside a was flex, then b wins
-                    .num_flex => self.merge(vars, vars.a.desc.content),
-                    .int_flex => self.merge(vars, vars.a.desc.content),
-
-                    // If the var inside was a num with requirements
-                    .num_unbound => |b_reqs| {
-                        const result = self.checkIntPrecisionRequirements(a_int, b_reqs.int_requirements);
-                        switch (result) {
-                            .ok => {},
-                            .negative_unsigned => return error.NegativeUnsignedInt,
-                            .too_large => return error.NumberDoesNotFit,
-                        }
-                        self.merge(vars, vars.a.desc.content);
-                    },
-
-                    // If the variable inside an int with a precision or requirements
-                    .int_resolved => |b_int| if (@intFromEnum(a_int) == @intFromEnum(b_int)) {
-                        self.merge(vars, vars.a.desc.content);
-                    } else {
-                        return error.TypeMismatch;
-                    },
-                    .int_unbound => |b_reqs| {
-                        const result = self.checkIntPrecisionRequirements(a_int, b_reqs);
-                        switch (result) {
-                            .ok => {},
-                            .negative_unsigned => return error.NegativeUnsignedInt,
-                            .too_large => return error.NumberDoesNotFit,
-                        }
-                        self.merge(vars, vars.a.desc.content);
-                    },
-
-                    // If the variable inside b was a frac, error
-                    .frac_flex => return error.TypeMismatch,
-                    .frac_resolved => return error.TypeMismatch,
-                    .frac_unbound => return error.TypeMismatch,
-
-                    // If the variable was rigid, then error
-                    .num_rigid => return error.TypeMismatch,
-                    .int_rigid => return error.TypeMismatch,
-                    .frac_rigid => return error.TypeMismatch,
-
-                    // If the variable inside a wasn't a num, then this in an error
-                    .err => |var_| {
-                        return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
-                    },
-                }
-            },
-            .frac => |a_frac| {
-                switch (b_num_resolved) {
-                    // If the variable inside a was flex, then b wins
-                    .num_flex => self.merge(vars, vars.a.desc.content),
-                    .frac_flex => self.merge(vars, vars.a.desc.content),
-
-                    // If the var inside was a num with requirements
-                    .num_unbound => |b_reqs| {
-                        const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs.frac_requirements);
-                        if (!does_fit) {
-                            return error.NumberDoesNotFit;
-                        }
-                        self.merge(vars, vars.a.desc.content);
-                    },
-
-                    // If the variable inside an int with a precision or requirements
-                    .frac_resolved => |b_frac| if (@intFromEnum(a_frac) == @intFromEnum(b_frac)) {
-                        self.merge(vars, vars.a.desc.content);
-                    } else {
-                        return error.TypeMismatch;
-                    },
-                    .frac_unbound => |b_reqs| {
-                        const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs);
-                        if (!does_fit) {
-                            return error.NumberDoesNotFit;
-                        }
-                        self.merge(vars, vars.a.desc.content);
-                    },
-
-                    // If the variable inside b was an int, error
-                    .int_flex => return error.TypeMismatch,
-                    .int_resolved => return error.TypeMismatch,
-                    .int_unbound => return error.TypeMismatch,
-
-                    // If the variable was rigid, then error
-                    .num_rigid => return error.TypeMismatch,
-                    .int_rigid => return error.TypeMismatch,
-                    .frac_rigid => return error.TypeMismatch,
-
-                    // If the variable inside a wasn't a num, then this in an error
-                    .err => |var_| {
-                        return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
-                    },
-                }
-            },
-        }
-    }
-
-    /// Unify when a is polymorphic and b is compact
-    /// Since b is compact, we must merge with it (unless a is rigid, which errors)
-    fn unifyPolyAndCompactNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_num_var: Var,
-        b_num: NumCompact,
-    ) Error!void {
-        const a_num_resolved = self.resolvePolyNum(a_num_var, .inside_num);
-        switch (a_num_resolved) {
-            // If the variable inside a was flex, then b wins
-            .num_flex => self.merge(vars, vars.b.desc.content),
-            .int_flex => self.merge(vars, vars.b.desc.content),
-            .frac_flex => self.merge(vars, vars.b.desc.content),
-
-            // If the variable was rigid, then error
-            .num_rigid => return error.TypeMismatch,
-            .int_rigid => return error.TypeMismatch,
-            .frac_rigid => return error.TypeMismatch,
-
-            // If the var inside was a num with requirements
-            .num_unbound => |a_reqs| switch (b_num) {
-                .int => |b_int| {
-                    const result = self.checkIntPrecisionRequirements(b_int, a_reqs.int_requirements);
-                    switch (result) {
-                        .ok => {},
-                        .negative_unsigned => return error.NegativeUnsignedInt,
-                        .too_large => return error.NumberDoesNotFit,
-                    }
-                    self.merge(vars, vars.b.desc.content);
-                },
-                .frac => |b_frac| {
-                    const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs.frac_requirements);
-                    if (!does_fit) {
-                        return error.NumberDoesNotFit;
-                    }
-                    self.merge(vars, vars.b.desc.content);
-                },
-            },
-
-            // If the variable inside an int with a precision or requirements
-            .int_resolved => |a_int| switch (b_num) {
-                .int => |b_int| if (@intFromEnum(a_int) == @intFromEnum(b_int)) {
-                    self.merge(vars, vars.b.desc.content);
-                } else {
-                    return error.TypeMismatch;
-                },
-                .frac => return error.TypeMismatch,
-            },
-            .int_unbound => |a_reqs| switch (b_num) {
-                .int => |b_int| {
-                    const result = self.checkIntPrecisionRequirements(b_int, a_reqs);
-                    switch (result) {
-                        .ok => {},
-                        .negative_unsigned => return error.NegativeUnsignedInt,
-                        .too_large => return error.NumberDoesNotFit,
-                    }
-                    self.merge(vars, vars.b.desc.content);
-                },
-                .frac => return error.TypeMismatch,
-            },
-
-            // If the variable inside an frac with a precision or requirements
-            .frac_resolved => |a_frac| switch (b_num) {
-                .frac => |b_frac| if (@intFromEnum(a_frac) == @intFromEnum(b_frac)) {
-                    self.merge(vars, vars.b.desc.content);
-                } else {
-                    return error.TypeMismatch;
-                },
-                .int => return error.TypeMismatch,
-            },
-            .frac_unbound => |a_reqs| switch (b_num) {
-                .frac => |b_frac| {
-                    const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs);
-                    if (!does_fit) {
-                        return error.NumberDoesNotFit;
-                    }
-                    self.merge(vars, vars.b.desc.content);
-                },
-                .int => return error.TypeMismatch,
-            },
-
-            // If the variable inside a wasn't a num, then this in an error
-            .err => |var_| {
-                return self.setUnifyErrAndThrow(.{ .invalid_number_type = var_ });
-            },
-        }
-    }
-
-    /// Unify when a is compact and b is unbound with requirements
-    /// Since a is compact, we must merge with it after checking requirements
-    fn unifyCompactAndUnboundNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_num: NumCompact,
-        b_reqs: Num.NumRequirements,
-    ) Error!void {
-        switch (a_num) {
-            .int => |a_int| {
-                const result = self.checkIntPrecisionRequirements(a_int, b_reqs.int_requirements);
-                switch (result) {
-                    .ok => {},
-                    .negative_unsigned => return error.NegativeUnsignedInt,
-                    .too_large => return error.NumberDoesNotFit,
-                }
-                self.merge(vars, vars.a.desc.content);
-            },
-            .frac => |a_frac| {
-                const does_fit = self.checkFracPrecisionRequirements(a_frac, b_reqs.frac_requirements);
-                if (!does_fit) {
-                    return error.NumberDoesNotFit;
-                }
-                self.merge(vars, vars.a.desc.content);
-            },
-        }
-    }
-
-    /// Unify when a is unbound with requirements and b is compact
-    /// Since b is compact, we must merge with it after checking requirements
-    fn unifyUnboundAndCompactNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_reqs: Num.NumRequirements,
-        b_num: NumCompact,
-    ) Error!void {
-        switch (b_num) {
-            .int => |b_int| {
-                const result = self.checkIntPrecisionRequirements(b_int, a_reqs.int_requirements);
-                switch (result) {
-                    .ok => {},
-                    .negative_unsigned => return error.NegativeUnsignedInt,
-                    .too_large => return error.NumberDoesNotFit,
-                }
-                self.merge(vars, vars.b.desc.content);
-            },
-            .frac => |b_frac| {
-                const does_fit = self.checkFracPrecisionRequirements(b_frac, a_reqs.frac_requirements);
-                if (!does_fit) {
-                    return error.NumberDoesNotFit;
-                }
-                self.merge(vars, vars.b.desc.content);
-            },
-        }
-    }
-
-    fn unifyTwoCompactNums(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_num: NumCompact,
-        b_num: NumCompact,
-    ) Error!void {
-        const trace = tracy.trace(@src());
-        defer trace.end();
-
-        switch (a_num) {
-            .int => |a_int| {
-                switch (b_num) {
-                    .int => |b_int| if (a_int == b_int) {
-                        self.merge(vars, vars.b.desc.content);
-                    } else {
-                        return error.TypeMismatch;
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .frac => |a_frac| {
-                switch (b_num) {
-                    .frac => |b_frac| if (a_frac == b_frac) {
-                        self.merge(vars, vars.b.desc.content);
-                    } else {
-                        return error.TypeMismatch;
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-        }
-    }
-
-    // number requirement helpers //
-
-    /// The result of checking if an imprecision is compatible with a set of requirements.
-    const IntPrecisionCheckResult = enum {
-        ok,
-        negative_unsigned,
-        too_large,
-    };
-
-    /// Checks whether a chosen integer precision can satisfy unified IntRequirements
-    /// under two’s-complement semantics, using only sign_needed, bits_needed, and is_minimum_signed.
-    ///
-    /// Rules:
-    /// - Unsigned N-bit: accept if bits_needed ≤ N.
-    /// - Signed N-bit:
-    ///    * Positive: accept if bits_needed ≤ N−1.
-    ///    * Negative: accept if (bits_needed ≤ N−1)
-    ///                OR (bits_needed == N AND is_minimum_signed),
-    ///      where the latter covers the single boundary value −2^(N−1).
-    ///
-    /// TODO: Review, claude generated
-    fn checkIntPrecisionRequirements(self: *Self, prec: Num.Int.Precision, reqs: Num.IntRequirements) IntPrecisionCheckResult {
-        _ = self;
-
-        const is_signed = switch (prec) {
-            .i8, .i16, .i32, .i64, .i128 => true,
-            .u8, .u16, .u32, .u64, .u128 => false,
-        };
-
-        if (reqs.sign_needed and !is_signed) {
-            return .negative_unsigned;
-        }
-
-        const n: u8 = switch (prec) {
-            .i8, .u8 => 8,
-            .i16, .u16 => 16,
-            .i32, .u32 => 32,
-            .i64, .u64 => 64,
-            .i128, .u128 => 128,
-        };
-
-        const k: u8 = reqs.bits_needed;
-
-        if (!is_signed) {
-            return if (k <= n) .ok else .too_large;
-        }
-
-        if (reqs.sign_needed) {
-            const fits_regular_neg = (k <= n - 1);
-            const fits_boundary_neg = (k == n) and reqs.is_minimum_signed; // only allow −2^(N−1)
-            return if (fits_regular_neg or fits_boundary_neg) .ok else .too_large;
-        } else {
-            return if (k <= n - 1) .ok else .too_large;
-        }
-    }
-
-    /// Checks if the frac precision satisfies the requirements
-    fn checkFracPrecisionRequirements(self: *Self, prec: Num.Frac.Precision, requirements: Num.FracRequirements) bool {
-        _ = self;
-
-        switch (prec) {
-            .f32 => return requirements.fits_in_f32,
-            .f64 => return true, // F64 can always hold values
-            .dec => return requirements.fits_in_dec,
-        }
-    }
-
-    // polymorphic num helpers //
-
-    /// The result of attempting to resolve a polymorphic number
-    const ResolvedNum = union(enum) {
-        num_flex,
-        num_rigid: Var,
-        num_unbound: Num.NumRequirements,
-        int_flex,
-        int_rigid: Var,
-        int_unbound: Num.IntRequirements,
-        int_resolved: Num.Int.Precision,
-        frac_flex,
-        frac_rigid: Var,
-        frac_unbound: Num.FracRequirements,
-        frac_resolved: Num.Frac.Precision,
-        err: Var,
-    };
-
-    const ResolvePolyNumCtx = enum {
-        inside_num,
-        inside_int,
-        inside_frac,
-    };
-
-    /// Attempts to resolve a polymorphic number variable to a concrete precision.
-    ///
-    /// This function recursively follows the structure of a number type,
-    /// unwrapping any intermediate `.num_poly`, `.int_poly`, or `.frac_poly`
-    /// variants until it reaches a concrete representation:
-    /// either `.int_precision` or `.frac_precision`.
-    ///
-    /// For example:
-    ///   Given a type like `Num(Int(U8))`, this function returns `.int_resolved(.u8)`.
-    ///
-    /// If resolution reaches a `.flex`, it returns `.flex_resolved`,
-    /// indicating the number is still unspecialized.
-    ///
-    /// If the chain ends in an invalid structure (e.g. `Num(Str)`),
-    /// it returns `.err`, along with the offending variable.
-    /// TODO: Do we want the chain of offending variables on error?
-    ///
-    /// Note that this function will work on the "tail" of a polymorphic number.
-    /// That is, if you pass in `Frac(Dec)` (without the outer `Num`), this
-    /// function will still resolve successfully.
-    fn resolvePolyNum(self: *Self, initial_num_var: Var, initial_ctx: ResolvePolyNumCtx) ResolvedNum {
-        var num_var = initial_num_var;
-        var seen_int = initial_ctx == .inside_int;
-        var seen_frac = initial_ctx == .inside_frac;
-        while (true) {
-            const resolved = self.types_store.resolveVar(num_var);
-            switch (resolved.desc.content) {
-                .flex => {
-                    if (seen_int and seen_frac) {
-                        return .{ .err = num_var };
-                    } else if (seen_int) {
-                        return .int_flex;
-                    } else if (seen_frac) {
-                        return .frac_flex;
-                    } else {
-                        return .num_flex;
-                    }
-                },
-                .rigid => {
-                    if (seen_int and seen_frac) {
-                        return .{ .err = num_var };
-                    } else if (seen_int) {
-                        return .{ .int_rigid = num_var };
-                    } else if (seen_frac) {
-                        return .{ .frac_rigid = num_var };
-                    } else {
-                        return .{ .num_rigid = num_var };
-                    }
-                },
-                .alias => |alias| {
-                    num_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .num => |num| switch (num) {
-                            .num_poly => |var_| {
-                                num_var = var_;
-                            },
-                            .num_unbound => |reqs| {
-                                return .{ .num_unbound = reqs };
-                            },
-                            .int_poly => |var_| {
-                                seen_int = true;
-                                num_var = var_;
-                            },
-                            .int_unbound => |reqs| {
-                                return .{ .int_unbound = reqs };
-                            },
-                            .frac_poly => |var_| {
-                                seen_frac = true;
-                                num_var = var_;
-                            },
-                            .frac_unbound => |reqs| {
-                                return .{ .frac_unbound = reqs };
-                            },
-                            .int_precision => |prec| {
-                                return .{ .int_resolved = prec };
-                            },
-                            .frac_precision => |prec| {
-                                return .{ .frac_resolved = prec };
-                            },
-                            .num_compact => return .{ .err = num_var },
-                        },
-                        else => return .{ .err = num_var },
-                    }
-                },
-                else => return .{ .err = num_var },
-            }
-        }
-    }
-
     // Unify nominal type //
 
     /// Unify when `a` was a nominal type
@@ -2196,7 +1167,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        _ = nominal_type; // Used for identity in nominal type, but not needed here
+        // If this nominal is opaque and we're not in the origin module, error
+        if (!nominal_type.canLiftInner(self.module_env.module_name_idx)) {
+            return error.TypeMismatch;
+        }
 
         // Check if the nominal's backing type is a tag union (including empty)
         const nominal_backing_content = nominal_backing_resolved.desc.content;
@@ -2306,54 +1280,54 @@ const Unifier = struct {
     ///
     /// **Case 1: Exactly the Same Fields**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - All fields are shared
-    /// - We unify `ext_a ~ ext_b`
+    /// - We unify `others_a ~ others_b`
     /// - Then unify each shared field pair
     ///
     /// ---
     ///
     /// **Case 2: `a` Extends `b`**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, ..others_b }
     ///
     /// - `a` has additional fields not in `b`
-    /// - We generate a new var `only_in_a_var = { z }ext_a`
-    /// - Unify `only_in_a_var ~ ext_b`
+    /// - We generate a new var `only_in_a_var = { z, ..others_a }`
+    /// - Unify `only_in_a_var ~ others_b`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 3: `b` Extends `a`**
     ///
-    /// a = { x, y }ext_a
-    /// b = { x, y, z }ext_b
+    /// a = { x, y, ..others_a }
+    /// b = { x, y, z, ..others_b }
     ///
     /// - Same as Case 2, but reversed
     /// - `b` has additional fields not in `a`
-    /// - We generate a new var `only_in_b_var = { z }ext_b`
-    /// - Unify `ext_a ~ only_in_b_var`
+    /// - We generate a new var `only_in_b_var = { z, ..others_b }`
+    /// - Unify `others_a ~ only_in_b_var`
     /// - Then unify shared fields
     ///
     /// ---
     ///
     /// **Case 4: Both Extend Each Other**
     ///
-    /// a = { x, y, z }ext_a
-    /// b = { x, y, w }ext_b
+    /// a = { x, y, z, ..others_a }
+    /// b = { x, y, w, ..others_b }
     ///
     /// - Each has unique fields the other lacks
     /// - Generate:
-    ///     - shared_ext = fresh flex_var
-    ///     - only_in_a_var = { z }shared_ext
-    ///     - only_in_b_var = { w }shared_ext
+    ///     - shared_others = fresh flex_var
+    ///     - only_in_a_var = { z, ..shared_others }
+    ///     - only_in_b_var = { w, ..shared_others }
     /// - Unify:
-    ///     - `ext_a ~ only_in_b_var`
-    ///     - `only_in_a_var ~ ext_b`
-    /// - Then unify shared fields into `{ x, y }shared_ext`
+    ///     - `others_a ~ only_in_b_var`
+    ///     - `only_in_a_var ~ others_b`
+    /// - Then unify shared fields into `{ x, y, ..shared_others }`
     ///
     /// ---
     ///
@@ -2540,12 +1514,17 @@ const Unifier = struct {
             record_fields,
         ) catch return Error.AllocatorError;
 
-        // TODO: Below if we run into a record with the same field, then we
-        // prefer the leftmost field. But we should probably unify the dups
+        // Note: If a field name appears multiple times (e.g., in both base and extension),
+        // we keep the leftmost field (left-bias semantics, like Haskell's Map.union).
+        // Duplicates within a single record's extension chain are rare and typically
+        // indicate a type system bug (e.g., malformed type like `{ name: Str, ..{ name: U32 } }`).
+        // The outer unification logic handles unifying fields across *different* records.
 
-        // then recursiv
+        // Recursively gather fields from extensions
         var ext = record_ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
         while (true) {
+            guard.tick();
             switch (ext) {
                 .unbound => {
                     return .{ .ext = ext, .range = range };
@@ -2565,42 +1544,28 @@ const Unifier = struct {
                             switch (flat_type) {
                                 .record => |ext_record| {
                                     const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
-                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
 
-                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
-                                        // Check if field name already exists (O(n) but fields are small)
-                                        const already_exists = for (already_gathered) |existing| {
-                                            if (existing.name == name) break true;
-                                        } else false;
+                                    // Merge extension fields while maintaining sorted order
+                                    self.scratch.mergeSortedExtensionFields(
+                                        &range,
+                                        next_fields.items(.name),
+                                        next_fields.items(.var_),
+                                        self.module_env.getIdentStore(),
+                                    ) catch return Error.AllocatorError;
 
-                                        // Only append if NOT already present (Map.union left-bias)
-                                        if (!already_exists) {
-                                            _ = self.scratch.gathered_fields.append(
-                                                self.scratch.gpa,
-                                                RecordField{ .name = name, .var_ = var_ },
-                                            ) catch return Error.AllocatorError;
-                                            range.count += 1;
-                                        }
-                                    }
                                     ext = .{ .ext = ext_record.ext };
                                 },
                                 .record_unbound => |fields| {
                                     const next_fields = self.types_store.record_fields.sliceRange(fields);
-                                    const already_gathered = self.scratch.gathered_fields.sliceRange(range);
 
-                                    for (next_fields.items(.name), next_fields.items(.var_)) |name, var_| {
-                                        const already_exists = for (already_gathered) |existing| {
-                                            if (existing.name == name) break true;
-                                        } else false;
+                                    // Merge extension fields while maintaining sorted order
+                                    self.scratch.mergeSortedExtensionFields(
+                                        &range,
+                                        next_fields.items(.name),
+                                        next_fields.items(.var_),
+                                        self.module_env.getIdentStore(),
+                                    ) catch return Error.AllocatorError;
 
-                                        if (!already_exists) {
-                                            _ = self.scratch.gathered_fields.append(
-                                                self.scratch.gpa,
-                                                RecordField{ .name = name, .var_ = var_ },
-                                            ) catch return Error.AllocatorError;
-                                            range.count += 1;
-                                        }
-                                    }
                                     return .{ .ext = ext, .range = range };
                                 },
                                 .empty_record => {
@@ -2643,7 +1608,7 @@ const Unifier = struct {
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedRecordFields {
-        // First sort the fields
+        // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
         std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
@@ -2716,12 +1681,18 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const range_start: u32 = self.types_store.record_fields.len();
-
-        // Here, iterate over shared fields, sub unifying the field variables.
-        // At this point, the fields are know to be identical, so we arbitrary choose b
+        // First, unify all field types. This may cause nested record unifications
+        // which will append their own fields to the store. We must NOT interleave
+        // our field appends with these nested calls.
         for (shared_fields) |shared| {
             try self.unifyGuarded(shared.a.var_, shared.b.var_);
+        }
+
+        // Now that all nested unifications are complete, append OUR fields.
+        // This ensures our fields form a contiguous range.
+        const range_start: u32 = self.types_store.record_fields.len();
+
+        for (shared_fields) |shared| {
             _ = self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
@@ -2736,7 +1707,7 @@ const Unifier = struct {
             _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
         }
 
-        // Merge vars
+        // Merge vars - now the range correctly contains only THIS record's fields
         self.merge(vars, Content{ .structure = FlatType{ .record = .{
             .fields = self.types_store.record_fields.rangeToEnd(range_start),
             .ext = ext,
@@ -2920,35 +1891,40 @@ const Unifier = struct {
                 );
             },
             .both_extend => {
+                // Create a shared extension variable first
+                // This is critical: both only_in_a_var and only_in_b_var must use this
+                // shared extension to avoid creating circular type references
+                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
+
                 // Create a new variable of a tag_union with only a's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
                 const only_in_a_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
                 ) catch return Error.AllocatorError;
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_a_tags_range,
-                    .ext = a_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
 
                 // Create a new variable of a tag_union with only b's uniq tags
-                // This copies tags from scratch into type_store
+                // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
                 const only_in_b_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
                 ) catch return Error.AllocatorError;
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_b_tags_range,
-                    .ext = b_gathered_tags.ext,
+                    .ext = new_ext_var,
                 } } }) catch return Error.AllocatorError;
-
-                // Create a new ext var
-                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
 
                 // Unify shared tags
-                // This copies tags from scratch into type_store
+                // Include all tags in the merged type - both shared and unique
+                // The unique tags must be included because the merged type is what
+                // callers see, and the extension chain via only_in_a_var/only_in_b_var
+                // is for proper type equality, not for visibility
                 try self.unifySharedTags(
                     vars,
                     self.scratch.in_both_tags.sliceRange(partitioned.in_both),
@@ -2984,7 +1960,9 @@ const Unifier = struct {
 
         // then loop gathering extensible tags
         var ext_var = tag_union.ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherTagUnionTags");
         while (true) {
+            guard.tick();
             switch (self.types_store.resolveVar(ext_var).desc.content) {
                 .flex => {
                     return .{ .ext = ext_var, .range = range };
@@ -2998,11 +1976,16 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .tag_union => |ext_tag_union| {
-                            const next_range = self.scratch.copyGatherTagsFromMultiList(
-                                &self.types_store.tags,
-                                ext_tag_union.tags,
+                            const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
+
+                            // Merge extension tags while maintaining sorted order
+                            self.scratch.mergeSortedExtensionTags(
+                                &range,
+                                next_tags.items(.name),
+                                next_tags.items(.args),
+                                self.module_env.getIdentStore(),
                             ) catch return Error.AllocatorError;
-                            range.count += next_range.count;
+
                             ext_var = ext_tag_union.ext;
                         },
                         .empty_tag_union => {
@@ -3023,7 +2006,7 @@ const Unifier = struct {
     };
 
     /// Given two ranges of tag_union tags stored in `scratch.gathered_tags`, this function:
-    /// * sorts both slices in-place by field name
+    /// * sorts both slices in-place by tag name
     /// * partitions them into three disjoint groups:
     ///     - tags only in `a`
     ///     - tags only in `b`
@@ -3043,7 +2026,7 @@ const Unifier = struct {
         a_tags_range: TagSafeList.Range,
         b_tags_range: TagSafeList.Range,
     ) std.mem.Allocator.Error!PartitionedTags {
-        // First sort the tags
+        // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
         const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
         std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
         const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
@@ -3113,8 +2096,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const range_start: u32 = self.types_store.tags.len();
-
+        // IMPORTANT: First unify all shared tag arguments BEFORE recording range_start.
+        // This is because unifyGuarded may trigger recursive unifications that also
+        // append tags to the global tags list. We need to record range_start AFTER
+        // all inner unifications complete, so we only capture this level's tags.
         for (shared_tags) |tags| {
             const tag_a_args = self.types_store.sliceVars(tags.a.args);
             const tag_b_args = self.types_store.sliceVars(tags.b.args);
@@ -3124,7 +2109,13 @@ const Unifier = struct {
             for (tag_a_args, tag_b_args) |a_arg, b_arg| {
                 try self.unifyGuarded(a_arg, b_arg);
             }
+        }
 
+        // NOW record range_start after all inner unifications are done
+        const range_start: u32 = self.types_store.tags.len();
+
+        // Append this level's shared tags
+        for (shared_tags) |tags| {
             _ = self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
@@ -3139,7 +2130,7 @@ const Unifier = struct {
             _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
         }
 
-        // Merge vars
+        // Merge vars (sorting happens in merge() for all tag unions)
         self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
             .tags = self.types_store.tags.rangeToEnd(range_start),
             .ext = ext,
@@ -3208,7 +2199,33 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+        // Self-referential constraints like `a.plus : a, a -> a` are valid and expected.
+        // To prevent infinite recursion when unifying them, we use variable marks to detect
+        // if we're already in the process of unifying these constraint function variables.
+        //
+        // This works together with the occurs check in occurs.zig which follows constraints
+        // to detect truly infinite types.
+        const a_desc = self.types_store.resolveVar(a_constraint.fn_var);
+        const b_desc = self.types_store.resolveVar(b_constraint.fn_var);
+
+        // Check if either variable is marked as "visited" (currently being unified)
+        if (a_desc.desc.mark == .visited or b_desc.desc.mark == .visited) {
+            // Already unifying these constraint functions - skip to prevent infinite recursion
+            return;
+        }
+
+        // Mark variables as being unified
+        self.types_store.setDescMark(a_desc.desc_idx, .visited);
+        self.types_store.setDescMark(b_desc.desc_idx, .visited);
+
+        // Unify the constraint function types
+        const result = self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+
+        // Unmark variables
+        self.types_store.setDescMark(a_desc.desc_idx, .none);
+        self.types_store.setDescMark(b_desc.desc_idx, .none);
+
+        try result;
     }
 
     const PartitionedStaticDispatchConstraints = struct {
@@ -3372,14 +2389,11 @@ pub fn partitionTags(
 ///    while SafeLists waste some space compared to MultiList, the cost isn't too
 ///    high
 ///
-/// TODO: If canonicalization can ensure that record fields/tags are always sorted
-/// then we could switch these to use multi lists.
-///
-/// TODO: Currently, we capture vars created during unifcation in `fresh_vars`
-/// and constraints to check later in `deferred_constraints`. We then copy
-/// these values into other arrays in Check.  In the future, we should consider
-/// passing in references to arrays by the caller of unify. Then we can write
-/// directly into the output arrays and save the extra copying.
+/// NOTE: Record fields and tags are merged in sorted order during gathering
+/// (via mergeSortedExtensionFields/mergeSortedExtensionTags). However, unification
+/// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
+/// still perform a final sort. To fully eliminate these sorts, we would need to ensure
+/// unifySharedTags also produces sorted output.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -3415,7 +2429,11 @@ pub const Scratch = struct {
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
-        // TODO: Set these based on the heuristics
+        // Initial capacities are conservative estimates. Lists grow dynamically as needed.
+        // These values handle common cases without reallocation:
+        // - fresh_vars: 8 - most unifications create few fresh variables
+        // - fields/tags: 32 - typical records/unions have fewer than 32 members
+        // Future optimization: profile real codebases to tune these values.
         return .{
             .gpa = gpa,
             .fresh_vars = try VarSafeList.initCapacity(gpa, 8),
@@ -3468,6 +2486,7 @@ pub const Scratch = struct {
         self.only_in_a_static_dispatch_constraints.items.clearRetainingCapacity();
         self.only_in_b_static_dispatch_constraints.items.clearRetainingCapacity();
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
+        self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.err = null;
     }
@@ -3490,6 +2509,118 @@ pub const Scratch = struct {
             );
         }
         return self.gathered_fields.rangeToEnd(@intCast(start_int));
+    }
+
+    /// Merge sorted extension fields into an already-sorted gathered range.
+    /// Maintains sorted order and left-bias semantics (base fields take precedence).
+    /// The range is updated in-place to reflect the new count.
+    /// Returns whether any new fields were added.
+    fn mergeSortedExtensionFields(
+        self: *Self,
+        range: *RecordFieldSafeList.Range,
+        ext_names: []const Ident.Idx,
+        ext_vars: []const Var,
+        ident_store: *const Ident.Store,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(ext_names.len == ext_vars.len);
+        if (ext_names.len == 0) return;
+
+        // Get current gathered fields
+        const current_fields = self.gathered_fields.sliceRange(range.*);
+        const current_len = current_fields.len;
+
+        // Count how many extension fields are NOT duplicates
+        var new_count: usize = 0;
+        for (ext_names) |ext_name| {
+            const is_dup = for (current_fields) |existing| {
+                if (existing.name == ext_name) break true;
+            } else false;
+            if (!is_dup) new_count += 1;
+        }
+
+        if (new_count == 0) return;
+
+        // Allocate space for merged result
+        try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
+
+        // We need to merge in-place. Strategy:
+        // 1. Append all new (non-duplicate) extension fields to the end
+        // 2. Then do an in-place merge of the two sorted regions
+
+        // Append non-duplicate extension fields
+        for (ext_names, ext_vars) |name, var_| {
+            const is_dup = for (current_fields) |existing| {
+                if (existing.name == name) break true;
+            } else false;
+            if (!is_dup) {
+                self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .var_ = var_ });
+            }
+        }
+
+        // Now we have: [sorted_base | sorted_extension]
+        // Do an in-place merge using the standard merge technique
+        // Get the slice starting from range.start with the new total length
+        const start_idx: usize = @intFromEnum(range.start);
+        const total_len = current_len + new_count;
+        const items = self.gathered_fields.items.items[start_idx..][0..total_len];
+
+        // In-place merge: we have [sorted_left | sorted_right]
+        // Use rotation-based merge which is O(n) for this case
+        inPlaceMergeFields(items, current_len, ident_store);
+
+        // Update range count
+        range.count = @intCast(total_len);
+    }
+
+    /// Merge sorted extension tags into an already-sorted gathered range.
+    /// Maintains sorted order and left-bias semantics (base tags take precedence).
+    fn mergeSortedExtensionTags(
+        self: *Self,
+        range: *TagSafeList.Range,
+        ext_names: []const Ident.Idx,
+        ext_args: []const Var.SafeList.Range,
+        ident_store: *const Ident.Store,
+    ) std.mem.Allocator.Error!void {
+        std.debug.assert(ext_names.len == ext_args.len);
+        if (ext_names.len == 0) return;
+
+        // Get current gathered tags
+        const current_tags = self.gathered_tags.sliceRange(range.*);
+        const current_len = current_tags.len;
+
+        // Count how many extension tags are NOT duplicates
+        var new_count: usize = 0;
+        for (ext_names) |ext_name| {
+            const is_dup = for (current_tags) |existing| {
+                if (existing.name == ext_name) break true;
+            } else false;
+            if (!is_dup) new_count += 1;
+        }
+
+        if (new_count == 0) return;
+
+        // Allocate space for merged result
+        try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
+
+        // Append non-duplicate extension tags
+        for (ext_names, ext_args) |name, args| {
+            const is_dup = for (current_tags) |existing| {
+                if (existing.name == name) break true;
+            } else false;
+            if (!is_dup) {
+                self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });
+            }
+        }
+
+        // In-place merge
+        const start_idx: usize = @intFromEnum(range.start);
+        const total_len = current_len + new_count;
+        const items = self.gathered_tags.items.items[start_idx..][0..total_len];
+
+        inPlaceMergeTags(items, current_len, ident_store);
+
+        // Update range count
+        range.count = @intCast(total_len);
     }
 
     /// Given a multi list of tag and a range, copy from the multi list
@@ -3524,3 +2655,40 @@ pub const Scratch = struct {
         self.err = err;
     }
 };
+
+/// In-place merge of two sorted regions of record fields.
+/// Given an array [left_sorted | right_sorted], produces [merged_sorted].
+/// Uses insertion sort approach which is O(n*m) but efficient for small arrays.
+fn inPlaceMergeFields(items: []RecordField, left_len: usize, ident_store: *const Ident.Store) void {
+    if (left_len == 0 or left_len == items.len) return;
+
+    // Simple approach: insertion sort the right portion into the left
+    // This is O(n*m) but records typically have few fields
+    var i = left_len;
+    while (i < items.len) : (i += 1) {
+        const key = items[i];
+        var j = i;
+        // Shift elements right until we find the correct position
+        while (j > 0 and RecordField.orderByName(ident_store, items[j - 1], key) == .gt) {
+            items[j] = items[j - 1];
+            j -= 1;
+        }
+        items[j] = key;
+    }
+}
+
+/// In-place merge of two sorted regions of tags.
+fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Store) void {
+    if (left_len == 0 or left_len == items.len) return;
+
+    var i = left_len;
+    while (i < items.len) : (i += 1) {
+        const key = items[i];
+        var j = i;
+        while (j > 0 and Tag.orderByName(ident_store, items[j - 1], key) == .gt) {
+            items[j] = items[j - 1];
+            j -= 1;
+        }
+        items[j] = key;
+    }
+}

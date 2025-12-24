@@ -34,6 +34,9 @@ jobs:
               - '.github/workflows/ci_cross_compile.yml'
               - '.github/actions/flaky-retry/action.yml'
               - 'ci/zig_lints.sh'
+              - 'ci/check_test_wiring.zig'
+              - 'ci/custom_valgrind.sh'
+              - 'ci/valgrind.supp'
       - uses: dorny/paths-filter@v3
         id: other_filter
         with:
@@ -51,9 +54,13 @@ jobs:
               - '!.github/workflows/ci_cross_compile.yml'
               - '!.github/actions/flaky-retry/action.yml'
               - '!ci/zig_lints.sh'
+              - '!ci/check_test_wiring.zig'
+              - '!ci/custom_valgrind.sh'
+              - '!ci/valgrind.supp'
               # Files that ci manager workflows should not run on.
               - '!.gitignore'
               - '!.reuse'
+              - '!.rules'
               - '!authors'
               - '!legal_details'
               - '!LICENSE'

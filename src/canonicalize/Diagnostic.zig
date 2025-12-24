@@ -30,9 +30,6 @@ pub const Diagnostic = union(enum) {
     invalid_num_literal: struct {
         region: Region,
     },
-    invalid_single_quote: struct {
-        region: Region,
-    },
     empty_tuple: struct {
         region: Region,
     },
@@ -77,6 +74,9 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     if_else_not_canonicalized: struct {
+        region: Region,
+    },
+    if_expr_without_else: struct {
         region: Region,
     },
     malformed_type_annotation: struct {
@@ -252,7 +252,7 @@ pub const Diagnostic = union(enum) {
     },
 
     pub const Idx = enum(u32) { _ };
-    pub const Span = struct { span: base.DataSpan };
+    pub const Span = extern struct { span: base.DataSpan };
 
     /// Helper to extract the region from any diagnostic variant
     pub fn toRegion(self: Diagnostic) Region {
@@ -359,7 +359,7 @@ pub const Diagnostic = union(enum) {
     }
 
     /// Build a report for "invalid number literal" diagnostic
-    pub fn buildInvalidNumLiteralReport(
+    pub fn buildInvalidNumeralReport(
         allocator: Allocator,
         region_info: base.RegionInfo,
         literal_text: []const u8,
@@ -468,7 +468,6 @@ pub const Diagnostic = union(enum) {
         allocator: Allocator,
         ident_name: []const u8,
         region_info: base.RegionInfo,
-        original_region_info: base.RegionInfo,
         filename: []const u8,
         source: []const u8,
         line_starts: []const u32,
@@ -489,10 +488,6 @@ pub const Diagnostic = union(enum) {
             source,
             line_starts,
         );
-
-        // we don't need to display the original region info
-        // as this header is in a single location
-        _ = original_region_info;
 
         try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 
@@ -1449,11 +1444,11 @@ pub const Diagnostic = union(enum) {
         const owned_module = try report.addOwnedString(module_name);
         const owned_type = try report.addOwnedString(type_name);
 
-        // Check if trying to access a type with the same name as the module (e.g., Result.Result)
+        // Check if trying to access a type with the same name as the module (e.g., Try.Try)
         const is_same_name = std.mem.eql(u8, module_name, type_name);
 
         if (is_same_name) {
-            // Special message for Result.Result, Color.Color, etc.
+            // Special message for Try.Try, Color.Color, etc.
             const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, type_name });
             defer allocator.free(qualified_name);
             const owned_qualified = try report.addOwnedString(qualified_name);

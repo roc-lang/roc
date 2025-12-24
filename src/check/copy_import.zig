@@ -58,7 +58,7 @@ pub fn copyVar(
     const dest_content = try copyContent(source_store, dest_store, resolved.desc.content, var_mapping, source_idents, dest_idents, allocator);
 
     // Update the placeholder with the actual content
-    try dest_store.setVarDesc(placeholder_var, .{
+    try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
         .mark = types_mod.Mark.none,
@@ -81,6 +81,11 @@ fn copyContent(
         .rigid => |rigid| Content{ .rigid = try copyRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
         .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
+        .recursion_var => |rec_var| blk: {
+            // Copy the recursion var by copying the structure it points to
+            const copied_structure = try copyVar(source_store, dest_store, rec_var.structure, var_mapping, source_idents, dest_idents, allocator);
+            break :blk Content{ .recursion_var = .{ .structure = copied_structure, .name = rec_var.name } };
+        },
         .err => Content.err,
     };
 }
@@ -196,12 +201,7 @@ fn copyFlatType(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!FlatType {
     return switch (flat_type) {
-        .str => FlatType.str,
-        .box => |box_var| FlatType{ .box = try copyVar(source_store, dest_store, box_var, var_mapping, source_idents, dest_idents, allocator) },
-        .list => |list_var| FlatType{ .list = try copyVar(source_store, dest_store, list_var, var_mapping, source_idents, dest_idents, allocator) },
-        .list_unbound => FlatType.list_unbound,
         .tuple => |tuple| FlatType{ .tuple = try copyTuple(source_store, dest_store, tuple, var_mapping, source_idents, dest_idents, allocator) },
-        .num => |num| FlatType{ .num = try copyNum(source_store, dest_store, num, var_mapping, source_idents, dest_idents, allocator) },
         .nominal_type => |nominal| FlatType{ .nominal_type = try copyNominalType(source_store, dest_store, nominal, var_mapping, source_idents, dest_idents, allocator) },
         .fn_pure => |func| FlatType{ .fn_pure = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
         .fn_effectful => |func| FlatType{ .fn_effectful = try copyFunc(source_store, dest_store, func, var_mapping, source_idents, dest_idents, allocator) },
@@ -236,29 +236,6 @@ fn copyTuple(
     const dest_range = try dest_store.appendVars(dest_elems.items);
     return types_mod.Tuple{ .elems = dest_range };
 }
-
-fn copyNum(
-    source_store: *const TypesStore,
-    dest_store: *TypesStore,
-    num: Num,
-    var_mapping: *VarMapping,
-    source_idents: *const base.Ident.Store,
-    dest_idents: *base.Ident.Store,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!Num {
-    return switch (num) {
-        .num_poly => |poly_var| Num{ .num_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .int_poly => |poly_var| Num{ .int_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .frac_poly => |poly_var| Num{ .frac_poly = try copyVar(source_store, dest_store, poly_var, var_mapping, source_idents, dest_idents, allocator) },
-        .num_unbound => |unbound| Num{ .num_unbound = unbound },
-        .int_unbound => |unbound| Num{ .int_unbound = unbound },
-        .frac_unbound => |unbound| Num{ .frac_unbound = unbound },
-        .int_precision => |precision| Num{ .int_precision = precision },
-        .frac_precision => |precision| Num{ .frac_precision = precision },
-        .num_compact => |compact| Num{ .num_compact = compact },
-    };
-}
-
 fn copyFunc(
     source_store: *const TypesStore,
     dest_store: *TypesStore,
@@ -419,6 +396,7 @@ fn copyNominalType(
         .ident = types_mod.TypeIdent{ .ident_idx = translated_ident },
         .vars = .{ .nonempty = dest_vars_span },
         .origin_module = translated_origin,
+        .is_opaque = source_nominal.is_opaque,
     };
 }
 

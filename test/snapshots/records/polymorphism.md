@@ -14,20 +14,23 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE DOES NOT HAVE METHODS - polymorphism.md:6:5:6:37
+MISSING METHOD - polymorphism.md:6:29:6:35
 # PROBLEMS
-**TYPE DOES NOT HAVE METHODS**
-You're calling the method `to_str` on a type that doesn't support methods:
-**polymorphism.md:6:5:6:37:**
+**MISSING METHOD**
+This **to_str** method is being called on a value whose type doesn't have that method:
+**polymorphism.md:6:29:6:35:**
 ```roc
     { pair1, pair2, pair3 }.to_str()
 ```
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            ^^^^^^
 
-This type doesn't support methods:
-    _{ pair1: { first: Num(_size), second: Str }, pair2: { first: Str, second: Num(_size2) }, pair3: { first: [True]_others, second: [False]_others2 } }_
+The value's type, which does not have a method named **to_str**, is:
 
-
+    { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } }
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+      ]
 
 # TOKENS
 ~~~zig

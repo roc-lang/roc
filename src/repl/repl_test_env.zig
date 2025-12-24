@@ -32,7 +32,7 @@ pub const TestEnv = struct {
                 .roc_dbg = testRocDbg,
                 .roc_expect_failed = testRocExpectFailed,
                 .roc_crashed = testRocCrashed,
-                .host_fns = undefined, // Not used in tests
+                .hosted_fns = .{ .count = 0, .fns = undefined }, // Not used in tests
             },
         };
     }
@@ -132,16 +132,22 @@ fn testRocRealloc(realloc_args: *RocRealloc, env: *anyopaque) callconv(.c) void 
     realloc_args.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 }
 
-fn testRocDbg(dbg_args: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = dbg_args;
-    _ = env;
+fn testRocDbg(_: *const RocDbg, _: *anyopaque) callconv(.c) void {
     @panic("testRocDbg not implemented yet");
 }
 
 fn testRocExpectFailed(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = expect_args;
-    _ = env;
-    @panic("testRocExpectFailed not implemented yet");
+    const test_env: *TestEnv = @ptrCast(@alignCast(env));
+    const source_bytes = expect_args.utf8_bytes[0..expect_args.len];
+    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+    // Format and record the message
+    const formatted = std.fmt.allocPrint(test_env.allocator, "Expect failed: {s}", .{trimmed}) catch {
+        std.debug.panic("failed to allocate REPL expect failure message", .{});
+    };
+    test_env.crash.recordCrash(formatted) catch |err| {
+        test_env.allocator.free(formatted);
+        std.debug.panic("failed to store REPL expect failure: {}", .{err});
+    };
 }
 
 fn testRocCrashed(crashed_args: *const RocCrashed, env: *anyopaque) callconv(.c) void {

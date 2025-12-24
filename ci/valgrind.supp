@@ -1,0 +1,57 @@
+# Valgrind suppression file for Roc
+#
+# These suppressions address false positives from the interaction between
+# LLVM and musl's mallocng allocator. The uninitialised values originate
+# from LLVM code (DebugCounter::registerCounter and scc_iterator::DFSVisitChildren)
+# and propagate through to musl's malloc where they trigger conditional jumps
+# in the enframe function. These are safe because:
+# 1. musl's mallocng is designed to handle these patterns
+# 2. Fresh mmap'd memory will be zeroed, reused memory has valid values
+# 3. The program runs correctly and produces correct results
+
+# Suppress uninitialised value errors in musl's malloc enframe function
+# when called from LLVM code paths
+{
+   musl-mallocng-enframe-llvm-global-init
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   ...
+   fun:_GLOBAL__sub_I_*
+}
+
+{
+   musl-mallocng-enframe-llvm-allocate
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   fun:aligned_alloc
+   ...
+   fun:*llvm*
+}
+
+{
+   musl-mallocng-enframe-lld
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   ...
+   fun:*lld*
+}
+
+{
+   musl-mallocng-enframe-smallvector
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   fun:*SmallVector*
+}
+
+{
+   musl-mallocng-enframe-llvm-mcregisterinfo
+   Memcheck:Cond
+   fun:enframe
+   fun:__libc_malloc_impl
+   ...
+   fun:*llvm*MCRegisterInfo*
+}
