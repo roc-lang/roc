@@ -1,28 +1,39 @@
 # META
 ~~~ini
-description=Mono test: closure with single capture at top-level
+description=Mono test: closure with single captured variable
 type=mono
 ~~~
 # SOURCE
 ~~~roc
-x = 42
-add_x = |y| x + y
-result = add_x(10)
+func = |x| {
+    add_x = |y| x + y
+    add_x(10)
+}
+result = func(42)
 ~~~
 # MONO
 ~~~roc
-x : Dec
-x = 42
+func : Dec -> Dec
+func = |x| {
+	add_x = Closure_add_x_1({ x: x })
+	match add_x {
+		Closure_add_x_1({ x }) => {
+			y = 10
+			x + y
+		}
+	}
+}
 
-add_x : Dec -> Dec
-add_x = |y| x + y
-
-result : Dec
-result = 52
+result : Dec -> Dec
+result = func(42)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+func = |x| {
+	add_x = |y| x + y
+	add_x(10)
+}
+result = func(42)
 ~~~
 # EXPECTED
 NIL
@@ -30,8 +41,10 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,Int,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,OpPlus,LowerIdent,
+LowerIdent,NoSpaceOpenRound,Int,CloseRound,
+CloseCurly,
 LowerIdent,OpAssign,LowerIdent,NoSpaceOpenRound,Int,CloseRound,
 EndOfFile,
 ~~~
@@ -41,51 +54,81 @@ EndOfFile,
 	(type-module)
 	(statements
 		(s-decl
-			(p-ident (raw "x"))
-			(e-int (raw "42")))
-		(s-decl
-			(p-ident (raw "add_x"))
+			(p-ident (raw "func"))
 			(e-lambda
 				(args
-					(p-ident (raw "y")))
-				(e-binop (op "+")
-					(e-ident (raw "x"))
-					(e-ident (raw "y")))))
+					(p-ident (raw "x")))
+				(e-block
+					(statements
+						(s-decl
+							(p-ident (raw "add_x"))
+							(e-lambda
+								(args
+									(p-ident (raw "y")))
+								(e-binop (op "+")
+									(e-ident (raw "x"))
+									(e-ident (raw "y")))))
+						(e-apply
+							(e-ident (raw "add_x"))
+							(e-int (raw "10")))))))
 		(s-decl
 			(p-ident (raw "result"))
 			(e-apply
-				(e-ident (raw "add_x"))
-				(e-int (raw "10"))))))
+				(e-ident (raw "func"))
+				(e-int (raw "42"))))))
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
-		(p-assign (ident "x"))
-		(e-num (value "42")))
-	(d-let
-		(p-assign (ident "add_x"))
+		(p-assign (ident "func"))
 		(e-lambda
 			(args
-				(p-assign (ident "y")))
-			(e-binop (op "add")
-				(e-lookup-local
-					(p-assign (ident "x")))
-				(e-lookup-local
-					(p-assign (ident "y"))))))
+				(p-assign (ident "x")))
+			(e-block
+				(s-let
+					(p-assign (ident "add_x"))
+					(e-tag (name "Closure_add_x_1")
+						(args
+							(e-record
+								(fields
+									(field (name "x")
+										(e-lookup-local
+											(p-assign (ident "x")))))))))
+				(e-match
+					(match
+						(cond
+							(e-lookup-local
+								(p-assign (ident "add_x"))))
+						(branches
+							(branch
+								(patterns
+									(pattern (degenerate false)
+										(p-applied-tag)))
+								(value
+									(e-block
+										(s-let
+											(p-assign (ident "y"))
+											(e-num (value "10")))
+										(e-binop (op "add")
+											(e-lookup-local
+												(p-assign (ident "x")))
+											(e-lookup-local
+												(p-assign (ident "y")))))))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-num (value "52"))))
+		(e-call
+			(e-lookup-local
+				(p-assign (ident "func")))
+			(e-num (value "42")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
 ~~~
