@@ -6458,15 +6458,38 @@ pub fn canonicalizePattern(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Create a Pattern node for our identifier
-                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-                    .ident = ident_idx,
-                } }, region);
+                // Check if this is a reassignable identifier ($var) that already exists as a var
+                // If so, we reuse the existing pattern for the reassignment
+                if (ident_idx.attributes.reassignable) {
+                    switch (self.scopeLookup(.ident, ident_idx)) {
+                        .found => |existing_pattern_idx| {
+                            if (self.isVarPattern(existing_pattern_idx)) {
+                                // This is a var reassignment in a pattern (e.g., `(a, $x) = ...` where $x exists)
+                                // Check for function boundary violations
+                                if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
+                                    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
+                                        .region = region,
+                                    } });
+                                }
+                                // Reuse the existing pattern - this ensures that the interpreter's
+                                // upsertBinding will update the existing binding rather than creating
+                                // a new one with a different pattern_idx
+                                return existing_pattern_idx;
+                            }
+                        },
+                        .not_found => {},
+                    }
+                }
 
                 // Check if a placeholder exists for this identifier in the current scope
                 // Placeholders are tracked in the placeholder_idents hash map
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
+
+                // Create a Pattern node for our identifier (new binding, not a var reassignment)
+                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                    .ident = ident_idx,
+                } }, region);
 
                 if (placeholder_exists) {
                     // Replace the placeholder in the current scope
@@ -6514,7 +6537,25 @@ pub fn canonicalizePattern(
             // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Create a Pattern node for our mutable identifier
+                // Check if this var already exists in scope - if so, this is a reassignment
+                switch (self.scopeLookup(.ident, ident_idx)) {
+                    .found => |existing_pattern_idx| {
+                        if (self.isVarPattern(existing_pattern_idx)) {
+                            // This is a var reassignment - check for function boundary violations
+                            if (self.isVarReassignmentAcrossFunctionBoundary(existing_pattern_idx)) {
+                                return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
+                                    .region = region,
+                                } });
+                            }
+                            // Reuse the existing pattern - this ensures that the interpreter's
+                            // upsertBinding will update the existing binding
+                            return existing_pattern_idx;
+                        }
+                    },
+                    .not_found => {},
+                }
+
+                // Create a new Pattern node for our mutable identifier (this is a declaration)
                 const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
                     .ident = ident_idx,
                 } }, region);
