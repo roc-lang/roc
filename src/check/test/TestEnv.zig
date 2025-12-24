@@ -438,7 +438,19 @@ pub fn deinit(self: *TestEnv) void {
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
-    try self.assertNoErrors();
+    return self.assertDefTypeOptions(target_def_name, expected, .{ .allow_type_errors = false });
+}
+
+/// Get the inferred type of the last declaration and compare it to the provided
+/// expected type string.
+///
+/// Also assert that there were no problems processing the source code.
+pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) !void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    if (!options.allow_type_errors) {
+        try self.assertNoTypeProblems();
+    }
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
 

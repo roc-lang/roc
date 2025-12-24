@@ -397,10 +397,10 @@ quux = ("hello", 42)
 (inferred-types
 	(defs
 		(patt (type "BadType"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "BadList"))
+		(patt (type "BadRecord"))
+		(patt (type "BadFunction"))
+		(patt (type "BadTuple")))
 	(type_decls
 		(nominal (type "BadType")
 			(ty-header (name "BadType")))
