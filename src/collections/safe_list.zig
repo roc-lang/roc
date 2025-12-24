@@ -2380,12 +2380,15 @@ test "SafeList deserialization with high address (issue 8728)" {
     // We can't actually allocate at such a high address in a test, but we can verify
     // the arithmetic works correctly by checking that high_base + offset produces
     // the expected result when both are treated as unsigned.
-    const high_base: usize = 0x9000_0000_0000_0000;
-    const offset_in_buffer: u64 = 0x100;
-    const expected_address: usize = high_base + offset_in_buffer;
+    // This test only runs on 64-bit platforms where usize can represent high addresses.
+    if (@sizeOf(usize) == 8) {
+        const high_base: usize = 0x9000_0000_0000_0000;
+        const offset_in_buffer: u64 = 0x100;
+        const expected_address: usize = high_base + offset_in_buffer;
 
-    // This would have failed with the old i64 approach because:
-    // @as(i64, @intCast(high_base)) would be negative
-    // But with usize, this works correctly
-    try testing.expectEqual(@as(usize, 0x9000_0000_0000_0100), expected_address);
+        // This would have failed with the old i64 approach because:
+        // @as(i64, @intCast(high_base)) would be negative
+        // But with usize, this works correctly
+        try testing.expectEqual(@as(usize, 0x9000_0000_0000_0100), expected_address);
+    }
 }
