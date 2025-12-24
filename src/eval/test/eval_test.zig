@@ -1483,7 +1483,7 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
 test "type annotation on var declaration - regression issue8660" {
     // Regression test for issue #8660: Type annotation on var produced duplicate definition error
     // The syntax `var $foo : U8` followed by `var $foo = 42` should work correctly
-    try runExpectInt(
+    try runExpectI64(
         \\{
         \\    var $foo : U8
         \\    var $foo = 42
