@@ -223,7 +223,7 @@ This **to_frac** method is being called on a value whose type doesn't have that 
 
 The value's type, which does not have a method named **to_frac**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **to_frac** associated with it in the type's declaration.
 
@@ -237,7 +237,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -251,7 +251,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -265,7 +265,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -279,7 +279,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -293,7 +293,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -307,7 +307,7 @@ This **is_char_in_hex_range** method is being called on a value whose type doesn
 
 The value's type, which does not have a method named **is_char_in_hex_range**, is:
 
-    _U8_
+    U8
 
 **Hint:** For this to work, the type would need to have a method named **is_char_in_hex_range** associated with it in the type's declaration.
 
@@ -321,7 +321,7 @@ This **is_named_color** method is being called on a value whose type doesn't hav
 
 The value's type, which does not have a method named **is_named_color**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **is_named_color** associated with it in the type's declaration.
 
@@ -335,7 +335,7 @@ expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
 
 The value's type, which does not have a method named **to_str**, is:
 
-    _Color_
+    Color
 
 **Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 
@@ -349,7 +349,7 @@ expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
 
 The value's type, which does not have a method named **to_str**, is:
 
-    _Color_
+    Color
 
 **Hint:** For this to work, the type would need to have a method named **to_str** associated with it in the type's declaration.
 

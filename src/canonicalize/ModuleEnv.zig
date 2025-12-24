@@ -98,8 +98,6 @@ pub const ModuleKind = union(enum) {
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
 pub const CommonIdents = extern struct {
     // Method names for operator desugaring
-    from_int_digits: Ident.Idx,
-    from_dec_digits: Ident.Idx,
     plus: Ident.Idx,
     minus: Ident.Idx,
     times: Ident.Idx,
@@ -194,8 +192,6 @@ pub const CommonIdents = extern struct {
     /// Use this when creating a fresh ModuleEnv from scratch.
     pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
         return .{
-            .from_int_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
-            .from_dec_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
             .plus = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME)),
             .minus = try common.insertIdent(gpa, Ident.for_text("minus")),
             .times = try common.insertIdent(gpa, Ident.for_text("times")),
@@ -286,8 +282,6 @@ pub const CommonIdents = extern struct {
     /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
     pub fn find(common: *const CommonEnv) CommonIdents {
         return .{
-            .from_int_digits = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
             .plus = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
             .minus = common.findIdent("minus") orelse unreachable,
             .times = common.findIdent("times") orelse unreachable,
@@ -2454,6 +2448,10 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
     if (maybe_expr_idx) |expr_idx| {
         try self.pushExprTypesToSExprTree(expr_idx, tree);
     } else {
+        // Create a TypeWriter to format the type
+        var type_writer = try self.initTypeWriter();
+        defer type_writer.deinit();
+
         // Generate full type information for all definitions and expressions
         const root_begin = tree.beginNode();
         try tree.pushStaticAtom("inferred-types");
@@ -2483,12 +2481,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
-            // Create a TypeWriter to format the type
-            var type_writer = self.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
             // Write the type to the buffer
-            type_writer.write(pattern_var) catch continue;
+            try type_writer.write(pattern_var, .one_line);
 
             // Add the pattern type entry
             const patt_begin = tree.beginNode();
@@ -2537,12 +2531,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         // Get the type variable for this statement
                         const stmt_var = varFrom(stmt_idx);
 
-                        // Create a TypeWriter to format the type
-                        var type_writer = self.initTypeWriter() catch continue;
-                        defer type_writer.deinit();
-
                         // Write the type to the buffer
-                        type_writer.write(stmt_var) catch continue;
+                        try type_writer.write(stmt_var, .one_line);
 
                         const type_str = type_writer.get();
                         try tree.pushStringPair("type", type_str);
@@ -2566,12 +2556,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         // Get the type variable for this statement
                         const stmt_var = varFrom(stmt_idx);
 
-                        // Create a TypeWriter to format the type
-                        var type_writer = self.initTypeWriter() catch continue;
-                        defer type_writer.deinit();
-
                         // Write the type to the buffer
-                        type_writer.write(stmt_var) catch continue;
+                        try type_writer.write(stmt_var, .one_line);
 
                         const type_str = type_writer.get();
                         try tree.pushStringPair("type", type_str);
@@ -2606,11 +2592,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const expr_region = self.store.getRegionAt(expr_node_idx);
 
             // Create a TypeWriter to format the type
-            var type_writer = self.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
             // Write the type to the buffer
-            type_writer.write(expr_var) catch continue;
+            try type_writer.write(expr_var, .one_line);
 
             // Add the expression type entry
             const expr_begin = tree.beginNode();
@@ -2643,7 +2626,7 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTre
     defer type_writer.deinit();
 
     // Write the type to the buffer
-    try type_writer.write(expr_var);
+    try type_writer.write(expr_var, .one_line);
 
     // Add the formatted type to the S-expression tree
     const type_str = type_writer.get();

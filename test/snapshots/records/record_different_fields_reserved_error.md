@@ -457,7 +457,8 @@ This expression produces a value, but it's not being used:
             ^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -468,7 +469,8 @@ This expression produces a value, but it's not being used:
             ^^^^^^^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 # TOKENS
 ~~~zig

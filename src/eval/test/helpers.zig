@@ -72,7 +72,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
 }
 
 /// Helpers to setup and run an interpreter expecting an integer result.
-pub fn runExpectInt(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
+pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -426,6 +426,46 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     }
 }
 
+/// Helpers to setup and run an interpreter expecting a list of zst result.
+pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    if (result.layout.tag != .list_of_zst) {
+        std.debug.print("\nExpected .list_of_zst layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        return error.TestExpectedEqual;
+    }
+
+    // Get the element layout
+    const elem_layout_idx = result.layout.data.list;
+    const elem_layout = layout_cache.getLayout(elem_layout_idx);
+
+    // Use the ListAccessor to safely access list elements
+    const list_accessor = try result.asList(layout_cache, elem_layout, ops);
+
+    try std.testing.expectEqual(expected_element_count, list_accessor.len());
+}
+
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
 pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
@@ -451,8 +491,11 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     defer result.decref(layout_cache, ops);
     defer interpreter.cleanupBindings(ops);
 
-    // Verify we got a list layout
-    try std.testing.expect(result.layout.tag == .list or result.layout.tag == .list_of_zst);
+    // A list of i64 must have .list layout, not .list_of_zst
+    if (result.layout.tag != .list) {
+        std.debug.print("\nExpected .list layout but got .{s}\n", .{@tagName(result.layout.tag)});
+        return error.TestExpectedEqual;
+    }
 
     // Get the element layout
     const elem_layout_idx = result.layout.data.list;
@@ -475,10 +518,9 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     }
 }
 
-/// Like runExpectListI64 but asserts the layout is .list (not .list_of_zst).
-/// This is used to verify that type unification is working correctly -
-/// when a list is used with a non-ZST element type, its layout should be .list.
-pub fn runExpectListI64WithStrictLayout(src: []const u8, expected_elements: []const i64, should_trace: enum { trace, no_trace }) !void {
+/// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
+/// This is for cases like List.repeat(7i64, 0) which returns an empty list.
+pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
@@ -502,33 +544,21 @@ pub fn runExpectListI64WithStrictLayout(src: []const u8, expected_elements: []co
     defer result.decref(layout_cache, ops);
     defer interpreter.cleanupBindings(ops);
 
-    // STRICT: Verify we got a .list layout (NOT .list_of_zst)
-    // If this fails, it means type unification didn't properly infer the element type
-    if (result.layout.tag != .list) {
-        std.debug.print("\n[FAIL] Expected .list layout but got .{s}\n", .{@tagName(result.layout.tag)});
-        std.debug.print("This indicates a type inference bug - List.with_capacity should be unified to List(I64)\n", .{});
+    // Verify we got a .list_of_zst layout (empty list optimization)
+    if (result.layout.tag != .list_of_zst) {
+        std.debug.print("\nExpected .list_of_zst layout but got .{s}\n", .{@tagName(result.layout.tag)});
         return error.TestExpectedEqual;
     }
 
-    // Get the element layout
+    // Get the element layout and verify it's i64
     const elem_layout_idx = result.layout.data.list;
     const elem_layout = layout_cache.getLayout(elem_layout_idx);
+    try std.testing.expect(elem_layout.tag == .scalar);
+    try std.testing.expect(elem_layout.data.scalar.tag == .int);
 
-    // Use the ListAccessor to safely access list elements
+    // Use the ListAccessor to verify the list is empty
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
-
-    try std.testing.expectEqual(expected_elements.len, list_accessor.len());
-
-    for (expected_elements, 0..) |expected_val, i| {
-        // Use the result's rt_var since we're accessing elements of the evaluated expression
-        const element = try list_accessor.getElement(i, result.rt_var);
-
-        // Check if this is an integer
-        try std.testing.expect(element.layout.tag == .scalar);
-        try std.testing.expect(element.layout.data.scalar.tag == .int);
-        const int_val = element.asI128();
-        try std.testing.expectEqual(@as(i128, expected_val), int_val);
-    }
+    try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
 }
 
 /// Parse and canonicalize an expression.

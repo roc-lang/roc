@@ -24,10 +24,12 @@ The first argument being passed to this function has the wrong type:
                    ^
 
 This argument has the type:
-    _I64_
+
+    I64
 
 But the function needs the first argument to be:
-    _Dec_
+
+    Dec
 
 # TOKENS
 ~~~zig

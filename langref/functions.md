@@ -2,6 +2,8 @@
 
 ## Pure Functions
 
+### Side Effects
+
 ## Effectful Functions
 
 ### `!` suffix
