@@ -15,7 +15,7 @@ result = func(1, 2)
 ~~~roc
 func : Dec, Dec -> Dec
 func = |a, b| {
-	add_ab = Closure_add_ab_1({ a: a, b: b })
+	add_ab = Closure_add_ab_1({ a, b })
 	match add_ab {
 		Closure_add_ab_1({ a, b }) => {
 			x = 10

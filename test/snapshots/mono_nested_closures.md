@@ -16,7 +16,7 @@ x : Dec
 x = 10
 
 make_adder : Dec -> [Closure_1({ y : Dec })]
-make_adder = |y| Closure_1({ y: y })
+make_adder = |y| Closure_1({ y })
 
 add_five : [Closure_1({ y : Dec })]
 add_five = make_adder(5)

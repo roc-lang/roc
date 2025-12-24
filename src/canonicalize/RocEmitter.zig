@@ -274,8 +274,24 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 const field = self.module_env.store.getRecordField(field_idx);
                 if (i > 0) try self.write(", ");
                 const name = self.module_env.getIdent(field.name);
-                try self.writer().print("{s}: ", .{name});
-                try self.emitExpr(field.value);
+
+                // Check if we can use shorthand syntax { x } instead of { x: x }
+                const field_value = self.module_env.store.getExpr(field.value);
+                const use_shorthand = if (field_value == .e_lookup_local) blk: {
+                    const lookup_pattern = self.module_env.store.getPattern(field_value.e_lookup_local.pattern_idx);
+                    if (lookup_pattern == .assign) {
+                        const lookup_name = self.module_env.getIdent(lookup_pattern.assign.ident);
+                        break :blk std.mem.eql(u8, name, lookup_name);
+                    }
+                    break :blk false;
+                } else false;
+
+                if (use_shorthand) {
+                    try self.write(name);
+                } else {
+                    try self.writer().print("{s}: ", .{name});
+                    try self.emitExpr(field.value);
+                }
             }
             if (record.ext) |ext_idx| {
                 if (field_indices.len > 0) try self.write(", ");

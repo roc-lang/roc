@@ -2415,6 +2415,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
             } else if (self.peek() == .LowerIdent and self.peekNext() == .Comma) {
                 // Definitely a record - has comma-separated fields
                 expr = try self.parseRecord(start);
+            } else if (self.peek() == .LowerIdent and self.peekNext() == .CloseCurly) {
+                // Single-field record with shorthand syntax: { field }
+                expr = try self.parseRecord(start);
             } else if (self.peek() == .LowerIdent and self.peekNext() == .OpColon) {
                 // Ambiguous case: could be record field or type annotation
                 // Use bounded lookahead to determine the context

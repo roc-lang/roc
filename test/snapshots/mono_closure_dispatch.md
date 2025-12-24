@@ -17,7 +17,7 @@ result = func(1)
 func : Dec -> Dec
 func = |offset| {
 	condition = True
-	f = if (condition) Closure_f_1({ offset: offset }) else |x| x * 2
+	f = if (condition) Closure_f_1({ offset }) else |x| x * 2
 	match f {
 		Closure_f_1({ offset }) => {
 			x = 10
