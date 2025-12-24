@@ -2248,16 +2248,17 @@ test "check type - body w/ anno does not leak to references - top level" {
 }
 
 test "check type - body w/ anno does not leak to references - inline" {
-    // First verify Bool basics work
+    // Test that when an inline declaration's body has a type error,
+    // the annotation type is preserved for references
     const source =
         \\Test := [].{}
         \\
         \\test = {
-        \\  x : Num(size)
-        \\  x = False
+        \\  x : Bool
+        \\  x = "Str"
         \\
-        \\  y : Num(size)
-        \\  y = x + 10
+        \\  y : Bool
+        \\  y = x or True
         \\
         \\  y
         \\}
@@ -2267,7 +2268,7 @@ test "check type - body w/ anno does not leak to references - inline" {
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("TYPE MISMATCH");
-    try test_env.assertDefTypeOptions("test", "Num(size)", .{ .allow_type_errors = true });
+    try test_env.assertDefTypeOptions("test", "Bool", .{ .allow_type_errors = true });
 }
 
 test "check type - scoped type variables - bigger example 1" {
