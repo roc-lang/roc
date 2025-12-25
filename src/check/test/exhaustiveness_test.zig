@@ -208,6 +208,88 @@ test "exhaustive - record destructuring" {
     try test_env.assertLastDefType("I64");
 }
 
+test "exhaustive - record with all fields as wildcards" {
+    // Matching all fields with wildcards should be exhaustive
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: "Alice", age: 30i64 }
+        \\
+        \\result = match x {
+        \\    { name: _, age: _ } => 1i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - record with literal field guard" {
+    // Matching record with specific literal value requires wildcard for other cases
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: "Alice", age: 30i64 }
+        \\
+        \\result = match x {
+        \\    { name: _, age: 30 } => "thirty"
+        \\    { name: _, age: _ } => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive - record with literal field missing wildcard" {
+    // Matching record field with only literal value is not exhaustive
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: "Alice", age: 30i64 }
+        \\
+        \\result = match x {
+        \\    { name: _, age: 30 } => "thirty"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - record with tag field all cases" {
+    // Record containing a tag field - all tag cases must be covered
+    const source =
+        \\x : { value: Try(I64, Str) }
+        \\x = { value: Ok(42i64) }
+        \\
+        \\result = match x {
+        \\    { value: Ok(n) } => n
+        \\    { value: Err(_) } => 0i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "non-exhaustive - record with tag field missing case" {
+    // Record containing a tag field - missing Err case
+    const source =
+        \\x : { value: Try(I64, Str) }
+        \\x = { value: Ok(42i64) }
+        \\
+        \\result = match x {
+        \\    { value: Ok(n) } => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
 // Nested Pattern Exhaustiveness with Try
 
 test "exhaustive - nested Try patterns fully covered" {

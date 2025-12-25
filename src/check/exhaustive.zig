@@ -949,9 +949,14 @@ fn isTypeEmpty(type_store: *TypeStore, type_var: Var) bool {
                 }
                 return false; // Has tags, not empty
             },
-            .nominal_type => |nominal| {
-                const backing_var = type_store.getNominalBackingVar(nominal);
-                return isTypeEmpty(type_store, backing_var);
+            .nominal_type => {
+                // Nominal types are considered inhabited unless they explicitly wrap
+                // an uninhabited type parameter. We don't follow the backing var here
+                // because the internal representation (e.g., for Str) might look empty
+                // but the nominal type itself is inhabited.
+                // TODO: For types like Try(I64, []) where the error type is empty,
+                // we should propagate emptiness through type parameters, not backing types.
+                return false;
             },
             else => return false, // Other structures are not empty
         },
@@ -1066,12 +1071,27 @@ fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const
                 // Tuples are single-constructor types, return the element types
                 return type_store.sliceVars(tuple.elems);
             },
+            .record => |record| {
+                // Records are single-constructor types, return the field types
+                return getRecordFieldTypes(type_store, record.fields);
+            },
+            .record_unbound => |fields| {
+                // Unbound records also have field types
+                return getRecordFieldTypes(type_store, fields);
+            },
             else => {},
         },
         else => {},
     }
 
     return &[_]Var{};
+}
+
+/// Get the field types from a Record type.
+/// Returns the Var for each field in the record.
+fn getRecordFieldTypes(type_store: *TypeStore, fields: types.RecordField.SafeMultiList.Range) []const Var {
+    const fields_slice = type_store.getRecordFieldsSlice(fields);
+    return fields_slice.items(.var_);
 }
 
 /// Get the element type from a List type.
@@ -1464,9 +1484,10 @@ pub fn checkExhaustive(
             if (rest.len == 0) return &[_]Pattern{};
 
             // Prepend typed wildcard to missing patterns
-            const result = try allocator.alloc(Pattern, 1);
+            const result = try allocator.alloc(Pattern, 1 + rest.len);
             const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
             result[0] = .{ .anything = first_type };
+            @memcpy(result[1..], rest);
             return result;
         },
 
@@ -1527,6 +1548,7 @@ pub fn checkExhaustive(
                     alt.tag_id,
                     alt.arity,
                 );
+
                 const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
                 const missing = try checkExhaustive(allocator, specialized, specialized_types);
 
@@ -2016,10 +2038,13 @@ pub fn checkMatch(
     const arena_alloc = arena.allocator();
 
     // Check if the scrutinee type is fully resolved
-    // If it's still a flex/rigid var or can't be unwrapped to a concrete type,
-    // we can't reliably do exhaustiveness checking
-    const union_result = try getUnionFromType(arena_alloc, type_store, ident_store, scrutinee_type);
-    const scrutinee_unresolved = union_result == .not_a_union;
+    // If it's still a flex/rigid var, we can't reliably do exhaustiveness checking
+    // Note: records, tuples, etc. are NOT tag unions but are still resolved types
+    const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
+    const scrutinee_unresolved = switch (resolved_scrutinee.desc.content) {
+        .flex, .rigid => true,
+        else => false,
+    };
 
     // Phase 1: Convert CIR patterns to unresolved patterns
     const unresolved = try convertMatchBranches(
