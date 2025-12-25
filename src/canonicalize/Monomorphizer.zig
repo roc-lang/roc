@@ -97,6 +97,34 @@ pub const Phase = enum {
     making,
 };
 
+/// A reference to an external module that needs specialization.
+/// Used for cross-module monomorphization.
+pub const ExternalSpecializationRequest = struct {
+    /// The module that defines the function
+    source_module: CIR.Import.Idx,
+    /// The original function identifier in the source module
+    original_ident: base.Ident.Idx,
+    /// The concrete type to specialize for
+    concrete_type: types.Var,
+    /// The call site in this module (for error reporting)
+    call_site: ?Expr.Idx,
+
+    pub fn eql(a: ExternalSpecializationRequest, b: ExternalSpecializationRequest) bool {
+        return a.source_module == b.source_module and
+            a.original_ident == b.original_ident;
+        // Note: concrete_type comparison would require type equality check
+    }
+};
+
+/// Result of requesting an external specialization.
+/// The actual specialization happens in the source module.
+pub const ExternalSpecializationResult = struct {
+    /// The specialized name in the external module
+    specialized_ident: base.Ident.Idx,
+    /// Whether this is a new request or was already known
+    is_new: bool,
+};
+
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
 
@@ -136,6 +164,9 @@ max_recursion_depth: u32,
 /// Stack of functions currently being specialized (for recursion detection)
 specialization_stack: std.ArrayList(SpecializationKey),
 
+/// External specializations requested from other modules
+external_requests: std.ArrayList(ExternalSpecializationRequest),
+
 /// Default maximum recursion depth for polymorphic recursion
 pub const DEFAULT_MAX_RECURSION_DEPTH: u32 = 64;
 
@@ -159,6 +190,7 @@ pub fn init(
         .recursion_depth = 0,
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
+        .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
     };
 }
 
@@ -176,6 +208,7 @@ pub fn deinit(self: *Self) void {
     self.specialization_names.deinit();
     self.in_progress.deinit();
     self.specialization_stack.deinit(self.allocator);
+    self.external_requests.deinit(self.allocator);
 }
 
 /// Register a polymorphic function definition as a partial proc.
@@ -256,6 +289,74 @@ pub fn requestSpecialization(
     });
 
     return null;
+}
+
+/// Request a specialization from an external module.
+/// This is used when a function call crosses module boundaries and the
+/// function is polymorphic in the external module.
+///
+/// Returns the specialized name if already known, or adds to external_requests
+/// for later resolution.
+pub fn requestExternalSpecialization(
+    self: *Self,
+    source_module: CIR.Import.Idx,
+    original_ident: base.Ident.Idx,
+    concrete_type: types.Var,
+    call_site: ?Expr.Idx,
+) !ExternalSpecializationResult {
+    // Check if we already have this request
+    for (self.external_requests.items) |existing| {
+        if (existing.source_module == source_module and
+            existing.original_ident == original_ident)
+        {
+            // TODO: Also compare concrete types when we have proper type equality
+            // For now, assume same module + ident means same specialization
+            return ExternalSpecializationResult{
+                .specialized_ident = original_ident, // Placeholder
+                .is_new = false,
+            };
+        }
+    }
+
+    // Add new external request
+    try self.external_requests.append(self.allocator, ExternalSpecializationRequest{
+        .source_module = source_module,
+        .original_ident = original_ident,
+        .concrete_type = concrete_type,
+        .call_site = call_site,
+    });
+
+    return ExternalSpecializationResult{
+        .specialized_ident = original_ident, // Will be resolved later
+        .is_new = true,
+    };
+}
+
+/// Get all external specialization requests.
+/// This should be called after the finding phase to get the list of
+/// specializations needed from external modules.
+pub fn getExternalRequests(self: *const Self) []const ExternalSpecializationRequest {
+    return self.external_requests.items;
+}
+
+/// Resolve an external specialization request with the actual specialized name.
+/// Called when the external module provides the specialized function name.
+/// Note: source_module is not currently stored but may be needed for
+/// cross-module linking in the future.
+pub fn resolveExternalSpecialization(
+    self: *Self,
+    original_ident: base.Ident.Idx,
+    specialized_ident: base.Ident.Idx,
+    concrete_type: types.Var,
+) !void {
+    const type_hash = self.structuralTypeHash(concrete_type);
+    const key = SpecializationKey{
+        .original_ident = original_ident,
+        .type_hash = type_hash,
+    };
+
+    // Store the mapping for future lookups
+    try self.specialization_names.put(key, specialized_ident);
 }
 
 /// Process all pending specializations.
