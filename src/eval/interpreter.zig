@@ -14495,7 +14495,11 @@ pub const Interpreter = struct {
                                     return error.Crash;
                                 },
                                 .call_invoke_closure => |ci| {
-                                    // Free resources if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation.
+                                    // Note: We don't pop values from value_stack here because
+                                    // call_invoke_closure is scheduled BEFORE call_collect_args
+                                    // finishes, so the function and args aren't on the stack yet.
+                                    // The call_collect_args cleanup handles the partial values.
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                     if (ci.saved_rigid_subst) |saved| {
                                         var saved_copy = saved;
@@ -14512,33 +14516,41 @@ pub const Interpreter = struct {
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
                                 .str_collect => |sc| {
-                                    // Clean up any already-collected string segments on the value stack
-                                    for (0..sc.collected_count) |_| {
+                                    // Clean up any already-collected string segments on the value stack.
+                                    // collected_count is incremented before evaluation, so actual = collected_count - 1.
+                                    const actual_collected = if (sc.collected_count > 0) sc.collected_count - 1 else 0;
+                                    for (0..actual_collected) |_| {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
                                         }
                                     }
                                 },
                                 .tuple_collect => |tc| {
-                                    // Clean up any already-collected tuple elements on the value stack
-                                    for (0..tc.collected_count) |_| {
+                                    // Clean up any already-collected tuple elements on the value stack.
+                                    // collected_count is incremented before evaluation, so actual = collected_count - 1.
+                                    const actual_collected = if (tc.collected_count > 0) tc.collected_count - 1 else 0;
+                                    for (0..actual_collected) |_| {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
                                         }
                                     }
                                 },
                                 .list_collect => |lc| {
-                                    // Clean up any already-collected list elements on the value stack
-                                    for (0..lc.collected_count) |_| {
+                                    // Clean up any already-collected list elements on the value stack.
+                                    // collected_count is incremented before evaluation, so actual = collected_count - 1.
+                                    const actual_collected = if (lc.collected_count > 0) lc.collected_count - 1 else 0;
+                                    for (0..actual_collected) |_| {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
                                         }
                                     }
                                 },
                                 .record_collect => |rc| {
-                                    // Clean up any already-collected record fields on the value stack
-                                    // Also clean up base record value if present (from record extension)
-                                    for (0..rc.collected_count) |_| {
+                                    // Clean up any already-collected record fields on the value stack.
+                                    // collected_count is incremented before evaluation, so actual = collected_count - 1.
+                                    // Also clean up base record value if present (from record extension).
+                                    const actual_collected = if (rc.collected_count > 0) rc.collected_count - 1 else 0;
+                                    for (0..actual_collected) |_| {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
                                         }
@@ -14550,17 +14562,26 @@ pub const Interpreter = struct {
                                     }
                                 },
                                 .tag_collect => |tc| {
-                                    // Clean up any already-collected tag arguments on the value stack
-                                    for (0..tc.collected_count) |_| {
+                                    // Clean up any already-collected tag arguments on the value stack.
+                                    // collected_count represents how many args WILL BE collected
+                                    // when this continuation runs normally. But since we're
+                                    // early-returning, the current arg being evaluated isn't done.
+                                    // So actual args on stack = collected_count - 1.
+                                    const actual_collected = if (tc.collected_count > 0) tc.collected_count - 1 else 0;
+                                    for (0..actual_collected) |_| {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
                                         }
                                     }
                                 },
                                 .call_collect_args => |cc| {
-                                    // Clean up any already-collected arguments on the value stack
-                                    // Also clean up function value
-                                    for (0..cc.collected_count) |_| {
+                                    // Clean up already-collected arguments on the value stack.
+                                    // collected_count represents how many args WILL BE collected
+                                    // when this continuation runs normally. But since we're
+                                    // early-returning, the current arg being evaluated isn't done.
+                                    // So actual args on stack = collected_count - 1.
+                                    const actual_collected = if (cc.collected_count > 0) cc.collected_count - 1 else 0;
+                                    for (0..actual_collected) |_| {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
                                         }
