@@ -6,7 +6,26 @@
 //! 3. Creates specialized versions of functions for each concrete type
 //!
 //! Following the Cor approach, monomorphization happens AFTER type checking
-//! but BEFORE code generation.
+//! but BEFORE code generation. This differs from the Rust compiler's approach
+//! where lambda sets are resolved during type inference.
+//!
+//! ## Architecture Overview
+//!
+//! The monomorphizer works in three phases:
+//!
+//! ### Phase 1: Registration
+//! Polymorphic function definitions are registered as `PartialProc`s via
+//! `registerPartialProc`. These store the function body and type info but
+//! haven't been specialized yet.
+//!
+//! ### Phase 2: Finding
+//! When a call site is encountered, `requestSpecialization` checks if a
+//! specialization is needed and adds it to `pending_specializations`.
+//! For cross-module calls, use `requestExternalSpecialization`.
+//!
+//! ### Phase 3: Making
+//! `processPendingSpecializations` processes the queue, creating specialized
+//! versions of functions by duplicating their bodies with type substitutions.
 //!
 //! ## Two-Phase Specialization
 //!
@@ -21,6 +40,27 @@
 //!
 //! This separation prevents infinite loops with recursive types by allowing
 //! forward references that are patched after the recursive type is fully resolved.
+//!
+//! ## Polymorphic Recursion Detection
+//!
+//! The monomorphizer includes fuel-based cutoffs to prevent infinite
+//! specialization from polymorphic recursion patterns like:
+//!
+//! ```roc
+//! f = \list -> f [list]  // Type grows: a -> List a -> List (List a) -> ...
+//! ```
+//!
+//! When the same function appears 3+ times on the specialization stack with
+//! different types, or when recursion depth exceeds `max_recursion_depth`,
+//! specialization stops to prevent non-termination.
+//!
+//! ## Key Types
+//!
+//! - `PartialProc`: A function that can be specialized
+//! - `PendingSpecialization`: A specialization request waiting to be processed
+//! - `SpecializedProc`: A completed specialization with duplicated body
+//! - `SpecializationKey`: (original_ident, type_hash) for lookup
+//! - `ExternalSpecializationRequest`: Cross-module specialization request
 
 const std = @import("std");
 const base = @import("base");
