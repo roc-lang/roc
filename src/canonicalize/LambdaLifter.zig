@@ -46,8 +46,8 @@ pub const LiftedFunction = struct {
     body: Expr.Idx,
     /// The function's return type variable
     ret_var: types.Var,
-    /// The original closure expression index (for reference)
-    original_closure: Expr.Idx,
+    /// The original closure expression index (for reference), or null for pure lambdas
+    original_closure: ?Expr.Idx,
 };
 
 /// The allocator for intermediate allocations
@@ -171,9 +171,6 @@ pub fn liftFromInfo(
     // Create a fresh type variable for the return type
     const ret_var = try self.module_env.types.fresh();
 
-    // Use a sentinel value for original_closure since pure lambdas don't have one
-    const sentinel_idx: CIR.Expr.Idx = @enumFromInt(0);
-
     // Create the lifted function
     const lifted = LiftedFunction{
         .name = info.tag_name,
@@ -181,7 +178,7 @@ pub fn liftFromInfo(
         .captures_pattern = captures_pattern,
         .body = body,
         .ret_var = ret_var,
-        .original_closure = sentinel_idx,
+        .original_closure = null, // Pure lambdas don't have an original closure
     };
 
     try self.lifted_functions.append(self.allocator, lifted);
