@@ -234,30 +234,26 @@ pub const Store = struct {
 
     // make builtin types //
 
-    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create fn anno
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
-
+    /// Create a Bool type as a tag union with False and True tags.
+    /// Use cached idents from CommonIdents.false_tag and CommonIdents.true_tag.
+    pub fn mkBool(self: *Self, false_ident: base.Ident.Idx, true_ident: base.Ident.Idx, ext_var: Var) std.mem.Allocator.Error!Content {
         const false_tag = try self.mkTag(false_ident, &[_]Var{});
         const true_tag = try self.mkTag(true_ident, &[_]Var{});
         return try self.mkTagUnion(&[_]Tag{ false_tag, true_tag }, ext_var);
     }
 
+    /// Create a Result type as a tag union with Ok and Err tags.
+    /// Use cached idents from CommonIdents.ok and CommonIdents.err.
     pub fn mkResult(
         self: *Self,
-        gpa: Allocator,
-        idents: *base.Ident.Store,
+        ok_ident: base.Ident.Idx,
+        err_ident: base.Ident.Idx,
         ok_var: Var,
         err_var: Var,
         ext_var: Var,
     ) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create every fn call
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("Ok"));
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("Err"));
-
-        const ok_tag = try self.mkTag(true_ident, &[_]Var{ok_var});
-        const err_tag = try self.mkTag(false_ident, &[_]Var{err_var});
+        const ok_tag = try self.mkTag(ok_ident, &[_]Var{ok_var});
+        const err_tag = try self.mkTag(err_ident, &[_]Var{err_var});
         return try self.mkTagUnion(&[_]Tag{ ok_tag, err_tag }, ext_var);
     }
 
