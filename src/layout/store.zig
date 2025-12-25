@@ -1339,10 +1339,11 @@ pub const Store = struct {
                             var max_payload_size: u32 = 0;
                             var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
 
-                            // Sort tags alphabetically by name to match interpreter's appendUnionTags ordering.
-                            // This ensures discriminant values are consistent between evaluation and layout.
-                            // TODO: Consider sorting tags in the type store instead for better performance,
-                            // which would eliminate the need for sorting here and in appendUnionTags.
+                            // Sort tags alphabetically by name to ensure consistent discriminant values.
+                            // This is necessary because gatherTags may combine tags from multiple
+                            // unions when following extensions, and the combined list may not be sorted.
+                            // Note: appendUnionTags in the interpreter no longer sorts because
+                            // translateTypeVar already stores flattened, sorted tags in runtime_types.
                             const tags_names = tags_slice.items(.name)[pending_tags_top..];
                             const tags_args_slice = tags_slice.items(.args)[pending_tags_top..];
 

@@ -7158,11 +7158,9 @@ pub const Interpreter = struct {
             }
         }
 
-        // Sort the tags alphabetically to match gatherTags and layout store ordering
-        // This ensures tag discriminants are consistent between evaluation and rendering
-        // Use runtime_layout_store.env since runtime type tag names are translated to that env
-        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
-        std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
+        // Note: Tags are already sorted alphabetically in runtime_types.
+        // translateTypeVar flattens tag union extensions and sorts tags before storing,
+        // so no sorting is needed here. See translateTypeVar lines 9235-9240.
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
