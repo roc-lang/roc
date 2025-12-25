@@ -81,6 +81,15 @@ pub const LambdaSet = struct {
             try self.closures.append(allocator, info);
         }
     }
+
+    /// Create a deep copy of this LambdaSet with its own ArrayList
+    pub fn clone(self: *const LambdaSet, allocator: std.mem.Allocator) !LambdaSet {
+        var new_set = LambdaSet.init();
+        for (self.closures.items) |info| {
+            try new_set.closures.append(allocator, info);
+        }
+        return new_set;
+    }
 };
 
 /// Information for generating a dispatch function
@@ -109,7 +118,7 @@ pattern_lambda_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 /// Map from lambda expression to its return lambda set (what closures it returns when called)
 lambda_return_sets: std.AutoHashMap(Expr.Idx, LambdaSet),
 
-/// Map from pattern to lambda return set (for looking up what a variable's lambda returns)
+/// Map from pattern to lambda return set (for looking up what a variable's lambda returns when called)
 pattern_lambda_return_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 
 /// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
@@ -536,7 +545,12 @@ pub fn transformExprWithLambdaSet(
 
             // If the body returns closures, track this so calls to this lambda return those closures
             if (body_result.lambda_set) |body_lambda_set| {
-                try self.lambda_return_sets.put(new_lambda, body_lambda_set);
+                // Clone the lambda_set for storage since we're consuming the original
+                const cloned = try body_lambda_set.clone(self.allocator);
+                try self.lambda_return_sets.put(new_lambda, cloned);
+                // Free the original since we're returning null (not passing ownership to caller)
+                var to_free = body_lambda_set;
+                to_free.deinit(self.allocator);
             }
 
             return .{ .expr = new_lambda, .lambda_set = null };
@@ -696,22 +710,18 @@ pub fn transformExprWithLambdaSet(
             }
         },
         .e_call => |call| {
-            // Call expression - check if calling a lambda that returns closures
-            // Transform the call normally first
+            // Call expression - transform and check if calling a function that returns closures
             const transformed = try self.transformExpr(expr_idx);
 
-            // Check if the function is a local variable that might return closures
+            // Check if the function is a local variable that returns closures when called
             const func_expr = self.module_env.store.getExpr(call.func);
             switch (func_expr) {
                 .e_lookup_local => |lookup| {
                     // Check if this pattern has a lambda return set (calling a lambda that returns closures)
                     if (self.pattern_lambda_return_sets.get(lookup.pattern_idx)) |return_set| {
                         // Clone the return set for this call's result
-                        var call_lambda_set = LambdaSet.init();
-                        for (return_set.closures.items) |info| {
-                            try call_lambda_set.addClosure(self.allocator, info);
-                        }
-                        return .{ .expr = transformed, .lambda_set = call_lambda_set };
+                        const cloned = try return_set.clone(self.allocator);
+                        return .{ .expr = transformed, .lambda_set = cloned };
                     }
                 },
                 else => {},

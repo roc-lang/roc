@@ -1439,7 +1439,9 @@ fn processSnapshotContent(
             // If the expression is a lambda with a return set, track what it returns when called
             // This allows propagating closure information through calls to this lambda
             if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
-                try transformer.pattern_lambda_return_sets.put(def.pattern, return_set);
+                // Clone the return set to avoid double-free issues
+                const cloned = try return_set.clone(allocator);
+                try transformer.pattern_lambda_return_sets.put(def.pattern, cloned);
             }
 
             // Update the definition to use the transformed expression
