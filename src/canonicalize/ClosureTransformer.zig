@@ -163,6 +163,75 @@ pub const UnspecializedClosure = struct {
     region: u8,
 };
 
+/// Information about a concrete type for cross-module requests.
+/// This allows external modules to know what concrete type to use when
+/// resolving an ability implementation.
+pub const ConcreteTypeInfo = struct {
+    /// The type identifier (e.g., "List", "Dict")
+    type_ident: ?base.Ident.Idx,
+    /// Type arguments if applicable (for generic types like List U64)
+    type_args_hash: u64,
+};
+
+/// External Lambda Set Request - for cross-module lambda set resolution.
+///
+/// When a call crosses module boundaries and involves an ability-polymorphic
+/// closure, we need to request the ability implementation from the external
+/// module. This struct captures that request.
+pub const ExternalLambdaSetRequest = struct {
+    /// The module containing the ability implementation
+    source_module: CIR.Import.Idx,
+
+    /// The ability member being requested (e.g., `hash`, `eq`)
+    ability_member: base.Ident.Idx,
+
+    /// The concrete type for which we need the implementation
+    concrete_type_info: ConcreteTypeInfo,
+
+    /// The original unspecialized closure this request came from
+    original_unspec: UnspecializedClosure,
+
+    pub fn eql(a: ExternalLambdaSetRequest, b: ExternalLambdaSetRequest) bool {
+        return a.source_module == b.source_module and
+            a.ability_member == b.ability_member and
+            a.concrete_type_info.type_args_hash == b.concrete_type_info.type_args_hash;
+    }
+};
+
+/// Result of an external lambda set resolution.
+/// Returned when the external module provides the closure info.
+pub const ExternalLambdaSetResult = struct {
+    /// The closure info for the resolved ability implementation
+    closure_info: ClosureInfo,
+    /// Whether this is a new resolution or was already cached
+    is_new: bool,
+};
+
+/// Exported closure information for module interfaces.
+///
+/// This struct contains information about closures that external modules
+/// might need when resolving their own lambda sets. It's part of the
+/// module's exported interface.
+pub const ExportedClosureInfo = struct {
+    /// The closure's tag name (e.g., "Closure_hash_1")
+    closure_name: base.Ident.Idx,
+
+    /// The lifted function pattern for dispatch
+    lifted_fn_pattern: ?CIR.Pattern.Idx,
+
+    /// Ability member this implements (if any)
+    implements_ability: ?AbilityImpl,
+
+    pub const AbilityImpl = struct {
+        /// The ability identifier (e.g., "Hash", "Eq")
+        ability: base.Ident.Idx,
+        /// The member within the ability (e.g., "hash", "eq")
+        member: base.Ident.Idx,
+        /// The type this implementation is for (e.g., "List", "Dict")
+        for_type: base.Ident.Idx,
+    };
+};
+
 /// A lambda set - a collection of closures that could reach a given variable.
 ///
 /// Lambda sets can contain both:
@@ -325,6 +394,83 @@ pub const LambdaSet = struct {
         }
         return true;
     }
+
+    /// Count how many closures in this set are ability-derived (have no captures
+    /// and were likely resolved from ability member references).
+    ///
+    /// Ability implementations are typically top-level functions without captures,
+    /// so they're very efficient to dispatch to (no closure environment needed).
+    pub fn countAbilityDerivedClosures(self: *const LambdaSet) usize {
+        var count: usize = 0;
+        for (self.closures.items) |closure| {
+            // Ability-derived closures typically have:
+            // - No captures (empty capture_names)
+            // - No lifted captures pattern
+            // - May have a lifted fn pattern for dispatch
+            if (closure.capture_names.items.len == 0 and
+                closure.lifted_captures_pattern == null)
+            {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    /// Check if this lambda set is "pure" (all closures are ability-derived
+    /// or otherwise have no captures).
+    ///
+    /// Pure lambda sets can use the most efficient representation (enum dispatch)
+    /// since no closure environments need to be stored or passed.
+    pub fn isPureLambdaSet(self: *const LambdaSet) bool {
+        return self.allCapturesEmpty();
+    }
+
+    /// Check if this lambda set has mixed captures (some closures have captures,
+    /// some don't).
+    ///
+    /// Mixed lambda sets require tagged union representation where ability-derived
+    /// closures effectively have an empty capture record.
+    pub fn hasMixedCaptures(self: *const LambdaSet) bool {
+        var has_with_captures = false;
+        var has_without_captures = false;
+
+        for (self.closures.items) |closure| {
+            if (closure.capture_names.items.len > 0) {
+                has_with_captures = true;
+            } else {
+                has_without_captures = true;
+            }
+
+            if (has_with_captures and has_without_captures) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Calculate the maximum number of captures across all closures.
+    /// Useful for determining if unwrapped capture optimization can apply.
+    pub fn maxCaptureCount(self: *const LambdaSet) usize {
+        var max: usize = 0;
+        for (self.closures.items) |closure| {
+            if (closure.capture_names.items.len > max) {
+                max = closure.capture_names.items.len;
+            }
+        }
+        return max;
+    }
+
+    /// Determine if this lambda set should use a compact representation.
+    ///
+    /// Returns true if:
+    /// - All closures have <= 1 capture (unwrapped capture possible)
+    /// - Or all closures have no captures (enum dispatch possible)
+    ///
+    /// This is useful for optimization decisions.
+    pub fn canUseCompactRepresentation(self: *const LambdaSet) bool {
+        const max_caps = self.maxCaptureCount();
+        return max_caps <= 1;
+    }
 };
 
 /// Information about a capture for layout optimization
@@ -401,6 +547,14 @@ top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 /// Higher region = more deeply nested = should be resolved first.
 current_region: u8,
 
+/// External lambda set requests - for cross-module resolution.
+/// These are requests for ability implementations from other modules.
+external_lambda_set_requests: std.ArrayList(ExternalLambdaSetRequest),
+
+/// Exported closure information for module interface.
+/// These are closures that can be used by other modules.
+exported_closures: std.ArrayList(ExportedClosureInfo),
+
 /// Initialize the transformer
 pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
     return .{
@@ -413,6 +567,8 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .pattern_lambda_return_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
         .current_region = 0,
+        .external_lambda_set_requests = std.ArrayList(ExternalLambdaSetRequest).empty,
+        .exported_closures = std.ArrayList(ExportedClosureInfo).empty,
     };
 }
 
@@ -481,6 +637,384 @@ pub fn isTopLevel(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     return self.top_level_patterns.contains(pattern_idx);
 }
 
+/// Request an ability implementation from an external module.
+///
+/// Called when transforming code that references an ability member where
+/// the implementation is defined in another module.
+///
+/// Returns true if this is a new request, false if already requested.
+pub fn requestExternalLambdaSet(
+    self: *Self,
+    source_module: CIR.Import.Idx,
+    ability_member: base.Ident.Idx,
+    concrete_type_info: ConcreteTypeInfo,
+    original_unspec: UnspecializedClosure,
+) !bool {
+    // Check if we already have this request
+    for (self.external_lambda_set_requests.items) |existing| {
+        if (existing.eql(.{
+            .source_module = source_module,
+            .ability_member = ability_member,
+            .concrete_type_info = concrete_type_info,
+            .original_unspec = original_unspec,
+        })) {
+            return false; // Already requested
+        }
+    }
+
+    // Add new request
+    try self.external_lambda_set_requests.append(self.allocator, .{
+        .source_module = source_module,
+        .ability_member = ability_member,
+        .concrete_type_info = concrete_type_info,
+        .original_unspec = original_unspec,
+    });
+
+    return true;
+}
+
+/// Get all pending external lambda set requests.
+///
+/// These should be processed after the transformation pass to resolve
+/// cross-module ability implementations.
+pub fn getExternalLambdaSetRequests(self: *const Self) []const ExternalLambdaSetRequest {
+    return self.external_lambda_set_requests.items;
+}
+
+/// Resolve an external lambda set request with the closure info from the external module.
+///
+/// Called when the external module provides the ability implementation closure.
+/// Returns the resolved result which includes the closure info.
+pub fn resolveExternalLambdaSet(
+    self: *Self,
+    request: ExternalLambdaSetRequest,
+    closure_info: ClosureInfo,
+) ExternalLambdaSetResult {
+    // Find and remove the request from our pending list
+    var found = false;
+    var i: usize = 0;
+    while (i < self.external_lambda_set_requests.items.len) {
+        if (self.external_lambda_set_requests.items[i].eql(request)) {
+            _ = self.external_lambda_set_requests.swapRemove(i);
+            found = true;
+            break;
+        }
+        i += 1;
+    }
+
+    return .{
+        .closure_info = closure_info,
+        .is_new = found,
+    };
+}
+
+/// Export a closure for the module interface.
+///
+/// Called for closures that implement abilities and should be accessible
+/// from other modules.
+pub fn exportClosure(
+    self: *Self,
+    closure_name: base.Ident.Idx,
+    lifted_fn_pattern: ?CIR.Pattern.Idx,
+    implements_ability: ?ExportedClosureInfo.AbilityImpl,
+) !void {
+    try self.exported_closures.append(self.allocator, .{
+        .closure_name = closure_name,
+        .lifted_fn_pattern = lifted_fn_pattern,
+        .implements_ability = implements_ability,
+    });
+}
+
+/// Get all exported closures for the module interface.
+///
+/// These are closures that other modules can reference when resolving
+/// their ability-polymorphic lambda sets.
+pub fn getExportedClosures(self: *const Self) []const ExportedClosureInfo {
+    return self.exported_closures.items;
+}
+
+/// Find an exported closure by ability implementation.
+///
+/// Used when an external module requests a specific ability implementation
+/// for a concrete type.
+pub fn findExportedClosureByAbility(
+    self: *const Self,
+    ability: base.Ident.Idx,
+    member: base.Ident.Idx,
+    for_type: base.Ident.Idx,
+) ?ExportedClosureInfo {
+    for (self.exported_closures.items) |exported| {
+        if (exported.implements_ability) |impl| {
+            if (impl.ability == ability and
+                impl.member == member and
+                impl.for_type == for_type)
+            {
+                return exported;
+            }
+        }
+    }
+    return null;
+}
+
+/// Detect if a closure body contains a reference to the closure itself.
+///
+/// This is used to identify recursive closures, which require special handling
+/// during dispatch generation (the recursion must be tracked to prevent
+/// infinite lambda set expansion).
+///
+/// Returns true if the body contains a self-reference.
+pub fn detectRecursion(
+    self: *const Self,
+    closure_pattern: CIR.Pattern.Idx,
+    body_expr: Expr.Idx,
+) bool {
+    return self.exprContainsPatternRef(body_expr, closure_pattern);
+}
+
+/// Check if an expression contains a reference to the given pattern.
+/// Used for recursive closure detection.
+fn exprContainsPatternRef(
+    self: *const Self,
+    expr_idx: Expr.Idx,
+    target_pattern: CIR.Pattern.Idx,
+) bool {
+    const expr = self.module_env.store.getExpr(expr_idx);
+
+    switch (expr) {
+        .e_lookup_local => |lookup| {
+            return lookup.pattern_idx == target_pattern;
+        },
+        .e_call => |call| {
+            // Check function expression
+            if (self.exprContainsPatternRef(call.func, target_pattern)) {
+                return true;
+            }
+            // Check arguments
+            const args = self.module_env.store.sliceExpr(call.args);
+            for (args) |arg_idx| {
+                if (self.exprContainsPatternRef(arg_idx, target_pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .e_lambda => |lambda| {
+            return self.exprContainsPatternRef(lambda.body, target_pattern);
+        },
+        .e_closure => |closure| {
+            const lambda_expr = self.module_env.store.getExpr(closure.lambda_idx);
+            if (lambda_expr == .e_lambda) {
+                return self.exprContainsPatternRef(lambda_expr.e_lambda.body, target_pattern);
+            }
+            return false;
+        },
+        .e_block => |block| {
+            // Check statements
+            const stmts = self.module_env.store.sliceStatements(block.stmts);
+            for (stmts) |stmt_idx| {
+                const stmt = self.module_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_decl => |decl| {
+                        if (self.exprContainsPatternRef(decl.expr, target_pattern)) {
+                            return true;
+                        }
+                    },
+                    .s_decl_gen => |decl| {
+                        if (self.exprContainsPatternRef(decl.expr, target_pattern)) {
+                            return true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            // Check final expression
+            return self.exprContainsPatternRef(block.final_expr, target_pattern);
+        },
+        .e_if => |if_expr| {
+            // Check all branches
+            const branches = self.module_env.store.sliceIfBranches(if_expr.branches);
+            for (branches) |branch_idx| {
+                const branch = self.module_env.store.getIfBranch(branch_idx);
+                if (self.exprContainsPatternRef(branch.cond, target_pattern) or
+                    self.exprContainsPatternRef(branch.body, target_pattern))
+                {
+                    return true;
+                }
+            }
+            return self.exprContainsPatternRef(if_expr.final_else, target_pattern);
+        },
+        .e_binop => |binop| {
+            return self.exprContainsPatternRef(binop.lhs, target_pattern) or
+                self.exprContainsPatternRef(binop.rhs, target_pattern);
+        },
+        .e_list => |list| {
+            const elems = self.module_env.store.sliceExpr(list.elems);
+            for (elems) |elem_idx| {
+                if (self.exprContainsPatternRef(elem_idx, target_pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .e_tuple => |tuple| {
+            const elems = self.module_env.store.sliceExpr(tuple.elems);
+            for (elems) |elem_idx| {
+                if (self.exprContainsPatternRef(elem_idx, target_pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .e_record => |record| {
+            const fields = self.module_env.store.sliceRecordFields(record.fields);
+            for (fields) |field_idx| {
+                const field = self.module_env.store.getRecordField(field_idx);
+                if (self.exprContainsPatternRef(field.value, target_pattern)) {
+                    return true;
+                }
+            }
+            if (record.ext) |ext| {
+                return self.exprContainsPatternRef(ext, target_pattern);
+            }
+            return false;
+        },
+        .e_tag => |tag| {
+            const args = self.module_env.store.sliceExpr(tag.args);
+            for (args) |arg_idx| {
+                if (self.exprContainsPatternRef(arg_idx, target_pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .e_unary_minus => |unary| {
+            return self.exprContainsPatternRef(unary.expr, target_pattern);
+        },
+        .e_unary_not => |unary| {
+            return self.exprContainsPatternRef(unary.expr, target_pattern);
+        },
+        .e_dot_access => |dot| {
+            if (self.exprContainsPatternRef(dot.receiver, target_pattern)) {
+                return true;
+            }
+            if (dot.args) |args_span| {
+                const args = self.module_env.store.sliceExpr(args_span);
+                for (args) |arg_idx| {
+                    if (self.exprContainsPatternRef(arg_idx, target_pattern)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        },
+        .e_match => |match| {
+            if (self.exprContainsPatternRef(match.cond, target_pattern)) {
+                return true;
+            }
+            const branches = self.module_env.store.sliceMatchBranches(match.branches);
+            for (branches) |branch_idx| {
+                const branch = self.module_env.store.getMatchBranch(branch_idx);
+                if (self.exprContainsPatternRef(branch.value, target_pattern)) {
+                    return true;
+                }
+                if (branch.guard) |guard| {
+                    if (self.exprContainsPatternRef(guard, target_pattern)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        },
+        .e_return => |ret| {
+            return self.exprContainsPatternRef(ret.expr, target_pattern);
+        },
+        .e_dbg => |dbg| {
+            return self.exprContainsPatternRef(dbg.expr, target_pattern);
+        },
+        .e_expect => |expect| {
+            return self.exprContainsPatternRef(expect.body, target_pattern);
+        },
+        .e_nominal => |nominal| {
+            return self.exprContainsPatternRef(nominal.backing_expr, target_pattern);
+        },
+        .e_nominal_external => |nominal| {
+            return self.exprContainsPatternRef(nominal.backing_expr, target_pattern);
+        },
+        .e_for => |for_expr| {
+            return self.exprContainsPatternRef(for_expr.expr, target_pattern) or
+                self.exprContainsPatternRef(for_expr.body, target_pattern);
+        },
+        .e_type_var_dispatch => |tvd| {
+            const args = self.module_env.store.sliceExpr(tvd.args);
+            for (args) |arg_idx| {
+                if (self.exprContainsPatternRef(arg_idx, target_pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        // Leaf expressions that can't contain references
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_str_segment,
+        .e_str,
+        .e_lookup_external,
+        .e_empty_list,
+        .e_empty_record,
+        .e_zero_argument_tag,
+        .e_runtime_error,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_lookup_required,
+        .e_hosted_lambda,
+        .e_low_level_lambda,
+        .e_crash,
+        => return false,
+    }
+}
+
+/// Mark a lambda set as containing a recursive closure.
+///
+/// When a closure references itself (directly or indirectly), its lambda set
+/// needs special handling during code generation.
+pub fn markLambdaSetRecursive(
+    lambda_set: *LambdaSet,
+    closure_info: *ClosureInfo,
+) void {
+    lambda_set.recursion_closure = closure_info;
+}
+
+/// Check if a lambda set is recursive.
+pub fn isLambdaSetRecursive(lambda_set: *const LambdaSet) bool {
+    return lambda_set.recursion_closure != null;
+}
+
+/// Handle an empty lambda set at a call site.
+///
+/// This returns the original call site expression for cases where a closure
+/// is called but the lambda set is empty. This shouldn't happen in valid
+/// programs - it indicates either a compiler bug or a program that's guaranteed
+/// to fail at runtime.
+///
+/// In the future, this could generate a runtime error expression with proper
+/// diagnostic information.
+pub fn handleEmptyLambdaSet(
+    call_site: Expr.Idx,
+) Expr.Idx {
+    // Return the original call site - this is an error case that shouldn't
+    // happen in valid programs. Type checking should catch this.
+    return call_site;
+}
+
+/// Check if a lambda set is empty (no closures can reach the variable).
+pub fn isLambdaSetEmpty(lambda_set: *const LambdaSet) bool {
+    return lambda_set.closures.items.len == 0 and
+        lambda_set.unspecialized.items.len == 0;
+}
+
 /// Free resources
 pub fn deinit(self: *Self) void {
     // Free capture name lists
@@ -514,6 +1048,12 @@ pub fn deinit(self: *Self) void {
 
     // Free top-level patterns set
     self.top_level_patterns.deinit();
+
+    // Free external lambda set requests
+    self.external_lambda_set_requests.deinit(self.allocator);
+
+    // Free exported closures
+    self.exported_closures.deinit(self.allocator);
 }
 
 /// Generate a unique tag name for a closure
@@ -1884,4 +2424,153 @@ test "LambdaSet: merge with unspecialized" {
     // set1 should have both unspecialized closures
     try testing.expectEqual(@as(usize, 2), set1.unspecialized.items.len);
     try testing.expect(set1.hasUnspecialized());
+}
+
+test "ClosureTransformer: external lambda set requests" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // Create test identifiers
+    const ability_member = try module_env.insertIdent(base.Ident.for_text("hash"));
+
+    // Create a dummy unspecialized closure
+    const unspec = UnspecializedClosure{
+        .member = ability_member,
+        .member_expr = @enumFromInt(1),
+        .region = 0,
+    };
+
+    // Request an external lambda set
+    // source_module is only used for equality comparison in tests, never dereferenced
+    const source_module: CIR.Import.Idx = undefined;
+    const concrete_type_info = ConcreteTypeInfo{
+        .type_ident = null,
+        .type_args_hash = 12345,
+    };
+
+    const is_new = try transformer.requestExternalLambdaSet(
+        source_module,
+        ability_member,
+        concrete_type_info,
+        unspec,
+    );
+    try testing.expect(is_new);
+
+    // Get the pending requests
+    const requests = transformer.getExternalLambdaSetRequests();
+    try testing.expectEqual(@as(usize, 1), requests.len);
+    try testing.expect(requests[0].ability_member == ability_member);
+
+    // Duplicate request should return false
+    const is_new2 = try transformer.requestExternalLambdaSet(
+        source_module,
+        ability_member,
+        concrete_type_info,
+        unspec,
+    );
+    try testing.expect(!is_new2);
+}
+
+test "ClosureTransformer: export closure" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // Create test identifiers
+    const closure_name = try module_env.insertIdent(base.Ident.for_text("Closure_hash_1"));
+    const ability = try module_env.insertIdent(base.Ident.for_text("Hash"));
+    const member = try module_env.insertIdent(base.Ident.for_text("hash"));
+    const for_type = try module_env.insertIdent(base.Ident.for_text("List"));
+
+    // Export a closure
+    try transformer.exportClosure(
+        closure_name,
+        null,
+        ExportedClosureInfo.AbilityImpl{
+            .ability = ability,
+            .member = member,
+            .for_type = for_type,
+        },
+    );
+
+    // Check exported closures
+    const exported = transformer.getExportedClosures();
+    try testing.expectEqual(@as(usize, 1), exported.len);
+    try testing.expect(exported[0].closure_name == closure_name);
+
+    // Find by ability
+    const found = transformer.findExportedClosureByAbility(ability, member, for_type);
+    try testing.expect(found != null);
+    try testing.expect(found.?.closure_name == closure_name);
+}
+
+test "LambdaSet: isEmpty" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Empty lambda set
+    try testing.expect(isLambdaSetEmpty(&lambda_set));
+
+    // Add an unspecialized closure
+    const unspec = UnspecializedClosure{
+        .member = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 1,
+        },
+        .member_expr = @enumFromInt(1),
+        .region = 0,
+    };
+    try lambda_set.addUnspecialized(allocator, unspec);
+
+    // No longer empty
+    try testing.expect(!isLambdaSetEmpty(&lambda_set));
+}
+
+test "LambdaSet: isPureLambdaSet with no closures" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Empty is pure (vacuously true)
+    try testing.expect(lambda_set.isPureLambdaSet());
+}
+
+test "LambdaSet: maxCaptureCount" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Empty lambda set has max 0
+    try testing.expectEqual(@as(usize, 0), lambda_set.maxCaptureCount());
+}
+
+test "LambdaSet: canUseCompactRepresentation" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Empty can use compact
+    try testing.expect(lambda_set.canUseCompactRepresentation());
 }
