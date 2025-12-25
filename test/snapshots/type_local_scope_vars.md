@@ -263,7 +263,7 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, Error -> a"))
+		(patt (type "a, b -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "a, Error -> a"))

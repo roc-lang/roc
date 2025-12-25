@@ -352,7 +352,7 @@ NO CHANGE
 		(patt (type "Pair(U8)"))
 		(patt (type "Pair(U8)"))
 		(patt (type "Pair(U64)"))
-		(patt (type "a, b -> Error")))
+		(patt (type "a, b -> Pair(a)")))
 	(type_decls
 		(nominal (type "Pair(a)")
 			(ty-header (name "Pair")

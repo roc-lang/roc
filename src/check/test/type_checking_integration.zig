@@ -2789,6 +2789,43 @@ test "check type - List.get method syntax" {
     );
 }
 
+// Nested error type annotation tests
+
+test "check type - nested error should use annotation type" {
+    // Test that when an expression has a nested error (not at the root level),
+    // the pattern still gets the annotation type, not an error type.
+    //
+    // For example: if annotation is Try(Try(I64, Str), Bool) and expression is
+    // Ok(Err("oops")), the pattern should get the full annotation type even though
+    // the nested Err would normally need type information from the annotation.
+    //
+    // This tests the fix for the TODO at Check.zig lines 1530-1534.
+    const source =
+        \\nested_err : Try(Try(I64, Str), Bool)
+        \\nested_err = Ok(Err("oops"))
+    ;
+    // Expected: the pattern should have the annotation type
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Try(I64, Str), Bool)");
+}
+
+test "check type - deeply nested error should use annotation type" {
+    // Test that errors deeply nested within a structure still get annotation type
+    const source =
+        \\deep_err : Try(Try(Try(I64, Str), Bool), U8)
+        \\deep_err = Ok(Ok(Err("deep error")))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(Try(Try(I64, Str), Bool), U8)");
+}
+
+test "check type - nested error in function return should use annotation" {
+    // Test that nested errors in function return values work correctly
+    const source =
+        \\get_nested : {} -> Try(Try(I64, Str), Bool)
+        \\get_nested = |{}| Ok(Err("inner error"))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Try(I64, Str), Bool)");
+}
+
 // List.first method syntax tests - REGRESSION TEST for cycle detection bug
 
 test "check type - List.first method syntax should not create cyclic types" {

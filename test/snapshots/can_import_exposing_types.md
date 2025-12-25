@@ -907,11 +907,11 @@ combineTrys = |jsonTry, httpStatus|
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Str -> Try(Error, Error)"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error, List(Error) -> Error"))
+		(patt (type "Error, List(Error) -> Try(List(Error), Error)"))
 		(patt (type "Error -> Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Error -> Str"))
 		(patt (type "Try(Error, Error), Error -> Try(Error, Error)")))
 	(type_decls
 		(alias (type "ServerConfig")

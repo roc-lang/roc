@@ -32,6 +32,7 @@ const Var = types_mod.Var;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
+const FlatType = types_mod.FlatType;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Num = types_mod.Num;
@@ -1529,20 +1530,27 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(env);
 
-        // TODO: This currently only works if the root type is an error, but we
-        // should later expand this to use the annotation if there's _any_ error.
+        // Check if the expression type contains any errors anywhere in its structure.
+        // If it does and we have an annotation, use the annotation type for the pattern
+        // instead of the expression type. This preserves the annotation type for other
+        // code that references this identifier, even when the expression has errors.
         //
-        // For example, if the expr resolves to `Error -> Error` does not
-        // trigger this codepath
-        if (mb_instantiated_anno_var != null and
-            self.types.resolveVar(expr_var).desc.content == .err)
-        {
-            // If there was an annotation AND the expr errored, then unify the
-            // ptrn against the annotation
-            const instantiated_anno_var = mb_instantiated_anno_var.?;
-            _ = try self.unify(ptrn_var, instantiated_anno_var, env);
+        // For example, if the annotation is `I64 -> Str` and the expression has an error
+        // in the return type (making it `I64 -> Error`), the pattern should still get
+        // `I64 -> Str` from the annotation.
+        if (mb_instantiated_anno_var) |instantiated_anno_var| {
+            var visited = std.AutoHashMap(Var, void).init(self.gpa);
+            defer visited.deinit();
+            if (self.varContainsError(expr_var, &visited)) {
+                // If there was an annotation AND the expr contains errors, then unify the
+                // ptrn against the annotation
+                _ = try self.unify(ptrn_var, instantiated_anno_var, env);
+            } else {
+                // Otherwise, unify the ptrn and expr
+                _ = try self.unify(ptrn_var, expr_var, env);
+            }
         } else {
-            // Otherwise, unify the ptrn and expr
+            // No annotation, just unify the ptrn and expr
             _ = try self.unify(ptrn_var, expr_var, env);
         }
 
@@ -5784,6 +5792,72 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
     };
 }
 
+/// Check if a type variable contains any error types anywhere in its structure.
+/// This is used to determine if an expression's type contains errors, in which case
+/// we should use the annotation type for the pattern instead of the expression type.
+/// This handles cases like `Error -> Error` where the root is a function but the
+/// argument/return types are errors.
+fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
+    const resolved = self.types.resolveVar(var_);
+
+    // Check if we've already visited this var (cycle detection)
+    if (visited.contains(resolved.var_)) {
+        return false;
+    }
+    visited.put(resolved.var_, {}) catch return false;
+
+    return switch (resolved.desc.content) {
+        .err => true,
+        .flex, .rigid => false,
+        .alias => |alias| self.varContainsError(self.types.getAliasBackingVar(alias), visited),
+        .recursion_var => |rec_var| self.varContainsError(rec_var.structure, visited),
+        .structure => |flat_type| self.flatTypeContainsError(flat_type, visited),
+    };
+}
+
+/// Check if a flat type contains any error types
+fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHashMap(Var, void)) bool {
+    return switch (flat_type) {
+        .tuple => |tuple| self.varsContainError(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| blk: {
+            var arg_iter = self.types.iterNominalArgs(nominal);
+            while (arg_iter.next()) |arg_var| {
+                if (self.varContainsError(arg_var, visited)) break :blk true;
+            }
+            break :blk self.varContainsError(self.types.getNominalBackingVar(nominal), visited);
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+            if (self.varsContainError(self.types.sliceVars(func.args), visited)) break :blk true;
+            break :blk self.varContainsError(func.ret, visited);
+        },
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (self.varsContainError(fields.items(.var_), visited)) break :blk true;
+            break :blk self.varContainsError(record.ext, visited);
+        },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            break :blk self.varsContainError(fields_slice.items(.var_), visited);
+        },
+        .tag_union => |tag_union| blk: {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |tag_args| {
+                if (self.varsContainError(self.types.sliceVars(tag_args), visited)) break :blk true;
+            }
+            break :blk self.varContainsError(tag_union.ext, visited);
+        },
+        .empty_record, .empty_tag_union => false,
+    };
+}
+
+/// Check if any of the given vars contain errors
+fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) bool {
+    for (vars) |v| {
+        if (self.varContainsError(v, visited)) return true;
+    }
+    return false;
+}
+
 /// Mark a constraint function's return type as error
 fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstraint, env: *Env) !void {
     const resolved_constraint = self.types.resolveVar(constraint.fn_var);
@@ -5806,7 +5880,7 @@ fn reportConstraintError(
 ) !void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
-        .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
+        .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{
             .dispatcher_does_not_impl_method = .{
                 .dispatcher_var = dispatcher_var,
                 .dispatcher_snapshot = snapshot,
@@ -5816,7 +5890,7 @@ fn reportConstraintError(
                 .origin = constraint.origin,
             },
         } },
-        .not_nominal => problem.Problem{ .static_dispach = .{
+        .not_nominal => problem.Problem{ .static_dispatch = .{
             .dispatcher_not_nominal = .{
                 .dispatcher_var = dispatcher_var,
                 .dispatcher_snapshot = snapshot,
@@ -5838,7 +5912,7 @@ fn reportEqualityError(
     env: *Env,
 ) !void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
-    const equality_problem = problem.Problem{ .static_dispach = .{
+    const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
             .dispatcher_snapshot = snapshot,

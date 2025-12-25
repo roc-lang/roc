@@ -53,6 +53,18 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
     unreachable;
 }
 
+/// Read the discriminant for a tag union, handling single-tag unions which don't store one.
+fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache: *LayoutStore) usize {
+    std.debug.assert(layout.tag == .tag_union);
+    const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
+    const variants = layout_cache.getTagUnionVariants(tu_data);
+    // Single-tag unions don't have discriminants, so don't try to read one.
+    if (variants.len == 1) return 0;
+    const discriminant = tu_data.readDiscriminant(base_ptr);
+    std.debug.assert(discriminant < variants.len);
+    return discriminant;
+}
+
 /// Increment reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
@@ -115,13 +127,10 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tag_union) {
         if (ptr == null) return;
-        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
-
+        const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
         increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
@@ -284,13 +293,10 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tag_union) {
         if (ptr == null) return;
-        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
-
+        const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
         decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
         return;
@@ -570,13 +576,10 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
         @memcpy(dst, src);
 
-        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
-
+        const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
         if (comptime trace_refcount) {
@@ -1031,9 +1034,7 @@ pub const TagUnionAccessor = struct {
     /// Get the layout for a specific variant by discriminant
     pub fn getVariantLayout(self: *const TagUnionAccessor, discriminant: usize) Layout {
         const variants = self.layout_cache.getTagUnionVariants(&self.tu_data);
-        if (discriminant >= variants.len) {
-            return Layout.zst();
-        }
+        std.debug.assert(discriminant < variants.len);
         const variant = variants.get(discriminant);
         return self.layout_cache.getLayout(variant.payload_layout);
     }
@@ -1785,13 +1786,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .tag_union => {
             if (self.ptr == null) return;
-            const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
             const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
-            const discriminant = tu_data.readDiscriminant(base_ptr);
-
+            const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
+            const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
             const variants = layout_cache.getTagUnionVariants(tu_data);
-            std.debug.assert(discriminant < variants.len);
-
             const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
             if (comptime trace_refcount) {

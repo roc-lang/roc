@@ -2083,13 +2083,11 @@ pub fn checkRedundancy(
     };
 }
 
-// =============================================================================
 // 1-Phase On-Demand Reification
 //
 // These functions work with UnresolvedPattern directly, reifying on-demand
 // during usefulness checking. This allows type errors to propagate immediately
 // rather than being silently skipped.
-// =============================================================================
 
 /// A matrix of sketched (unresolved) patterns for exhaustiveness checking.
 /// Patterns are reified on-demand when type information is needed.
@@ -2987,9 +2985,7 @@ pub fn checkRedundancySketched(
     };
 }
 
-// =============================================================================
 // High-level Integration API
-// =============================================================================
 //
 // These functions provide a simpler interface for the type checker to call.
 
