@@ -1654,3 +1654,26 @@ test "issue 8727: function returning closure that captures outer variable" {
     // Triple currying
     try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
 }
+
+test "issue 8737: tag union with tuple payload containing tag union" {
+    // Regression test for GitHub issue #8737
+    // A tag union whose payload is a tuple containing another tag union as the first element
+    // would crash during pattern matching due to incorrect discriminant reading.
+    // The bug is specifically triggered when:
+    // 1. Outer tag union has a tuple payload
+    // 2. The tuple's first element is another tag union (with a payload)
+    // 3. The tuple has 2+ elements
+    // 4. Pattern matching is used on the outer tag union
+
+    // Test: Inner tag union inside tuple inside outer tag union (the bug trigger)
+    // The match branches force type inference to produce a 2-variant type
+    try runExpectI64(
+        \\{
+        \\    result = XYZ((QQQ(1u8), 3u64))
+        \\    match result {
+        \\        XYZ(_) => 42
+        \\        BBB => 0
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
