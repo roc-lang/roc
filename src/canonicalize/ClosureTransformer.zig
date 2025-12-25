@@ -141,29 +141,88 @@ pub const ClosureInfo = struct {
     lifted_captures_pattern: ?CIR.Pattern.Idx,
 };
 
-/// A lambda set - a collection of closures that could reach a given variable
+/// Unspecialized Closure - represents an ability-polymorphic closure.
+///
+/// These are closures that depend on ability implementations which won't be
+/// known until monomorphization. For example, when code uses `hash` from the
+/// Hash ability, we don't know which concrete `hash` implementation to dispatch
+/// to until we know the concrete type.
+///
+/// These are resolved during monomorphization when concrete types are known.
+pub const UnspecializedClosure = struct {
+    /// The ability member symbol (e.g., `hash` from Hash ability)
+    member: base.Ident.Idx,
+
+    /// The expression that references the ability member.
+    /// Used to locate this in the IR for resolution.
+    member_expr: Expr.Idx,
+
+    /// Region number for ordering during resolution.
+    /// When resolving nested ability-polymorphic closures, we process
+    /// innermost first (higher region numbers first).
+    region: u8,
+};
+
+/// A lambda set - a collection of closures that could reach a given variable.
+///
+/// Lambda sets can contain both:
+/// - Resolved closures: concrete closures with known implementations
+/// - Unspecialized closures: ability-polymorphic closures resolved at mono time
 pub const LambdaSet = struct {
-    /// All closures in this lambda set
+    /// Resolved/concrete closures in this lambda set
     closures: std.ArrayList(ClosureInfo),
 
+    /// Unspecialized closures (ability-polymorphic).
+    /// These are resolved during monomorphization when concrete types are known.
+    unspecialized: std.ArrayList(UnspecializedClosure),
+
+    /// For recursive lambda sets (self-referential closures).
+    /// Points to the closure that references itself.
+    recursion_closure: ?*ClosureInfo,
+
     pub fn init() LambdaSet {
-        return .{ .closures = std.ArrayList(ClosureInfo).empty };
+        return .{
+            .closures = std.ArrayList(ClosureInfo).empty,
+            .unspecialized = std.ArrayList(UnspecializedClosure).empty,
+            .recursion_closure = null,
+        };
     }
 
     /// Note: This does NOT free capture_names since they are shared with the closures map.
     /// The capture_names are owned by the original closures and freed when the transformer is deinitialized.
     pub fn deinit(self: *LambdaSet, allocator: std.mem.Allocator) void {
         self.closures.deinit(allocator);
+        self.unspecialized.deinit(allocator);
     }
 
     pub fn addClosure(self: *LambdaSet, allocator: std.mem.Allocator, info: ClosureInfo) !void {
         try self.closures.append(allocator, info);
     }
 
+    /// Add an unspecialized (ability-polymorphic) closure to this lambda set.
+    /// These will be resolved during monomorphization.
+    pub fn addUnspecialized(self: *LambdaSet, allocator: std.mem.Allocator, unspec: UnspecializedClosure) !void {
+        try self.unspecialized.append(allocator, unspec);
+    }
+
+    /// Check if this lambda set has any unresolved ability-polymorphic closures.
+    pub fn hasUnspecialized(self: *const LambdaSet) bool {
+        return self.unspecialized.items.len > 0;
+    }
+
+    /// Check if all closures are resolved (no unspecialized remaining).
+    pub fn isFullyResolved(self: *const LambdaSet) bool {
+        return self.unspecialized.items.len == 0;
+    }
+
     pub fn merge(self: *LambdaSet, allocator: std.mem.Allocator, other: *const LambdaSet) !void {
         for (other.closures.items) |info| {
             try self.closures.append(allocator, info);
         }
+        for (other.unspecialized.items) |unspec| {
+            try self.unspecialized.append(allocator, unspec);
+        }
+        // Don't merge recursion_closure - that's specific to each lambda set
     }
 
     /// Create a deep copy of this LambdaSet with its own ArrayList
@@ -172,12 +231,23 @@ pub const LambdaSet = struct {
         for (self.closures.items) |info| {
             try new_set.closures.append(allocator, info);
         }
+        for (self.unspecialized.items) |unspec| {
+            try new_set.unspecialized.append(allocator, unspec);
+        }
+        new_set.recursion_closure = self.recursion_closure;
         return new_set;
     }
 
     /// Determine the optimal closure representation for this lambda set.
     /// This is used to generate efficient dispatch code.
+    ///
+    /// IMPORTANT: This should only be called after all unspecialized closures
+    /// have been resolved during monomorphization.
     pub fn determineRepresentation(self: *const LambdaSet) ClosureRepresentation {
+        // All ability-polymorphic closures must be resolved before we can
+        // determine representation. This happens during monomorphization.
+        std.debug.assert(self.unspecialized.items.len == 0);
+
         const closures = self.closures.items;
 
         // Empty lambda set
@@ -326,6 +396,11 @@ pattern_lambda_return_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 /// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
 top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 
+/// Current region number for ordering unspecialized closures.
+/// Incremented when entering nested lambda scopes.
+/// Higher region = more deeply nested = should be resolved first.
+current_region: u8,
+
 /// Initialize the transformer
 pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
     return .{
@@ -337,6 +412,62 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .lambda_return_sets = std.AutoHashMap(Expr.Idx, LambdaSet).init(allocator),
         .pattern_lambda_return_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
+        .current_region = 0,
+    };
+}
+
+/// Enter a new nested scope (e.g., lambda body), incrementing the region counter.
+/// Returns the previous region value for restoration.
+pub fn enterRegion(self: *Self) u8 {
+    const prev = self.current_region;
+    if (self.current_region < 255) {
+        self.current_region += 1;
+    }
+    return prev;
+}
+
+/// Exit a nested scope, restoring the previous region value.
+pub fn exitRegion(self: *Self, prev_region: u8) void {
+    self.current_region = prev_region;
+}
+
+/// Info extracted from an ability member reference expression.
+pub const AbilityMemberInfo = struct {
+    /// The method name being called (e.g., "hash", "eq", "default")
+    method_name: base.Ident.Idx,
+    /// Reference to the type var alias statement (for type resolution)
+    type_var_alias_stmt: CIR.Statement.Idx,
+    /// Arguments to the method call
+    args: CIR.Expr.Span,
+};
+
+/// Check if an expression is an ability member reference (e_type_var_dispatch).
+/// Returns the ability member info if so, null otherwise.
+pub fn isAbilityMemberRef(self: *const Self, expr_idx: Expr.Idx) ?AbilityMemberInfo {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_type_var_dispatch => |tvd| AbilityMemberInfo{
+            .method_name = tvd.method_name,
+            .type_var_alias_stmt = tvd.type_var_alias_stmt,
+            .args = tvd.args,
+        },
+        else => null,
+    };
+}
+
+/// Create an unspecialized closure entry for an ability member reference.
+/// This records that we need to resolve this ability dispatch at monomorphization time.
+pub fn createUnspecializedClosure(
+    self: *const Self,
+    member_info: AbilityMemberInfo,
+    expr_idx: Expr.Idx,
+) UnspecializedClosure {
+    _ = member_info.type_var_alias_stmt; // Will be used in phase 2 for type resolution
+    _ = member_info.args; // Will be used when generating dispatch
+    return UnspecializedClosure{
+        .member = member_info.method_name,
+        .member_expr = expr_idx,
+        .region = self.current_region,
     };
 }
 
@@ -600,6 +731,11 @@ fn generateLambdaSetDispatchMatch(
     lambda_set: *const LambdaSet,
     call_args: []const Expr.Idx,
 ) !Expr.Idx {
+    // All unspecialized closures must be resolved before generating dispatch.
+    // Unspecialized closures (ability-polymorphic entries) are resolved during
+    // monomorphization when concrete types are known.
+    std.debug.assert(lambda_set.isFullyResolved());
+
     // If there's only one closure, use the simpler single-closure dispatch
     if (lambda_set.closures.items.len == 1) {
         return try self.generateDispatchMatch(closure_var_expr, lambda_set.closures.items[0], call_args);
@@ -953,6 +1089,48 @@ pub fn transformExprWithLambdaSet(
 
             return .{ .expr = transformed, .lambda_set = null };
         },
+        .e_type_var_dispatch => |tvd| {
+            // Ability member reference - this is an unspecialized closure.
+            // We record it as an unspecialized entry that will be resolved
+            // during monomorphization when the concrete type is known.
+            //
+            // For example, `hash` from `Hash has hash : a -> U64 | a has Hash`
+            // becomes an unspecialized closure until we know what type `a` is.
+            const member_info = AbilityMemberInfo{
+                .method_name = tvd.method_name,
+                .type_var_alias_stmt = tvd.type_var_alias_stmt,
+                .args = tvd.args,
+            };
+
+            // Create a lambda set with this unspecialized closure
+            var lambda_set = LambdaSet.init();
+            const unspec = self.createUnspecializedClosure(member_info, expr_idx);
+            try lambda_set.addUnspecialized(self.allocator, unspec);
+
+            // Transform arguments if any
+            const args = self.module_env.store.sliceExpr(tvd.args);
+            if (args.len > 0) {
+                const args_start = self.module_env.store.scratch.?.exprs.top();
+                for (args) |arg_idx| {
+                    const new_arg = try self.transformExpr(arg_idx);
+                    try self.module_env.store.scratch.?.exprs.append(new_arg);
+                }
+                const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+                // Create new e_type_var_dispatch with transformed args
+                const new_expr = try self.module_env.store.addExpr(Expr{
+                    .e_type_var_dispatch = .{
+                        .type_var_alias_stmt = tvd.type_var_alias_stmt,
+                        .method_name = tvd.method_name,
+                        .args = new_args_span,
+                    },
+                }, base.Region.zero());
+
+                return .{ .expr = new_expr, .lambda_set = lambda_set };
+            }
+
+            return .{ .expr = expr_idx, .lambda_set = lambda_set };
+        },
         else => {
             // Other expressions - just transform without lambda set
             const transformed = try self.transformExpr(expr_idx);
@@ -1303,10 +1481,42 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_ellipsis,
         .e_anno_only,
         .e_lookup_required,
-        .e_type_var_dispatch,
         .e_hosted_lambda,
         .e_low_level_lambda,
         => return expr_idx,
+
+        .e_type_var_dispatch => |tvd| {
+            // Transform arguments of the ability member dispatch
+            const args = self.module_env.store.sliceExpr(tvd.args);
+            if (args.len == 0) {
+                return expr_idx;
+            }
+
+            const args_start = self.module_env.store.scratch.?.exprs.top();
+            var any_changed = false;
+
+            for (args) |arg_idx| {
+                const new_arg = try self.transformExpr(arg_idx);
+                if (new_arg != arg_idx) {
+                    any_changed = true;
+                }
+                try self.module_env.store.scratch.?.exprs.append(new_arg);
+            }
+
+            if (!any_changed) {
+                return expr_idx;
+            }
+
+            const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+            return try self.module_env.store.addExpr(Expr{
+                .e_type_var_dispatch = .{
+                    .type_var_alias_stmt = tvd.type_var_alias_stmt,
+                    .method_name = tvd.method_name,
+                    .args = new_args_span,
+                },
+            }, base.Region.zero());
+        },
 
         .e_list => |list| {
             const elems = self.module_env.store.sliceExpr(list.elems);
@@ -1575,4 +1785,103 @@ test "ClosureTransformer: generateClosureTagName without hint" {
     const tag_str = module_env.getIdent(tag_name);
 
     try testing.expectEqualStrings("Closure_1", tag_str);
+}
+
+test "ClosureTransformer: region tracking" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // Initial region should be 0
+    try testing.expectEqual(@as(u8, 0), transformer.current_region);
+
+    // Enter nested scopes
+    const region0 = transformer.enterRegion();
+    try testing.expectEqual(@as(u8, 0), region0);
+    try testing.expectEqual(@as(u8, 1), transformer.current_region);
+
+    const region1 = transformer.enterRegion();
+    try testing.expectEqual(@as(u8, 1), region1);
+    try testing.expectEqual(@as(u8, 2), transformer.current_region);
+
+    // Exit scopes
+    transformer.exitRegion(region1);
+    try testing.expectEqual(@as(u8, 1), transformer.current_region);
+
+    transformer.exitRegion(region0);
+    try testing.expectEqual(@as(u8, 0), transformer.current_region);
+}
+
+test "LambdaSet: unspecialized closures" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Initially empty
+    try testing.expect(!lambda_set.hasUnspecialized());
+    try testing.expect(lambda_set.isFullyResolved());
+
+    // Add an unspecialized closure
+    const unspec = UnspecializedClosure{
+        .member = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 42,
+        },
+        .member_expr = @enumFromInt(1),
+        .region = 1,
+    };
+    try lambda_set.addUnspecialized(allocator, unspec);
+
+    // Now has unspecialized
+    try testing.expect(lambda_set.hasUnspecialized());
+    try testing.expect(!lambda_set.isFullyResolved());
+    try testing.expectEqual(@as(usize, 1), lambda_set.unspecialized.items.len);
+}
+
+test "LambdaSet: merge with unspecialized" {
+    const allocator = testing.allocator;
+
+    var set1 = LambdaSet.init();
+    defer set1.deinit(allocator);
+
+    var set2 = LambdaSet.init();
+    defer set2.deinit(allocator);
+
+    // Add unspecialized to set1
+    const unspec1 = UnspecializedClosure{
+        .member = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 10,
+        },
+        .member_expr = @enumFromInt(1),
+        .region = 0,
+    };
+    try set1.addUnspecialized(allocator, unspec1);
+
+    // Add unspecialized to set2
+    const unspec2 = UnspecializedClosure{
+        .member = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 20,
+        },
+        .member_expr = @enumFromInt(2),
+        .region = 1,
+    };
+    try set2.addUnspecialized(allocator, unspec2);
+
+    // Merge set2 into set1
+    try set1.merge(allocator, &set2);
+
+    // set1 should have both unspecialized closures
+    try testing.expectEqual(@as(usize, 2), set1.unspecialized.items.len);
+    try testing.expect(set1.hasUnspecialized());
 }

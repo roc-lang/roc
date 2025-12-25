@@ -251,6 +251,259 @@ pub fn deinit(self: *Self) void {
     self.external_requests.deinit(self.allocator);
 }
 
+/// Result of looking up an ability implementation for a concrete type.
+/// Contains the information needed to create a ClosureInfo for dispatch.
+pub const AbilityImplLookup = struct {
+    /// The identifier of the method implementation (e.g., "List.hash")
+    method_ident: base.Ident.Idx,
+    /// The type identifier this implementation is for (e.g., "List")
+    type_ident: base.Ident.Idx,
+    /// The node index for the method, if found in this module
+    node_idx: ?u16,
+};
+
+/// Looks up the implementation of an ability method for a concrete type.
+///
+/// Given a concrete type (e.g., List U64) and a method name (e.g., "hash"),
+/// this looks up the qualified method identifier (e.g., "List.hash") and
+/// finds the function definition that implements it.
+///
+/// This is used during monomorphization to resolve unspecialized closures
+/// (ability-polymorphic lambda set entries) to concrete implementations.
+///
+/// Returns null if:
+/// - The type is not resolved to a concrete type
+/// - No implementation is registered for this type/method combination
+pub fn lookupAbilityImpl(
+    self: *Self,
+    concrete_type: types.Var,
+    method_name: base.Ident.Idx,
+) ?AbilityImplLookup {
+    // Resolve the type to get the concrete structure
+    const resolved = self.types_store.resolveVar(concrete_type);
+
+    // Get the type identifier from the concrete type
+    const type_ident: ?base.Ident.Idx = switch (resolved.desc.content) {
+        .structure => |flat| switch (flat) {
+            .nominal_type => |nom| nom.ident.ident_idx,
+            // For built-in types, we need to look up by their canonical name
+            .record, .record_unbound => self.module_env.common.findIdent("Record"),
+            .tag_union, .empty_tag_union => self.module_env.common.findIdent("Tag"),
+            .tuple => self.module_env.common.findIdent("Tuple"),
+            .fn_pure, .fn_effectful, .fn_unbound => self.module_env.common.findIdent("Fn"),
+            .empty_record => self.module_env.common.findIdent("Record"),
+        },
+        .alias => |alias| alias.ident.ident_idx,
+        // Flex/rigid vars are not concrete - can't look up implementation
+        .flex, .rigid => null,
+        .recursion_var => |rec| blk: {
+            // Recursion var - look up the underlying structure
+            const inner = self.types_store.resolveVar(rec.structure);
+            break :blk switch (inner.desc.content) {
+                .structure => |flat| switch (flat) {
+                    .nominal_type => |nom| nom.ident.ident_idx,
+                    else => null,
+                },
+                else => null,
+            };
+        },
+        .err => null,
+    };
+
+    const resolved_type_ident = type_ident orelse return null;
+
+    // Look up the method implementation
+    const qualified_method = self.module_env.lookupMethodIdent(
+        resolved_type_ident,
+        method_name,
+    ) orelse {
+        // Try looking in external modules if not found locally
+        // This handles the case where the type is defined in another module
+        return null;
+    };
+
+    // Find the node index for this method (for later lookup)
+    const node_idx = self.module_env.getExposedNodeIndexById(qualified_method);
+
+    return AbilityImplLookup{
+        .method_ident = qualified_method,
+        .type_ident = resolved_type_ident,
+        .node_idx = node_idx,
+    };
+}
+
+/// Get the concrete type name from a type variable for error messages
+pub fn getConcreteTypeName(self: *Self, type_var: types.Var) ?[]const u8 {
+    const resolved = self.types_store.resolveVar(type_var);
+    return switch (resolved.desc.content) {
+        .structure => |flat| switch (flat) {
+            .nominal_type => |nom| self.module_env.getIdent(nom.ident.ident_idx),
+            .record, .record_unbound, .empty_record => "Record",
+            .tag_union, .empty_tag_union => "Tag",
+            .tuple => "Tuple",
+            .fn_pure, .fn_effectful, .fn_unbound => "Function",
+        },
+        .alias => |alias| self.module_env.getIdent(alias.ident.ident_idx),
+        else => null,
+    };
+}
+
+/// The ClosureTransformer module contains lambda set types
+const ClosureTransformer = @import("ClosureTransformer.zig");
+
+/// Result of resolving an unspecialized closure
+pub const ResolvedClosure = struct {
+    /// The original unspecialized closure that was resolved
+    unspecialized: ClosureTransformer.UnspecializedClosure,
+    /// The looked up ability implementation
+    impl_lookup: AbilityImplLookup,
+};
+
+/// Resolve unspecialized closures in a lambda set.
+///
+/// This function is called during monomorphization when we have concrete type
+/// information available. For each unspecialized closure (ability member reference),
+/// it looks up the concrete implementation.
+///
+/// Returns a list of resolved closures. Closures that couldn't be resolved
+/// (e.g., the type doesn't implement the ability) are left unresolved.
+pub fn resolveUnspecializedClosures(
+    self: *Self,
+    lambda_set: *ClosureTransformer.LambdaSet,
+    type_var: types.Var,
+) !std.ArrayList(ResolvedClosure) {
+    var resolved = std.ArrayList(ResolvedClosure).empty;
+    errdefer resolved.deinit(self.allocator);
+
+    // Iterate through unspecialized closures
+    var i: usize = 0;
+    while (i < lambda_set.unspecialized.items.len) {
+        const unspec = lambda_set.unspecialized.items[i];
+
+        // Look up the ability implementation for this concrete type
+        if (self.lookupAbilityImpl(type_var, unspec.member)) |impl| {
+            // Found the implementation - add to resolved list
+            try resolved.append(self.allocator, .{
+                .unspecialized = unspec,
+                .impl_lookup = impl,
+            });
+
+            // Remove from unspecialized list (swap with last element)
+            _ = lambda_set.unspecialized.swapRemove(i);
+            // Don't increment i since we removed an element
+        } else {
+            // Implementation not found for this type
+            // This could mean the type doesn't implement the ability
+            // Keep it in unspecialized for now (error will be reported later)
+            i += 1;
+        }
+    }
+
+    return resolved;
+}
+
+/// Resolve unspecialized closures using type substitutions.
+///
+/// This is an alternative entry point that uses a type substitution map
+/// to resolve the type from the expression associated with each unspecialized closure.
+pub fn resolveUnspecializedClosuresWithSubstitutions(
+    self: *Self,
+    lambda_set: *ClosureTransformer.LambdaSet,
+    type_substitutions: *const types.VarMap,
+) !std.ArrayList(ResolvedClosure) {
+    var resolved = std.ArrayList(ResolvedClosure).empty;
+    errdefer resolved.deinit(self.allocator);
+
+    var i: usize = 0;
+    while (i < lambda_set.unspecialized.items.len) {
+        const unspec = lambda_set.unspecialized.items[i];
+
+        // Get the type variable for this expression
+        const expr = self.module_env.store.getExpr(unspec.member_expr);
+        const type_var: ?types.Var = switch (expr) {
+            .e_type_var_dispatch => |tvd| blk: {
+                // Get the type var from the type var alias statement
+                const stmt = self.module_env.store.getStatement(tvd.type_var_alias_stmt);
+                const type_var_anno = stmt.s_type_var_alias.type_var_anno;
+                const ct_var = ModuleEnv.varFrom(type_var_anno);
+
+                // Check if this type var has a substitution
+                if (type_substitutions.get(ct_var)) |concrete| {
+                    break :blk concrete;
+                }
+                break :blk ct_var;
+            },
+            else => null,
+        };
+
+        if (type_var) |tv| {
+            // Look up the ability implementation for this concrete type
+            if (self.lookupAbilityImpl(tv, unspec.member)) |impl| {
+                // Found the implementation - add to resolved list
+                try resolved.append(self.allocator, .{
+                    .unspecialized = unspec,
+                    .impl_lookup = impl,
+                });
+
+                // Remove from unspecialized list
+                _ = lambda_set.unspecialized.swapRemove(i);
+                // Don't increment i since we removed an element
+                continue;
+            }
+        }
+
+        // Implementation not found or type not concrete yet
+        i += 1;
+    }
+
+    return resolved;
+}
+
+/// Add a resolved ability implementation as a closure to a lambda set.
+///
+/// This is called after `resolveUnspecializedClosures` to add the resolved
+/// implementations back into the lambda set as proper closures that can be
+/// used for dispatch generation.
+///
+/// Note: For ability implementations that are simple functions (not closures with
+/// captures), this creates a "pure lambda" closure info with no captures.
+pub fn addResolvedToLambdaSet(
+    self: *Self,
+    lambda_set: *ClosureTransformer.LambdaSet,
+    resolved: ResolvedClosure,
+) !void {
+    // Create a ClosureInfo for the resolved ability implementation.
+    // Ability implementations are typically top-level functions without captures,
+    // so we create a simple closure with the method ident as the tag name.
+    //
+    // Note: The lambda_body is set to the member_expr from the original unspecialized
+    // closure. This allows dispatch generation to reference the correct function.
+    const closure_info = ClosureTransformer.ClosureInfo{
+        .tag_name = resolved.impl_lookup.method_ident,
+        .lambda_body = resolved.unspecialized.member_expr,
+        .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
+        .capture_names = std.ArrayList(base.Ident.Idx).empty,
+        .lifted_fn_pattern = null, // Will be set during further processing if needed
+        .lifted_captures_pattern = null, // No captures for top-level ability impls
+    };
+
+    try lambda_set.addClosure(self.allocator, closure_info);
+}
+
+/// Process all resolved closures and add them to the lambda set.
+///
+/// This is a convenience function that iterates over the resolved closures
+/// from `resolveUnspecializedClosures` and adds them all to the lambda set.
+pub fn addAllResolvedToLambdaSet(
+    self: *Self,
+    lambda_set: *ClosureTransformer.LambdaSet,
+    resolved_list: *std.ArrayList(ResolvedClosure),
+) !void {
+    for (resolved_list.items) |resolved| {
+        try self.addResolvedToLambdaSet(lambda_set, resolved);
+    }
+}
+
 /// Register a polymorphic function definition as a partial proc.
 /// This should be called for each function definition during the finding phase.
 pub fn registerPartialProc(
@@ -1561,4 +1814,48 @@ test "monomorphizer: process empty pending" {
     try mono.processPendingSpecializations();
 
     try testing.expectEqual(@as(usize, 0), mono.getSpecializationCount());
+}
+
+test "monomorphizer: ability impl lookup returns null for flex vars" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a flex type var (polymorphic - not yet resolved)
+    const flex_var = try module_env.types.fresh();
+
+    // Create a method name
+    const method_name = try module_env.insertIdent(base.Ident.for_text("hash"));
+
+    // Looking up ability impl for a flex var should return null
+    // (can't dispatch until we know the concrete type)
+    const result = mono.lookupAbilityImpl(flex_var, method_name);
+    try testing.expect(result == null);
+}
+
+test "monomorphizer: getConcreteTypeName" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // For flex vars, should return null
+    const flex_var = try module_env.types.fresh();
+    const name = mono.getConcreteTypeName(flex_var);
+    try testing.expect(name == null);
 }
