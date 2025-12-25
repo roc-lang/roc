@@ -1184,18 +1184,33 @@ pub const ColumnTypes = struct {
         return self.types.len;
     }
 
-    /// Get the argument types when specializing by a constructor
+    /// Get the argument types when specializing by a constructor.
+    /// The first column type must be a resolved type (not a flex/rigid var) that
+    /// contains the constructor being specialized by.
+    ///
+    /// Returns error.TypeError if the payload types don't match the expected arity.
+    /// This can happen for records where the pattern destructures fewer fields
+    /// than the actual record type has - a known limitation of the current algorithm
+    /// that treats records positionally instead of by field name.
     pub fn specializeByConstructor(
         self: ColumnTypes,
         allocator: std.mem.Allocator,
         tag_id: TagId,
-    ) !ColumnTypes {
-        if (self.types.len == 0) {
-            return .{ .types = &[_]Var{}, .type_store = self.type_store };
-        }
+        expected_arity: usize,
+    ) error{ OutOfMemory, TypeError }!ColumnTypes {
+        // Column types must be available. If not, it indicates a compiler bug.
+        std.debug.assert(self.types.len > 0);
 
         // Look up the tag's payload types from types[0]
         const payload_types = getCtorArgTypes(self.type_store, self.types[0], tag_id);
+
+        // For tag unions, the arity should match exactly.
+        // For records, the pattern might destructure fewer fields than the actual type has.
+        // Currently, we don't handle records by field name, so return TypeError to skip
+        // exhaustiveness checking in that case.
+        if (payload_types.len != expected_arity) {
+            return error.TypeError;
+        }
 
         // New types: [payload_types..., self.types[1...]...]
         const new_types = try allocator.alloc(Var, payload_types.len + self.types.len - 1);
@@ -1532,7 +1547,7 @@ pub fn checkExhaustive(
                             alt.tag_id,
                             alt.arity,
                         );
-                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
                         const inner_missing = try checkExhaustive(allocator, specialized, specialized_types);
 
                         if (inner_missing.len > 0) {
@@ -1567,7 +1582,7 @@ pub fn checkExhaustive(
                     alt.arity,
                 );
 
-                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
                 const missing = try checkExhaustive(allocator, specialized, specialized_types);
 
                 if (missing.len > 0) {
@@ -1764,7 +1779,7 @@ pub fn isUseful(
                 c.tag_id,
                 c.args.len,
             );
-            const specialized_types = try column_types.specializeByConstructor(allocator, c.tag_id);
+            const specialized_types = try column_types.specializeByConstructor(allocator, c.tag_id, c.args.len);
 
             // Check if args + rest is useful in specialized matrix
             const extended_row = try allocator.alloc(Pattern, c.args.len + rest.len);
@@ -1811,7 +1826,7 @@ pub fn isUseful(
                             alt.tag_id,
                             alt.arity,
                         );
-                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
 
                         const extended = try allocator.alloc(Pattern, alt.arity + rest.len);
                         for (0..alt.arity) |i| {
@@ -2041,13 +2056,12 @@ const CollectedCtorsSketched = union(enum) {
 
 /// Collect constructors from the first column of a sketched matrix.
 /// Reifies constructor patterns on-demand to get union information.
-/// `first_col_type` is optional; if null, only `known_ctor` patterns can provide union info.
 fn collectCtorsSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
     ident_store: *const Ident.Store,
     matrix: SketchedMatrix,
-    first_col_type: ?Var,
+    first_col_type: Var,
 ) ReifyError!CollectedCtorsSketched {
     if (matrix.isEmpty()) return .non_exhaustive_wildcards;
 
@@ -2066,9 +2080,7 @@ fn collectCtorsSketched(
             .ctor => |c| {
                 found_ctor = true;
                 if (union_info == null) {
-                    // .ctor patterns require type info to resolve the union
-                    const col_type = first_col_type orelse return error.TypeError;
-                    const union_result = try getUnionFromType(allocator, type_store, ident_store, col_type);
+                    const union_result = try getUnionFromType(allocator, type_store, ident_store, first_col_type);
                     switch (union_result) {
                         .success => |u| union_info = u,
                         .not_a_union => return error.TypeError,
@@ -2298,7 +2310,10 @@ pub fn checkExhaustiveSketched(
         return &[_]Pattern{};
     }
 
-    const first_col_type = if (column_types.types.len > 0) column_types.types[0] else null;
+    // Column types must be available for exhaustiveness checking.
+    // If this assertion fails, it indicates a compiler bug - likely incomplete type inference.
+    std.debug.assert(column_types.types.len > 0);
+    const first_col_type = column_types.types[0];
     const ctors = try collectCtorsSketched(allocator, type_store, ident_store, matrix, first_col_type);
 
     return switch (ctors) {
@@ -2310,8 +2325,7 @@ pub fn checkExhaustiveSketched(
             if (rest.len == 0) return &[_]Pattern{};
 
             const result = try allocator.alloc(Pattern, 1 + rest.len);
-            const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
-            result[0] = .{ .anything = first_type };
+            result[0] = .{ .anything = column_types.types[0] };
             @memcpy(result[1..], rest);
             return result;
         },
@@ -2338,7 +2352,7 @@ pub fn checkExhaustiveSketched(
                             alt.arity,
                             ctor_info.union_info,
                         );
-                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
 
                         if (inner_missing.len > 0) {
@@ -2368,7 +2382,7 @@ pub fn checkExhaustiveSketched(
                     ctor_info.union_info,
                 );
 
-                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
                 const missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
 
                 if (missing.len > 0) {
@@ -2456,18 +2470,17 @@ pub fn isUsefulSketched(
     // No more patterns to check = not useful (existing rows cover everything)
     if (new_row.len == 0) return false;
 
+    // Column types must match the pattern row length.
+    // If this assertion fails, it indicates a compiler bug - likely incomplete type inference.
+    std.debug.assert(column_types.types.len >= new_row.len);
+
     const first = new_row[0];
     const rest = new_row[1..];
-
-    // Get first column type if available. For known_ctor patterns (records, tuples),
-    // we don't strictly need the type because the pattern carries its own union info.
-    const first_col_type = if (column_types.types.len > 0) column_types.types[0] else null;
+    const first_col_type = column_types.types[0];
 
     return switch (first) {
         .ctor => |c| {
-            // .ctor patterns require type info to resolve the union
-            const col_type = first_col_type orelse return error.TypeError;
-            const union_result = try getUnionFromType(allocator, type_store, ident_store, col_type);
+            const union_result = try getUnionFromType(allocator, type_store, ident_store, first_col_type);
             const union_info = switch (union_result) {
                 .success => |u| u,
                 .not_a_union => return error.TypeError,
@@ -2481,7 +2494,7 @@ pub fn isUsefulSketched(
                 c.args.len,
                 union_info,
             );
-            const specialized_types = try column_types.specializeByConstructor(allocator, tag_id);
+            const specialized_types = try column_types.specializeByConstructor(allocator, tag_id, c.args.len);
 
             const extended_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
             @memcpy(extended_row[0..c.args.len], c.args);
@@ -2498,7 +2511,7 @@ pub fn isUsefulSketched(
                 kc.args.len,
                 kc.union_info,
             );
-            const specialized_types = try column_types.specializeByConstructor(allocator, kc.tag_id);
+            const specialized_types = try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len);
 
             const extended_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
             @memcpy(extended_row[0..kc.args.len], kc.args);
@@ -2541,7 +2554,7 @@ pub fn isUsefulSketched(
                             alt.arity,
                             ctor_info.union_info,
                         );
-                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
 
                         const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
                         for (0..alt.arity) |i| {
@@ -2773,6 +2786,14 @@ pub fn checkMatch(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
+
+    // The scrutinee type must be fully resolved for exhaustiveness checking.
+    // If it's still a flex/rigid var, we can't determine what constructors exist.
+    const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
+    switch (resolved_scrutinee.desc.content) {
+        .flex, .rigid => return error.TypeError,
+        else => {},
+    }
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
     const sketched = try convertMatchBranches(
