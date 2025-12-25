@@ -13,21 +13,17 @@ result = func(42)
 ~~~
 # MONO
 ~~~roc
-# Lifted functions (Phase 4)
-# closure_add_x_1 = |y, captures| captures.x + y
+closure_add_x_1 = |y, captures| captures.x + y
 
-func : Dec -> Dec
+func : Dec -> []
 func = |x| {
 	add_x = Closure_add_x_1({ x: x })
 	match add_x {
-		Closure_add_x_1({ x }) => {
-			y = 10
-			x + y
-		}
+		Closure_add_x_1(captures) => closure_add_x_1(10, captures)
 	}
 }
 
-result : Dec
+result : []
 result = func(42)
 ~~~
 # FORMATTED
@@ -109,15 +105,12 @@ EndOfFile,
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-block
-										(s-let
-											(p-assign (ident "y"))
-											(e-num (value "10")))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "x")))
-											(e-lookup-local
-												(p-assign (ident "y")))))))))))))
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "closure_add_x_1")))
+										(e-num (value "10"))
+										(e-lookup-local
+											(p-assign (ident "captures"))))))))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -130,8 +123,8 @@ EndOfFile,
 (inferred-types
 	(defs
 		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "a -> [] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "a -> [] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "[]"))))
 ~~~

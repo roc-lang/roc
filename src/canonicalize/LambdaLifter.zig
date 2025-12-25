@@ -146,6 +146,47 @@ pub fn liftClosure(
     }
 }
 
+/// Import ClosureInfo from ClosureTransformer
+const ClosureTransformer = @import("ClosureTransformer.zig");
+const ClosureInfo = ClosureTransformer.ClosureInfo;
+
+/// Lift a closure from ClosureInfo directly.
+/// This is used for pure lambdas that were converted to closure tags
+/// but don't have an e_closure expression.
+pub fn liftFromInfo(
+    self: *Self,
+    info: ClosureInfo,
+) !void {
+    // Pure lambdas have no captures, so no captures pattern needed
+    const has_captures = info.capture_names.items.len > 0;
+    const captures_pattern = if (has_captures)
+        try self.buildSimpleCapturesPattern()
+    else
+        null;
+
+    // For pure lambdas, we don't need to transform the body (no captures to replace)
+    // For closures with captures, the body transformation is already done
+    const body = info.lambda_body;
+
+    // Create a fresh type variable for the return type
+    const ret_var = try self.module_env.types.fresh();
+
+    // Use a sentinel value for original_closure since pure lambdas don't have one
+    const sentinel_idx: CIR.Expr.Idx = @enumFromInt(0);
+
+    // Create the lifted function
+    const lifted = LiftedFunction{
+        .name = info.tag_name,
+        .args = info.lambda_args,
+        .captures_pattern = captures_pattern,
+        .body = body,
+        .ret_var = ret_var,
+        .original_closure = sentinel_idx,
+    };
+
+    try self.lifted_functions.append(self.allocator, lifted);
+}
+
 /// Build a simple "captures" identifier pattern for the captures parameter.
 /// This is cleaner than a record destructure pattern for the lifted function output.
 fn buildSimpleCapturesPattern(self: *Self) !CIR.Pattern.Idx {

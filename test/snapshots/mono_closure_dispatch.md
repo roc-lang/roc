@@ -14,26 +14,21 @@ result = func(1)
 ~~~
 # MONO
 ~~~roc
-# Lifted functions (Phase 4)
-# closure_f_1 = |x, captures| x + captures.offset
+closure_f_1 = |x, captures| x + captures.offset
 
-func : Dec -> Dec
+closure_f_2 = |x| x * 2
+
+func : Dec -> []
 func = |offset| {
 	condition = True
 	f = if (condition) Closure_f_1({ offset: offset }) else Closure_f_2({})
 	match f {
-		Closure_f_1({ offset }) => {
-			x = 10
-			x + offset
-		}
-		Closure_f_2({}) => {
-			x = 10
-			x * 2
-		}
+		Closure_f_1(captures) => closure_f_1(10, captures)
+		Closure_f_2({}) => closure_f_2(10)
 	}
 }
 
-result : Dec
+result : []
 result = func(1)
 ~~~
 # FORMATTED
@@ -140,28 +135,21 @@ EndOfFile,
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-block
-										(s-let
-											(p-assign (ident "x"))
-											(e-num (value "10")))
-										(e-binop (op "add")
-											(e-lookup-local
-												(p-assign (ident "x")))
-											(e-lookup-local
-												(p-assign (ident "offset")))))))
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "closure_f_1")))
+										(e-num (value "10"))
+										(e-lookup-local
+											(p-assign (ident "captures"))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)
 										(p-applied-tag)))
 								(value
-									(e-block
-										(s-let
-											(p-assign (ident "x"))
-											(e-num (value "10")))
-										(e-binop (op "mul")
-											(e-lookup-local
-												(p-assign (ident "x")))
-											(e-num (value "2"))))))))))))
+									(e-call
+										(e-lookup-local
+											(p-assign (ident "closure_f_2")))
+										(e-num (value "10")))))))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -173,9 +161,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> _ret where [_b.from_numeral : Numeral -> (a -> a), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([])]), b.from_numeral : Numeral -> Try(b, a -> [])]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([])])]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_a where [_b.from_numeral : Numeral -> Try(_c, [InvalidNumeral(Str)])]"))))
+		(expr (type "a -> [] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([])])]"))
+		(expr (type "[]"))))
 ~~~

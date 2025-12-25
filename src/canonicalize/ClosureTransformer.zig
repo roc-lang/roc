@@ -47,7 +47,7 @@ const Self = @This();
 
 /// Information about a transformed closure
 pub const ClosureInfo = struct {
-    /// The tag name for this closure (e.g., `addX`)
+    /// The tag name for this closure (e.g., `Closure_addX_1`)
     tag_name: base.Ident.Idx,
     /// The lambda body expression
     lambda_body: Expr.Idx,
@@ -55,6 +55,11 @@ pub const ClosureInfo = struct {
     lambda_args: CIR.Pattern.Span,
     /// The capture names (for generating dispatch function patterns)
     capture_names: std.ArrayList(base.Ident.Idx),
+    /// The pattern for the lifted function definition (for calling in dispatch)
+    /// This is the pattern that binds the lifted function name (e.g., `closure_addX_1`)
+    lifted_fn_pattern: ?CIR.Pattern.Idx,
+    /// The captures pattern used in the lifted function (for passing to calls)
+    lifted_captures_pattern: ?CIR.Pattern.Idx,
 };
 
 /// A lambda set - a collection of closures that could reach a given variable
@@ -221,15 +226,61 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
     return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
 }
 
+/// Generate the lowercase function name from a closure tag name.
+/// E.g., "Closure_addX_1" -> "closure_addX_1"
+fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
+    const tag_str = self.module_env.getIdent(tag_name);
+
+    // Allocate a copy with first char lowercased
+    var fn_name = try self.allocator.alloc(u8, tag_str.len);
+    defer self.allocator.free(fn_name);
+    @memcpy(fn_name, tag_str);
+
+    if (fn_name.len > 0 and fn_name[0] >= 'A' and fn_name[0] <= 'Z') {
+        fn_name[0] = fn_name[0] + ('a' - 'A');
+    }
+
+    return try self.module_env.insertIdent(base.Ident.for_text(fn_name));
+}
+
+/// Create patterns for calling a lifted function in dispatch.
+/// Returns the pattern for the lifted function name and the captures pattern.
+/// The actual lifted function body is created by LambdaLifter.
+fn createLiftedFunctionPatterns(
+    self: *Self,
+    tag_name: base.Ident.Idx,
+    has_captures: bool,
+) !struct { fn_pattern: CIR.Pattern.Idx, captures_pattern: ?CIR.Pattern.Idx } {
+    // Generate the lowercase function name
+    const fn_name = try self.generateLiftedFunctionName(tag_name);
+
+    // Create the pattern for the function (used in dispatch lookups)
+    const fn_pattern = try self.module_env.store.addPattern(
+        Pattern{ .assign = .{ .ident = fn_name } },
+        base.Region.zero(),
+    );
+
+    // Build the captures parameter pattern if there are captures
+    var captures_pattern: ?CIR.Pattern.Idx = null;
+    if (has_captures) {
+        // Create a "captures" identifier pattern (used in dispatch match branches)
+        const captures_ident = try self.module_env.insertIdent(base.Ident.for_text("captures"));
+        captures_pattern = try self.module_env.store.addPattern(
+            Pattern{ .assign = .{ .ident = captures_ident } },
+            base.Region.zero(),
+        );
+    }
+
+    return .{ .fn_pattern = fn_pattern, .captures_pattern = captures_pattern };
+}
+
 /// Generate a dispatch match expression for a closure call.
 ///
+/// Phase 5: Generates calls to lifted functions instead of inlining bodies.
 /// Transforms a call like `f(10)` where `f` is a closure into:
 /// ```roc
 /// match f {
-///     Closure_f_1({ x }) => {
-///         y = 10
-///         x + y
-///     }
+///     Closure_f_1(captures) => closure_f_1(10, captures)
 /// }
 /// ```
 fn generateDispatchMatch(
@@ -238,40 +289,24 @@ fn generateDispatchMatch(
     closure_info: ClosureInfo,
     call_args: []const Expr.Idx,
 ) !Expr.Idx {
-    // Step 1: Create the capture record destructure pattern
-    // For `{ x, y }` we need a record_destructure with each field
-
-    const record_destruct_start = self.module_env.store.scratchRecordDestructTop();
-
-    for (closure_info.capture_names.items) |capture_name| {
-        // Create an assign pattern for this capture binding
-        const assign_pattern = try self.module_env.store.addPattern(
-            Pattern{ .assign = .{ .ident = capture_name } },
+    // Step 1: Create the captures pattern for matching
+    // Use the lifted_captures_pattern if there are captures, otherwise use empty record
+    const captures_pattern = if (closure_info.lifted_captures_pattern) |cap_pat|
+        cap_pat
+    else blk: {
+        // No captures - create an empty record destructure pattern
+        const destructs_span = try self.module_env.store.recordDestructSpanFrom(
+            self.module_env.store.scratchRecordDestructTop(),
+        );
+        break :blk try self.module_env.store.addPattern(
+            Pattern{ .record_destructure = .{ .destructs = destructs_span } },
             base.Region.zero(),
         );
+    };
 
-        // Create the record destruct for this field
-        const destruct = Pattern.RecordDestruct{
-            .label = capture_name,
-            .ident = capture_name,
-            .kind = .{ .Required = assign_pattern },
-        };
-        const destruct_idx = try self.module_env.store.addRecordDestruct(destruct, base.Region.zero());
-        try self.module_env.store.addScratchRecordDestruct(destruct_idx);
-    }
-
-    const destructs_span = try self.module_env.store.recordDestructSpanFrom(record_destruct_start);
-
-    // Create the record destructure pattern
-    const record_pattern = try self.module_env.store.addPattern(
-        Pattern{ .record_destructure = .{ .destructs = destructs_span } },
-        base.Region.zero(),
-    );
-
-    // Step 2: Create the applied_tag pattern: `f({ x, y })
-    // The tag pattern takes the record pattern as its single argument
+    // Step 2: Create the applied_tag pattern: `Closure_f_1(captures)`
     const pattern_args_start = self.module_env.store.scratchPatternTop();
-    try self.module_env.store.addScratchPattern(record_pattern);
+    try self.module_env.store.addScratchPattern(captures_pattern);
     const pattern_args_span = try self.module_env.store.patternSpanFrom(pattern_args_start);
 
     const tag_pattern = try self.module_env.store.addPattern(
@@ -282,45 +317,44 @@ fn generateDispatchMatch(
         base.Region.zero(),
     );
 
-    // Step 3: Create the body - a block that binds arguments then executes lambda body
-    // We need to bind each call argument to the corresponding lambda parameter
+    // Step 3: Create the body - a call to the lifted function
+    // Generate: closure_f_1(arg1, arg2, ..., captures)
+    const body_expr = if (closure_info.lifted_fn_pattern) |fn_pattern| blk: {
+        // Create a lookup to the lifted function
+        const fn_lookup = try self.module_env.store.addExpr(Expr{
+            .e_lookup_local = .{ .pattern_idx = fn_pattern },
+        }, base.Region.zero());
 
-    const lambda_params = self.module_env.store.slicePatterns(closure_info.lambda_args);
+        // Build the argument list: (original call args..., captures)
+        const args_start = self.module_env.store.scratch.?.exprs.top();
 
-    // Transform the lambda body to handle nested closures
-    const transformed_lambda_body = try self.transformExpr(closure_info.lambda_body);
-
-    // If we have arguments to bind, create a block with let bindings
-    const body_expr = if (call_args.len > 0 and lambda_params.len > 0) blk: {
-        const stmt_start = self.module_env.store.scratch.?.statements.top();
-
-        // Bind each argument to its parameter
-        const num_args = @min(call_args.len, lambda_params.len);
-        for (0..num_args) |i| {
-            const param_pattern = lambda_params[i];
-            const arg_expr = call_args[i];
-
-            const stmt = CIR.Statement{ .s_decl = .{
-                .pattern = param_pattern,
-                .expr = arg_expr,
-                .anno = null,
-            } };
-            const stmt_idx = try self.module_env.store.addStatement(stmt, base.Region.zero());
-            try self.module_env.store.scratch.?.statements.append(stmt_idx);
+        // Add original call arguments
+        for (call_args) |arg| {
+            try self.module_env.store.scratch.?.exprs.append(arg);
         }
 
-        const stmts_span = try self.module_env.store.statementSpanFrom(stmt_start);
+        // Add captures lookup if there are captures
+        if (closure_info.lifted_captures_pattern) |cap_pat| {
+            const captures_lookup = try self.module_env.store.addExpr(Expr{
+                .e_lookup_local = .{ .pattern_idx = cap_pat },
+            }, base.Region.zero());
+            try self.module_env.store.scratch.?.exprs.append(captures_lookup);
+        }
 
-        // Create block with bindings and transformed lambda body as final expression
+        const args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+        // Create the call expression
         break :blk try self.module_env.store.addExpr(Expr{
-            .e_block = .{
-                .stmts = stmts_span,
-                .final_expr = transformed_lambda_body,
+            .e_call = .{
+                .func = fn_lookup,
+                .args = args_span,
+                .called_via = .apply,
             },
         }, base.Region.zero());
     } else blk: {
-        // No arguments, just use the transformed lambda body directly
-        break :blk transformed_lambda_body;
+        // Fallback: no lifted function pattern (shouldn't happen)
+        // Transform the lambda body to handle nested closures (old behavior)
+        break :blk try self.transformExpr(closure_info.lambda_body);
     };
 
     // Step 4: Create the match branch
@@ -365,11 +399,12 @@ fn generateDispatchMatch(
 
 /// Generate a dispatch match expression for a call to a variable with multiple possible closures.
 ///
+/// Phase 5: Generates calls to lifted functions instead of inlining bodies.
 /// Transforms a call like `f(10)` where `f` could be one of several closures into:
 /// ```roc
 /// match f {
-///     Closure_add1_1({}) => 10 + 1,
-///     Closure_mul2_2({}) => 10 * 2,
+///     Closure_add1_1(captures) => closure_add1_1(10, captures),
+///     Closure_mul2_2({}) => closure_mul2_2(10),
 /// }
 /// ```
 fn generateLambdaSetDispatchMatch(
@@ -388,34 +423,23 @@ fn generateLambdaSetDispatchMatch(
 
     // Generate a branch for each closure in the lambda set
     for (lambda_set.closures.items) |closure_info| {
-        // Create the capture record destructure pattern
-        const record_destruct_start = self.module_env.store.scratchRecordDestructTop();
-
-        for (closure_info.capture_names.items) |capture_name| {
-            const assign_pattern = try self.module_env.store.addPattern(
-                Pattern{ .assign = .{ .ident = capture_name } },
+        // Step 1: Create the captures pattern for matching
+        const captures_pattern = if (closure_info.lifted_captures_pattern) |cap_pat|
+            cap_pat
+        else blk: {
+            // No captures - create an empty record destructure pattern
+            const destructs_span = try self.module_env.store.recordDestructSpanFrom(
+                self.module_env.store.scratchRecordDestructTop(),
+            );
+            break :blk try self.module_env.store.addPattern(
+                Pattern{ .record_destructure = .{ .destructs = destructs_span } },
                 base.Region.zero(),
             );
-            const destruct = Pattern.RecordDestruct{
-                .label = capture_name,
-                .ident = capture_name,
-                .kind = .{ .Required = assign_pattern },
-            };
-            const destruct_idx = try self.module_env.store.addRecordDestruct(destruct, base.Region.zero());
-            try self.module_env.store.addScratchRecordDestruct(destruct_idx);
-        }
+        };
 
-        const destructs_span = try self.module_env.store.recordDestructSpanFrom(record_destruct_start);
-
-        // Create record destructure pattern
-        const record_pattern = try self.module_env.store.addPattern(
-            Pattern{ .record_destructure = .{ .destructs = destructs_span } },
-            base.Region.zero(),
-        );
-
-        // Create applied_tag pattern
+        // Step 2: Create applied_tag pattern
         const pattern_args_start = self.module_env.store.scratchPatternTop();
-        try self.module_env.store.addScratchPattern(record_pattern);
+        try self.module_env.store.addScratchPattern(captures_pattern);
         const pattern_args_span = try self.module_env.store.patternSpanFrom(pattern_args_start);
 
         const tag_pattern = try self.module_env.store.addPattern(
@@ -426,42 +450,45 @@ fn generateLambdaSetDispatchMatch(
             base.Region.zero(),
         );
 
-        // Create the body - bind arguments and execute lambda body
-        const lambda_params = self.module_env.store.slicePatterns(closure_info.lambda_args);
+        // Step 3: Create the body - call to lifted function
+        const body_expr = if (closure_info.lifted_fn_pattern) |fn_pattern| blk: {
+            // Create a lookup to the lifted function
+            const fn_lookup = try self.module_env.store.addExpr(Expr{
+                .e_lookup_local = .{ .pattern_idx = fn_pattern },
+            }, base.Region.zero());
 
-        // Transform the lambda body to handle nested closures
-        const transformed_lambda_body = try self.transformExpr(closure_info.lambda_body);
+            // Build the argument list: (original call args..., captures)
+            const args_start = self.module_env.store.scratch.?.exprs.top();
 
-        const body_expr = if (call_args.len > 0 and lambda_params.len > 0) blk: {
-            const stmt_start = self.module_env.store.scratch.?.statements.top();
-
-            const num_args = @min(call_args.len, lambda_params.len);
-            for (0..num_args) |i| {
-                const param_pattern = lambda_params[i];
-                const arg_expr = call_args[i];
-
-                const stmt = CIR.Statement{ .s_decl = .{
-                    .pattern = param_pattern,
-                    .expr = arg_expr,
-                    .anno = null,
-                } };
-                const stmt_idx = try self.module_env.store.addStatement(stmt, base.Region.zero());
-                try self.module_env.store.scratch.?.statements.append(stmt_idx);
+            // Add original call arguments
+            for (call_args) |arg| {
+                try self.module_env.store.scratch.?.exprs.append(arg);
             }
 
-            const stmts_span = try self.module_env.store.statementSpanFrom(stmt_start);
+            // Add captures lookup if there are captures
+            if (closure_info.lifted_captures_pattern) |cap_pat| {
+                const captures_lookup = try self.module_env.store.addExpr(Expr{
+                    .e_lookup_local = .{ .pattern_idx = cap_pat },
+                }, base.Region.zero());
+                try self.module_env.store.scratch.?.exprs.append(captures_lookup);
+            }
 
+            const args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+            // Create the call expression
             break :blk try self.module_env.store.addExpr(Expr{
-                .e_block = .{
-                    .stmts = stmts_span,
-                    .final_expr = transformed_lambda_body,
+                .e_call = .{
+                    .func = fn_lookup,
+                    .args = args_span,
+                    .called_via = .apply,
                 },
             }, base.Region.zero());
         } else blk: {
-            break :blk transformed_lambda_body;
+            // Fallback: no lifted function pattern (shouldn't happen)
+            break :blk try self.transformExpr(closure_info.lambda_body);
         };
 
-        // Create match branch pattern
+        // Step 4: Create match branch pattern
         const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
         const branch_pattern = try self.module_env.store.addMatchBranchPattern(
             Expr.Match.BranchPattern{
@@ -627,12 +654,17 @@ pub fn transformExprWithLambdaSet(
                                 },
                             }, base.Region.zero());
 
+                            // Create patterns for calling the lifted function in dispatch
+                            const lifted_patterns = try self.createLiftedFunctionPatterns(tag_name, false);
+
                             // Add to lambda set with the lambda's info
                             try lambda_set.addClosure(self.allocator, ClosureInfo{
                                 .tag_name = tag_name,
                                 .lambda_body = lambda.body,
                                 .lambda_args = lambda.args,
                                 .capture_names = std.ArrayList(base.Ident.Idx).empty,
+                                .lifted_fn_pattern = lifted_patterns.fn_pattern,
+                                .lifted_captures_pattern = lifted_patterns.captures_pattern,
                             });
                         }
                     }
@@ -667,12 +699,17 @@ pub fn transformExprWithLambdaSet(
                             },
                         }, base.Region.zero());
 
+                        // Create patterns for calling the lifted function in dispatch
+                        const lifted_patterns = try self.createLiftedFunctionPatterns(tag_name, false);
+
                         // Add to lambda set with the lambda's info
                         try lambda_set.addClosure(self.allocator, ClosureInfo{
                             .tag_name = tag_name,
                             .lambda_body = lambda.body,
                             .lambda_args = lambda.args,
                             .capture_names = std.ArrayList(base.Ident.Idx).empty,
+                            .lifted_fn_pattern = lifted_patterns.fn_pattern,
+                            .lifted_captures_pattern = lifted_patterns.captures_pattern,
                         });
                     }
                 }
@@ -843,12 +880,20 @@ pub fn transformClosure(
                 },
             }, base.Region.zero());
 
+            // Create patterns for calling the lifted function in dispatch
+            const lifted_patterns = try self.createLiftedFunctionPatterns(
+                tag_name,
+                capture_names.items.len > 0,
+            );
+
             // Store closure info for dispatch function generation
             try self.closures.put(closure_expr_idx, ClosureInfo{
                 .tag_name = tag_name,
                 .lambda_body = lambda.body,
                 .lambda_args = lambda.args,
                 .capture_names = capture_names,
+                .lifted_fn_pattern = lifted_patterns.fn_pattern,
+                .lifted_captures_pattern = lifted_patterns.captures_pattern,
             });
 
             return tag_expr;

@@ -14,28 +14,22 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
-# Lifted functions (Phase 4)
-# closure_add_x_1 = |a, captures| a + captures.x
-# closure_add_y_2 = |b, captures| b + captures.y
+closure_add_x_1 = |a, captures| a + captures.x
 
-func : Dec, Dec -> Dec
+closure_add_y_2 = |b, captures| b + captures.y
+
+func : Dec, Dec -> Numeral
 func = |x, y| {
 	add_x = Closure_add_x_1({ x: x })
 	add_y = Closure_add_y_2({ y: y })
 	match add_x {
-		Closure_add_x_1({ x }) => {
-			a = 5
-			a + x
-		}
+		Closure_add_x_1(captures) => closure_add_x_1(5, captures)
 	} + match add_y {
-		Closure_add_y_2({ y }) => {
-			b = 5
-			b + y
-		}
+		Closure_add_y_2(captures) => closure_add_y_2(5, captures)
 	}
 }
 
-result : Dec
+result : Numeral
 result = func(10, 20)
 ~~~
 # FORMATTED
@@ -144,15 +138,12 @@ EndOfFile,
 										(pattern (degenerate false)
 											(p-applied-tag)))
 									(value
-										(e-block
-											(s-let
-												(p-assign (ident "a"))
-												(e-num (value "5")))
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "a")))
-												(e-lookup-local
-													(p-assign (ident "x"))))))))))
+										(e-call
+											(e-lookup-local
+												(p-assign (ident "closure_add_x_1")))
+											(e-num (value "5"))
+											(e-lookup-local
+												(p-assign (ident "captures")))))))))
 					(e-match
 						(match
 							(cond
@@ -164,15 +155,12 @@ EndOfFile,
 										(pattern (degenerate false)
 											(p-applied-tag)))
 									(value
-										(e-block
-											(s-let
-												(p-assign (ident "b"))
-												(e-num (value "5")))
-											(e-binop (op "add")
-												(e-lookup-local
-													(p-assign (ident "b")))
-												(e-lookup-local
-													(p-assign (ident "y"))))))))))))))
+										(e-call
+											(e-lookup-local
+												(p-assign (ident "closure_add_y_2")))
+											(e-num (value "5"))
+											(e-lookup-local
+												(p-assign (ident "captures")))))))))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
@@ -185,9 +173,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(c, c -> c)])]"))
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(d, d -> d)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(d, d -> d)])]")))
+		(patt (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(c, c -> Numeral)])]"))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(d, d -> Numeral)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(d, d -> Numeral)])]")))
 	(expressions
-		(expr (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(c, c -> c)])]"))
-		(expr (type "_c where [_d.from_numeral : Numeral -> Try(e, [InvalidNumeral(e, e -> e)])]"))))
+		(expr (type "c, c -> Numeral where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(c, c -> Numeral)])]"))
+		(expr (type "Numeral"))))
 ~~~

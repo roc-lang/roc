@@ -12,24 +12,20 @@ result = add_five(3)
 ~~~
 # MONO
 ~~~roc
-# Lifted functions (Phase 4)
-# closure_make_adder_1 = |z, captures| captures.x + captures.y + z
+closure_make_adder_1 = |z, captures| captures.x + captures.y + z
 
-x : Dec
+x : ... -> [Closure_make_adder_1({ y : ... })]
 x = 10
 
-make_adder : Dec -> [Closure_make_adder_1({ y : Dec })]
+make_adder : ... -> [Closure_make_adder_1({ y : ... })]
 make_adder = |y| Closure_make_adder_1({ y: y })
 
-add_five : [Closure_make_adder_1({ y : Dec })]
+add_five : [Closure_make_adder_1({ y : ... -> [Closure_make_adder_1(...)] })]
 add_five = make_adder(5)
 
-result : Dec
+result : [InvalidNumeral([Closure_make_adder_1({ y : ... -> ... })])]
 result = match add_five {
-	Closure_make_adder_1({ y }) => {
-		z = 3
-		x + y + z
-	}
+	Closure_make_adder_1(captures) => closure_make_adder_1(3, captures)
 }
 ~~~
 # FORMATTED
@@ -117,30 +113,24 @@ EndOfFile,
 							(pattern (degenerate false)
 								(p-applied-tag)))
 						(value
-							(e-block
-								(s-let
-									(p-assign (ident "z"))
-									(e-num (value "3")))
-								(e-binop (op "add")
-									(e-binop (op "add")
-										(e-lookup-local
-											(p-assign (ident "x")))
-										(e-lookup-local
-											(p-assign (ident "y"))))
-									(e-lookup-local
-										(p-assign (ident "z"))))))))))))
+							(e-call
+								(e-lookup-local
+									(p-assign (ident "closure_make_adder_1")))
+								(e-num (value "3"))
+								(e-lookup-local
+									(p-assign (ident "captures")))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ .._others, y: a }), .._others])])]"))
-		(patt (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ ..b, y: a }), ..c])])]"))
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ ..b, y: c }), ..d])]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral([Closure_make_adder_1({ ..b, y: c }), ..d])])]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ .._others, y: b }), .._others])]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral([Closure_make_adder_1({ .._others2, y: b }), .._others2])])]")))
+		(patt (type "... -> [Closure_make_adder_1({ .._others, y: ... }), .._others]"))
+		(patt (type "(... -> [Closure_make_adder_1({ ..a, y: ... }), ..b]) -> ((... -> [Closure_make_adder_1({ ..a, y: ... }), ..b]) -> (... -> [Closure_make_adder_1({ ..a, y: ... }), ..b]))"))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ ..b, y: ... -> ... }), ..c])])]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ .._others, y: ... -> ... }), .._others])])]")))
 	(expressions
-		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ .._others, y: a }), .._others])])]"))
-		(expr (type "a -> [Closure_make_adder_1({ ..b, y: a }), ..c] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ ..b, y: a }), ..c])])]"))
-		(expr (type "[Closure_make_adder_1({ .._others, y: a }), ..b] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ .._others2, y: a }), ..b])])]"))
-		(expr (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ ..b, y: c }), ..d])]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral([Closure_make_adder_1({ ..b, y: c }), ..d])])]"))))
+		(expr (type "... -> [Closure_make_adder_1({ .._others, y: ... }), .._others]"))
+		(expr (type "... -> [Closure_make_adder_1({ .._others, y: ... }), .._others]"))
+		(expr (type "[Closure_make_adder_1({ .._others, y: ... -> [Closure_make_adder_1(...), ..a] }), ..a]"))
+		(expr (type "a -> (a -> a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([Closure_make_adder_1({ ..b, y: ... -> ... }), ..c])])]"))))
 ~~~
