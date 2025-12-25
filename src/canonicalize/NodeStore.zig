@@ -557,11 +557,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const lambda_idx = extra_data[0];
             const capture_start = extra_data[1];
             const capture_len = extra_data[2];
+            const tag_name: base.Ident.Idx = @bitCast(extra_data[3]);
 
             return CIR.Expr{
                 .e_closure = .{
                     .lambda_idx = @enumFromInt(lambda_idx),
                     .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
+                    .tag_name = tag_name,
                 },
             };
         },
@@ -1809,6 +1811,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
             _ = try store.extra_data.append(store.gpa, e.captures.span.start);
             _ = try store.extra_data.append(store.gpa, e.captures.span.len);
+            _ = try store.extra_data.append(store.gpa, @bitCast(e.tag_name));
 
             node.data_1 = @intCast(extra_data_start);
         },

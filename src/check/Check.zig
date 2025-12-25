@@ -3438,8 +3438,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
         },
         .e_closure => |closure| {
+            // Check the inner lambda and unify the closure's type with it
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
+
+            // The closure's tag_name is stored in the expression for later use during
+            // defunctionalization. Lambda set population in the type system will be
+            // handled in a future phase when it's properly integrated with unification.
+            _ = closure.tag_name;
         },
         // function calling //
         .e_call => |call| {
@@ -4428,6 +4434,9 @@ fn checkIfElseExpr(
     // Set the entire expr's type to be the type of the branch
     const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
     _ = try self.unify(if_expr_var, branch_var, env);
+
+    // TODO: Merge lambda sets from all branches when the result is a function type.
+    // This will be handled in a future phase when the unifier is updated to merge lambda sets.
 
     return does_fx;
 }

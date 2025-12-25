@@ -326,6 +326,7 @@ test "NodeStore round trip - Expressions" {
         .e_closure = .{
             .lambda_idx = rand_idx(CIR.Expr.Idx),
             .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
+            .tag_name = rand_ident_idx(),
         },
     });
     try expressions.append(gpa, CIR.Expr{

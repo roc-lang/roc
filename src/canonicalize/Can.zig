@@ -100,6 +100,8 @@ scratch_captures: base.Scratch(Pattern.Idx),
 scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
+/// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
+closure_counter: u32 = 0,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -4938,11 +4940,17 @@ pub fn canonicalizeExpr(
                 break :blk try self.env.store.capturesSpanFrom(scratch_start);
             };
 
+            // Generate a unique tag name for this closure
+            // Note: We don't have context about what variable this is assigned to,
+            // so we use null for the hint. The tag name will be "Closure_N".
+            const tag_name = try self.generateClosureTagName(null);
+
             // Now, create the closure that captures the environment
             const closure_expr = Expr{
                 .e_closure = .{
                     .lambda_idx = lambda_idx,
                     .captures = capture_info,
+                    .tag_name = tag_name,
                 },
             };
             // The type of the closure is the same as the type of the pure lambda
@@ -11539,6 +11547,38 @@ fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error
 /// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
 fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
     return try self.env.insertIdent(base.Ident.for_text("unknown"));
+}
+
+/// Generate a unique tag name for a closure.
+///
+/// This generates names like "Closure_addX_1", "Closure_addX_2" when a hint is provided,
+/// or "Closure_1", "Closure_2" when no hint is available. The tag names are used for
+/// lambda set tracking in the type system during defunctionalization.
+fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
+    self.closure_counter += 1;
+
+    // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
+    if (hint) |h| {
+        const hint_name = self.env.getIdent(h);
+        // Use Closure_ prefix (capitalized) to create valid Roc tag names that won't clash with userspace tags
+        // Include counter to ensure uniqueness, e.g., "myFunc" becomes "Closure_myFunc_1", "Closure_myFunc_2", etc.
+        const tag_name = try std.fmt.allocPrint(
+            self.env.gpa,
+            "Closure_{s}_{d}",
+            .{ hint_name, self.closure_counter },
+        );
+        defer self.env.gpa.free(tag_name);
+        return try self.env.insertIdent(base.Ident.for_text(tag_name));
+    }
+
+    // Otherwise generate a numeric name
+    const tag_name = try std.fmt.allocPrint(
+        self.env.gpa,
+        "Closure_{d}",
+        .{self.closure_counter},
+    );
+    defer self.env.gpa.free(tag_name);
+    return try self.env.insertIdent(base.Ident.for_text(tag_name));
 }
 
 const MainFunctionStatus = enum { valid, invalid, not_found };

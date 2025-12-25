@@ -1181,6 +1181,9 @@ pub const Expr = union(enum) {
     pub const Closure = struct {
         lambda_idx: Expr.Idx, // An index pointing to an `e_lambda` expression
         captures: Expr.Capture.Span,
+        /// The unique tag name for this closure (e.g., "Closure_addX_1").
+        /// Used for lambda set tracking in the type system.
+        tag_name: Ident.Idx,
     };
 
     /// A pure lambda expression, with no captures. This represents the
