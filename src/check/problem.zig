@@ -28,6 +28,7 @@ const Ident = base.Ident;
 const MkSafeMultiList = collections.SafeMultiList;
 
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
+const ExtraStringIdx = snapshot.ExtraStringIdx;
 
 const Var = types_mod.Var;
 const Content = types_mod.Content;
@@ -250,8 +251,8 @@ pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
     /// Snapshot of the condition type for error messages
     condition_snapshot: SnapshotContentIdx,
-    /// Human-readable representation of missing patterns
-    missing_patterns: []const []const u8,
+    /// Indices into the snapshot store's extra strings for missing pattern descriptions
+    missing_patterns: []const ExtraStringIdx,
 };
 
 /// Problem data for a redundant pattern in a match
@@ -2897,7 +2898,8 @@ pub const ReportBuilder = struct {
         try report.document.addText("Missing patterns:");
         try report.document.addLineBreak();
 
-        for (data.missing_patterns) |pattern| {
+        for (data.missing_patterns) |pattern_idx| {
+            const pattern = self.snapshots.getExtraString(pattern_idx);
             const owned_pattern = try report.addOwnedString(pattern);
             try report.document.addText("    ");
             try report.document.addCodeBlock(owned_pattern);
@@ -3036,15 +3038,11 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
-        // Free nested allocations in problems
-        for (self.problems.items) |problem| {
-            switch (problem) {
-                .non_exhaustive_match => |nem| {
-                    for (nem.missing_patterns) |pattern_str| {
-                        gpa.free(pattern_str);
-                    }
-                    gpa.free(nem.missing_patterns);
-                },
+        // Free the indices slice in non_exhaustive_match problems
+        // (the actual strings are managed by the SnapshotStore)
+        for (self.problems.items) |prob| {
+            switch (prob) {
+                .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
                 else => {},
             }
         }

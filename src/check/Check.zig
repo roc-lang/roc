@@ -39,7 +39,8 @@ const testing = std.testing;
 const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
-const SnapshotStore = @import("snapshot.zig").Store;
+const SnapshotStore = snapshot_mod.Store;
+const ExtraStringIdx = snapshot_mod.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 const is_freestanding = builtin.os.tag == .freestanding;
@@ -4620,17 +4621,18 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!result.is_exhaustive) {
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
 
-            // Format missing patterns as strings for the error message
-            var missing_strs: std.ArrayList([]const u8) = .empty;
+            // Format missing patterns and store in snapshot store for lifecycle management
+            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
             for (result.missing_patterns) |pattern| {
                 const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, pattern);
-                try missing_strs.append(self.cir.gpa, formatted);
+                const idx = try self.snapshots.storeExtraString(formatted);
+                try missing_indices.append(self.cir.gpa, idx);
             }
 
             _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
-                .missing_patterns = try missing_strs.toOwnedSlice(self.cir.gpa),
+                .missing_patterns = try missing_indices.toOwnedSlice(self.cir.gpa),
             } });
         }
 
