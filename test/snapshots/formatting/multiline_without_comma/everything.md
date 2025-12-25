@@ -1372,7 +1372,8 @@ This `match` expression doesn't cover all possible cases:
 	}
 ```
 
-The value being matched on has type: _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c)), .._others]_
+The value being matched on has type:
+        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c)), .._others]_
 
 Missing patterns:
         Z4 [_]

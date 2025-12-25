@@ -2887,7 +2887,9 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         const condition_type = self.getFormattedString(data.condition_snapshot);
-        try report.document.addText("The value being matched on has type: ");
+        try report.document.addText("The value being matched on has type:");
+        try report.document.addLineBreak();
+        try report.document.addText("        ");
         try report.document.addAnnotated(condition_type, .type_variable);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
