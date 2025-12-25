@@ -86,6 +86,51 @@ pub const Pattern = union(enum) {
         }
         return result;
     }
+
+    /// Check if this pattern can ever match a value (is inhabited).
+    /// A pattern is uninhabited if it matches a type with no possible values,
+    /// such as an empty tag union or a constructor with uninhabited arguments.
+    pub fn isInhabited(self: Pattern) bool {
+        return switch (self) {
+            // Wildcards and literals are always inhabited
+            // (literals match their specific value, wildcards match anything)
+            .anything, .literal => true,
+
+            .ctor => |c| {
+                // An empty union is uninhabited - no constructors exist
+                if (c.union_info.alternatives.len == 0 and !c.union_info.has_flex_extension) {
+                    return false;
+                }
+
+                // Check if this constructor exists in the union
+                var found = false;
+                for (c.union_info.alternatives) |alt| {
+                    if (alt.tag_id == c.tag_id) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found and !c.union_info.has_flex_extension) {
+                    // Constructor was removed from union (shouldn't happen in practice)
+                    return false;
+                }
+
+                // All arguments must be inhabited for the pattern to be inhabited
+                for (c.args) |arg| {
+                    if (!arg.isInhabited()) return false;
+                }
+                return true;
+            },
+
+            .list => |l| {
+                // All elements must be inhabited
+                for (l.elements) |elem| {
+                    if (!elem.isInhabited()) return false;
+                }
+                return true;
+            },
+        };
+    }
 };
 
 /// Identifies a tag within a union
@@ -116,6 +161,15 @@ pub const Union = struct {
             .render_as = self.render_as,
             .has_flex_extension = self.has_flex_extension,
         };
+    }
+
+    /// Check if this union type is inhabited (has at least one possible value).
+    /// An empty tag union with no flex extension is uninhabited.
+    pub fn isInhabited(self: Union) bool {
+        // If there's a flex extension, more constructors might exist
+        if (self.has_flex_extension) return true;
+        // Otherwise, need at least one alternative
+        return self.alternatives.len > 0;
     }
 };
 
@@ -864,6 +918,45 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
     return content == .flex;
 }
 
+/// Check if a type is an empty tag union (uninhabited).
+/// Returns true if the type is definitely uninhabited (empty closed tag union).
+/// Returns false (inhabited) for any other type or if uncertain.
+fn isTypeEmpty(type_store: *TypeStore, type_var: Var) bool {
+    const resolved = type_store.resolveVar(type_var);
+    const content = resolved.desc.content;
+
+    // Check for empty_tag_union structure directly
+    switch (content) {
+        .structure => |flat_type| switch (flat_type) {
+            .empty_tag_union => return true,
+            .tag_union => |tag_union| {
+                const tags_slice = type_store.getTagsSlice(tag_union.tags);
+                if (tags_slice.len == 0) {
+                    // Empty but check extension
+                    if (isOpenExtension(type_store, tag_union.ext) or hasFlexExtension(type_store, tag_union.ext)) {
+                        return false; // Might have more tags
+                    }
+                    return true; // Definitely empty
+                }
+                return false; // Has tags, not empty
+            },
+            .nominal_type => |nominal| {
+                const backing_var = type_store.getNominalBackingVar(nominal);
+                return isTypeEmpty(type_store, backing_var);
+            },
+            else => return false, // Other structures are not empty
+        },
+        .alias => |alias| {
+            const backing_var = type_store.getAliasBackingVar(alias);
+            return isTypeEmpty(type_store, backing_var);
+        },
+        .recursion_var => |rec| {
+            return isTypeEmpty(type_store, rec.structure);
+        },
+        else => return false, // Default: not empty
+    }
+}
+
 /// Check if an extension variable represents an open union.
 /// For exhaustiveness checking, we only consider a union truly "open" if:
 /// - It has a rigid type variable (explicit polymorphism from annotation)
@@ -1322,14 +1415,20 @@ pub fn checkExhaustive(
                         const inner_missing = try checkExhaustive(allocator, specialized, alt.arity + n - 1);
 
                         if (inner_missing.len > 0) {
-                            // Wildcards don't cover this - it's truly missing
-                            const result = try allocator.alloc(Pattern, 1);
-                            result[0] = .{ .ctor = .{
+                            // Wildcards don't cover this - check if the pattern is inhabited
+                            const missing_pattern = Pattern{ .ctor = .{
                                 .union_info = ctor_info.union_info,
                                 .tag_id = alt.tag_id,
                                 .args = inner_missing,
                             } };
-                            return result;
+                            // Only report as missing if the pattern is inhabited
+                            // (e.g., Err on a Try with empty error type is uninhabited)
+                            if (missing_pattern.isInhabited()) {
+                                const result = try allocator.alloc(Pattern, 1);
+                                result[0] = missing_pattern;
+                                return result;
+                            }
+                            // Pattern is uninhabited, continue checking others
                         }
                         // else: wildcards cover this constructor, continue checking others
                     }
@@ -1360,13 +1459,19 @@ pub fn checkExhaustive(
                         }
                     }
 
-                    const result = try allocator.alloc(Pattern, 1);
-                    result[0] = .{ .ctor = .{
+                    const missing_pattern = Pattern{ .ctor = .{
                         .union_info = ctor_info.union_info,
                         .tag_id = alt.tag_id,
                         .args = args,
                     } };
-                    return result;
+
+                    // Only report as missing if the pattern is inhabited
+                    if (missing_pattern.isInhabited()) {
+                        const result = try allocator.alloc(Pattern, 1);
+                        result[0] = missing_pattern;
+                        return result;
+                    }
+                    // Pattern is uninhabited, continue checking other constructors
                 }
             }
 
