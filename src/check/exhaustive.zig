@@ -777,8 +777,6 @@ pub fn reifyRows(
             }
         }
 
-        // TODO: Check if this row is useful (redundancy checking comes in Phase 5)
-        // For now, add all rows
         try reified_rows.append(allocator, reified);
     }
 
@@ -950,12 +948,10 @@ fn isTypeEmpty(type_store: *TypeStore, type_var: Var) bool {
                 return false; // Has tags, not empty
             },
             .nominal_type => {
-                // Nominal types are considered inhabited unless they explicitly wrap
-                // an uninhabited type parameter. We don't follow the backing var here
-                // because the internal representation (e.g., for Str) might look empty
-                // but the nominal type itself is inhabited.
-                // TODO: For types like Try(I64, []) where the error type is empty,
-                // we should propagate emptiness through type parameters, not backing types.
+                // Nominal types like Str have internal representations that might look
+                // empty but are actually inhabited. Don't follow backing vars here.
+                // For uninhabited type parameters (like Try(I64, [])), emptiness is
+                // propagated through ColumnTypes during exhaustiveness checking.
                 return false;
             },
             else => return false, // Other structures are not empty
