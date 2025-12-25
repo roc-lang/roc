@@ -783,7 +783,6 @@ fn buildUnionFromTagUnion(
     type_store: *TypeStore,
     tag_union: types.TagUnion,
 ) error{OutOfMemory}!UnionResult {
-
     const tags_slice = type_store.getTagsSlice(tag_union.tags);
     const tag_names = tags_slice.items(.name);
     const tag_args = tags_slice.items(.args);
@@ -1173,9 +1172,33 @@ fn specializeByListArity(
             .list => |l| {
                 if (l.arity.coversLength(target_len)) {
                     // This list pattern covers the target length
-                    const new_row = try allocator.alloc(Pattern, l.elements.len + rest.len);
-                    @memcpy(new_row[0..l.elements.len], l.elements);
-                    @memcpy(new_row[l.elements.len..], rest);
+                    // For exact patterns, elements.len == target_len
+                    // For slice patterns, we need to expand the "rest" part with wildcards
+                    const new_row = try allocator.alloc(Pattern, target_len + rest.len);
+
+                    switch (l.arity) {
+                        .exact => {
+                            // Exact match - just copy elements
+                            @memcpy(new_row[0..l.elements.len], l.elements);
+                        },
+                        .slice => |s| {
+                            // Slice pattern [prefix.., suffix] - expand middle with wildcards
+                            // Copy prefix elements
+                            @memcpy(new_row[0..s.prefix], l.elements[0..s.prefix]);
+                            // Fill middle with wildcards
+                            const middle_len = target_len - s.prefix - s.suffix;
+                            for (s.prefix..s.prefix + middle_len) |i| {
+                                new_row[i] = .anything;
+                            }
+                            // Copy suffix elements
+                            if (s.suffix > 0) {
+                                const suffix_start = l.elements.len - s.suffix;
+                                @memcpy(new_row[s.prefix + middle_len .. target_len], l.elements[suffix_start..]);
+                            }
+                        },
+                    }
+
+                    @memcpy(new_row[target_len..], rest);
                     try new_rows.append(allocator, new_row);
                 }
             },
@@ -1244,9 +1267,8 @@ pub fn checkExhaustive(
             const num_alts = ctor_info.union_info.alternatives.len;
 
             if (num_found < num_alts) {
-                // Not all constructors covered - find which are missing
-                var missing_alts: std.ArrayList(CtorInfo) = .empty;
-
+                // Not all constructors covered explicitly - check if wildcards cover the rest
+                // For each missing constructor, specialize and check if exhaustive
                 for (ctor_info.union_info.alternatives) |alt| {
                     var found = false;
                     for (ctor_info.found) |found_id| {
@@ -1256,26 +1278,30 @@ pub fn checkExhaustive(
                         }
                     }
                     if (!found) {
-                        try missing_alts.append(allocator, alt);
+                        // This constructor isn't explicitly matched - check if wildcards cover it
+                        const specialized = try specializeByConstructor(
+                            allocator,
+                            matrix,
+                            alt.tag_id,
+                            alt.arity,
+                        );
+                        const inner_missing = try checkExhaustive(allocator, specialized, alt.arity + n - 1);
+
+                        if (inner_missing.len > 0) {
+                            // Wildcards don't cover this - it's truly missing
+                            const result = try allocator.alloc(Pattern, 1);
+                            result[0] = .{ .ctor = .{
+                                .union_info = ctor_info.union_info,
+                                .tag_id = alt.tag_id,
+                                .args = inner_missing,
+                            } };
+                            return result;
+                        }
+                        // else: wildcards cover this constructor, continue checking others
                     }
                 }
-
-                // Return the first missing constructor as a pattern
-                if (missing_alts.items.len > 0) {
-                    const alt = missing_alts.items[0];
-                    const args = try allocator.alloc(Pattern, alt.arity);
-                    for (0..alt.arity) |i| {
-                        args[i] = .anything;
-                    }
-
-                    const result = try allocator.alloc(Pattern, 1);
-                    result[0] = .{ .ctor = .{
-                        .union_info = ctor_info.union_info,
-                        .tag_id = alt.tag_id,
-                        .args = args,
-                    } };
-                    return result;
-                }
+                // All missing constructors are covered by wildcards
+                return &[_]Pattern{};
             }
 
             // All constructors covered - check each one recursively
@@ -1572,14 +1598,65 @@ pub fn isUseful(
         },
 
         .list => |l| {
-            // Specialize by this list arity
-            const specialized = try specializeByListArity(allocator, existing_matrix, l.arity);
+            // For list patterns, we need to check usefulness at various lengths
+            // that the pattern covers. A slice pattern like [1, ..] covers
+            // lengths 1, 2, 3, etc. so we need to check if it's useful at any of those.
+            switch (l.arity) {
+                .exact => {
+                    // Exact pattern - only check at this one length
+                    const specialized = try specializeByListArity(allocator, existing_matrix, l.arity);
 
-            const extended_row = try allocator.alloc(Pattern, l.elements.len + rest.len);
-            @memcpy(extended_row[0..l.elements.len], l.elements);
-            @memcpy(extended_row[l.elements.len..], rest);
+                    const extended_row = try allocator.alloc(Pattern, l.elements.len + rest.len);
+                    @memcpy(extended_row[0..l.elements.len], l.elements);
+                    @memcpy(extended_row[l.elements.len..], rest);
 
-            return isUseful(allocator, specialized, extended_row);
+                    return isUseful(allocator, specialized, extended_row);
+                },
+                .slice => |s| {
+                    // Slice pattern - need to check at multiple lengths
+                    // Collect arities from existing matrix to know what lengths to check
+                    const first_col = try existing_matrix.firstColumn();
+                    var arities_list: std.ArrayList(ListArity) = .empty;
+                    for (first_col) |p| {
+                        if (p == .list) {
+                            try arities_list.append(allocator, p.list.arity);
+                        }
+                    }
+                    // Also add our own arity
+                    try arities_list.append(allocator, l.arity);
+
+                    const check_arities = try buildListCtorsForChecking(allocator, arities_list.items);
+
+                    for (check_arities) |check_arity| {
+                        // Only check lengths that our pattern covers
+                        const len = check_arity.minLen();
+                        if (!l.arity.coversLength(len)) continue;
+
+                        const specialized = try specializeByListArity(allocator, existing_matrix, check_arity);
+
+                        // Expand our pattern to this length
+                        const extended_row = try allocator.alloc(Pattern, len + rest.len);
+                        // Copy prefix elements
+                        @memcpy(extended_row[0..s.prefix], l.elements[0..s.prefix]);
+                        // Fill middle with wildcards
+                        const middle_len = len - s.prefix - s.suffix;
+                        for (s.prefix..s.prefix + middle_len) |i| {
+                            extended_row[i] = .anything;
+                        }
+                        // Copy suffix elements
+                        if (s.suffix > 0) {
+                            const suffix_start = l.elements.len - s.suffix;
+                            @memcpy(extended_row[s.prefix + middle_len .. len], l.elements[suffix_start..]);
+                        }
+                        @memcpy(extended_row[len..], rest);
+
+                        if (try isUseful(allocator, specialized, extended_row)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+            }
         },
     };
 }
