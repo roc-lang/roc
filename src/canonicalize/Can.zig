@@ -1854,12 +1854,8 @@ pub fn canonicalizeFile(
                                     .original_region = original_region,
                                 } });
                             },
-                            .top_level_var_error => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
-                            .var_across_function_boundary => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
+                            // is_var=false, so var-related errors can't occur
+                            .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => unreachable,
                         }
                     }
                 }
@@ -4229,16 +4225,8 @@ pub fn canonicalizeExpr(
 
                             // Get the Import.Idx for the module this item comes from
                             const module_text = self.env.getIdent(exposed_info.module_name);
-                            const import_idx = self.scopeLookupImportedModule(module_text) orelse {
-                                // This shouldn't happen if imports are properly tracked, but handle it gracefully
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
-                                        .module_name = exposed_info.module_name,
-                                        .region = region,
-                                    } }),
-                                    .free_vars = DataSpan.empty(),
-                                };
-                            };
+                            // scopeLookupExposedItem found it, so the import must exist
+                            const import_idx = self.scopeLookupImportedModule(module_text) orelse unreachable;
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
@@ -6458,22 +6446,23 @@ pub fn canonicalizePattern(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Create a Pattern node for our identifier
-                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-                    .ident = ident_idx,
-                } }, region);
-
                 // Check if a placeholder exists for this identifier in the current scope
                 // Placeholders are tracked in the placeholder_idents hash map
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
+
+                // Create a Pattern node for our identifier
+                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                    .ident = ident_idx,
+                } }, region);
 
                 if (placeholder_exists) {
                     // Replace the placeholder in the current scope
                     try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
                 } else {
                     // Introduce the identifier into scope mapping to this pattern node
-                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                    // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, false)) {
                         .success => {},
                         .shadowing_warning => |shadowed_pattern_idx| {
                             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -6492,10 +6481,14 @@ pub fn canonicalizePattern(
                             });
                         },
                         .var_across_function_boundary => {
-                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
-                                .ident = ident_idx,
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
                                 .region = region,
                             } });
+                        },
+                        .var_reassignment_ok => |existing_pattern_idx| {
+                            // This is a var reassignment - return the existing pattern
+                            // so the interpreter's upsertBinding will update the existing binding
+                            return existing_pattern_idx;
                         },
                     }
                 }
@@ -6519,10 +6512,10 @@ pub fn canonicalizePattern(
                     .ident = ident_idx,
                 } }, region);
 
-                // Introduce the var with function boundary tracking (using scopeIntroduceVar)
-                _ = try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
-
-                return pattern_idx;
+                // Introduce the var with function boundary tracking
+                // scopeIntroduceVar will detect if this is a reassignment of an existing var
+                // and return the existing pattern in that case
+                return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
             } else {
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
@@ -7070,6 +7063,7 @@ pub fn canonicalizePattern(
                                 } });
                                 return pattern_idx;
                             },
+                            .var_reassignment_ok => unreachable, // is_declaration=true
                         }
                     }
                 } else {
@@ -7177,6 +7171,8 @@ pub fn canonicalizePattern(
                                         .region = list_rest_region,
                                     } });
                                 },
+                                // List rest patterns are always declarations, never reassignments
+                                .var_reassignment_ok => unreachable,
                             }
 
                             current_rest_pattern = assign_idx;
@@ -7307,6 +7303,8 @@ pub fn canonicalizePattern(
                             .region = region,
                         } });
                     },
+                    // As patterns are always declarations, never reassignments
+                    .var_reassignment_ok => unreachable,
                 }
 
                 return pattern_idx;
@@ -7603,13 +7601,8 @@ fn scopeIntroduceIdent(
                 },
             });
         },
-        .var_across_function_boundary => |_| {
-            // This shouldn't happen for regular identifiers
-            return self.env.pushMalformed(T, Diagnostic{ .not_implemented = .{
-                .feature = try self.env.insertString("var across function boundary for non-var identifier"),
-                .region = region,
-            } });
-        },
+        // These only occur for reassignments (is_declaration=false), not declarations
+        .var_across_function_boundary, .var_reassignment_ok => unreachable,
     }
 }
 
@@ -7626,10 +7619,7 @@ fn scopeIntroduceVar(
 
     switch (result) {
         .success => {
-            // If this is a var declaration, record which function it belongs to
-            if (is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
+            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .shadowing_warning => |shadowed_pattern_idx| {
@@ -7639,9 +7629,7 @@ fn scopeIntroduceVar(
                 .region = region,
                 .original_region = original_region,
             } });
-            if (is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
+            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .top_level_var_error => {
@@ -7657,6 +7645,10 @@ fn scopeIntroduceVar(
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
             } });
+        },
+        .var_reassignment_ok => |existing_pattern_idx| {
+            // Var reassignment - return the existing pattern
+            return existing_pattern_idx;
         },
     }
 }
@@ -9303,15 +9295,8 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check: {
                                 // Reuse the existing placeholder pattern
                                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                                const existing_pattern = current_scope.idents.get(name_ident) orelse {
-                                    // This shouldn't happen, but handle it gracefully
-                                    const pattern = Pattern{
-                                        .assign = .{
-                                            .ident = name_ident,
-                                        },
-                                    };
-                                    break :placeholder_check try self.env.addPattern(pattern, region);
-                                };
+                                // Placeholders are always added to both placeholder_idents and scope
+                                const existing_pattern = current_scope.idents.get(name_ident) orelse unreachable;
                                 // Remove from placeholder tracking since we're making it real
                                 _ = self.placeholder_idents.remove(name_ident);
                                 break :placeholder_check existing_pattern;
@@ -10191,8 +10176,9 @@ pub fn scopeIntroduceInternal(
 
     // Check for existing identifier in any scope level for shadowing detection
     if (self.scopeContains(item_kind, ident_idx)) |existing| {
-        // If it's a var reassignment (not declaration), check function boundaries
-        if (is_var and !is_declaration) {
+        // Check if this is a var reassignment: the existing pattern must have been
+        // declared with `var` (source of truth), and we're not declaring a new var
+        if (!is_declaration and self.isVarPattern(existing)) {
             // Find the scope where the var was declared and check for function boundaries
             var declaration_scope_idx: ?usize = null;
             var scope_idx = self.scopes.items.len;
@@ -10227,20 +10213,25 @@ pub fn scopeIntroduceInternal(
                     // Different function, return error
                     return Scope.IntroduceResult{ .var_across_function_boundary = existing };
                 } else {
-                    // Same function, allow reassignment without warning
-                    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
-                    return Scope.IntroduceResult{ .success = {} };
+                    // Same function, allow reassignment - return the existing pattern
+                    // so all references use the same pattern_idx for upsertBinding to work
+                    return Scope.IntroduceResult{ .var_reassignment_ok = existing };
                 }
+            } else {
+                // scopeContains found the identifier, so it must be in some scope
+                unreachable;
             }
-
-            // If we get here, the declaration scope was not found
-            // This shouldn't happen in practice, but we need to handle it
-            return Scope.IntroduceResult{ .success = {} };
         }
 
         // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
         try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+        // If this is a var declaration, record it in var_patterns
+        if (is_var and is_declaration) {
+            try self.recordVarFunction(pattern_idx);
+        }
+
         return Scope.IntroduceResult{ .shadowing_warning = existing };
     }
 
@@ -10253,12 +10244,24 @@ pub fn scopeIntroduceInternal(
         if (ident_idx.idx == entry.key_ptr.idx) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+            // If this is a var declaration, record it in var_patterns
+            if (is_var and is_declaration) {
+                try self.recordVarFunction(pattern_idx);
+            }
+
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
         }
     }
 
     // No conflicts, introduce successfully
     try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+    // If this is a var declaration, record it in var_patterns
+    if (is_var and is_declaration) {
+        try self.recordVarFunction(pattern_idx);
+    }
+
     return Scope.IntroduceResult{ .success = {} };
 }
 
@@ -10444,18 +10447,8 @@ pub fn introduceType(
                 });
             }
         },
-        .shadowing_warning => |shadowed_stmt| {
-            // This shouldn't happen since we're not passing a parent lookup function
-            // but handle it just in case the Scope implementation changes
-            const original_region = self.env.store.getStatementRegion(shadowed_stmt);
-            try self.env.pushDiagnostic(Diagnostic{
-                .shadowing_warning = .{
-                    .ident = name_ident,
-                    .region = region,
-                    .original_region = original_region,
-                },
-            });
-        },
+        // No parent lookup function is passed, so shadowing can't be detected
+        .shadowing_warning => unreachable,
         .redeclared_error => |original_stmt| {
             // Extract region information from the original statement
             const original_region = self.env.store.getStatementRegion(original_stmt);
