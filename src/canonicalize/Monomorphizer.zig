@@ -31,6 +31,8 @@ const CIR = @import("CIR.zig");
 const Expr = CIR.Expr;
 const Pattern = @import("Pattern.zig").Pattern;
 
+const Instantiator = types.instantiate.Instantiator;
+
 const Self = @This();
 
 /// Key for looking up specializations
@@ -311,6 +313,168 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     };
 
     try self.specialized.put(key, specialized);
+}
+
+/// Build type substitutions by comparing polymorphic type with concrete type.
+/// This populates the VarMap with mappings from polymorphic vars to concrete vars.
+fn buildTypeSubstitutions(
+    self: *Self,
+    polymorphic_var: types.Var,
+    concrete_var: types.Var,
+    var_map: *types.VarMap,
+) std.mem.Allocator.Error!void {
+    const poly_resolved = self.types_store.resolveVar(polymorphic_var);
+    const concrete_resolved = self.types_store.resolveVar(concrete_var);
+
+    // If the polymorphic type is a flex or rigid, map it to the concrete type
+    switch (poly_resolved.desc.content) {
+        .flex, .rigid => {
+            try var_map.put(poly_resolved.var_, concrete_resolved.var_);
+            return;
+        },
+        else => {},
+    }
+
+    // Otherwise, recursively compare structure
+    switch (poly_resolved.desc.content) {
+        .structure => |poly_flat| {
+            const concrete_content = concrete_resolved.desc.content;
+            switch (concrete_content) {
+                .structure => |concrete_flat| {
+                    try self.buildFlatTypeSubstitutions(poly_flat, concrete_flat, var_map);
+                },
+                else => {},
+            }
+        },
+        .alias => |poly_alias| {
+            const concrete_content = concrete_resolved.desc.content;
+            switch (concrete_content) {
+                .alias => |concrete_alias| {
+                    // Compare alias type arguments
+                    var poly_iter = self.types_store.iterAliasArgs(poly_alias);
+                    var concrete_iter = self.types_store.iterAliasArgs(concrete_alias);
+
+                    while (poly_iter.next()) |poly_arg| {
+                        if (concrete_iter.next()) |concrete_arg| {
+                            try self.buildTypeSubstitutions(poly_arg, concrete_arg, var_map);
+                        }
+                    }
+
+                    // Also compare backing vars
+                    const poly_backing = self.types_store.getAliasBackingVar(poly_alias);
+                    const concrete_backing = self.types_store.getAliasBackingVar(concrete_alias);
+                    try self.buildTypeSubstitutions(poly_backing, concrete_backing, var_map);
+                },
+                else => {},
+            }
+        },
+        else => {},
+    }
+}
+
+/// Build substitutions for flat types
+fn buildFlatTypeSubstitutions(
+    self: *Self,
+    poly_flat: types.FlatType,
+    concrete_flat: types.FlatType,
+    var_map: *types.VarMap,
+) std.mem.Allocator.Error!void {
+    switch (poly_flat) {
+        .fn_pure, .fn_effectful, .fn_unbound => |poly_func| {
+            const concrete_func = switch (concrete_flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => |f| f,
+                else => return,
+            };
+
+            // Compare arguments
+            const poly_args = self.types_store.sliceVars(poly_func.args);
+            const concrete_args = self.types_store.sliceVars(concrete_func.args);
+
+            const min_len = @min(poly_args.len, concrete_args.len);
+            for (0..min_len) |i| {
+                try self.buildTypeSubstitutions(poly_args[i], concrete_args[i], var_map);
+            }
+
+            // Compare return types
+            try self.buildTypeSubstitutions(poly_func.ret, concrete_func.ret, var_map);
+        },
+        .record => |poly_record| {
+            const concrete_record = switch (concrete_flat) {
+                .record => |r| r,
+                else => return,
+            };
+
+            // Compare field types
+            const poly_fields = self.types_store.getRecordFieldsSlice(poly_record.fields);
+            const concrete_fields = self.types_store.getRecordFieldsSlice(concrete_record.fields);
+
+            const min_len = @min(poly_fields.len, concrete_fields.len);
+            for (0..min_len) |i| {
+                try self.buildTypeSubstitutions(
+                    poly_fields.items(.var_)[i],
+                    concrete_fields.items(.var_)[i],
+                    var_map,
+                );
+            }
+        },
+        .tuple => |poly_tuple| {
+            const concrete_tuple = switch (concrete_flat) {
+                .tuple => |t| t,
+                else => return,
+            };
+
+            const poly_elems = self.types_store.sliceVars(poly_tuple.elems);
+            const concrete_elems = self.types_store.sliceVars(concrete_tuple.elems);
+
+            const min_len = @min(poly_elems.len, concrete_elems.len);
+            for (0..min_len) |i| {
+                try self.buildTypeSubstitutions(poly_elems[i], concrete_elems[i], var_map);
+            }
+        },
+        .tag_union => |poly_union| {
+            const concrete_union = switch (concrete_flat) {
+                .tag_union => |u| u,
+                else => return,
+            };
+
+            // Compare extension types
+            try self.buildTypeSubstitutions(poly_union.ext, concrete_union.ext, var_map);
+        },
+        .nominal_type => |poly_nom| {
+            const concrete_nom = switch (concrete_flat) {
+                .nominal_type => |n| n,
+                else => return,
+            };
+
+            // Compare type arguments
+            const poly_vars = self.types_store.sliceVars(poly_nom.vars.nonempty);
+            const concrete_vars = self.types_store.sliceVars(concrete_nom.vars.nonempty);
+
+            const min_len = @min(poly_vars.len, concrete_vars.len);
+            for (0..min_len) |i| {
+                try self.buildTypeSubstitutions(poly_vars[i], concrete_vars[i], var_map);
+            }
+        },
+        .record_unbound, .empty_record, .empty_tag_union => {},
+    }
+}
+
+/// Instantiate a type variable using the type substitutions.
+/// Returns the concrete type for a polymorphic type.
+pub fn instantiateType(
+    self: *Self,
+    type_var: types.Var,
+    var_map: *std.AutoHashMap(types.Var, types.Var),
+) std.mem.Allocator.Error!types.Var {
+    var instantiator = Instantiator{
+        .store = self.types_store,
+        .idents = self.module_env.getIdentStoreConst(),
+        .var_map = var_map,
+        .current_rank = types.Rank.top_level,
+        .rigid_behavior = .fresh_flex,
+    };
+
+    return try instantiator.instantiateVar(type_var);
 }
 
 /// Duplicate a function body, substituting polymorphic types with concrete ones.
