@@ -1631,3 +1631,26 @@ test "issue 8710: tag union with heap payload in tuple should not leak" {
         \\}
     , &[_]i64{ 1, 2, 3 }, .no_trace);
 }
+
+test "issue 8727: function returning closure that captures outer variable" {
+    // Regression test for GitHub issue #8727
+    // A function that returns a closure which captures a variable from its
+    // enclosing scope would crash with "e_lookup_local: definition not found".
+    // The issue was that capture field names are stored using runtime_layout_store
+    // idents, but lookups used module idents which have different indices.
+
+    // Simple case: function returns closure capturing its argument
+    try runExpectI64(
+        \\{
+        \\    make_adder = |n| |x| n + x
+        \\    add_ten = make_adder(10)
+        \\    add_ten(5)
+        \\}
+    , 15, .no_trace);
+
+    // Curried multiplication
+    try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+
+    // Triple currying
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+}
