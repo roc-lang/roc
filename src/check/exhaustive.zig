@@ -663,7 +663,16 @@ pub fn convertMatchBranches(
 // Pattern Reification
 //
 // These functions resolve unresolved patterns to concrete patterns using type information.
-// This is the second phase of exhaustiveness checking.
+// In the 1-phase design, reification happens on-demand during usefulness checking,
+// and type errors are propagated immediately rather than silently skipped.
+
+/// Errors that can occur during pattern reification.
+/// These indicate type mismatches that prevent exhaustiveness checking.
+pub const ReifyError = error{
+    OutOfMemory,
+    /// Type couldn't be resolved (e.g., polymorphic type with unknown structure)
+    TypeError,
+};
 
 /// Result of reifying pattern rows
 pub const ReifiedRows = struct {
@@ -685,13 +694,17 @@ pub const ReifiedRows = struct {
 ///
 /// This resolves tag patterns by looking up the full union type and determining
 /// the tag_id for the constructor.
+///
+/// Returns `error.TypeError` when the type cannot be resolved (e.g., polymorphic types).
+/// This allows the caller to gracefully skip exhaustiveness checking rather than
+/// producing incorrect results.
 pub fn reifyPattern(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
     ident_store: *const Ident.Store,
     unresolved: UnresolvedPattern,
     type_var: Var,
-) error{OutOfMemory}!Pattern {
+) ReifyError!Pattern {
     return switch (unresolved) {
         .anything => .{ .anything = null },
 
@@ -713,10 +726,9 @@ pub fn reifyPattern(
                 };
 
                 if (is_unresolved and arg != .anything) {
-                    // TODO: Arg type is polymorphic but pattern expects something specific.
-                    // We should properly reify nested patterns for polymorphic types
-                    // instead of falling back to 'anything'.
-                    args[i] = .{ .anything = null };
+                    // Arg type is polymorphic but pattern expects something specific.
+                    // We can't reliably do exhaustiveness checking.
+                    return error.TypeError;
                 } else {
                     args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
                 }
@@ -736,8 +748,8 @@ pub fn reifyPattern(
             switch (union_result) {
                 .success => |union_info| {
                     const tag_id = findTagId(union_info, c.tag_name) orelse {
-                        // TODO: Handle open unions properly instead of treating as anything.
-                        return .{ .anything = null };
+                        // Tag not found in union - type error
+                        return error.TypeError;
                     };
 
                     const args = try allocator.alloc(Pattern, c.args.len);
@@ -754,10 +766,9 @@ pub fn reifyPattern(
                         };
 
                         if (is_unresolved and arg != .anything) {
-                            // TODO: Arg type is polymorphic but pattern expects something specific.
-                            // We should properly reify nested patterns for polymorphic types
-                            // instead of falling back to 'anything'.
-                            args[i] = .{ .anything = null };
+                            // Arg type is polymorphic but pattern expects something specific.
+                            // We can't reliably do exhaustiveness checking.
+                            return error.TypeError;
                         } else {
                             args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
                         }
@@ -770,8 +781,8 @@ pub fn reifyPattern(
                     } };
                 },
                 .not_a_union => {
-                    // TODO: Handle non-union types properly instead of treating as anything.
-                    return .{ .anything = null };
+                    // Type is not a union - can't do exhaustiveness checking
+                    return error.TypeError;
                 },
             }
         },
@@ -795,6 +806,8 @@ pub fn reifyPattern(
 /// Reify all unresolved pattern rows to concrete patterns.
 ///
 /// This also performs redundancy checking as patterns are added.
+/// If any pattern fails to reify due to a TypeError, has_unresolved_ctor is set to true,
+/// which will cause checking to be skipped for this match expression.
 pub fn reifyRows(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
@@ -811,26 +824,15 @@ pub fn reifyRows(
         // Reify this row's patterns
         const reified = try allocator.alloc(Pattern, row.patterns.len);
         for (row.patterns, 0..) |pat, i| {
-            reified[i] = try reifyPattern(allocator, type_store, ident_store, pat, scrutinee_type);
-            // Track if any constructor patterns couldn't be fully resolved
-            // (turned into .anything when they should have been .ctor)
-            // Also check known_ctor patterns that might have nested unresolved patterns
-            if ((pat == .ctor or pat == .known_ctor) and reified[i] == .anything) {
-                has_unresolved_ctor = true;
-            }
-            // Check nested patterns in constructors (tuples, records, tag unions with payloads)
-            if (pat == .known_ctor and reified[i] == .ctor) {
-                // Check if any nested pattern became .anything when it wasn't originally
-                if (hasUnresolvedNestedPatterns(pat.known_ctor.args, reified[i].ctor.args)) {
+            reified[i] = reifyPattern(allocator, type_store, ident_store, pat, scrutinee_type) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.TypeError => blk: {
+                    // Type error during reification - pattern couldn't be resolved.
+                    // Mark as unresolved and use a wildcard as placeholder.
                     has_unresolved_ctor = true;
-                }
-            }
-            // Also check .ctor patterns that resolved but have nested unresolved args
-            if (pat == .ctor and reified[i] == .ctor) {
-                if (hasUnresolvedNestedPatterns(pat.ctor.args, reified[i].ctor.args)) {
-                    has_unresolved_ctor = true;
-                }
-            }
+                    break :blk .{ .anything = null };
+                },
+            };
         }
 
         try reified_rows.append(allocator, reified);
@@ -843,33 +845,6 @@ pub fn reifyRows(
         .overall_region = unresolved.overall_region,
         .has_unresolved_ctor = has_unresolved_ctor,
     };
-}
-
-/// Check if any nested constructor patterns couldn't be fully resolved.
-/// This happens when an unresolved pattern (like a tag name) became .anything
-/// because the union type couldn't be determined.
-fn hasUnresolvedNestedPatterns(unresolved_args: []const UnresolvedPattern, reified_args: []const Pattern) bool {
-    // If argument counts don't match, something went wrong but we can't check
-    if (unresolved_args.len != reified_args.len) return false;
-
-    for (unresolved_args, reified_args) |unresolved, reified| {
-        // Constructor that became anything = unresolved
-        if ((unresolved == .ctor or unresolved == .known_ctor) and reified == .anything) {
-            return true;
-        }
-        // Recursively check nested patterns
-        if (unresolved == .known_ctor and reified == .ctor) {
-            if (hasUnresolvedNestedPatterns(unresolved.known_ctor.args, reified.ctor.args)) {
-                return true;
-            }
-        }
-        if (unresolved == .ctor and reified == .ctor) {
-            if (hasUnresolvedNestedPatterns(unresolved.ctor.args, reified.ctor.args)) {
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 // Helper types and functions for reification
