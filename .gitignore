@@ -145,3 +145,4 @@ src/snapshots/**/*.html
 .claude/settings.local.json
 
 *.bak
+docs/CLOSURE_TRANSFORMATION_MIGRATION.md
