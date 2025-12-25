@@ -1278,29 +1278,7 @@ pub const Store = struct {
                             // Recursively get all tags by checking the tag extension
                             const num_tags = try self.gatherTags(tag_union);
                             const tags_slice = self.work.pending_tags.slice();
-
-                            // Get the slices of tags
                             const tags_args = tags_slice.items(.args)[pending_tags_top..];
-
-                            // Check if this is a Bool (2 tags with no payload) as a special case
-                            // This is a legitimate layout optimization for boolean tag unions
-                            // TODO: Is this necessary?
-                            if (num_tags == 2) {
-                                var is_bool = true;
-                                for (tags_args) |tag_args| {
-                                    const args_slice = self.types_store.sliceVars(tag_args);
-                                    if (args_slice.len != 0) {
-                                        is_bool = false;
-                                        break;
-                                    }
-                                }
-
-                                if (is_bool) {
-                                    // Bool layout: use predefined bool layout
-                                    // Break to fall through to pending container processing
-                                    break :flat_type Layout.boolType();
-                                }
-                            }
 
                             // For general tag unions, we need to compute the layout
                             // First, determine discriminant size based on number of tags
