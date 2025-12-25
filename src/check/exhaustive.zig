@@ -1990,7 +1990,723 @@ pub fn checkRedundancy(
     };
 }
 
+// =============================================================================
+// 1-Phase On-Demand Reification
+//
+// These functions work with UnresolvedPattern directly, reifying on-demand
+// during usefulness checking. This allows type errors to propagate immediately
+// rather than being silently skipped.
+// =============================================================================
+
+/// A matrix of sketched (unresolved) patterns for exhaustiveness checking.
+/// Patterns are reified on-demand when type information is needed.
+pub const SketchedMatrix = struct {
+    rows: []const []const UnresolvedPattern,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, rows: []const []const UnresolvedPattern) SketchedMatrix {
+        return .{ .rows = rows, .allocator = allocator };
+    }
+
+    pub fn isEmpty(self: SketchedMatrix) bool {
+        return self.rows.len == 0;
+    }
+
+    /// Get the first column of patterns
+    pub fn firstColumn(self: SketchedMatrix) error{OutOfMemory}![]const UnresolvedPattern {
+        if (self.rows.len == 0) return &[_]UnresolvedPattern{};
+        const col = try self.allocator.alloc(UnresolvedPattern, self.rows.len);
+        for (self.rows, 0..) |row, i| {
+            col[i] = if (row.len > 0) row[0] else .anything;
+        }
+        return col;
+    }
+};
+
+/// Result of collecting constructors from the first column of a sketched matrix.
+/// When reifying fails, returns an error.
+const CollectedCtorsSketched = union(enum) {
+    /// Only wildcards/anything - pattern is not exhaustive by itself
+    non_exhaustive_wildcards,
+    /// Specific tag constructors found
+    ctors: struct {
+        found: []const TagId,
+        union_info: Union,
+    },
+    /// List patterns found
+    lists: []const ListArity,
+    /// Literal patterns found (cannot be exhaustive for infinite domains)
+    literals,
+};
+
+/// Collect constructors from the first column of a sketched matrix.
+/// Reifies constructor patterns on-demand to get union information.
+/// `first_col_type` is optional; if null, only `known_ctor` patterns can provide union info.
+fn collectCtorsSketched(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    matrix: SketchedMatrix,
+    first_col_type: ?Var,
+) ReifyError!CollectedCtorsSketched {
+    if (matrix.isEmpty()) return .non_exhaustive_wildcards;
+
+    const first_col = try matrix.firstColumn();
+    if (first_col.len == 0) return .non_exhaustive_wildcards;
+
+    // Determine what kind of patterns we have
+    var found_ctor = false;
+    var found_list = false;
+    var found_literal = false;
+    var found_wildcard = false;
+    var union_info: ?Union = null;
+
+    for (first_col) |pat| {
+        switch (pat) {
+            .ctor => |c| {
+                found_ctor = true;
+                if (union_info == null) {
+                    // .ctor patterns require type info to resolve the union
+                    const col_type = first_col_type orelse return error.TypeError;
+                    const union_result = try getUnionFromType(allocator, type_store, ident_store, col_type);
+                    switch (union_result) {
+                        .success => |u| union_info = u,
+                        .not_a_union => return error.TypeError,
+                    }
+                    // Verify tag exists
+                    if (findTagId(union_info.?, c.tag_name) == null) {
+                        return error.TypeError;
+                    }
+                }
+            },
+            .known_ctor => |kc| {
+                found_ctor = true;
+                if (union_info == null) {
+                    union_info = kc.union_info;
+                }
+            },
+            .list => {
+                found_list = true;
+            },
+            .literal => {
+                found_literal = true;
+            },
+            .anything => {
+                found_wildcard = true;
+            },
+        }
+    }
+
+    if (found_ctor) {
+        // Collect all unique tag IDs
+        var tag_set = std.AutoHashMap(TagId, void).init(allocator);
+        for (first_col) |pat| {
+            switch (pat) {
+                .ctor => |c| {
+                    const tag_id = findTagId(union_info.?, c.tag_name) orelse return error.TypeError;
+                    try tag_set.put(tag_id, {});
+                },
+                .known_ctor => |kc| {
+                    try tag_set.put(kc.tag_id, {});
+                },
+                else => {},
+            }
+        }
+
+        var found_tags: std.ArrayList(TagId) = .empty;
+        var it = tag_set.keyIterator();
+        while (it.next()) |key| {
+            try found_tags.append(allocator, key.*);
+        }
+
+        return .{ .ctors = .{
+            .found = try found_tags.toOwnedSlice(allocator),
+            .union_info = union_info.?,
+        } };
+    }
+
+    if (found_list) {
+        if (found_wildcard) {
+            return .non_exhaustive_wildcards;
+        }
+        var arities: std.ArrayList(ListArity) = .empty;
+        for (first_col) |pat| {
+            if (pat == .list) {
+                try arities.append(allocator, pat.list.arity);
+            }
+        }
+        return .{ .lists = try arities.toOwnedSlice(allocator) };
+    }
+
+    if (found_literal) {
+        if (found_wildcard) {
+            return .non_exhaustive_wildcards;
+        }
+        return .literals;
+    }
+
+    return .non_exhaustive_wildcards;
+}
+
+/// Specialize a sketched matrix by a constructor.
+/// Keeps patterns in unresolved form until needed.
+fn specializeByConstructorSketched(
+    allocator: std.mem.Allocator,
+    matrix: SketchedMatrix,
+    tag_id: TagId,
+    arity: usize,
+    union_info: Union,
+) error{OutOfMemory}!SketchedMatrix {
+    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+
+    for (matrix.rows) |row| {
+        if (row.len == 0) continue;
+
+        const first = row[0];
+        const rest = row[1..];
+
+        switch (first) {
+            .ctor => |c| {
+                const pat_tag_id = findTagId(union_info, c.tag_name) orelse continue;
+                if (@intFromEnum(pat_tag_id) == @intFromEnum(tag_id)) {
+                    const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
+                    @memcpy(new_row[0..c.args.len], c.args);
+                    @memcpy(new_row[c.args.len..], rest);
+                    try new_rows.append(allocator, new_row);
+                }
+            },
+            .known_ctor => |kc| {
+                if (@intFromEnum(kc.tag_id) == @intFromEnum(tag_id)) {
+                    const new_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
+                    @memcpy(new_row[0..kc.args.len], kc.args);
+                    @memcpy(new_row[kc.args.len..], rest);
+                    try new_rows.append(allocator, new_row);
+                }
+            },
+            .anything => {
+                const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
+                for (0..arity) |i| {
+                    new_row[i] = .anything;
+                }
+                @memcpy(new_row[arity..], rest);
+                try new_rows.append(allocator, new_row);
+            },
+            else => {},
+        }
+    }
+
+    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+}
+
+/// Specialize the sketched matrix for wildcard - keep only rows starting with wildcard
+fn specializeByAnythingSketched(allocator: std.mem.Allocator, matrix: SketchedMatrix) error{OutOfMemory}!SketchedMatrix {
+    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+
+    for (matrix.rows) |row| {
+        if (row.len == 0) continue;
+        if (row[0] == .anything) {
+            try new_rows.append(allocator, row[1..]);
+        }
+    }
+
+    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+}
+
+/// Specialize the sketched matrix by a list arity.
+fn specializeByListAritySketched(
+    allocator: std.mem.Allocator,
+    matrix: SketchedMatrix,
+    arity: ListArity,
+) error{OutOfMemory}!SketchedMatrix {
+    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+
+    const target_len = arity.minLen();
+
+    for (matrix.rows) |row| {
+        if (row.len == 0) continue;
+
+        const first = row[0];
+        const rest = row[1..];
+
+        switch (first) {
+            .list => |l| {
+                if (l.arity.coversLength(target_len)) {
+                    const new_row = try allocator.alloc(UnresolvedPattern, target_len + rest.len);
+
+                    switch (l.arity) {
+                        .exact => {
+                            @memcpy(new_row[0..l.elements.len], l.elements);
+                        },
+                        .slice => |s| {
+                            @memcpy(new_row[0..s.prefix], l.elements[0..s.prefix]);
+                            const middle_len = target_len - s.prefix - s.suffix;
+                            for (s.prefix..s.prefix + middle_len) |i| {
+                                new_row[i] = .anything;
+                            }
+                            if (s.suffix > 0) {
+                                const suffix_start = l.elements.len - s.suffix;
+                                @memcpy(new_row[s.prefix + middle_len .. target_len], l.elements[suffix_start..]);
+                            }
+                        },
+                    }
+
+                    @memcpy(new_row[target_len..], rest);
+                    try new_rows.append(allocator, new_row);
+                }
+            },
+            .anything => {
+                const new_row = try allocator.alloc(UnresolvedPattern, target_len + rest.len);
+                for (0..target_len) |i| {
+                    new_row[i] = .anything;
+                }
+                @memcpy(new_row[target_len..], rest);
+                try new_rows.append(allocator, new_row);
+            },
+            else => {},
+        }
+    }
+
+    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+}
+
+/// Check if a sketched pattern matrix is exhaustive.
+/// Reifies patterns on-demand when type information is needed.
+/// Returns missing patterns as reified Pattern for error messages.
+pub fn checkExhaustiveSketched(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    matrix: SketchedMatrix,
+    column_types: ColumnTypes,
+) ReifyError![]const Pattern {
+    const n = column_types.len();
+
+    // Base case: empty matrix with columns to fill = not exhaustive
+    if (matrix.isEmpty()) {
+        if (n == 0) {
+            return &[_]Pattern{};
+        }
+        // Return typed wildcards as missing pattern
+        const missing = try allocator.alloc(Pattern, n);
+        for (column_types.types, 0..) |col_type, i| {
+            missing[i] = .{ .anything = col_type };
+        }
+        return missing;
+    }
+
+    if (n == 0) {
+        return &[_]Pattern{};
+    }
+
+    const first_col_type = if (column_types.types.len > 0) column_types.types[0] else null;
+    const ctors = try collectCtorsSketched(allocator, type_store, ident_store, matrix, first_col_type);
+
+    return switch (ctors) {
+        .non_exhaustive_wildcards => {
+            const new_matrix = try specializeByAnythingSketched(allocator, matrix);
+            const rest_types = column_types.dropFirst();
+            const rest = try checkExhaustiveSketched(allocator, type_store, ident_store, new_matrix, rest_types);
+
+            if (rest.len == 0) return &[_]Pattern{};
+
+            const result = try allocator.alloc(Pattern, 1 + rest.len);
+            const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
+            result[0] = .{ .anything = first_type };
+            @memcpy(result[1..], rest);
+            return result;
+        },
+
+        .ctors => |ctor_info| {
+            const num_found = ctor_info.found.len;
+            const num_alts = ctor_info.union_info.alternatives.len;
+
+            if (num_found < num_alts) {
+                // Check missing constructors
+                for (ctor_info.union_info.alternatives) |alt| {
+                    var found = false;
+                    for (ctor_info.found) |found_id| {
+                        if (@intFromEnum(alt.tag_id) == @intFromEnum(found_id)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        const specialized = try specializeByConstructorSketched(
+                            allocator,
+                            matrix,
+                            alt.tag_id,
+                            alt.arity,
+                            ctor_info.union_info,
+                        );
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                        const inner_missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
+
+                        if (inner_missing.len > 0) {
+                            const missing_pattern = Pattern{ .ctor = .{
+                                .union_info = ctor_info.union_info,
+                                .tag_id = alt.tag_id,
+                                .args = inner_missing,
+                            } };
+                            if (missing_pattern.isInhabited(column_types.type_store)) {
+                                const result = try allocator.alloc(Pattern, 1);
+                                result[0] = missing_pattern;
+                                return result;
+                            }
+                        }
+                    }
+                }
+                return &[_]Pattern{};
+            }
+
+            // All constructors covered - check each recursively
+            for (ctor_info.union_info.alternatives) |alt| {
+                const specialized = try specializeByConstructorSketched(
+                    allocator,
+                    matrix,
+                    alt.tag_id,
+                    alt.arity,
+                    ctor_info.union_info,
+                );
+
+                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                const missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
+
+                if (missing.len > 0) {
+                    const args = try allocator.alloc(Pattern, alt.arity);
+                    for (0..alt.arity) |i| {
+                        if (i < missing.len) {
+                            args[i] = missing[i];
+                        } else {
+                            const arg_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
+                            args[i] = .{ .anything = arg_type };
+                        }
+                    }
+
+                    const missing_pattern = Pattern{ .ctor = .{
+                        .union_info = ctor_info.union_info,
+                        .tag_id = alt.tag_id,
+                        .args = args,
+                    } };
+
+                    if (missing_pattern.isInhabited(column_types.type_store)) {
+                        const result = try allocator.alloc(Pattern, 1);
+                        result[0] = missing_pattern;
+                        return result;
+                    }
+                }
+            }
+
+            return &[_]Pattern{};
+        },
+
+        .lists => |arities| {
+            const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
+
+            for (ctors_to_check) |list_arity| {
+                const specialized = try specializeByListAritySketched(allocator, matrix, list_arity);
+                const min_len = list_arity.minLen();
+                const specialized_types = try column_types.specializeForList(allocator, min_len);
+                const missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
+
+                if (missing.len > 0) {
+                    const elements = try allocator.alloc(Pattern, min_len);
+                    for (0..min_len) |i| {
+                        if (i < missing.len) {
+                            elements[i] = missing[i];
+                        } else {
+                            const elem_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
+                            elements[i] = .{ .anything = elem_type };
+                        }
+                    }
+
+                    const result = try allocator.alloc(Pattern, 1);
+                    result[0] = .{ .list = .{
+                        .arity = list_arity,
+                        .elements = elements,
+                    } };
+                    return result;
+                }
+            }
+
+            return &[_]Pattern{};
+        },
+
+        .literals => {
+            const result = try allocator.alloc(Pattern, 1);
+            const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
+            result[0] = .{ .anything = first_type };
+            return result;
+        },
+    };
+}
+
+/// Check if a new sketched pattern row is "useful" given existing sketched rows.
+/// Reifies patterns on-demand when type information is needed.
+pub fn isUsefulSketched(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    existing_matrix: SketchedMatrix,
+    new_row: []const UnresolvedPattern,
+    column_types: ColumnTypes,
+) ReifyError!bool {
+    // Empty matrix = new row is definitely useful
+    if (existing_matrix.isEmpty()) return true;
+
+    // No more patterns to check = not useful (existing rows cover everything)
+    if (new_row.len == 0) return false;
+
+    const first = new_row[0];
+    const rest = new_row[1..];
+
+    // Get first column type if available. For known_ctor patterns (records, tuples),
+    // we don't strictly need the type because the pattern carries its own union info.
+    const first_col_type = if (column_types.types.len > 0) column_types.types[0] else null;
+
+    return switch (first) {
+        .ctor => |c| {
+            // .ctor patterns require type info to resolve the union
+            const col_type = first_col_type orelse return error.TypeError;
+            const union_result = try getUnionFromType(allocator, type_store, ident_store, col_type);
+            const union_info = switch (union_result) {
+                .success => |u| u,
+                .not_a_union => return error.TypeError,
+            };
+            const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
+
+            const specialized = try specializeByConstructorSketched(
+                allocator,
+                existing_matrix,
+                tag_id,
+                c.args.len,
+                union_info,
+            );
+            const specialized_types = try column_types.specializeByConstructor(allocator, tag_id);
+
+            const extended_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
+            @memcpy(extended_row[0..c.args.len], c.args);
+            @memcpy(extended_row[c.args.len..], rest);
+
+            return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
+        },
+
+        .known_ctor => |kc| {
+            const specialized = try specializeByConstructorSketched(
+                allocator,
+                existing_matrix,
+                kc.tag_id,
+                kc.args.len,
+                kc.union_info,
+            );
+            const specialized_types = try column_types.specializeByConstructor(allocator, kc.tag_id);
+
+            const extended_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
+            @memcpy(extended_row[0..kc.args.len], kc.args);
+            @memcpy(extended_row[kc.args.len..], rest);
+
+            return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
+        },
+
+        .anything => {
+            // Check if matrix is complete (covers all constructors)
+            const ctors = try collectCtorsSketched(allocator, type_store, ident_store, existing_matrix, first_col_type);
+
+            switch (ctors) {
+                .non_exhaustive_wildcards => {
+                    const specialized = try specializeByAnythingSketched(allocator, existing_matrix);
+                    const rest_types = column_types.dropFirst();
+                    return isUsefulSketched(allocator, type_store, ident_store, specialized, rest, rest_types);
+                },
+
+                .ctors => |ctor_info| {
+                    if (ctor_info.union_info.has_flex_extension) {
+                        return true;
+                    }
+
+                    const num_found = ctor_info.found.len;
+                    const num_alts = ctor_info.union_info.alternatives.len;
+
+                    if (num_found < num_alts) {
+                        const specialized = try specializeByAnythingSketched(allocator, existing_matrix);
+                        const rest_types = column_types.dropFirst();
+                        return isUsefulSketched(allocator, type_store, ident_store, specialized, rest, rest_types);
+                    }
+
+                    // All constructors covered - check each one
+                    for (ctor_info.union_info.alternatives) |alt| {
+                        const specialized = try specializeByConstructorSketched(
+                            allocator,
+                            existing_matrix,
+                            alt.tag_id,
+                            alt.arity,
+                            ctor_info.union_info,
+                        );
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+
+                        const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
+                        for (0..alt.arity) |i| {
+                            extended[i] = .anything;
+                        }
+                        @memcpy(extended[alt.arity..], rest);
+
+                        if (try isUsefulSketched(allocator, type_store, ident_store, specialized, extended, specialized_types)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+
+                .lists => |arities| {
+                    const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
+
+                    for (ctors_to_check) |list_arity| {
+                        const specialized = try specializeByListAritySketched(allocator, existing_matrix, list_arity);
+                        const min_len = list_arity.minLen();
+                        const specialized_types = try column_types.specializeForList(allocator, min_len);
+
+                        const extended = try allocator.alloc(UnresolvedPattern, min_len + rest.len);
+                        for (0..min_len) |i| {
+                            extended[i] = .anything;
+                        }
+                        @memcpy(extended[min_len..], rest);
+
+                        if (try isUsefulSketched(allocator, type_store, ident_store, specialized, extended, specialized_types)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+
+                .literals => {
+                    return true;
+                },
+            }
+        },
+
+        .literal => |lit| {
+            var matching_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+
+            for (existing_matrix.rows) |row| {
+                if (row.len == 0) continue;
+                const row_first = row[0];
+
+                const matches = switch (row_first) {
+                    .literal => |l| Literal.eql(l, lit),
+                    .anything => true,
+                    else => false,
+                };
+
+                if (matches) {
+                    try matching_rows.append(allocator, row[1..]);
+                }
+            }
+
+            const filtered = SketchedMatrix.init(allocator, try matching_rows.toOwnedSlice(allocator));
+            const rest_types = column_types.dropFirst();
+            return isUsefulSketched(allocator, type_store, ident_store, filtered, rest, rest_types);
+        },
+
+        .list => |l| {
+            switch (l.arity) {
+                .exact => {
+                    const specialized = try specializeByListAritySketched(allocator, existing_matrix, l.arity);
+                    const specialized_types = try column_types.specializeForList(allocator, l.elements.len);
+
+                    const extended_row = try allocator.alloc(UnresolvedPattern, l.elements.len + rest.len);
+                    @memcpy(extended_row[0..l.elements.len], l.elements);
+                    @memcpy(extended_row[l.elements.len..], rest);
+
+                    return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
+                },
+                .slice => |s| {
+                    const first_col = try existing_matrix.firstColumn();
+                    var arities_list: std.ArrayList(ListArity) = .empty;
+                    for (first_col) |p| {
+                        if (p == .list) {
+                            try arities_list.append(allocator, p.list.arity);
+                        }
+                    }
+                    try arities_list.append(allocator, l.arity);
+
+                    const check_arities = try buildListCtorsForChecking(allocator, arities_list.items);
+
+                    for (check_arities) |check_arity| {
+                        const len = check_arity.minLen();
+                        if (!l.arity.coversLength(len)) continue;
+
+                        const specialized = try specializeByListAritySketched(allocator, existing_matrix, check_arity);
+                        const specialized_types = try column_types.specializeForList(allocator, len);
+
+                        const extended_row = try allocator.alloc(UnresolvedPattern, len + rest.len);
+                        @memcpy(extended_row[0..s.prefix], l.elements[0..s.prefix]);
+                        const middle_len = len - s.prefix - s.suffix;
+                        for (s.prefix..s.prefix + middle_len) |i| {
+                            extended_row[i] = .anything;
+                        }
+                        if (s.suffix > 0) {
+                            const suffix_start = l.elements.len - s.suffix;
+                            @memcpy(extended_row[s.prefix + middle_len .. len], l.elements[suffix_start..]);
+                        }
+                        @memcpy(extended_row[len..], rest);
+
+                        if (try isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+            }
+        },
+    };
+}
+
+/// Result of checking rows for redundancy using sketched patterns
+pub const RedundancyResultSketched = struct {
+    /// Non-redundant rows (useful patterns)
+    non_redundant_rows: []const []const UnresolvedPattern,
+    /// Indices of redundant branches
+    redundant_indices: []const u32,
+    /// Regions of redundant branches
+    redundant_regions: []const Region,
+};
+
+/// Process sketched pattern rows and identify redundant patterns.
+/// Uses on-demand reification for type checking.
+pub fn checkRedundancySketched(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    rows: []const UnresolvedRow,
+    column_types: ColumnTypes,
+) ReifyError!RedundancyResultSketched {
+    var non_redundant: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var redundant_indices: std.ArrayList(u32) = .empty;
+    var redundant_regions: std.ArrayList(Region) = .empty;
+
+    for (rows) |row| {
+        // Rows with guards are always considered useful (guard might fail at runtime)
+        const matrix = SketchedMatrix.init(allocator, non_redundant.items);
+        const is_useful = row.guard == .has_guard or
+            try isUsefulSketched(allocator, type_store, ident_store, matrix, row.patterns, column_types);
+
+        if (is_useful) {
+            try non_redundant.append(allocator, row.patterns);
+        } else {
+            try redundant_indices.append(allocator, row.branch_index);
+            try redundant_regions.append(allocator, row.region);
+        }
+    }
+
+    return .{
+        .non_redundant_rows = try non_redundant.toOwnedSlice(allocator),
+        .redundant_indices = try redundant_indices.toOwnedSlice(allocator),
+        .redundant_regions = try redundant_regions.toOwnedSlice(allocator),
+    };
+}
+
+// =============================================================================
 // High-level Integration API
+// =============================================================================
 //
 // These functions provide a simpler interface for the type checker to call.
 
@@ -2038,8 +2754,12 @@ pub const CheckResult = struct {
 /// Perform full exhaustiveness and redundancy checking on a match expression.
 ///
 /// This is the main entry point for the type checker.
-/// It converts patterns, reifies them with type info, and checks both
-/// exhaustiveness and redundancy.
+/// Uses 1-phase on-demand reification: patterns are converted to UnresolvedPattern
+/// and reified on-demand during checking when type information is needed.
+///
+/// Returns `error.TypeError` when a pattern cannot be resolved due to type issues
+/// (e.g., polymorphic types, type mismatches). The caller should handle this by
+/// skipping exhaustiveness error reporting for that match expression.
 pub fn checkMatch(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
@@ -2048,42 +2768,21 @@ pub fn checkMatch(
     branches_span: CIR.Expr.Match.Branch.Span,
     scrutinee_type: Var,
     overall_region: Region,
-) error{OutOfMemory}!CheckResult {
+) ReifyError!CheckResult {
     // Use an arena for all intermediate allocations to avoid leaks
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    // Check if the scrutinee type is fully resolved
-    // If it's still a flex/rigid var, we can't reliably do exhaustiveness checking
-    // Note: records, tuples, etc. are NOT tag unions but are still resolved types
-    const resolved_scrutinee = type_store.resolveVar(scrutinee_type);
-    const scrutinee_unresolved = switch (resolved_scrutinee.desc.content) {
-        .flex, .rigid => true,
-        else => false,
-    };
-
-    // Phase 1: Convert CIR patterns to unresolved patterns
-    const unresolved = try convertMatchBranches(
+    // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
+    const sketched = try convertMatchBranches(
         arena_alloc,
         node_store,
         branches_span,
         overall_region,
     );
 
-    // Phase 2: Reify patterns with type information
-    const reified = try reifyRows(
-        arena_alloc,
-        type_store,
-        ident_store,
-        unresolved,
-        scrutinee_type,
-    );
-
-    // TODO: Handle unresolved scrutinee types properly instead of skipping checks.
-    const skip_checks = scrutinee_unresolved or reified.has_unresolved_ctor;
-
-    // Create initial column types for exhaustiveness checking
+    // Create initial column types for on-demand reification
     const initial_types = try arena_alloc.alloc(Var, 1);
     initial_types[0] = scrutinee_type;
     const column_types = ColumnTypes{
@@ -2091,30 +2790,25 @@ pub fn checkMatch(
         .type_store = type_store,
     };
 
-    // Phase 3: Check redundancy
-    // TODO: Handle unresolved constructors properly instead of skipping redundancy checks.
-    const redundancy = if (skip_checks)
-        RedundancyResult{
-            .non_redundant_rows = reified.rows,
-            .redundant_indices = &[_]u32{},
-            .redundant_regions = &[_]Region{},
-        }
-    else
-        try checkRedundancy(
-            arena_alloc,
-            unresolved.rows,
-            reified.rows,
-            column_types,
-        );
+    // Phase 2: Check redundancy with on-demand reification
+    // Patterns are reified as needed when type information is required
+    const redundancy = try checkRedundancySketched(
+        arena_alloc,
+        type_store,
+        ident_store,
+        sketched.rows,
+        column_types,
+    );
 
-    // Phase 4: Check exhaustiveness on non-redundant patterns
-    // TODO: Handle unresolved patterns properly instead of skipping exhaustiveness checks.
-    const missing: []const Pattern = if (skip_checks)
-        &[_]Pattern{}
-    else blk: {
-        const matrix = PatternMatrix.init(arena_alloc, redundancy.non_redundant_rows);
-        break :blk try checkExhaustive(arena_alloc, matrix, column_types);
-    };
+    // Phase 3: Check exhaustiveness on non-redundant patterns
+    const sketched_matrix = SketchedMatrix.init(arena_alloc, redundancy.non_redundant_rows);
+    const missing = try checkExhaustiveSketched(
+        arena_alloc,
+        type_store,
+        ident_store,
+        sketched_matrix,
+        column_types,
+    );
 
     // Copy results to the original allocator before freeing the arena
     const result_patterns = try allocator.alloc(Pattern, missing.len);

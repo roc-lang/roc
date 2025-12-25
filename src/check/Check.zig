@@ -4606,7 +4606,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             @enumFromInt(@intFromEnum(expr_idx)),
         ).*;
 
-        const result = try exhaustive.checkMatch(
+        const result = exhaustive.checkMatch(
             self.cir.gpa,
             self.types,
             &self.cir.store,
@@ -4614,7 +4614,15 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             match.branches,
             cond_var,
             match_region,
-        );
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeError => {
+                // Type error in pattern - exhaustiveness checking can't proceed
+                // This is expected when there are polymorphic types or type mismatches
+                // Don't report exhaustiveness errors in this case
+                return does_fx;
+            },
+        };
         defer result.deinit(self.cir.gpa);
 
         // Report non-exhaustive match if any patterns are missing
