@@ -47,8 +47,8 @@ pub fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_n
         *ModuleEnv.Serialized,
         @ptrCast(@alignCast(buffer.ptr)),
     );
-    const base_ptr: i64 = @intCast(@intFromPtr(buffer.ptr));
-    const env = try serialized_ptr.deserialize(base_ptr, gpa, source, module_name);
+    const base_addr = @intFromPtr(buffer.ptr);
+    const env = try serialized_ptr.deserialize(base_addr, gpa, source, module_name);
 
     return LoadedModule{
         .env = env,
