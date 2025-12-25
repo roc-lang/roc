@@ -165,6 +165,13 @@ pub const ExternalSpecializationResult = struct {
     is_new: bool,
 };
 
+/// Key for looking up resolved external specializations.
+pub const ExternalSpecKey = struct {
+    source_module: CIR.Import.Idx,
+    original_ident: base.Ident.Idx,
+    type_hash: u64,
+};
+
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
 
@@ -207,6 +214,10 @@ specialization_stack: std.ArrayList(SpecializationKey),
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
 
+/// Resolved external specializations: maps (source_module, original_ident, type_hash) to specialized_ident.
+/// Populated by resolveExternalSpecialization, used by requestExternalSpecialization.
+resolved_external_specs: std.AutoHashMap(ExternalSpecKey, base.Ident.Idx),
+
 /// Optional closure transformer for resolving unspecialized lambda set entries.
 /// When set, the monomorphizer will resolve unspecialized closures during specialization.
 closure_transformer: ?*ClosureTransformer,
@@ -239,6 +250,7 @@ pub fn init(
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
+        .resolved_external_specs = std.AutoHashMap(ExternalSpecKey, base.Ident.Idx).init(allocator),
         .closure_transformer = null,
         .impl_lambda_sets = null,
     };
@@ -271,6 +283,7 @@ pub fn deinit(self: *Self) void {
     self.in_progress.deinit();
     self.specialization_stack.deinit(self.allocator);
     self.external_requests.deinit(self.allocator);
+    self.resolved_external_specs.deinit();
 }
 
 /// Result of looking up an ability implementation for a concrete type.
@@ -822,6 +835,21 @@ pub fn requestExternalSpecialization(
 ) !ExternalSpecializationResult {
     // Check if we already have this request (same module, ident, and concrete type)
     const new_type_hash = self.structuralTypeHash(concrete_type);
+
+    // First, check if this has already been resolved
+    const ext_key = ExternalSpecKey{
+        .source_module = source_module,
+        .original_ident = original_ident,
+        .type_hash = new_type_hash,
+    };
+    if (self.resolved_external_specs.get(ext_key)) |resolved_ident| {
+        return ExternalSpecializationResult{
+            .specialized_ident = resolved_ident,
+            .is_new = false,
+        };
+    }
+
+    // Check if we already have a pending request
     for (self.external_requests.items) |existing| {
         if (existing.source_module == source_module and
             existing.original_ident == original_ident)
@@ -829,8 +857,9 @@ pub fn requestExternalSpecialization(
             // Compare concrete types using structural type hashing
             const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
             if (existing_type_hash == new_type_hash) {
+                // Pending but not yet resolved - return original ident for now
                 return ExternalSpecializationResult{
-                    .specialized_ident = original_ident, // Placeholder
+                    .specialized_ident = original_ident,
                     .is_new = false,
                 };
             }
@@ -860,22 +889,29 @@ pub fn getExternalRequests(self: *const Self) []const ExternalSpecializationRequ
 
 /// Resolve an external specialization request with the actual specialized name.
 /// Called when the external module provides the specialized function name.
-/// Note: source_module is not currently stored but may be needed for
-/// cross-module linking in the future.
 pub fn resolveExternalSpecialization(
     self: *Self,
+    source_module: CIR.Import.Idx,
     original_ident: base.Ident.Idx,
     specialized_ident: base.Ident.Idx,
     concrete_type: types.Var,
 ) !void {
     const type_hash = self.structuralTypeHash(concrete_type);
+
+    // Store in the local specialization names for consistency
     const key = SpecializationKey{
         .original_ident = original_ident,
         .type_hash = type_hash,
     };
-
-    // Store the mapping for future lookups
     try self.specialization_names.put(key, specialized_ident);
+
+    // Store in the external specs map for cross-module lookups
+    const ext_key = ExternalSpecKey{
+        .source_module = source_module,
+        .original_ident = original_ident,
+        .type_hash = type_hash,
+    };
+    try self.resolved_external_specs.put(ext_key, specialized_ident);
 }
 
 /// Process all pending specializations.
@@ -1203,6 +1239,7 @@ fn duplicateExpr(
     switch (expr) {
         .e_call => |call| {
             // Check if this is a call to a polymorphic function we should specialize
+            var specialized_func: ?Expr.Idx = null;
             const func_expr = self.module_env.store.getExpr(call.func);
             switch (func_expr) {
                 .e_lookup_local => |lookup| {
@@ -1211,9 +1248,24 @@ fn duplicateExpr(
                     switch (pattern) {
                         .assign => |assign| {
                             // Check if this is a call to a partial proc
-                            if (self.partial_procs.contains(assign.ident)) {
-                                // TODO: Determine concrete type at call site and request specialization
-                                // For now, just duplicate the call as-is
+                            if (self.partial_procs.get(assign.ident)) |partial_proc| {
+                                // Get the concrete type by applying substitutions to the polymorphic type
+                                const concrete_type = type_subs.get(partial_proc.type_var) orelse partial_proc.type_var;
+
+                                // Request a specialization for this concrete type
+                                if (try self.requestSpecialization(assign.ident, concrete_type, expr_idx)) |specialized_ident| {
+                                    // Create a new pattern for the specialized function
+                                    const new_pattern = try self.module_env.store.addPattern(
+                                        Pattern{ .assign = .{ .ident = specialized_ident } },
+                                        base.Region.zero(),
+                                    );
+                                    // Create a new lookup expression pointing to the specialized function
+                                    specialized_func = try self.module_env.store.addExpr(Expr{
+                                        .e_lookup_local = .{ .pattern_idx = new_pattern },
+                                    }, base.Region.zero());
+                                }
+                                // If requestSpecialization returned null, the specialization is pending.
+                                // We'll handle this during a later pass when all specializations are resolved.
                             }
                         },
                         else => {},
@@ -1222,8 +1274,8 @@ fn duplicateExpr(
                 else => {},
             }
 
-            // Duplicate the function expression
-            const new_func = try self.duplicateExpr(call.func, type_subs);
+            // Use the specialized function if available, otherwise duplicate the original
+            const new_func = specialized_func orelse try self.duplicateExpr(call.func, type_subs);
 
             // Duplicate arguments
             const args = self.module_env.store.sliceExpr(call.args);
@@ -2445,4 +2497,66 @@ test "monomorphizer: pattern duplication - underscore pattern" {
     // The duplicated pattern should be underscore
     const dup_pattern = module_env.store.getPattern(duplicated);
     try testing.expect(dup_pattern == .underscore);
+}
+
+test "monomorphizer: external specialization resolution stores and retrieves" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create test identifiers
+    const original_ident = try module_env.insertIdent(base.Ident.for_text("polymorphic_fn"));
+    const specialized_ident = try module_env.insertIdent(base.Ident.for_text("polymorphic_fn_I64"));
+
+    // Create a concrete type
+    const concrete_type = try module_env.types.fresh();
+
+    // Create a source module index (using an arbitrary test value)
+    const source_module: CIR.Import.Idx = @enumFromInt(1);
+
+    // First request should be new
+    const result1 = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
+    try testing.expect(result1.is_new);
+    try testing.expectEqual(original_ident, result1.specialized_ident);
+
+    // Resolve the external specialization
+    try mono.resolveExternalSpecialization(source_module, original_ident, specialized_ident, concrete_type);
+
+    // Second request should return the resolved specialized ident
+    const result2 = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
+    try testing.expect(!result2.is_new);
+    try testing.expectEqual(specialized_ident, result2.specialized_ident);
+}
+
+test "monomorphizer: ExternalSpecKey stores module info" {
+    const key1 = ExternalSpecKey{
+        .source_module = @enumFromInt(1),
+        .original_ident = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 42,
+        },
+        .type_hash = 12345,
+    };
+
+    const key2 = ExternalSpecKey{
+        .source_module = @enumFromInt(2), // Different module
+        .original_ident = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 42,
+        },
+        .type_hash = 12345,
+    };
+
+    // Different modules should produce different keys
+    const hash1 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key1));
+    const hash2 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key2));
+    try testing.expect(hash1 != hash2);
 }
