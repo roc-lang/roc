@@ -1112,6 +1112,55 @@ fn getRecordFieldTypes(type_store: *TypeStore, fields: types.RecordField.SafeMul
     return fields_slice.items(.var_);
 }
 
+/// Look up a record field's type by its name.
+/// Returns null if the field doesn't exist in the record type.
+/// Handles record, record_unbound, and follows aliases/recursion vars.
+fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name: Ident.Idx) ?Var {
+    const resolved = type_store.resolveVar(record_type);
+    const content = resolved.desc.content;
+
+    switch (content) {
+        .structure => |flat_type| switch (flat_type) {
+            .record => |record| {
+                const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+
+                for (field_names, field_vars) |name, var_| {
+                    // Compare by idx (interned string index), not the full Ident.Idx
+                    if (name.idx == field_name.idx) {
+                        return var_;
+                    }
+                }
+                // Field not found in this record - check extension
+                return getRecordFieldTypeByName(type_store, record.ext, field_name);
+            },
+            .record_unbound => |fields| {
+                const fields_slice = type_store.getRecordFieldsSlice(fields);
+                const field_names = fields_slice.items(.name);
+                const field_vars = fields_slice.items(.var_);
+
+                for (field_names, field_vars) |name, var_| {
+                    if (name.idx == field_name.idx) {
+                        return var_;
+                    }
+                }
+                return null;
+            },
+            .empty_record => return null,
+            else => return null,
+        },
+        .alias => |alias| {
+            const backing_var = type_store.getAliasBackingVar(alias);
+            return getRecordFieldTypeByName(type_store, backing_var, field_name);
+        },
+        .recursion_var => |rec| {
+            return getRecordFieldTypeByName(type_store, rec.structure, field_name);
+        },
+        else => return null,
+    }
+}
+
 /// Get the element type from a List type.
 fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
     const resolved = type_store.resolveVar(type_var);
@@ -1217,6 +1266,35 @@ pub const ColumnTypes = struct {
         @memcpy(new_types[0..payload_types.len], payload_types);
         if (self.types.len > 1) {
             @memcpy(new_types[payload_types.len..], self.types[1..]);
+        }
+
+        return .{ .types = new_types, .type_store = self.type_store };
+    }
+
+    /// Specialize column types for a record pattern.
+    /// Unlike tag unions (positional), records are matched by field name.
+    /// `field_names` are the names of the fields being destructured.
+    /// Returns the types for those specific fields in the given order.
+    pub fn specializeByRecordPattern(
+        self: ColumnTypes,
+        allocator: std.mem.Allocator,
+        field_names: []const Ident.Idx,
+    ) error{ OutOfMemory, TypeError }!ColumnTypes {
+        std.debug.assert(self.types.len > 0);
+
+        const record_type = self.types[0];
+        const field_types = try allocator.alloc(Var, field_names.len);
+
+        for (field_names, 0..) |name, i| {
+            field_types[i] = getRecordFieldTypeByName(self.type_store, record_type, name) orelse
+                return error.TypeError;
+        }
+
+        // New types: [field_types..., self.types[1...]...]
+        const new_types = try allocator.alloc(Var, field_types.len + self.types.len - 1);
+        @memcpy(new_types[0..field_types.len], field_types);
+        if (self.types.len > 1) {
+            @memcpy(new_types[field_types.len..], self.types[1..]);
         }
 
         return .{ .types = new_types, .type_store = self.type_store };
@@ -2075,6 +2153,10 @@ fn collectCtorsSketched(
     var found_wildcard = false;
     var union_info: ?Union = null;
 
+    // For records, collect all unique field names from all patterns
+    var all_record_fields: std.ArrayList(Ident.Idx) = .empty;
+    var is_record = false;
+
     for (first_col) |pat| {
         switch (pat) {
             .ctor => |c| {
@@ -2095,6 +2177,26 @@ fn collectCtorsSketched(
                 found_ctor = true;
                 if (union_info == null) {
                     union_info = kc.union_info;
+                }
+                // Collect record fields
+                switch (kc.union_info.render_as) {
+                    .record => |fields| {
+                        is_record = true;
+                        for (fields) |field| {
+                            // Add if not already present
+                            var already_present = false;
+                            for (all_record_fields.items) |existing| {
+                                if (existing.idx == field.idx) {
+                                    already_present = true;
+                                    break;
+                                }
+                            }
+                            if (!already_present) {
+                                try all_record_fields.append(allocator, field);
+                            }
+                        }
+                    },
+                    else => {},
                 }
             },
             .list => {
@@ -2131,9 +2233,26 @@ fn collectCtorsSketched(
             try found_tags.append(allocator, key.*);
         }
 
+        // For records, update union_info to include all fields
+        var result_union_info = union_info.?;
+        if (is_record and all_record_fields.items.len > 0) {
+            const all_fields = try all_record_fields.toOwnedSlice(allocator);
+            result_union_info.render_as = .{ .record = all_fields };
+            // Update the alternative's arity to match total fields
+            if (result_union_info.alternatives.len == 1) {
+                const new_alts = try allocator.alloc(CtorInfo, 1);
+                new_alts[0] = .{
+                    .tag_id = result_union_info.alternatives[0].tag_id,
+                    .arity = all_fields.len,
+                    .name = result_union_info.alternatives[0].name,
+                };
+                result_union_info.alternatives = new_alts;
+            }
+        }
+
         return .{ .ctors = .{
             .found = try found_tags.toOwnedSlice(allocator),
-            .union_info = union_info.?,
+            .union_info = result_union_info,
         } };
     }
 
@@ -2162,6 +2281,8 @@ fn collectCtorsSketched(
 
 /// Specialize a sketched matrix by a constructor.
 /// Keeps patterns in unresolved form until needed.
+/// For records, handles field name matching so patterns with different field sets
+/// are properly aligned to the target field order.
 fn specializeByConstructorSketched(
     allocator: std.mem.Allocator,
     matrix: SketchedMatrix,
@@ -2170,6 +2291,12 @@ fn specializeByConstructorSketched(
     union_info: Union,
 ) error{OutOfMemory}!SketchedMatrix {
     var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+
+    // For records, get the target field names we're specializing by
+    const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
+        .record => |fields| fields,
+        else => null,
+    };
 
     for (matrix.rows) |row| {
         if (row.len == 0) continue;
@@ -2189,10 +2316,44 @@ fn specializeByConstructorSketched(
             },
             .known_ctor => |kc| {
                 if (@intFromEnum(kc.tag_id) == @intFromEnum(tag_id)) {
-                    const new_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
-                    @memcpy(new_row[0..kc.args.len], kc.args);
-                    @memcpy(new_row[kc.args.len..], rest);
-                    try new_rows.append(allocator, new_row);
+                    // For records, we need to match fields by name, not position.
+                    // Different patterns may destructure different fields.
+                    if (target_fields) |targets| {
+                        // Get this pattern's field names
+                        const pat_fields: []const Ident.Idx = switch (kc.union_info.render_as) {
+                            .record => |fields| fields,
+                            else => &[_]Ident.Idx{}, // Shouldn't happen for records
+                        };
+
+                        // Build the new row with fields aligned to target order
+                        const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
+
+                        for (targets, 0..) |target_field, i| {
+                            // Find this field in the pattern's field list
+                            var found = false;
+                            for (pat_fields, 0..) |pat_field, j| {
+                                if (pat_field.idx == target_field.idx) {
+                                    // Found the field - use the pattern's arg
+                                    new_row[i] = if (j < kc.args.len) kc.args[j] else .anything;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                // Pattern doesn't destructure this field - use wildcard
+                                new_row[i] = .anything;
+                            }
+                        }
+
+                        @memcpy(new_row[arity..], rest);
+                        try new_rows.append(allocator, new_row);
+                    } else {
+                        // Non-record: use positional matching
+                        const new_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
+                        @memcpy(new_row[0..kc.args.len], kc.args);
+                        @memcpy(new_row[kc.args.len..], rest);
+                        try new_rows.append(allocator, new_row);
+                    }
                 }
             },
             .anything => {
@@ -2352,7 +2513,12 @@ pub fn checkExhaustiveSketched(
                             alt.arity,
                             ctor_info.union_info,
                         );
-                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
+
+                        // Use field-name-based lookup for records, positional for everything else
+                        const specialized_types = switch (ctor_info.union_info.render_as) {
+                            .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                        };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
 
                         if (inner_missing.len > 0) {
@@ -2382,7 +2548,11 @@ pub fn checkExhaustiveSketched(
                     ctor_info.union_info,
                 );
 
-                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
+                // Use field-name-based lookup for records, positional for everything else
+                const specialized_types = switch (ctor_info.union_info.render_as) {
+                    .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                    else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                };
                 const missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
 
                 if (missing.len > 0) {
@@ -2504,18 +2674,113 @@ pub fn isUsefulSketched(
         },
 
         .known_ctor => |kc| {
+            // For records, we need to merge field sets from matrix + current pattern
+            var merged_union_info = kc.union_info;
+            switch (kc.union_info.render_as) {
+                .record => |current_fields| {
+                    // Collect all unique fields from matrix patterns + current pattern
+                    var all_fields: std.ArrayList(Ident.Idx) = .empty;
+
+                    // Add current pattern's fields
+                    for (current_fields) |field| {
+                        try all_fields.append(allocator, field);
+                    }
+
+                    // Add fields from matrix patterns
+                    const first_col = try existing_matrix.firstColumn();
+                    for (first_col) |pat| {
+                        switch (pat) {
+                            .known_ctor => |mat_kc| {
+                                switch (mat_kc.union_info.render_as) {
+                                    .record => |mat_fields| {
+                                        for (mat_fields) |field| {
+                                            var already_present = false;
+                                            for (all_fields.items) |existing| {
+                                                if (existing.idx == field.idx) {
+                                                    already_present = true;
+                                                    break;
+                                                }
+                                            }
+                                            if (!already_present) {
+                                                try all_fields.append(allocator, field);
+                                            }
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+
+                    // Update union_info with all fields
+                    const all_fields_slice = try all_fields.toOwnedSlice(allocator);
+                    merged_union_info.render_as = .{ .record = all_fields_slice };
+                    if (merged_union_info.alternatives.len == 1) {
+                        const new_alts = try allocator.alloc(CtorInfo, 1);
+                        new_alts[0] = .{
+                            .tag_id = merged_union_info.alternatives[0].tag_id,
+                            .arity = all_fields_slice.len,
+                            .name = merged_union_info.alternatives[0].name,
+                        };
+                        merged_union_info.alternatives = new_alts;
+                    }
+                },
+                else => {},
+            }
+
+            const arity = if (merged_union_info.alternatives.len > 0)
+                merged_union_info.alternatives[0].arity
+            else
+                kc.args.len;
+
             const specialized = try specializeByConstructorSketched(
                 allocator,
                 existing_matrix,
                 kc.tag_id,
-                kc.args.len,
-                kc.union_info,
+                arity,
+                merged_union_info,
             );
-            const specialized_types = try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len);
 
-            const extended_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
-            @memcpy(extended_row[0..kc.args.len], kc.args);
-            @memcpy(extended_row[kc.args.len..], rest);
+            // Use field-name-based lookup for records, positional for everything else
+            const specialized_types = switch (merged_union_info.render_as) {
+                .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                else => try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len),
+            };
+
+            // Expand current pattern's args to match merged field set
+            const extended_row = switch (merged_union_info.render_as) {
+                .record => |merged_fields| blk: {
+                    const row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
+                    const current_fields = switch (kc.union_info.render_as) {
+                        .record => |f| f,
+                        else => &[_]Ident.Idx{},
+                    };
+
+                    // Map current pattern's args to merged field positions
+                    for (merged_fields, 0..) |merged_field, i| {
+                        var found = false;
+                        for (current_fields, 0..) |cur_field, j| {
+                            if (cur_field.idx == merged_field.idx) {
+                                row[i] = if (j < kc.args.len) kc.args[j] else .anything;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            row[i] = .anything;
+                        }
+                    }
+                    @memcpy(row[arity..], rest);
+                    break :blk row;
+                },
+                else => blk: {
+                    const row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
+                    @memcpy(row[0..kc.args.len], kc.args);
+                    @memcpy(row[kc.args.len..], rest);
+                    break :blk row;
+                },
+            };
 
             return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
         },
@@ -2554,7 +2819,12 @@ pub fn isUsefulSketched(
                             alt.arity,
                             ctor_info.union_info,
                         );
-                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity);
+
+                        // Use field-name-based lookup for records, positional for everything else
+                        const specialized_types = switch (ctor_info.union_info.render_as) {
+                            .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+                            else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+                        };
 
                         const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
                         for (0..alt.arity) |i| {
