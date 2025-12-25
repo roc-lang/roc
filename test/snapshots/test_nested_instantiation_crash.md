@@ -217,11 +217,11 @@ answer = composed([42])
 	(defs
 		(patt (type "a -> { tag: Str, value: a }"))
 		(patt (type "{ tag: Str, value: a } -> a"))
-		(patt (type "Error -> Error"))
-		(patt (type "Error")))
+		(patt (type "List(a) -> Str"))
+		(patt (type "Str")))
 	(expressions
 		(expr (type "a -> { tag: Str, value: a }"))
 		(expr (type "{ tag: Str, value: a } -> a"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error"))))
+		(expr (type "Str"))))
 ~~~

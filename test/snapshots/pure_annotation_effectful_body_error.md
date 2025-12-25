@@ -107,9 +107,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
-		(patt (type "Error")))
+		(patt (type "Str -> {  }"))
+		(patt (type "{  }")))
 	(expressions
 		(expr (type "Str -> Error"))
-		(expr (type "Error"))))
+		(expr (type "{  }"))))
 ~~~
