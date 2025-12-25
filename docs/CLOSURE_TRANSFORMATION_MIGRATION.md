@@ -741,6 +741,27 @@ Added lambda set infrastructure to the type system:
 
 All tests pass after running `zig build rebuild-builtins` to regenerate compiled modules with new format.
 
+#### Double-Free Bug Fix (2024-12-24)
+
+Fixed a double-free bug in `ClosureTransformer` that was caused by storing lambda sets in multiple maps without proper cloning:
+
+**Root cause:** In `snapshot_tool/main.zig`, when a lambda's return set was stored in `pattern_lambda_return_sets`, it was storing the same `LambdaSet` object (with its `ArrayList` pointer) that was already in `lambda_return_sets`. During `deinit`, both maps would iterate and free the same `ArrayList`, causing a double-free.
+
+**Fix applied:**
+1. Updated `snapshot_tool/main.zig` to clone the return_set before storing:
+   ```zig
+   if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
+       const cloned = try return_set.clone(allocator);
+       try transformer.pattern_lambda_return_sets.put(def.pattern, cloned);
+   }
+   ```
+
+2. Updated `.e_call` case in `transformExprWithLambdaSet` to clone when returning lambda sets from lookups
+
+3. Updated serialization size check: `expected_moduleenv_size` from 1160 to 1184
+
+All 2056 tests pass.
+
 ---
 
 ## Questions?
