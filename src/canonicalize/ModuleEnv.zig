@@ -98,8 +98,6 @@ pub const ModuleKind = union(enum) {
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
 pub const CommonIdents = extern struct {
     // Method names for operator desugaring
-    from_int_digits: Ident.Idx,
-    from_dec_digits: Ident.Idx,
     plus: Ident.Idx,
     minus: Ident.Idx,
     times: Ident.Idx,
@@ -194,8 +192,6 @@ pub const CommonIdents = extern struct {
     /// Use this when creating a fresh ModuleEnv from scratch.
     pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
         return .{
-            .from_int_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
-            .from_dec_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
             .plus = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME)),
             .minus = try common.insertIdent(gpa, Ident.for_text("minus")),
             .times = try common.insertIdent(gpa, Ident.for_text("times")),
@@ -286,8 +282,6 @@ pub const CommonIdents = extern struct {
     /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
     pub fn find(common: *const CommonEnv) CommonIdents {
         return .{
-            .from_int_digits = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
             .plus = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
             .minus = common.findIdent("minus") orelse unreachable,
             .times = common.findIdent("times") orelse unreachable,
@@ -2057,9 +2051,10 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    /// The base_addr parameter is the base address of the serialized buffer in memory.
     pub fn deserialize(
         self: *Serialized,
-        offset: i64,
+        base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
@@ -2078,30 +2073,30 @@ pub const Serialized = extern struct {
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
         // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(offset, source).*;
+        const common = self.common.deserialize(base_addr, source).*;
 
         env.* = Self{
             .gpa = gpa,
             .common = common,
-            .types = self.types.deserialize(offset, gpa).*,
+            .types = self.types.deserialize(base_addr, gpa).*,
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(offset).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(offset).*,
+            .requires_types = self.requires_types.deserialize(base_addr).*,
+            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = (try self.imports.deserialize(offset, gpa)).*,
+            .external_decls = self.external_decls.deserialize(base_addr).*,
+            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
             .module_name = module_name,
             .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .store = self.store.deserialize(base_addr, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(offset).*,
+            .method_idents = self.method_idents.deserialize(base_addr).*,
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 

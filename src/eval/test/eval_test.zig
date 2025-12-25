@@ -29,6 +29,7 @@ const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
 const runExpectRecord = helpers.runExpectRecord;
 const runExpectListI64 = helpers.runExpectListI64;
+const runExpectListZst = helpers.runExpectListZst;
 const ExpectedField = helpers.ExpectedField;
 
 const TraceWriterState = struct {
@@ -821,7 +822,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        var deserialized_env = try deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+        var deserialized_env = try deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
         // Free the imports map that was allocated during deserialization
         defer deserialized_env.imports.map.deinit(gpa);
 
@@ -1311,6 +1312,44 @@ test "List.map - adding" {
     );
 }
 
+test "List.map - empty list" {
+    // Map with adding function
+    try runExpectListZst(
+        "List.map([], |x| x)",
+        0,
+        .no_trace,
+    );
+}
+
+// Test for List.append
+
+test "List.append - basic case" {
+    // Append two non-empty lists
+    try runExpectListI64(
+        "List.append([1i64, 2i64], 3i64)",
+        &[_]i64{ 1, 2, 3 },
+        .no_trace,
+    );
+}
+
+test "List.append - empty case" {
+    // Append to empty list
+    try runExpectListI64(
+        "List.append([], 42i64)",
+        &[_]i64{42},
+        .no_trace,
+    );
+}
+
+test "List.append - zst case" {
+    // Append to empty list
+    try runExpectListZst(
+        "List.append([{}], {})",
+        2,
+        .no_trace,
+    );
+}
+
 // Test for List.repeat
 
 test "List.repeat - basic case" {
@@ -1325,6 +1364,24 @@ test "List.repeat - basic case" {
 test "List.repeat - empty case" {
     // Repeat a value zero times returns empty list
     try helpers.runExpectEmptyListI64("List.repeat(7i64, 0)", .no_trace);
+}
+
+test "List.with_capacity - unknown case" {
+    // Create a list with specified capacity
+    try runExpectListZst(
+        "List.with_capacity(5)",
+        0,
+        .no_trace,
+    );
+}
+
+test "List.with_capacity - append case" {
+    // Create a list with specified capacity
+    try runExpectListI64(
+        "List.with_capacity(5).append(10i64)",
+        &[_]i64{10},
+        .trace,
+    );
 }
 
 // Bug regression tests - interpreter crash issues
@@ -1421,6 +1478,18 @@ test "List.len returns proper U64 nominal type for method calls - regression" {
         \\    n.to_str()
         \\}
     , "3", .no_trace);
+}
+
+test "type annotation on var declaration - regression issue8660" {
+    // Regression test for issue #8660: Type annotation on var produced duplicate definition error
+    // The syntax `var $foo : U8` followed by `var $foo = 42` should work correctly
+    try runExpectI64(
+        \\{
+        \\    var $foo : U8
+        \\    var $foo = 42
+        \\    $foo
+        \\}
+    , 42, .no_trace);
 }
 
 test "List.get with polymorphic numeric index - regression #8666" {

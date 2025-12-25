@@ -2479,7 +2479,7 @@ expect {
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> U64"))
 		(patt (type "[Red, Blue, .._others2], _arg -> Error"))
-		(patt (type "Error"))
+		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls

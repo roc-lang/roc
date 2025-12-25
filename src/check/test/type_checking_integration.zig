@@ -2228,6 +2228,49 @@ test "check type - scoped type variables - fail" {
     );
 }
 
+test "check type - body w/ anno does not leak to references - top level" {
+    // First verify Bool basics work
+    const source =
+        \\Test := [].{}
+        \\
+        \\x : Bool
+        \\x = "Str"
+        \\
+        \\y : Bool
+        \\y = x or True
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertDefTypeOptions("y", "Bool", .{ .allow_type_errors = true });
+}
+
+test "check type - body w/ anno does not leak to references - inline" {
+    // Test that when an inline declaration's body has a type error,
+    // the annotation type is preserved for references
+    const source =
+        \\Test := [].{}
+        \\
+        \\test = {
+        \\  x : Bool
+        \\  x = "Str"
+        \\
+        \\  y : Bool
+        \\  y = x or True
+        \\
+        \\  y
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("TYPE MISMATCH");
+    try test_env.assertDefTypeOptions("test", "Bool", .{ .allow_type_errors = true });
+}
+
 test "check type - scoped type variables - bigger example 1" {
     const source =
         \\test_scoped : a, b -> a
@@ -2238,11 +2281,11 @@ test "check type - scoped type variables - bigger example 1" {
         \\  # No err because we correctly provide `a` as the arg
         \\  result : a
         \\  result = f(a)
-        \\  
+        \\
         \\  # Err because we incorrectly provide `b` as the arg
         \\  _result2 : b
         \\  _result2 = f(b)
-        \\  
+        \\
         \\  result
         \\}
     ;
@@ -2428,8 +2471,8 @@ test "check type - equirecursive static dispatch with type annotation" {
     const source =
         \\fn : a, b -> ret where [
         \\    a.plus : a, b -> ret,
-        \\    a.from_int_digits : List(U8) -> Try(a, [OutOfRange]),
-        \\    b.from_int_digits : List(U8) -> Try(b, [OutOfRange])
+        \\    a.is_eq : a, a -> Bool,
+        \\    b.is_eq : b, b -> Bool
         \\]
         \\fn = |a, b| (|x| x.plus(b))(a)
     ;
@@ -2439,11 +2482,9 @@ test "check type - equirecursive static dispatch with type annotation" {
         source,
         .{ .pass = .{ .def = "fn" } },
         \\a, b -> ret
-        \\  where [
-        \\    a.from_int_digits : List(U8) -> Try(a, [OutOfRange]),
-        \\    a.plus : a, b -> ret,
-        \\    b.from_int_digits : List(U8) -> Try(b, [OutOfRange]),
-        \\  ]
+        \\  where [a.is_eq : a, a -> Bool
+        \\     , a.plus : a, b -> ret
+        \\     , b.is_eq : b, b -> Bool]
         ,
     );
 }

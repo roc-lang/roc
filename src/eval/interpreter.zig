@@ -2846,10 +2846,9 @@ pub const Interpreter = struct {
                 const elt_arg = args[1];
 
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
-                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
 
                 // Extract element layout from List(a)
-                std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
+                std.debug.assert((roc_list_arg.layout.tag == .list and elt_arg.ptr != null) or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
 
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
@@ -2857,7 +2856,7 @@ pub const Interpreter = struct {
                     const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
 
                     // If the element is also ZST, just bump the length
-                    if (elt_arg.layout.tag == .zst) {
+                    if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
                         var result_list = roc_list.*;
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
@@ -2867,6 +2866,8 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
+
+                    std.debug.assert(elt_arg.ptr != null); // non-ZST element must have non-null pointer
 
                     // The list was inferred as list_of_zst (e.g., from List.with_capacity with unknown element type)
                     // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
@@ -3064,18 +3065,17 @@ pub const Interpreter = struct {
                 const elt_arg = args[1];
 
                 std.debug.assert(roc_list_arg.ptr != null); // low-level .list_append expects non-null list pointer
-                std.debug.assert(elt_arg.ptr != null); // low-level .list_append expects non-null 2nd argument
 
                 // Extract element layout from List(a)
-                std.debug.assert(roc_list_arg.layout.tag == .list or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
 
+                std.debug.assert((roc_list_arg.layout.tag == .list and elt_arg.ptr != null) or roc_list_arg.layout.tag == .list_of_zst); // low-level .list_append expects list layout
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
                     const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
 
                     // If the element is also ZST, just bump the length
-                    if (elt_arg.layout.tag == .zst) {
+                    if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
                         var result_list = roc_list.*;
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
@@ -3085,6 +3085,8 @@ pub const Interpreter = struct {
                         out.is_initialized = true;
                         return out;
                     }
+
+                    std.debug.assert(elt_arg.ptr != null); // non-ZST element must have non-null pointer
 
                     // The list was inferred as list_of_zst (e.g., from List.with_capacity with unknown element type)
                     // but we're appending a non-ZST element. We need to "upgrade" to a proper list layout.
@@ -4054,166 +4056,6 @@ pub const Interpreter = struct {
             },
 
             // Numeric parsing operations
-            .num_from_int_digits => {
-                // num.from_int_digits : List(U8) -> Try(num, [OutOfRange])
-                std.debug.assert(args.len == 1); // expects 1 argument: List(U8)
-
-                // Return type info is required - missing it is a compiler bug
-                const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_int_digits", @src());
-
-                // Get the result layout (Try tag union)
-                const result_layout = try self.getRuntimeLayout(result_rt_var);
-
-                // Extract base-256 digits from List(U8)
-                const list_arg = args[0];
-                std.debug.assert(list_arg.ptr != null);
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                const list_len = roc_list.len();
-                const digits_ptr = roc_list.elements(u8);
-                const digits: []const u8 = if (digits_ptr) |ptr| ptr[0..list_len] else &[_]u8{};
-
-                // Convert base-256 digits to u128 (max intermediate precision)
-                var value: u128 = 0;
-                var overflow = false;
-                for (digits) |digit| {
-                    const new_value = @mulWithOverflow(value, 256);
-                    if (new_value[1] != 0) {
-                        overflow = true;
-                        break;
-                    }
-                    const add_result = @addWithOverflow(new_value[0], digit);
-                    if (add_result[1] != 0) {
-                        overflow = true;
-                        break;
-                    }
-                    value = add_result[0];
-                }
-
-                // Resolve the Try type to get Ok's payload type (the numeric type)
-                const resolved = self.resolveBaseVar(result_rt_var);
-                // Type system should guarantee this is a tag union - if not, it's a compiler bug
-                std.debug.assert(resolved.desc.content == .structure and resolved.desc.content.structure == .tag_union);
-
-                // Find tag indices for Ok and Err
-                var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                defer tag_list.deinit();
-                try self.appendUnionTags(result_rt_var, &tag_list);
-
-                var ok_index: ?usize = null;
-                var err_index: ?usize = null;
-                var ok_payload_var: ?types.Var = null;
-
-                // Use precomputed idents from the module env for direct comparison instead of string matching
-                const ok_ident = self.env.idents.ok;
-                const err_ident = self.env.idents.err;
-
-                for (tag_list.items, 0..) |tag_info, i| {
-                    if (tag_info.name == ok_ident) {
-                        ok_index = i;
-                        const arg_vars = self.runtime_types.sliceVars(tag_info.args);
-                        if (arg_vars.len >= 1) {
-                            ok_payload_var = arg_vars[0];
-                        }
-                    } else if (tag_info.name == err_ident) {
-                        err_index = i;
-                    }
-                }
-
-                // Determine target numeric type and check range
-                var in_range = !overflow;
-                if (in_range and ok_payload_var != null) {
-                    const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
-                    if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                        // Check if value fits in target integer type
-                        const int_type = num_layout.data.scalar.data.int;
-                        in_range = switch (int_type) {
-                            .u8 => value <= std.math.maxInt(u8),
-                            .i8 => value <= std.math.maxInt(i8),
-                            .u16 => value <= std.math.maxInt(u16),
-                            .i16 => value <= std.math.maxInt(i16),
-                            .u32 => value <= std.math.maxInt(u32),
-                            .i32 => value <= std.math.maxInt(i32),
-                            .u64 => value <= std.math.maxInt(u64),
-                            .i64 => value <= std.math.maxInt(i64),
-                            .u128, .i128 => true, // u128 fits, i128 needs sign check
-                        };
-                    }
-                }
-
-                // Construct the result tag union
-                if (result_layout.tag == .scalar) {
-                    // Simple tag with no payload (shouldn't happen for Try)
-                    var out = try self.pushRaw(result_layout, 0, result_rt_var);
-                    out.is_initialized = false;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    try out.setInt(@intCast(tag_idx));
-                    out.is_initialized = true;
-                    return out;
-                } else if (result_layout.tag == .record) {
-                    // Record { tag, payload }
-                    var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    var acc = try dest.asRecord(&self.runtime_layout_store);
-                    // Layout should guarantee tag and payload fields exist - if not, it's a compiler bug
-                    const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse debugUnreachable(roc_ops, "tag field not found in Try result record", @src());
-                    const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse debugUnreachable(roc_ops, "payload field not found in Try result record", @src());
-
-                    // Write tag discriminant
-                    const field_rt = try self.runtime_types.fresh();
-                    const tag_field = try acc.getFieldByIndex(tag_field_idx, field_rt);
-                    // Tag field should be scalar int - if not, it's a compiler bug
-                    std.debug.assert(tag_field.layout.tag == .scalar and tag_field.layout.data.scalar.tag == .int);
-                    var tmp = tag_field;
-                    tmp.is_initialized = false;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    try tmp.setInt(@intCast(tag_idx));
-
-                    // Clear payload area
-                    const field_rt2 = try self.runtime_types.fresh();
-                    const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
-                    if (payload_field.ptr) |payload_ptr| {
-                        const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                        if (payload_bytes_len > 0) {
-                            const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                            @memset(bytes, 0);
-                        }
-                    }
-
-                    // Write payload
-                    if (in_range and ok_payload_var != null) {
-                        // Write the numeric value as Ok payload
-                        const num_layout = try self.getRuntimeLayout(ok_payload_var.?);
-                        if (payload_field.ptr) |payload_ptr| {
-                            if (num_layout.tag == .scalar and num_layout.data.scalar.tag == .int) {
-                                // Write integer value directly to payload
-                                const int_type = num_layout.data.scalar.data.int;
-                                switch (int_type) {
-                                    .u8 => @as(*u8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i8 => @as(*i8, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u16 => @as(*u16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i16 => @as(*i16, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u32 => @as(*u32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i32 => @as(*i32, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u64 => @as(*u64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .i64 => @as(*i64, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                    .u128 => @as(*u128, @ptrCast(@alignCast(payload_ptr))).* = value,
-                                    .i128 => @as(*i128, @ptrCast(@alignCast(payload_ptr))).* = @intCast(value),
-                                }
-                            }
-                        }
-                    }
-                    // For Err case, payload is OutOfRange which is a zero-arg tag (already zeroed)
-
-                    return dest;
-                }
-
-                // Unsupported result layout is a compiler bug
-                debugUnreachable(roc_ops, "unsupported result layout for num_from_int_digits", @src());
-            },
-            .num_from_dec_digits => {
-                // num.from_dec_digits : (List(U8), List(U8)) -> Try(num, [OutOfRange])
-                self.triggerCrash("num_from_dec_digits not yet implemented", false, roc_ops);
-                return error.Crash;
-            },
             .num_from_numeral => {
                 // num.from_numeral : Numeral -> Try(num, [InvalidNumeral(Str)])
                 // Numeral is { is_negative: Bool, digits_before_pt: List(U8), digits_after_pt: List(U8) }
@@ -7920,8 +7762,23 @@ pub const Interpreter = struct {
         search_start: usize,
         roc_ops: *RocOps,
     ) !void {
+        // Check if this is a var reassignment (pattern for a reassignable identifier)
+        // In that case, we need to search from 0 to update the original binding,
+        // not just from search_start (which would miss bindings from outer scopes)
+        const actual_search_start = blk: {
+            const pat = self.env.store.getPattern(binding.pattern_idx);
+            if (pat == .assign) {
+                const ident = pat.assign.ident;
+                if (ident.attributes.reassignable) {
+                    // This is a var ($var) - search from beginning to find outer binding
+                    break :blk 0;
+                }
+            }
+            break :blk search_start;
+        };
+
         var idx = self.bindings.items.len;
-        while (idx > search_start) {
+        while (idx > actual_search_start) {
             idx -= 1;
             if (self.bindings.items[idx].pattern_idx == binding.pattern_idx) {
                 self.bindings.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
@@ -8754,14 +8611,10 @@ pub const Interpreter = struct {
         // Return cached value if available
         if (self.cached_list_u8_rt_var) |cached| return cached;
 
-        const origin_module_id = self.root_env.idents.builtin_module;
-
-        // Create U8 type
-        const u8_type_name = "U8";
-        const u8_type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(u8_type_name));
-        const u8_type_ident = types.TypeIdent{ .ident_idx = u8_type_name_ident };
-        const u8_backing_var = try self.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
-        const u8_content = try self.runtime_types.mkNominal(u8_type_ident, u8_backing_var, &.{}, origin_module_id, false);
+        // Create a canonical Builtin.Num.U8 type.
+        // Layout generation recognizes the fully-qualified numeric idents (Builtin.Num.U8, etc.);
+        // using an unqualified ident like "U8" can end up as ZST and then default numeric literals to Dec.
+        const u8_content = try self.mkNumberTypeContentRuntime("U8");
         const u8_rt_var = try self.runtime_types.freshFromContent(u8_content);
 
         // Create List(U8) type and cache it
@@ -11651,17 +11504,48 @@ pub const Interpreter = struct {
                     }
                     try value_stack.push(dest);
                 } else {
-                    // Get element type variable from first element
-                    const first_elem_var: types.Var = @enumFromInt(@intFromEnum(elems[0]));
-                    const elem_rt_var = try self.translateTypeVar(self.env, first_elem_var);
+                    // Get element type from list_rt_var. The list type should be List(elem)
+                    // where vars[0] is backing and vars[1] is the element type.
+                    // The element type may be flex (e.g., Num *) which is fine - downstream
+                    // code like getRuntimeLayout will default flex to Dec as needed.
+                    const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                    std.debug.assert(list_resolved.desc.content == .structure);
+                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
+                    const nom = list_resolved.desc.content.structure.nominal_type;
+                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                    const elem_rt_var = vars[1];
 
-                    // Schedule collection of elements
-                    try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
-                        .collected_count = 0,
-                        .remaining_elems = elems,
-                        .elem_rt_var = elem_rt_var,
-                        .list_rt_var = list_rt_var,
-                    } } });
+                    const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
+                    const elem_content = elem_resolved.desc.content;
+                    const is_elem_zst = switch (elem_content) {
+                        .structure => |ft| switch (ft) {
+                            .empty_record, .empty_tag_union => true,
+                            else => false,
+                        },
+                        else => false,
+                    };
+                    if (is_elem_zst) {
+                        // Special case: list of ZSTs
+                        // We can create the entire list immediately
+                        const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
+                        const dest = try self.pushRaw(list_layout, 0, list_rt_var);
+                        if (dest.ptr != null) {
+                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
+                            header.* = RocList.empty();
+                            header.length = elems.len;
+                        }
+                        try value_stack.push(dest);
+                    } else {
+
+                        // Schedule collection of elements
+                        try work_stack.push(.{ .apply_continuation = .{ .list_collect = .{
+                            .collected_count = 0,
+                            .remaining_elems = elems,
+                            .elem_rt_var = elem_rt_var,
+                            .list_rt_var = list_rt_var,
+                        } } });
+                    }
                 }
             },
 
@@ -12276,6 +12160,60 @@ pub const Interpreter = struct {
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
                     // poly_context_generation increments when flex_type_context changes, which invalidates
                     // stale layout cache entries. No explicit @memset needed.
+                }
+
+                // Seed flex_type_context from any already-bound local lookups in the argument list.
+                //
+                // This lets earlier arguments (like numeric literals inside `[0]`) be evaluated using the
+                // concrete type that is only apparent from a later argument (like `bytes : List U8`).
+                //
+                // Example: `List.concat([0], bytes)` where `bytes` was computed earlier in the block. The
+                // call arguments are evaluated left-to-right, so without this seeding the `[0]` may
+                // default to `List Dec` before we ever look up `bytes`, causing element-size mismatches.
+                // Avoid seeding while evaluating inside the Builtin module itself; those pre-compiled
+                // helpers (e.g. `List.repeat`) rely on their own internal inference and are called
+                // polymorphically many times in a single REPL session.
+                const can_seed_from_bindings = blk: {
+                    if (self.builtin_module_env) |builtin_env| {
+                        if (self.env == @constCast(builtin_env)) break :blk false;
+                    }
+                    break :blk true;
+                };
+                if (can_seed_from_bindings) {
+                    for (arg_indices) |arg_idx| {
+                        const arg_expr = self.env.store.getExpr(arg_idx);
+                        if (arg_expr != .e_lookup_local) continue;
+
+                        const lookup = arg_expr.e_lookup_local;
+                        var i: usize = self.bindings.items.len;
+                        while (i > 0) {
+                            i -= 1;
+                            const b = self.bindings.items[i];
+                            if (b.source_env != self.env) continue;
+                            if (b.pattern_idx != lookup.pattern_idx) continue;
+
+                            // Only seed from layouts where we can reliably recover a meaningful runtime type.
+                            // In particular, `.list_of_zst` has no element layout, so it cannot drive inference.
+                            if (b.value.layout.tag != .list) break;
+
+                            const arg_ct_var = can.ModuleEnv.varFrom(arg_idx);
+                            // Avoid seeding from a rigid CT var directly; rigid vars typically represent
+                            // generalized parameters (e.g. `state` in List.fold). Mapping them to a concrete
+                            // runtime type here can introduce cycles in layout computation.
+                            const arg_ct_resolved = self.env.types.resolveVar(arg_ct_var);
+                            if (arg_ct_resolved.desc.content == .rigid) break;
+
+                            // IMPORTANT: Always map to a fresh runtime type var derived from the layout.
+                            //
+                            // `prepareCallWithFuncVar` performs runtime unification between parameter
+                            // types and argument types. If we map directly to `b.value.rt_var`, that
+                            // unification can redirect the value's actual `rt_var`, which then changes
+                            // behavior of downstream operations like `Str.inspect`.
+                            const mapping_rt_var = try self.createTypeFromLayout(b.value.layout);
+                            try self.propagateFlexMappings(self.env, arg_ct_var, mapping_rt_var);
+                            break;
+                        }
+                    }
                 }
 
                 // Compute argument runtime type variables
@@ -17175,13 +17113,27 @@ pub const Interpreter = struct {
                     return error.Crash;
                 };
 
+                if (list_value.layout.tag == .list_of_zst) {
+                    // Short circuit for empty lists
+                    const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
+                    const list_len = list_header.len();
+                    if (list_len == 0) {
+                        // Empty list
+                        list_value.decref(&self.runtime_layout_store, roc_ops);
+                        try self.handleForLoopComplete(work_stack, value_stack, fl_in.stmt_context, fl_in.bindings_start, roc_ops);
+                        return true;
+                    }
+                }
+
                 // Get the list layout
-                if (list_value.layout.tag != .list) {
+                if (list_value.layout.tag != .list and list_value.layout.tag != .list_of_zst) {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                const elem_layout_idx = list_value.layout.data.list;
-                const elem_layout = self.runtime_layout_store.getLayout(elem_layout_idx);
+                const elem_layout = if (list_value.layout.tag == .list)
+                    self.runtime_layout_store.getLayout(list_value.layout.data.list)
+                else
+                    layout.Layout.zst(); // list_of_zst has zero-sized elements
                 const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
 
                 // Get the RocList header
@@ -17224,16 +17176,13 @@ pub const Interpreter = struct {
                     return true;
                 }
 
-                // Process first element
-                const elem_ptr = if (list_header.bytes) |buffer|
-                    buffer
-                else {
-                    list_value.decref(&self.runtime_layout_store, roc_ops);
-                    return error.TypeMismatch;
-                };
+                if (list_header.bytes == null) {
+                    std.debug.assert(list_value.layout.tag == .list_of_zst);
+                }
 
+                // Process first element
                 var elem_value = StackValue{
-                    .ptr = elem_ptr,
+                    .ptr = list_header.bytes,
                     .layout = elem_layout,
                     .is_initialized = true,
                     .rt_var = fl.patt_rt_var,
@@ -17298,10 +17247,8 @@ pub const Interpreter = struct {
                 const list_header: *const RocList = @ptrCast(@alignCast(fl.list_value.ptr.?));
                 const elem_ptr = if (list_header.bytes) |buffer|
                     buffer + next_index * fl.elem_size
-                else {
-                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
-                    return error.TypeMismatch;
-                };
+                else
+                    null;
 
                 var elem_value = StackValue{
                     .ptr = elem_ptr,

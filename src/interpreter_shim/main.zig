@@ -653,9 +653,9 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
         const env_serialized: *ModuleEnv.Serialized = @ptrFromInt(env_serialized_addr);
 
         // Deserialize the ModuleEnv
-        // The offset parameter is the buffer base address - serialized offsets are relative to buffer start
+        // The base parameter is the buffer base address - serialized offsets are relative to buffer start
         env_ptrs[i] = env_serialized.deserialize(
-            @as(i64, @intCast(@intFromPtr(base_ptr))), // buffer base address as offset
+            @intFromPtr(base_ptr), // buffer base address
             allocator,
             source,
             module_name,

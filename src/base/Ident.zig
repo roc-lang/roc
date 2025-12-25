@@ -23,10 +23,6 @@ const Ident = @This();
 const is_freestanding = builtin.os.tag == .freestanding;
 const enable_store_tracking = builtin.mode == .Debug and !is_freestanding;
 
-/// Method name for parsing integers from digit lists - used by numeric literal type checking
-pub const FROM_INT_DIGITS_METHOD_NAME = "from_int_digits";
-/// Method name for parsing decimals from digit lists - used by numeric literal type checking
-pub const FROM_DEC_DIGITS_METHOD_NAME = "from_dec_digits";
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
 /// Method name for negation - used by unary - operator desugaring
@@ -285,7 +281,8 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+        /// The base parameter is the base address of the serialized buffer in memory.
+        pub fn deserialize(self: *Serialized, base: usize) *Store {
             // Note: Serialized may be smaller than the runtime struct.
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
@@ -304,8 +301,8 @@ pub const Store = struct {
             }
 
             store.* = Store{
-                .interner = self.interner.deserialize(offset).*,
-                .attributes = self.attributes.deserialize(offset).*,
+                .interner = self.interner.deserialize(base).*,
+                .attributes = self.attributes.deserialize(base).*,
                 .next_unique_name = self.next_unique_name,
             };
 
