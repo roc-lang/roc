@@ -113,12 +113,13 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64) *Store {
+        /// The base parameter is the base address of the serialized buffer in memory.
+        pub fn deserialize(self: *Serialized, base: usize) *Store {
             // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
-                .buffer = self.buffer.deserialize(offset).*,
+                .buffer = self.buffer.deserialize(base).*,
             };
 
             return store;
@@ -388,7 +389,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize
     const deserialized_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const store = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const store = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify the strings are accessible
     try std.testing.expectEqualStrings("hello", store.get(idx1));

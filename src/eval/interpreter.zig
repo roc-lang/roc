@@ -7762,8 +7762,23 @@ pub const Interpreter = struct {
         search_start: usize,
         roc_ops: *RocOps,
     ) !void {
+        // Check if this is a var reassignment (pattern for a reassignable identifier)
+        // In that case, we need to search from 0 to update the original binding,
+        // not just from search_start (which would miss bindings from outer scopes)
+        const actual_search_start = blk: {
+            const pat = self.env.store.getPattern(binding.pattern_idx);
+            if (pat == .assign) {
+                const ident = pat.assign.ident;
+                if (ident.attributes.reassignable) {
+                    // This is a var ($var) - search from beginning to find outer binding
+                    break :blk 0;
+                }
+            }
+            break :blk search_start;
+        };
+
         var idx = self.bindings.items.len;
-        while (idx > search_start) {
+        while (idx > actual_search_start) {
             idx -= 1;
             if (self.bindings.items[idx].pattern_idx == binding.pattern_idx) {
                 self.bindings.items[idx].value.decref(&self.runtime_layout_store, roc_ops);
