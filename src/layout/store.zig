@@ -1278,29 +1278,7 @@ pub const Store = struct {
                             // Recursively get all tags by checking the tag extension
                             const num_tags = try self.gatherTags(tag_union);
                             const tags_slice = self.work.pending_tags.slice();
-
-                            // Get the slices of tags
                             const tags_args = tags_slice.items(.args)[pending_tags_top..];
-
-                            // Check if this is a Bool (2 tags with no payload) as a special case
-                            // This is a legitimate layout optimization for boolean tag unions
-                            // TODO: Is this necessary?
-                            if (num_tags == 2) {
-                                var is_bool = true;
-                                for (tags_args) |tag_args| {
-                                    const args_slice = self.types_store.sliceVars(tag_args);
-                                    if (args_slice.len != 0) {
-                                        is_bool = false;
-                                        break;
-                                    }
-                                }
-
-                                if (is_bool) {
-                                    // Bool layout: use predefined bool layout
-                                    // Break to fall through to pending container processing
-                                    break :flat_type Layout.boolType();
-                                }
-                            }
 
                             // For general tag unions, we need to compute the layout
                             // First, determine discriminant size based on number of tags
@@ -1339,10 +1317,11 @@ pub const Store = struct {
                             var max_payload_size: u32 = 0;
                             var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
 
-                            // Sort tags alphabetically by name to match interpreter's appendUnionTags ordering.
-                            // This ensures discriminant values are consistent between evaluation and layout.
-                            // TODO: Consider sorting tags in the type store instead for better performance,
-                            // which would eliminate the need for sorting here and in appendUnionTags.
+                            // Sort tags alphabetically by name to ensure consistent discriminant values.
+                            // This is necessary because gatherTags may combine tags from multiple
+                            // unions when following extensions, and the combined list may not be sorted.
+                            // Note: appendUnionTags in the interpreter no longer sorts because
+                            // translateTypeVar already stores flattened, sorted tags in runtime_types.
                             const tags_names = tags_slice.items(.name)[pending_tags_top..];
                             const tags_args_slice = tags_slice.items(.args)[pending_tags_top..];
 
