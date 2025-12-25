@@ -3442,10 +3442,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
 
-            // The closure's tag_name is stored in the expression for later use during
-            // defunctionalization. Lambda set population in the type system will be
-            // handled in a future phase when it's properly integrated with unification.
-            _ = closure.tag_name;
+            // Note: closure.tag_name is stored for later use during defunctionalization.
+            // Lambda set population will be integrated with unification in a future phase.
         },
         // function calling //
         .e_call => |call| {

@@ -20,6 +20,8 @@ pub const RocEmitter = @import("RocEmitter.zig");
 pub const Monomorphizer = @import("Monomorphizer.zig");
 /// Closure Transformer - transforms closures with captures into tagged values
 pub const ClosureTransformer = @import("ClosureTransformer.zig");
+/// Lambda Lifter - lifts closures to top-level function definitions (Cor-style)
+pub const LambdaLifter = @import("LambdaLifter.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
@@ -57,4 +59,5 @@ test "compile tests" {
     // Monomorphization
     std.testing.refAllDecls(@import("Monomorphizer.zig"));
     std.testing.refAllDecls(@import("ClosureTransformer.zig"));
+    std.testing.refAllDecls(@import("LambdaLifter.zig"));
 }
