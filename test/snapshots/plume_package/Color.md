@@ -1284,7 +1284,7 @@ is_named_color = |str| {
 		(patt (type "U8, U8, U8 -> Color"))
 		(patt (type "U8, U8, U8, U8 -> Color"))
 		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
-		(patt (type "Color -> Error"))
+		(patt (type "Color -> Str"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
 		(patt (type "_arg -> Error")))
 	(type_decls
