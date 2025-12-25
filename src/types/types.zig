@@ -100,9 +100,7 @@ pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 ///
 /// Keeping track of ranks makes type inference faster.
 ///
-/// TODO: We probably need to increase the size of this enum, as 15 is fairly
-/// shallow
-pub const Rank = enum(u4) {
+pub const Rank = enum(u8) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     top_level = 1,
