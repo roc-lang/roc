@@ -248,13 +248,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>False",
         .description = "Regression test: Method lookup for nominal types in roc build executables (issue #8654)",
     },
-    // TODO: Re-enable once evalLookupLocal ident translation fix is complete
-    // See https://github.com/roc-lang/roc/issues/8727
-    // .{
-    //     .roc_file = "test/fx/issue8727.roc",
-    //     .io_spec = "1>Failed to parse: error|1>Got error",
-    //     .description = "Regression test: Higher-order function returning closure (issue #8727)",
-    // },
+    .{
+        .roc_file = "test/fx/issue8727.roc",
+        .io_spec = "1>Failed to parse: error|1>Got error",
+        .description = "Regression test: Nested closures returning closures that capture outer variables (issue #8727)",
+    },
 };
 
 /// Get the total number of IO spec tests
