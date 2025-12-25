@@ -261,24 +261,73 @@ test "exhaustive - tuple with Try" {
     try test_env.assertLastDefType("I64");
 }
 
-// TODO: Uninhabited Types (Phase 8.4)
-// These tests are commented out until uninhabited type handling is fully implemented.
-// The challenge is that detecting uninhabited types (like empty tag unions as constructor
-// arguments) requires type information that isn't available in the pattern-only algorithm.
-//
-// test "exhaustive - empty error type means only Ok needed" {
-//     // When the error type is an empty tag union [], the Err case is uninhabited
-//     // So a match with only Ok should be exhaustive
-//     const source =
-//         \\x : Try(I64, [])
-//         \\x = Ok(42i64)
-//         \\
-//         \\result = match x {
-//         \\    Ok(n) => n
-//         \\}
-//     ;
-//     var test_env = try TestEnv.init("Test", source);
-//     defer test_env.deinit();
-//
-//     try test_env.assertLastDefType("I64");
-// }
+// Uninhabited Types - Empty Tag Union Handling
+// These tests verify that empty tag unions (like []) are recognized as uninhabited,
+// making patterns on them unnecessary.
+
+test "exhaustive - empty error type means only Ok needed" {
+    // When the error type is an empty tag union [], the Err case is uninhabited
+    // So a match with only Ok should be exhaustive
+    const source =
+        \\x : Try(I64, [])
+        \\x = Ok(42i64)
+        \\
+        \\result = match x {
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - nested Try with empty inner error" {
+    const source =
+        \\x : Try(Try(I64, []), Str)
+        \\x = Ok(Ok(42i64))
+        \\
+        \\result = match x {
+        \\    Ok(Ok(n)) => n
+        \\    Err(_) => 0i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Ok(Err(_)) is uninhabited (inner error is []), so this is exhaustive
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - doubly nested empty errors" {
+    const source =
+        \\x : Try(Try(I64, []), [])
+        \\x = Ok(Ok(42i64))
+        \\
+        \\result = match x {
+        \\    Ok(Ok(n)) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Both Err cases are uninhabited
+    try test_env.assertLastDefType("I64");
+}
+
+test "non-exhaustive - non-empty error type requires Err case" {
+    // This is a regression test - non-empty error types should still require Err
+    const source =
+        \\x : Try(I64, Str)
+        \\x = Ok(42i64)
+        \\
+        \\result = match x {
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Str is NOT empty, so Err is required
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}

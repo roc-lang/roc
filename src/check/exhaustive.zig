@@ -38,8 +38,9 @@ const Content = types.Content;
 /// A pattern for exhaustiveness checking.
 /// This is a simplified representation focused only on what matters for coverage analysis.
 pub const Pattern = union(enum) {
-    /// Matches anything (wildcard, identifier binding)
-    anything,
+    /// Matches anything (wildcard, identifier binding).
+    /// When generated as a "missing pattern", carries the type for inhabitedness checking.
+    anything: ?Var,
     /// Matches a specific literal value
     literal: Literal,
     /// Matches a constructor (tag) with nested patterns for arguments
@@ -65,7 +66,7 @@ pub const Pattern = union(enum) {
     /// Deep-copy to a new allocator
     pub fn dupe(self: Pattern, allocator: std.mem.Allocator) error{OutOfMemory}!Pattern {
         return switch (self) {
-            .anything => .anything,
+            .anything => |maybe_type| .{ .anything = maybe_type },
             .literal => |lit| .{ .literal = lit },
             .ctor => |c| .{ .ctor = .{
                 .union_info = try c.union_info.dupe(allocator),
@@ -90,11 +91,19 @@ pub const Pattern = union(enum) {
     /// Check if this pattern can ever match a value (is inhabited).
     /// A pattern is uninhabited if it matches a type with no possible values,
     /// such as an empty tag union or a constructor with uninhabited arguments.
-    pub fn isInhabited(self: Pattern) bool {
+    pub fn isInhabited(self: Pattern, type_store: *TypeStore) bool {
         return switch (self) {
-            // Wildcards and literals are always inhabited
-            // (literals match their specific value, wildcards match anything)
-            .anything, .literal => true,
+            .anything => |maybe_type| {
+                if (maybe_type) |type_var| {
+                    // Check if the type is empty (uninhabited)
+                    return !isTypeEmpty(type_store, type_var);
+                }
+                // Unknown type - assume inhabited
+                return true;
+            },
+
+            // Literals are always inhabited (match their specific value)
+            .literal => true,
 
             .ctor => |c| {
                 // An empty union is uninhabited - no constructors exist
@@ -117,7 +126,7 @@ pub const Pattern = union(enum) {
 
                 // All arguments must be inhabited for the pattern to be inhabited
                 for (c.args) |arg| {
-                    if (!arg.isInhabited()) return false;
+                    if (!arg.isInhabited(type_store)) return false;
                 }
                 return true;
             },
@@ -125,7 +134,7 @@ pub const Pattern = union(enum) {
             .list => |l| {
                 // All elements must be inhabited
                 for (l.elements) |elem| {
-                    if (!elem.isInhabited()) return false;
+                    if (!elem.isInhabited(type_store)) return false;
                 }
                 return true;
             },
@@ -625,7 +634,7 @@ pub fn reifyPattern(
     type_var: Var,
 ) error{OutOfMemory}!Pattern {
     return switch (unresolved) {
-        .anything => .anything,
+        .anything => .{ .anything = null },
 
         .literal => |lit| .{ .literal = lit },
 
@@ -649,7 +658,7 @@ pub fn reifyPattern(
                     // We can't properly reify the nested pattern, so treat this
                     // argument as 'anything'. But we KEEP the outer constructor
                     // structure - we don't return 'anything' for the whole pattern.
-                    args[i] = .anything;
+                    args[i] = .{ .anything = null };
                 } else {
                     args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
                 }
@@ -671,7 +680,7 @@ pub fn reifyPattern(
                     const tag_id = findTagId(union_info, c.tag_name) orelse {
                         // Tag not found - this can happen with open unions
                         // Treat as anything for exhaustiveness purposes
-                        return .anything;
+                        return .{ .anything = null };
                     };
 
                     const args = try allocator.alloc(Pattern, c.args.len);
@@ -692,7 +701,7 @@ pub fn reifyPattern(
                             // We can't properly reify the nested pattern, so treat this
                             // argument as 'anything'. But we KEEP the outer constructor
                             // structure - we don't return 'anything' for the whole pattern.
-                            args[i] = .anything;
+                            args[i] = .{ .anything = null };
                         } else {
                             args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
                         }
@@ -706,7 +715,7 @@ pub fn reifyPattern(
                 },
                 .not_a_union => {
                     // Type variable doesn't resolve to a union - treat as anything
-                    return .anything;
+                    return .{ .anything = null };
                 },
             }
         },
@@ -1118,9 +1127,77 @@ pub const PatternMatrix = struct {
         if (self.rows.len == 0) return &[_]Pattern{};
         const col = try self.allocator.alloc(Pattern, self.rows.len);
         for (self.rows, 0..) |row, i| {
-            col[i] = if (row.len > 0) row[0] else .anything;
+            col[i] = if (row.len > 0) row[0] else .{ .anything = null };
         }
         return col;
+    }
+};
+
+/// Type information for each column in the pattern matrix.
+/// Used to determine inhabitedness of wildcard patterns.
+pub const ColumnTypes = struct {
+    /// Type variable for each column
+    types: []const Var,
+    /// Reference to type store for lookups
+    type_store: *TypeStore,
+
+    /// Get the number of columns
+    pub fn len(self: ColumnTypes) usize {
+        return self.types.len;
+    }
+
+    /// Get the argument types when specializing by a constructor
+    pub fn specializeByConstructor(
+        self: ColumnTypes,
+        allocator: std.mem.Allocator,
+        tag_id: TagId,
+    ) !ColumnTypes {
+        if (self.types.len == 0) {
+            return .{ .types = &[_]Var{}, .type_store = self.type_store };
+        }
+
+        // Look up the tag's payload types from types[0]
+        const payload_types = getCtorArgTypes(self.type_store, self.types[0], tag_id);
+
+        // New types: [payload_types..., self.types[1...]...]
+        const new_types = try allocator.alloc(Var, payload_types.len + self.types.len - 1);
+        @memcpy(new_types[0..payload_types.len], payload_types);
+        if (self.types.len > 1) {
+            @memcpy(new_types[payload_types.len..], self.types[1..]);
+        }
+
+        return .{ .types = new_types, .type_store = self.type_store };
+    }
+
+    /// Remove the first column type
+    pub fn dropFirst(self: ColumnTypes) ColumnTypes {
+        if (self.types.len == 0) {
+            return .{ .types = &[_]Var{}, .type_store = self.type_store };
+        }
+        return .{ .types = self.types[1..], .type_store = self.type_store };
+    }
+
+    /// Expand for list specialization
+    pub fn specializeForList(
+        self: ColumnTypes,
+        allocator: std.mem.Allocator,
+        elem_count: usize,
+    ) !ColumnTypes {
+        if (self.types.len == 0) {
+            return .{ .types = &[_]Var{}, .type_store = self.type_store };
+        }
+
+        const elem_type = getListElemType(self.type_store, self.types[0]) orelse self.types[0];
+
+        const new_types = try allocator.alloc(Var, elem_count + self.types.len - 1);
+        for (0..elem_count) |i| {
+            new_types[i] = elem_type;
+        }
+        if (self.types.len > 1) {
+            @memcpy(new_types[elem_count..], self.types[1..]);
+        }
+
+        return .{ .types = new_types, .type_store = self.type_store };
     }
 };
 
@@ -1252,7 +1329,7 @@ fn specializeByConstructor(
                 // Wildcard matches everything - expand with wildcards for args
                 const new_row = try allocator.alloc(Pattern, arity + rest.len);
                 for (0..arity) |i| {
-                    new_row[i] = .anything;
+                    new_row[i] = .{ .anything = null };
                 }
                 @memcpy(new_row[arity..], rest);
                 try new_rows.append(allocator, new_row);
@@ -1315,7 +1392,7 @@ fn specializeByListArity(
                             // Fill middle with wildcards
                             const middle_len = target_len - s.prefix - s.suffix;
                             for (s.prefix..s.prefix + middle_len) |i| {
-                                new_row[i] = .anything;
+                                new_row[i] = .{ .anything = null };
                             }
                             // Copy suffix elements
                             if (s.suffix > 0) {
@@ -1334,7 +1411,7 @@ fn specializeByListArity(
                 // Wildcard matches all list lengths
                 const new_row = try allocator.alloc(Pattern, target_len + rest.len);
                 for (0..target_len) |i| {
-                    new_row[i] = .anything;
+                    new_row[i] = .{ .anything = null };
                 }
                 @memcpy(new_row[target_len..], rest);
                 try new_rows.append(allocator, new_row);
@@ -1352,18 +1429,20 @@ fn specializeByListArity(
 pub fn checkExhaustive(
     allocator: std.mem.Allocator,
     matrix: PatternMatrix,
-    n: usize, // number of columns
+    column_types: ColumnTypes,
 ) ![]const Pattern {
+    const n = column_types.len();
+
     // Base case: empty matrix with columns to fill = not exhaustive
     if (matrix.isEmpty()) {
         if (n == 0) {
             // No more columns to check - we're exhaustive
             return &[_]Pattern{};
         }
-        // Empty matrix but columns remain - return wildcards as missing pattern
+        // Empty matrix but columns remain - return typed wildcards as missing pattern
         const missing = try allocator.alloc(Pattern, n);
-        for (0..n) |i| {
-            missing[i] = .anything;
+        for (column_types.types, 0..) |col_type, i| {
+            missing[i] = .{ .anything = col_type };
         }
         return missing;
     }
@@ -1379,13 +1458,15 @@ pub fn checkExhaustive(
         .non_exhaustive_wildcards => {
             // Only wildcards in first column - recurse on rest
             const new_matrix = try specializeByAnything(allocator, matrix);
-            const rest = try checkExhaustive(allocator, new_matrix, n - 1);
+            const rest_types = column_types.dropFirst();
+            const rest = try checkExhaustive(allocator, new_matrix, rest_types);
 
             if (rest.len == 0) return &[_]Pattern{};
 
-            // Prepend wildcard to missing patterns
+            // Prepend typed wildcard to missing patterns
             const result = try allocator.alloc(Pattern, 1);
-            result[0] = .anything;
+            const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
+            result[0] = .{ .anything = first_type };
             return result;
         },
 
@@ -1412,7 +1493,8 @@ pub fn checkExhaustive(
                             alt.tag_id,
                             alt.arity,
                         );
-                        const inner_missing = try checkExhaustive(allocator, specialized, alt.arity + n - 1);
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                        const inner_missing = try checkExhaustive(allocator, specialized, specialized_types);
 
                         if (inner_missing.len > 0) {
                             // Wildcards don't cover this - check if the pattern is inhabited
@@ -1423,7 +1505,7 @@ pub fn checkExhaustive(
                             } };
                             // Only report as missing if the pattern is inhabited
                             // (e.g., Err on a Try with empty error type is uninhabited)
-                            if (missing_pattern.isInhabited()) {
+                            if (missing_pattern.isInhabited(column_types.type_store)) {
                                 const result = try allocator.alloc(Pattern, 1);
                                 result[0] = missing_pattern;
                                 return result;
@@ -1445,7 +1527,8 @@ pub fn checkExhaustive(
                     alt.tag_id,
                     alt.arity,
                 );
-                const missing = try checkExhaustive(allocator, specialized, alt.arity + n - 1);
+                const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
+                const missing = try checkExhaustive(allocator, specialized, specialized_types);
 
                 if (missing.len > 0) {
                     // Found a missing pattern in this constructor's arguments
@@ -1455,7 +1538,9 @@ pub fn checkExhaustive(
                         if (i < missing.len) {
                             args[i] = missing[i];
                         } else {
-                            args[i] = .anything;
+                            // Get type for this argument if available
+                            const arg_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
+                            args[i] = .{ .anything = arg_type };
                         }
                     }
 
@@ -1466,7 +1551,7 @@ pub fn checkExhaustive(
                     } };
 
                     // Only report as missing if the pattern is inhabited
-                    if (missing_pattern.isInhabited()) {
+                    if (missing_pattern.isInhabited(column_types.type_store)) {
                         const result = try allocator.alloc(Pattern, 1);
                         result[0] = missing_pattern;
                         return result;
@@ -1487,7 +1572,8 @@ pub fn checkExhaustive(
             for (ctors_to_check) |list_arity| {
                 const specialized = try specializeByListArity(allocator, matrix, list_arity);
                 const min_len = list_arity.minLen();
-                const missing = try checkExhaustive(allocator, specialized, min_len + n - 1);
+                const specialized_types = try column_types.specializeForList(allocator, min_len);
+                const missing = try checkExhaustive(allocator, specialized, specialized_types);
 
                 if (missing.len > 0) {
                     // Found a missing pattern
@@ -1496,7 +1582,9 @@ pub fn checkExhaustive(
                         if (i < missing.len) {
                             elements[i] = missing[i];
                         } else {
-                            elements[i] = .anything;
+                            // Get element type if available
+                            const elem_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
+                            elements[i] = .{ .anything = elem_type };
                         }
                     }
 
@@ -1516,7 +1604,8 @@ pub fn checkExhaustive(
             // Literals have infinite domains (except Bool which is handled as ctor)
             // So literal-only patterns are never exhaustive
             const result = try allocator.alloc(Pattern, 1);
-            result[0] = .anything;
+            const first_type = if (column_types.types.len > 0) column_types.types[0] else null;
+            result[0] = .{ .anything = first_type };
             return result;
         },
     };
@@ -1574,12 +1663,23 @@ fn buildListCtorsForChecking(
 /// Main entry point: check exhaustiveness and return an error if not exhaustive.
 pub fn check(
     allocator: std.mem.Allocator,
+    type_store: *TypeStore,
     region: Region,
     context: Context,
     rows: []const []const Pattern,
+    scrutinee_type: Var,
 ) !?Error {
     const matrix = PatternMatrix.init(allocator, rows);
-    const missing = try checkExhaustive(allocator, matrix, 1);
+
+    // Initial column types: just the scrutinee type
+    const initial_types = try allocator.alloc(Var, 1);
+    initial_types[0] = scrutinee_type;
+    const column_types = ColumnTypes{
+        .types = initial_types,
+        .type_store = type_store,
+    };
+
+    const missing = try checkExhaustive(allocator, matrix, column_types);
 
     if (missing.len > 0) {
         return .{ .incomplete = .{
@@ -1604,6 +1704,7 @@ pub fn isUseful(
     allocator: std.mem.Allocator,
     existing_matrix: PatternMatrix,
     new_row: []const Pattern,
+    column_types: ColumnTypes,
 ) !bool {
     // Empty matrix = new row is definitely useful
     if (existing_matrix.isEmpty()) return true;
@@ -1623,13 +1724,14 @@ pub fn isUseful(
                 c.tag_id,
                 c.args.len,
             );
+            const specialized_types = try column_types.specializeByConstructor(allocator, c.tag_id);
 
             // Check if args + rest is useful in specialized matrix
             const extended_row = try allocator.alloc(Pattern, c.args.len + rest.len);
             @memcpy(extended_row[0..c.args.len], c.args);
             @memcpy(extended_row[c.args.len..], rest);
 
-            return isUseful(allocator, specialized, extended_row);
+            return isUseful(allocator, specialized, extended_row, specialized_types);
         },
 
         .anything => {
@@ -1640,7 +1742,8 @@ pub fn isUseful(
                 .non_exhaustive_wildcards => {
                     // Not complete - check if any existing wildcard already covers this
                     const specialized = try specializeByAnything(allocator, existing_matrix);
-                    return isUseful(allocator, specialized, rest);
+                    const rest_types = column_types.dropFirst();
+                    return isUseful(allocator, specialized, rest, rest_types);
                 },
 
                 .ctors => |ctor_info| {
@@ -1657,7 +1760,8 @@ pub fn isUseful(
                         // Not all constructors covered - wildcard might be useful
                         // Check the default (wildcard) path
                         const specialized = try specializeByAnything(allocator, existing_matrix);
-                        return isUseful(allocator, specialized, rest);
+                        const rest_types = column_types.dropFirst();
+                        return isUseful(allocator, specialized, rest, rest_types);
                     }
 
                     // All constructors covered - check each one
@@ -1668,14 +1772,15 @@ pub fn isUseful(
                             alt.tag_id,
                             alt.arity,
                         );
+                        const specialized_types = try column_types.specializeByConstructor(allocator, alt.tag_id);
 
                         const extended = try allocator.alloc(Pattern, alt.arity + rest.len);
                         for (0..alt.arity) |i| {
-                            extended[i] = .anything;
+                            extended[i] = .{ .anything = null };
                         }
                         @memcpy(extended[alt.arity..], rest);
 
-                        if (try isUseful(allocator, specialized, extended)) {
+                        if (try isUseful(allocator, specialized, extended, specialized_types)) {
                             return true;
                         }
                     }
@@ -1689,14 +1794,15 @@ pub fn isUseful(
                     for (ctors_to_check) |list_arity| {
                         const specialized = try specializeByListArity(allocator, existing_matrix, list_arity);
                         const min_len = list_arity.minLen();
+                        const specialized_types = try column_types.specializeForList(allocator, min_len);
 
                         const extended = try allocator.alloc(Pattern, min_len + rest.len);
                         for (0..min_len) |i| {
-                            extended[i] = .anything;
+                            extended[i] = .{ .anything = null };
                         }
                         @memcpy(extended[min_len..], rest);
 
-                        if (try isUseful(allocator, specialized, extended)) {
+                        if (try isUseful(allocator, specialized, extended, specialized_types)) {
                             return true;
                         }
                     }
@@ -1733,7 +1839,8 @@ pub fn isUseful(
                 allocator,
                 try matching_rows.toOwnedSlice(allocator),
             );
-            return isUseful(allocator, filtered, rest);
+            const rest_types = column_types.dropFirst();
+            return isUseful(allocator, filtered, rest, rest_types);
         },
 
         .list => |l| {
@@ -1744,12 +1851,13 @@ pub fn isUseful(
                 .exact => {
                     // Exact pattern - only check at this one length
                     const specialized = try specializeByListArity(allocator, existing_matrix, l.arity);
+                    const specialized_types = try column_types.specializeForList(allocator, l.elements.len);
 
                     const extended_row = try allocator.alloc(Pattern, l.elements.len + rest.len);
                     @memcpy(extended_row[0..l.elements.len], l.elements);
                     @memcpy(extended_row[l.elements.len..], rest);
 
-                    return isUseful(allocator, specialized, extended_row);
+                    return isUseful(allocator, specialized, extended_row, specialized_types);
                 },
                 .slice => |s| {
                     // Slice pattern - need to check at multiple lengths
@@ -1772,6 +1880,7 @@ pub fn isUseful(
                         if (!l.arity.coversLength(len)) continue;
 
                         const specialized = try specializeByListArity(allocator, existing_matrix, check_arity);
+                        const specialized_types = try column_types.specializeForList(allocator, len);
 
                         // Expand our pattern to this length
                         const extended_row = try allocator.alloc(Pattern, len + rest.len);
@@ -1780,7 +1889,7 @@ pub fn isUseful(
                         // Fill middle with wildcards
                         const middle_len = len - s.prefix - s.suffix;
                         for (s.prefix..s.prefix + middle_len) |i| {
-                            extended_row[i] = .anything;
+                            extended_row[i] = .{ .anything = null };
                         }
                         // Copy suffix elements
                         if (s.suffix > 0) {
@@ -1789,7 +1898,7 @@ pub fn isUseful(
                         }
                         @memcpy(extended_row[len..], rest);
 
-                        if (try isUseful(allocator, specialized, extended_row)) {
+                        if (try isUseful(allocator, specialized, extended_row, specialized_types)) {
                             return true;
                         }
                     }
@@ -1816,6 +1925,7 @@ pub fn checkRedundancy(
     allocator: std.mem.Allocator,
     rows: []const UnresolvedRow,
     reified_patterns: []const []const Pattern,
+    column_types: ColumnTypes,
 ) !RedundancyResult {
     var non_redundant: std.ArrayList([]const Pattern) = .empty;
     var redundant_indices: std.ArrayList(u32) = .empty;
@@ -1824,7 +1934,7 @@ pub fn checkRedundancy(
     for (rows, reified_patterns) |row, patterns| {
         // Rows with guards are always considered useful (guard might fail at runtime)
         const is_useful = row.guard == .has_guard or
-            try isUseful(allocator, PatternMatrix.init(allocator, non_redundant.items), patterns);
+            try isUseful(allocator, PatternMatrix.init(allocator, non_redundant.items), patterns, column_types);
 
         if (is_useful) {
             try non_redundant.append(allocator, patterns);
@@ -1931,6 +2041,14 @@ pub fn checkMatch(
     // If scrutinee type is unresolved, skip checking entirely
     const skip_checks = scrutinee_unresolved or reified.has_unresolved_ctor;
 
+    // Create initial column types for exhaustiveness checking
+    const initial_types = try arena_alloc.alloc(Var, 1);
+    initial_types[0] = scrutinee_type;
+    const column_types = ColumnTypes{
+        .types = initial_types,
+        .type_store = type_store,
+    };
+
     // Phase 3: Check redundancy (skip if patterns couldn't be fully resolved)
     // When we have unresolved constructors (e.g., polymorphic types), all patterns
     // become wildcards which would incorrectly flag later patterns as redundant.
@@ -1945,6 +2063,7 @@ pub fn checkMatch(
             arena_alloc,
             unresolved.rows,
             reified.rows,
+            column_types,
         );
 
     // Phase 4: Check exhaustiveness on non-redundant patterns
@@ -1953,7 +2072,7 @@ pub fn checkMatch(
         &[_]Pattern{}
     else blk: {
         const matrix = PatternMatrix.init(arena_alloc, redundancy.non_redundant_rows);
-        break :blk try checkExhaustive(arena_alloc, matrix, 1);
+        break :blk try checkExhaustive(arena_alloc, matrix, column_types);
     };
 
     // Copy results to the original allocator before freeing the arena
