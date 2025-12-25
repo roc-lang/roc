@@ -257,6 +257,51 @@ pub const LambdaSet = struct {
     }
 };
 
+/// Information about a capture for layout optimization
+pub const CaptureLayoutInfo = struct {
+    pattern_idx: CIR.Pattern.Idx,
+    name: base.Ident.Idx,
+    lookup_expr: CIR.Expr.Idx,
+};
+
+/// Sort captures alphabetically by name for consistent ABI layout.
+/// This ensures that the same captures always produce the same record layout,
+/// regardless of the order they appear in the source code.
+pub fn sortCapturesAlphabetically(
+    captures: []CaptureLayoutInfo,
+    idents: *const base.Ident.Store,
+) void {
+    std.sort.insertion(CaptureLayoutInfo, captures, idents, struct {
+        pub fn lessThan(ident_store: *const base.Ident.Store, a: CaptureLayoutInfo, b: CaptureLayoutInfo) bool {
+            const a_text = ident_store.getText(a.name);
+            const b_text = ident_store.getText(b.name);
+            return std.mem.order(u8, a_text, b_text) == .lt;
+        }
+    }.lessThan);
+}
+
+/// Remove duplicate captures (same pattern_idx).
+/// Returns the deduplicated slice length.
+pub fn deduplicateCaptures(captures: []CaptureLayoutInfo) usize {
+    if (captures.len <= 1) return captures.len;
+
+    var write_idx: usize = 1;
+    for (1..captures.len) |read_idx| {
+        var is_duplicate = false;
+        for (0..write_idx) |check_idx| {
+            if (captures[read_idx].pattern_idx == captures[check_idx].pattern_idx) {
+                is_duplicate = true;
+                break;
+            }
+        }
+        if (!is_duplicate) {
+            captures[write_idx] = captures[read_idx];
+            write_idx += 1;
+        }
+    }
+    return write_idx;
+}
+
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
 
