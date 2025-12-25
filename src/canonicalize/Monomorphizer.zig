@@ -504,6 +504,207 @@ pub fn addAllResolvedToLambdaSet(
     }
 }
 
+/// Resolve all unspecialized entries that depend on a type variable.
+///
+/// When a type variable becomes concrete during monomorphization, this function
+/// finds all unspecialized lambda set entries that depend on it and resolves them.
+///
+/// The resolution follows a specific order:
+/// - Entries are sorted by region DESCENDING (innermost/highest region first)
+/// - This ensures that nested lambda sets are resolved before their enclosing ones
+/// - This is critical for correct ambient function unification
+///
+/// Parameters:
+/// - tracker: The UnspecializedByTypeVar tracker from the ClosureTransformer
+/// - type_var: The polymorphic type variable that has become concrete
+/// - concrete_type: The concrete type that type_var has been unified with
+///
+/// Returns the number of entries that were successfully resolved.
+pub fn resolveEntriesForTypeVar(
+    self: *Self,
+    tracker: *ClosureTransformer.UnspecializedByTypeVar,
+    type_var: types.Var,
+    concrete_type: types.Var,
+) !usize {
+    const entry_refs = tracker.getEntriesForVar(type_var) orelse return 0;
+
+    // If no entries, nothing to do
+    if (entry_refs.len == 0) return 0;
+
+    // Copy to slice for sorting (sort mutates in place)
+    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
+    defer self.allocator.free(entries);
+    @memcpy(entries, entry_refs);
+
+    // Sort by region DESCENDING (innermost first - higher region numbers first)
+    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
+
+    var resolved_count: usize = 0;
+
+    // Process each entry in region order
+    for (entries) |entry_ref| {
+        // Validate the entry is still valid (index might be stale after swapRemove)
+        if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
+            continue;
+        }
+
+        const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
+
+        // Look up the ability implementation for the concrete type
+        if (self.lookupAbilityImpl(concrete_type, unspec.member)) |impl| {
+            // Resolve this entry
+            const resolved = ResolvedClosure{
+                .unspecialized = unspec,
+                .impl_lookup = impl,
+            };
+
+            // Add to the lambda set as a closure
+            try self.addResolvedToLambdaSet(entry_ref.lambda_set, resolved);
+
+            // Remove from unspecialized list
+            // Note: Using swapRemove changes indices, which is why we process all entries
+            // in one pass and then remove the tracking entirely
+            _ = entry_ref.lambda_set.unspecialized.swapRemove(entry_ref.index);
+
+            resolved_count += 1;
+        }
+        // If not found, leave it in unspecialized for error reporting later
+    }
+
+    // Remove tracking for this type variable (entries are now resolved or will error)
+    tracker.removeVar(type_var);
+
+    return resolved_count;
+}
+
+/// Comparison function for sorting UnspecializedEntryRef by region descending.
+fn compareByRegionDesc(
+    _: void,
+    a: ClosureTransformer.UnspecializedEntryRef,
+    b: ClosureTransformer.UnspecializedEntryRef,
+) bool {
+    // Handle potential out-of-bounds indices gracefully
+    const a_region = if (a.index < a.lambda_set.unspecialized.items.len)
+        a.lambda_set.unspecialized.items[a.index].region
+    else
+        0;
+    const b_region = if (b.index < b.lambda_set.unspecialized.items.len)
+        b.lambda_set.unspecialized.items[b.index].region
+    else
+        0;
+    return a_region > b_region; // Descending order
+}
+
+/// Unify ambient function types when resolving an unspecialized entry.
+///
+/// When an unspecialized lambda set entry is resolved to a concrete implementation,
+/// we need to unify the ambient function type of the original lambda set with
+/// the ambient function type of the implementation's lambda set.
+///
+/// This is critical for connecting type variables across lambda set boundaries:
+/// - The original lambda set has an ambient function (the enclosing function)
+/// - The resolved implementation also has its own ambient function
+/// - Unifying them ensures that type variables in both contexts are connected
+///
+/// Parameters:
+/// - original_lambda_set: The lambda set containing the unspecialized entry
+/// - impl_lambda_set: The lambda set from the resolved implementation (may be null)
+///
+/// Note: If either lambda set lacks an ambient function, no unification occurs.
+pub fn unifyAmbientFunctions(
+    self: *Self,
+    original_lambda_set: *ClosureTransformer.LambdaSet,
+    impl_lambda_set: ?*ClosureTransformer.LambdaSet,
+) void {
+    const impl_set = impl_lambda_set orelse return;
+    const original_ambient = original_lambda_set.ambient_function_var orelse return;
+    const impl_ambient = impl_set.ambient_function_var orelse return;
+
+    // Skip if they're the same variable
+    if (original_ambient == impl_ambient) return;
+
+    // Unify by linking the original ambient to point to the implementation ambient.
+    // This connects the type variables from both contexts.
+    //
+    // We resolve both variables first to get their actual descriptors, then
+    // create a union that preserves the implementation's type information.
+    const original_data = self.types_store.resolveVarAndCompressPath(original_ambient);
+    const impl_data = self.types_store.resolveVarAndCompressPath(impl_ambient);
+
+    // Get the descriptor from the implementation (it has the concrete type info)
+    const impl_desc = self.types_store.getDesc(impl_data.desc_idx);
+
+    // Link original -> impl, using the impl's descriptor
+    self.types_store.union_(original_data.var_, impl_data.var_, impl_desc);
+}
+
+/// Resolve unspecialized entries with ambient function unification.
+///
+/// This is an enhanced version of `resolveEntriesForTypeVar` that also performs
+/// ambient function unification for each resolved entry.
+///
+/// The unification connects type variables across lambda set boundaries,
+/// which is essential for correct type inference with nested closures.
+///
+/// Parameters:
+/// - tracker: The UnspecializedByTypeVar tracker
+/// - type_var: The polymorphic type variable that has become concrete
+/// - concrete_type: The concrete type that type_var has been unified with
+/// - impl_lambda_sets: Optional map from method ident to the implementation's lambda set.
+///   If provided, ambient function unification will be performed.
+pub fn resolveEntriesForTypeVarWithUnification(
+    self: *Self,
+    tracker: *ClosureTransformer.UnspecializedByTypeVar,
+    type_var: types.Var,
+    concrete_type: types.Var,
+    impl_lambda_sets: ?*const std.AutoHashMap(base.Ident.Idx, *ClosureTransformer.LambdaSet),
+) !usize {
+    const entry_refs = tracker.getEntriesForVar(type_var) orelse return 0;
+
+    if (entry_refs.len == 0) return 0;
+
+    // Copy to slice for sorting
+    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
+    defer self.allocator.free(entries);
+    @memcpy(entries, entry_refs);
+
+    // Sort by region DESCENDING (innermost first)
+    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
+
+    var resolved_count: usize = 0;
+
+    for (entries) |entry_ref| {
+        if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
+            continue;
+        }
+
+        const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
+
+        if (self.lookupAbilityImpl(concrete_type, unspec.member)) |impl| {
+            // Perform ambient function unification if we have the implementation's lambda set
+            if (impl_lambda_sets) |ls_map| {
+                if (ls_map.get(impl.method_ident)) |impl_ls| {
+                    self.unifyAmbientFunctions(entry_ref.lambda_set, impl_ls);
+                }
+            }
+
+            // Resolve this entry
+            const resolved = ResolvedClosure{
+                .unspecialized = unspec,
+                .impl_lookup = impl,
+            };
+
+            try self.addResolvedToLambdaSet(entry_ref.lambda_set, resolved);
+            _ = entry_ref.lambda_set.unspecialized.swapRemove(entry_ref.index);
+            resolved_count += 1;
+        }
+    }
+
+    tracker.removeVar(type_var);
+
+    return resolved_count;
+}
+
 /// Register a polymorphic function definition as a partial proc.
 /// This should be called for each function definition during the finding phase.
 pub fn registerPartialProc(

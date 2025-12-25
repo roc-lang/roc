@@ -141,31 +141,31 @@ pub const ClosureInfo = struct {
     lifted_captures_pattern: ?CIR.Pattern.Idx,
 };
 
-/// Unspecialized Closure - represents an ability-polymorphic closure.
+/// Unspecialized Closure - represents a static-dispatch-dependent closure.
 ///
-/// These are closures that depend on ability implementations which won't be
+/// These are closures that depend on static dispatch implementations which won't be
 /// known until monomorphization. For example, when code uses `hash` from the
 /// Hash ability, we don't know which concrete `hash` implementation to dispatch
 /// to until we know the concrete type.
 ///
 /// These are resolved during monomorphization when concrete types are known.
 pub const UnspecializedClosure = struct {
-    /// The ability member symbol (e.g., `hash` from Hash ability)
+    /// The static dispatch member symbol (e.g., `hash` from Hash ability)
     member: base.Ident.Idx,
 
-    /// The expression that references the ability member.
+    /// The expression that references the static dispatch member.
     /// Used to locate this in the IR for resolution.
     member_expr: Expr.Idx,
 
     /// Region number for ordering during resolution.
-    /// When resolving nested ability-polymorphic closures, we process
+    /// When resolving nested static-dispatch-dependent closures, we process
     /// innermost first (higher region numbers first).
     region: u8,
 };
 
 /// Information about a concrete type for cross-module requests.
 /// This allows external modules to know what concrete type to use when
-/// resolving an ability implementation.
+/// resolving a static dispatch implementation.
 pub const ConcreteTypeInfo = struct {
     /// The type identifier (e.g., "List", "Dict")
     type_ident: ?base.Ident.Idx,
@@ -207,6 +207,81 @@ pub const ExternalLambdaSetResult = struct {
     is_new: bool,
 };
 
+/// Error types for lambda set resolution failures.
+pub const ResolutionError = struct {
+    /// The kind of resolution error
+    kind: Kind,
+    /// The expression where the error occurred
+    expr: ?Expr.Idx,
+    /// The method that couldn't be resolved
+    method_name: ?base.Ident.Idx,
+    /// Additional context (e.g., type name)
+    context: ?base.Ident.Idx,
+
+    pub const Kind = enum {
+        /// No implementation found for the ability method on this type
+        missing_ability_impl,
+        /// External module doesn't export the required closure
+        external_closure_not_found,
+        /// Type variable couldn't be resolved to a concrete type
+        unresolved_type_variable,
+        /// Recursive lambda set couldn't be resolved
+        recursive_lambda_set_unresolved,
+        /// Lambda set is empty but a closure was expected
+        empty_lambda_set,
+    };
+
+    /// Create a missing ability implementation error.
+    pub fn missingImpl(expr: Expr.Idx, method_name: base.Ident.Idx, type_name: ?base.Ident.Idx) ResolutionError {
+        return .{
+            .kind = .missing_ability_impl,
+            .expr = expr,
+            .method_name = method_name,
+            .context = type_name,
+        };
+    }
+
+    /// Create an external closure not found error.
+    pub fn externalNotFound(method_name: base.Ident.Idx) ResolutionError {
+        return .{
+            .kind = .external_closure_not_found,
+            .expr = null,
+            .method_name = method_name,
+            .context = null,
+        };
+    }
+
+    /// Create an unresolved type variable error.
+    pub fn unresolvedTypeVar(expr: ?Expr.Idx) ResolutionError {
+        return .{
+            .kind = .unresolved_type_variable,
+            .expr = expr,
+            .method_name = null,
+            .context = null,
+        };
+    }
+
+    /// Create an empty lambda set error.
+    pub fn emptyLambdaSet(expr: ?Expr.Idx) ResolutionError {
+        return .{
+            .kind = .empty_lambda_set,
+            .expr = expr,
+            .method_name = null,
+            .context = null,
+        };
+    }
+};
+
+/// Result of validating lambda set resolution.
+pub const ValidationResult = struct {
+    /// All unspecialized closures are resolved
+    is_valid: bool,
+    /// Number of unresolved entries
+    unresolved_count: usize,
+    /// First error encountered (if any)
+    first_error: ?ResolutionError,
+};
+
 /// Exported closure information for module interfaces.
 ///
 /// This struct contains information about closures that external modules
@@ -232,16 +307,96 @@ pub const ExportedClosureInfo = struct {
     };
 };
 
+/// Reference to an unspecialized entry in a lambda set.
+/// Used by UnspecializedByTypeVar to track which entries depend on which type variables.
+pub const UnspecializedEntryRef = struct {
+    /// Pointer to the lambda set containing this entry
+    lambda_set: *LambdaSet,
+    /// Index into lambda_set.unspecialized
+    index: usize,
+};
+
+/// Tracks unspecialized entries by the type variable they depend on.
+///
+/// This enables efficient lookup when a type variable becomes concrete during
+/// monomorphization - we can quickly find all unspecialized entries that need
+/// to be resolved for that type variable.
+pub const UnspecializedByTypeVar = struct {
+    /// Map: type_var -> list of (lambda_set_ptr, entry_index)
+    entries: std.AutoHashMap(types.Var, std.ArrayList(UnspecializedEntryRef)),
+    /// Allocator for internal structures
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) UnspecializedByTypeVar {
+        return .{
+            .entries = std.AutoHashMap(types.Var, std.ArrayList(UnspecializedEntryRef)).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *UnspecializedByTypeVar) void {
+        var iter = self.entries.valueIterator();
+        while (iter.next()) |list| {
+            list.deinit(self.allocator);
+        }
+        self.entries.deinit();
+    }
+
+    /// Track that an unspecialized entry depends on a type variable.
+    pub fn trackEntry(
+        self: *UnspecializedByTypeVar,
+        type_var: types.Var,
+        ref: UnspecializedEntryRef,
+    ) !void {
+        const gop = try self.entries.getOrPut(type_var);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = std.ArrayList(UnspecializedEntryRef).empty;
+        }
+        try gop.value_ptr.append(self.allocator, ref);
+    }
+
+    /// Get all unspecialized entries that depend on a type variable.
+    /// Returns null if no entries depend on this type variable.
+    pub fn getEntriesForVar(self: *const UnspecializedByTypeVar, type_var: types.Var) ?[]const UnspecializedEntryRef {
+        return if (self.entries.get(type_var)) |list| list.items else null;
+    }
+
+    /// Remove tracking for a type variable (called after resolving all its entries).
+    pub fn removeVar(self: *UnspecializedByTypeVar, type_var: types.Var) void {
+        if (self.entries.fetchRemove(type_var)) |kv| {
+            // The value is an ArrayList which owns its memory.
+            // We need to make a mutable copy to deinit it.
+            var list = kv.value;
+            list.deinit(self.allocator);
+        }
+    }
+
+    /// Check if a type variable has any tracked unspecialized entries.
+    pub fn hasEntriesForVar(self: *const UnspecializedByTypeVar, type_var: types.Var) bool {
+        return self.entries.contains(type_var);
+    }
+
+    /// Get the total count of tracked entries across all type variables.
+    pub fn totalEntryCount(self: *const UnspecializedByTypeVar) usize {
+        var count: usize = 0;
+        var iter = self.entries.valueIterator();
+        while (iter.next()) |list| {
+            count += list.items.len;
+        }
+        return count;
+    }
+};
+
 /// A lambda set - a collection of closures that could reach a given variable.
 ///
 /// Lambda sets can contain both:
 /// - Resolved closures: concrete closures with known implementations
-/// - Unspecialized closures: ability-polymorphic closures resolved at mono time
+/// - Unspecialized closures: static-dispatch-dependent closures resolved at mono time
 pub const LambdaSet = struct {
     /// Resolved/concrete closures in this lambda set
     closures: std.ArrayList(ClosureInfo),
 
-    /// Unspecialized closures (ability-polymorphic).
+    /// Unspecialized closures (static-dispatch-dependent).
     /// These are resolved during monomorphization when concrete types are known.
     unspecialized: std.ArrayList(UnspecializedClosure),
 
@@ -249,11 +404,19 @@ pub const LambdaSet = struct {
     /// Points to the closure that references itself.
     recursion_closure: ?*ClosureInfo,
 
+    /// The ambient function type that directly encloses this lambda set.
+    /// Used during monomorphization for ambient function unification:
+    /// when resolving an unspecialized entry, we unify this function type
+    /// with the ambient function of the resolved method's lambda set.
+    /// This connects type variables across lambda set boundaries.
+    ambient_function_var: ?types.Var,
+
     pub fn init() LambdaSet {
         return .{
             .closures = std.ArrayList(ClosureInfo).empty,
             .unspecialized = std.ArrayList(UnspecializedClosure).empty,
             .recursion_closure = null,
+            .ambient_function_var = null,
         };
     }
 
@@ -304,6 +467,7 @@ pub const LambdaSet = struct {
             try new_set.unspecialized.append(allocator, unspec);
         }
         new_set.recursion_closure = self.recursion_closure;
+        new_set.ambient_function_var = self.ambient_function_var;
         return new_set;
     }
 
@@ -555,6 +719,11 @@ external_lambda_set_requests: std.ArrayList(ExternalLambdaSetRequest),
 /// These are closures that can be used by other modules.
 exported_closures: std.ArrayList(ExportedClosureInfo),
 
+/// Tracks unspecialized entries by the type variable they depend on.
+/// This enables efficient lookup during monomorphization when a type variable
+/// becomes concrete - we can quickly find all entries that need resolution.
+unspec_by_type_var: UnspecializedByTypeVar,
+
 /// Initialize the transformer
 pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
     return .{
@@ -569,6 +738,7 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .current_region = 0,
         .external_lambda_set_requests = std.ArrayList(ExternalLambdaSetRequest).empty,
         .exported_closures = std.ArrayList(ExportedClosureInfo).empty,
+        .unspec_by_type_var = UnspecializedByTypeVar.init(allocator),
     };
 }
 
@@ -618,13 +788,69 @@ pub fn createUnspecializedClosure(
     member_info: AbilityMemberInfo,
     expr_idx: Expr.Idx,
 ) UnspecializedClosure {
-    _ = member_info.type_var_alias_stmt; // Will be used in phase 2 for type resolution
     _ = member_info.args; // Will be used when generating dispatch
     return UnspecializedClosure{
         .member = member_info.method_name,
         .member_expr = expr_idx,
         .region = self.current_region,
     };
+}
+
+/// Get the type variable from an expression, if it's a type var dispatch.
+/// Returns null for other expression types.
+pub fn getTypeVarFromExpr(self: *const Self, expr_idx: Expr.Idx) ?types.Var {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    return switch (expr) {
+        .e_type_var_dispatch => |tvd| blk: {
+            // Get the type var from the type var alias statement
+            const stmt = self.module_env.store.getStatement(tvd.type_var_alias_stmt);
+            const type_var_anno = stmt.s_type_var_alias.type_var_anno;
+            break :blk ModuleEnv.varFrom(type_var_anno);
+        },
+        else => null,
+    };
+}
+
+/// Add an unspecialized entry to a lambda set and track it by type variable.
+///
+/// This is the main entry point for adding unspecialized closures during
+/// closure transformation. It:
+/// 1. Adds the entry to the lambda set's unspecialized list
+/// 2. Extracts the type variable from the expression
+/// 3. Tracks the entry in unspec_by_type_var for efficient lookup during monomorphization
+///
+/// Returns error if allocation fails.
+pub fn addUnspecializedWithTracking(
+    self: *Self,
+    lambda_set: *LambdaSet,
+    unspec: UnspecializedClosure,
+) !void {
+    // Record the index before adding
+    const index = lambda_set.unspecialized.items.len;
+
+    // Add to the lambda set
+    try lambda_set.unspecialized.append(self.allocator, unspec);
+
+    // Extract the type variable from the member expression
+    if (self.getTypeVarFromExpr(unspec.member_expr)) |type_var| {
+        // Track this entry by its type variable
+        try self.unspec_by_type_var.trackEntry(type_var, .{
+            .lambda_set = lambda_set,
+            .index = index,
+        });
+    }
+}
+
+/// Add an unspecialized entry with tracking, creating the entry from member info.
+/// Convenience method that combines createUnspecializedClosure and addUnspecializedWithTracking.
+pub fn addUnspecializedFromMemberInfo(
+    self: *Self,
+    lambda_set: *LambdaSet,
+    member_info: AbilityMemberInfo,
+    expr_idx: Expr.Idx,
+) !void {
+    const unspec = self.createUnspecializedClosure(member_info, expr_idx);
+    try self.addUnspecializedWithTracking(lambda_set, unspec);
 }
 
 /// Mark a pattern as a top-level definition (doesn't need to be captured)
@@ -754,6 +980,208 @@ pub fn findExportedClosureByAbility(
         }
     }
     return null;
+}
+
+/// Result of processing external lambda set requests.
+pub const ExternalResolutionResult = struct {
+    /// Number of requests that were successfully resolved
+    resolved_count: usize,
+    /// Number of requests that failed to resolve (module not found, closure not found, etc.)
+    failed_count: usize,
+    /// Number of requests still pending (deferred for later resolution)
+    pending_count: usize,
+};
+
+/// Function signature for looking up a closure from an external module.
+/// Returns the ClosureInfo if found, null otherwise.
+pub const ExternalClosureLookupFn = *const fn (
+    /// The module to look in
+    source_module: CIR.Import.Idx,
+    /// The ability member to find
+    ability_member: base.Ident.Idx,
+    /// Type information for the concrete type
+    concrete_type_info: ConcreteTypeInfo,
+    /// User context passed through
+    context: *anyopaque,
+) ?ClosureInfo;
+
+/// Process all pending external lambda set requests.
+///
+/// This is called after the transformation pass to resolve ability implementations
+/// from external modules. For each pending request:
+/// 1. Look up the closure from the external module using the provided callback
+/// 2. If found, resolve the request and add the closure to the lambda set
+/// 3. If not found, track as failed (for error reporting)
+///
+/// The `lookup_fn` callback should use the module's exported closures to find
+/// the matching ability implementation.
+///
+/// Returns statistics about the resolution process.
+pub fn processExternalLambdaSetRequests(
+    self: *Self,
+    lookup_fn: ExternalClosureLookupFn,
+    context: *anyopaque,
+) ExternalResolutionResult {
+    var result = ExternalResolutionResult{
+        .resolved_count = 0,
+        .failed_count = 0,
+        .pending_count = 0,
+    };
+
+    // Process requests in reverse order so we can remove while iterating
+    var i: usize = self.external_lambda_set_requests.items.len;
+    while (i > 0) {
+        i -= 1;
+        const request = self.external_lambda_set_requests.items[i];
+
+        // Try to look up the closure from the external module
+        if (lookup_fn(
+            request.source_module,
+            request.ability_member,
+            request.concrete_type_info,
+            context,
+        )) |closure_info| {
+            // Successfully found the closure - resolve the request
+            _ = self.resolveExternalLambdaSet(request, closure_info);
+            result.resolved_count += 1;
+        } else {
+            // Closure not found - track as failed
+            // The request remains in the list for error reporting
+            result.failed_count += 1;
+        }
+    }
+
+    result.pending_count = self.external_lambda_set_requests.items.len;
+    return result;
+}
+
+/// Check if there are any pending external lambda set requests.
+pub fn hasPendingExternalRequests(self: *const Self) bool {
+    return self.external_lambda_set_requests.items.len > 0;
+}
+
+/// Get the count of pending external lambda set requests.
+pub fn pendingExternalRequestCount(self: *const Self) usize {
+    return self.external_lambda_set_requests.items.len;
+}
+
+/// Validate that all lambda sets have been fully resolved.
+///
+/// This should be called after monomorphization to ensure no unspecialized
+/// closures remain. Any remaining unspecialized entries indicate a failure
+/// to resolve ability implementations.
+///
+/// Returns a ValidationResult indicating whether validation passed and
+/// providing error details if it failed.
+pub fn validateAllResolved(self: *const Self) ValidationResult {
+    var total_unresolved: usize = 0;
+    var first_error: ?ResolutionError = null;
+
+    // Check pattern lambda sets
+    var pattern_iter = self.pattern_lambda_sets.valueIterator();
+    while (pattern_iter.next()) |lambda_set| {
+        if (lambda_set.unspecialized.items.len > 0) {
+            total_unresolved += lambda_set.unspecialized.items.len;
+            if (first_error == null) {
+                const unspec = lambda_set.unspecialized.items[0];
+                first_error = ResolutionError.missingImpl(
+                    unspec.member_expr,
+                    unspec.member,
+                    null,
+                );
+            }
+        }
+    }
+
+    // Check lambda return sets
+    var return_iter = self.lambda_return_sets.valueIterator();
+    while (return_iter.next()) |lambda_set| {
+        if (lambda_set.unspecialized.items.len > 0) {
+            total_unresolved += lambda_set.unspecialized.items.len;
+            if (first_error == null) {
+                const unspec = lambda_set.unspecialized.items[0];
+                first_error = ResolutionError.missingImpl(
+                    unspec.member_expr,
+                    unspec.member,
+                    null,
+                );
+            }
+        }
+    }
+
+    // Check pattern lambda return sets
+    var pattern_return_iter = self.pattern_lambda_return_sets.valueIterator();
+    while (pattern_return_iter.next()) |lambda_set| {
+        if (lambda_set.unspecialized.items.len > 0) {
+            total_unresolved += lambda_set.unspecialized.items.len;
+            if (first_error == null) {
+                const unspec = lambda_set.unspecialized.items[0];
+                first_error = ResolutionError.missingImpl(
+                    unspec.member_expr,
+                    unspec.member,
+                    null,
+                );
+            }
+        }
+    }
+
+    return .{
+        .is_valid = total_unresolved == 0 and self.external_lambda_set_requests.items.len == 0,
+        .unresolved_count = total_unresolved + self.external_lambda_set_requests.items.len,
+        .first_error = first_error,
+    };
+}
+
+/// Get all unresolved lambda set entries for error reporting.
+///
+/// This returns a list of unresolved entries that can be used to generate
+/// detailed error messages for the user.
+pub fn getUnresolvedEntries(self: *const Self, allocator: std.mem.Allocator) !std.ArrayList(ResolutionError) {
+    var errors = std.ArrayList(ResolutionError).empty;
+    errdefer errors.deinit(allocator);
+
+    // Collect from pattern lambda sets
+    var pattern_iter = self.pattern_lambda_sets.valueIterator();
+    while (pattern_iter.next()) |lambda_set| {
+        for (lambda_set.unspecialized.items) |unspec| {
+            try errors.append(allocator, ResolutionError.missingImpl(
+                unspec.member_expr,
+                unspec.member,
+                null,
+            ));
+        }
+    }
+
+    // Collect from lambda return sets
+    var return_iter = self.lambda_return_sets.valueIterator();
+    while (return_iter.next()) |lambda_set| {
+        for (lambda_set.unspecialized.items) |unspec| {
+            try errors.append(allocator, ResolutionError.missingImpl(
+                unspec.member_expr,
+                unspec.member,
+                null,
+            ));
+        }
+    }
+
+    // Collect from pattern lambda return sets
+    var pattern_return_iter = self.pattern_lambda_return_sets.valueIterator();
+    while (pattern_return_iter.next()) |lambda_set| {
+        for (lambda_set.unspecialized.items) |unspec| {
+            try errors.append(allocator, ResolutionError.missingImpl(
+                unspec.member_expr,
+                unspec.member,
+                null,
+            ));
+        }
+    }
+
+    // Collect from external requests
+    for (self.external_lambda_set_requests.items) |request| {
+        try errors.append(allocator, ResolutionError.externalNotFound(request.ability_member));
+    }
+
+    return errors;
 }
 
 /// Detect if a closure body contains a reference to the closure itself.
@@ -992,6 +1420,52 @@ pub fn isLambdaSetRecursive(lambda_set: *const LambdaSet) bool {
     return lambda_set.recursion_closure != null;
 }
 
+/// Detect recursion in a closure and mark the lambda set if recursive.
+///
+/// This combines `detectRecursion` and `markLambdaSetRecursive` into a single
+/// operation that:
+/// 1. Checks if the closure body contains a self-reference
+/// 2. If so, marks the lambda set as recursive
+///
+/// This should be called after a closure is added to a lambda set.
+///
+/// Returns true if the closure was found to be recursive.
+pub fn detectAndMarkRecursion(
+    self: *const Self,
+    lambda_set: *LambdaSet,
+    closure_info: *ClosureInfo,
+    closure_pattern: CIR.Pattern.Idx,
+) bool {
+    if (self.detectRecursion(closure_pattern, closure_info.lambda_body)) {
+        markLambdaSetRecursive(lambda_set, closure_info);
+        return true;
+    }
+    return false;
+}
+
+/// Check all closures in a lambda set for recursion.
+///
+/// This iterates through all closures in the lambda set and marks the set
+/// as recursive if any closure references itself.
+///
+/// Note: This modifies `closures.items` to get mutable pointers to ClosureInfo.
+pub fn detectRecursionInLambdaSet(
+    self: *const Self,
+    lambda_set: *LambdaSet,
+) bool {
+    for (lambda_set.closures.items, 0..) |*closure_info, i| {
+        // For each closure, check if it references itself
+        // We need the pattern that binds this closure, which is stored in lifted_fn_pattern
+        if (closure_info.lifted_fn_pattern) |fn_pattern| {
+            if (self.detectRecursion(fn_pattern, closure_info.lambda_body)) {
+                markLambdaSetRecursive(lambda_set, &lambda_set.closures.items[i]);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// Handle an empty lambda set at a call site.
 ///
 /// This returns the original call site expression for cases where a closure
@@ -1054,6 +1528,9 @@ pub fn deinit(self: *Self) void {
 
     // Free exported closures
     self.exported_closures.deinit(self.allocator);
+
+    // Free unspecialized entry tracking
+    self.unspec_by_type_var.deinit();
 }
 
 /// Generate a unique tag name for a closure
@@ -2573,4 +3050,151 @@ test "LambdaSet: canUseCompactRepresentation" {
 
     // Empty can use compact
     try testing.expect(lambda_set.canUseCompactRepresentation());
+}
+
+test "UnspecializedByTypeVar: init and deinit" {
+    const allocator = testing.allocator;
+
+    var tracker = UnspecializedByTypeVar.init(allocator);
+    defer tracker.deinit();
+
+    // Initially empty
+    try testing.expectEqual(@as(usize, 0), tracker.totalEntryCount());
+}
+
+test "UnspecializedByTypeVar: track and retrieve" {
+    const allocator = testing.allocator;
+
+    var tracker = UnspecializedByTypeVar.init(allocator);
+    defer tracker.deinit();
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Create a type variable (index 42)
+    const type_var: types.Var = @enumFromInt(42);
+
+    // Track an entry
+    try tracker.trackEntry(type_var, .{ .lambda_set = &lambda_set, .index = 0 });
+
+    // Should be retrievable
+    const entries = tracker.getEntriesForVar(type_var);
+    try testing.expect(entries != null);
+    try testing.expectEqual(@as(usize, 1), entries.?.len);
+    try testing.expectEqual(&lambda_set, entries.?[0].lambda_set);
+    try testing.expectEqual(@as(usize, 0), entries.?[0].index);
+
+    // Total count should be 1
+    try testing.expectEqual(@as(usize, 1), tracker.totalEntryCount());
+}
+
+test "UnspecializedByTypeVar: multiple entries per type var" {
+    const allocator = testing.allocator;
+
+    var tracker = UnspecializedByTypeVar.init(allocator);
+    defer tracker.deinit();
+
+    var lambda_set1 = LambdaSet.init();
+    defer lambda_set1.deinit(allocator);
+    var lambda_set2 = LambdaSet.init();
+    defer lambda_set2.deinit(allocator);
+
+    const type_var: types.Var = @enumFromInt(42);
+
+    // Track multiple entries for the same type var
+    try tracker.trackEntry(type_var, .{ .lambda_set = &lambda_set1, .index = 0 });
+    try tracker.trackEntry(type_var, .{ .lambda_set = &lambda_set2, .index = 1 });
+
+    const entries = tracker.getEntriesForVar(type_var);
+    try testing.expect(entries != null);
+    try testing.expectEqual(@as(usize, 2), entries.?.len);
+    try testing.expectEqual(@as(usize, 2), tracker.totalEntryCount());
+}
+
+test "UnspecializedByTypeVar: multiple type vars" {
+    const allocator = testing.allocator;
+
+    var tracker = UnspecializedByTypeVar.init(allocator);
+    defer tracker.deinit();
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    const type_var1: types.Var = @enumFromInt(42);
+    const type_var2: types.Var = @enumFromInt(99);
+
+    // Track entries for different type vars
+    try tracker.trackEntry(type_var1, .{ .lambda_set = &lambda_set, .index = 0 });
+    try tracker.trackEntry(type_var2, .{ .lambda_set = &lambda_set, .index = 1 });
+
+    // Both should be retrievable
+    try testing.expect(tracker.hasEntriesForVar(type_var1));
+    try testing.expect(tracker.hasEntriesForVar(type_var2));
+    try testing.expectEqual(@as(usize, 2), tracker.totalEntryCount());
+}
+
+test "UnspecializedByTypeVar: remove var" {
+    const allocator = testing.allocator;
+
+    var tracker = UnspecializedByTypeVar.init(allocator);
+    defer tracker.deinit();
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    const type_var: types.Var = @enumFromInt(42);
+
+    try tracker.trackEntry(type_var, .{ .lambda_set = &lambda_set, .index = 0 });
+    try testing.expect(tracker.hasEntriesForVar(type_var));
+
+    // Remove the type var
+    tracker.removeVar(type_var);
+
+    // Should no longer be present
+    try testing.expect(!tracker.hasEntriesForVar(type_var));
+    try testing.expect(tracker.getEntriesForVar(type_var) == null);
+    try testing.expectEqual(@as(usize, 0), tracker.totalEntryCount());
+}
+
+test "UnspecializedByTypeVar: non-existent type var" {
+    const allocator = testing.allocator;
+
+    var tracker = UnspecializedByTypeVar.init(allocator);
+    defer tracker.deinit();
+
+    const type_var: types.Var = @enumFromInt(42);
+
+    // Non-existent type var returns null
+    try testing.expect(tracker.getEntriesForVar(type_var) == null);
+    try testing.expect(!tracker.hasEntriesForVar(type_var));
+}
+
+test "LambdaSet: ambient_function_var initialization" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    // Initially null
+    try testing.expect(lambda_set.ambient_function_var == null);
+
+    // Can set it
+    const func_var: types.Var = @enumFromInt(123);
+    lambda_set.ambient_function_var = func_var;
+    try testing.expectEqual(func_var, lambda_set.ambient_function_var.?);
+}
+
+test "LambdaSet: clone preserves ambient_function_var" {
+    const allocator = testing.allocator;
+
+    var lambda_set = LambdaSet.init();
+    defer lambda_set.deinit(allocator);
+
+    const func_var: types.Var = @enumFromInt(456);
+    lambda_set.ambient_function_var = func_var;
+
+    var cloned = try lambda_set.clone(allocator);
+    defer cloned.deinit(allocator);
+
+    try testing.expectEqual(func_var, cloned.ambient_function_var.?);
 }
