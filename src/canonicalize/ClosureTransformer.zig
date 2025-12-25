@@ -44,12 +44,21 @@
 //! - Pure lambdas (no captures) in mixed contexts are wrapped as closure tags with empty records
 //! - Top-level patterns are tracked to avoid unnecessary captures (they're always in scope)
 //!
-//! ## TODO (Bugs to Fix)
+//! ## Closure Representation Strategies
 //!
-//! - BUG: Type-driven dispatch using lambda sets from the type system is incomplete
+//! The transformer determines the optimal representation for a lambda set:
+//!
+//! - **TaggedUnion**: Multiple closures with different captures, stored as tagged union
+//! - **CaptureStruct**: Single closure with captures, stored as struct
+//! - **UnwrappedCapture**: Single closure with single capture, stored directly
+//! - **EnumDispatch**: Multiple closures with NO captures, stored as enum tag only
+//!
+//! This follows the Cor-style defunctionalization approach where lambda sets are
+//! resolved AFTER type checking.
 
 const std = @import("std");
 const base = @import("base");
+const types = @import("types");
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
@@ -58,6 +67,62 @@ const Pattern = @import("Pattern.zig").Pattern;
 const RecordField = CIR.RecordField;
 
 const Self = @This();
+
+/// Represents how a lambda set is stored at runtime.
+/// This determines the dispatch strategy and memory layout.
+pub const ClosureRepresentation = union(enum) {
+    /// Multiple closures with different captures - stored as tagged union.
+    /// Each closure variant has its own capture record type.
+    /// Dispatch requires switching on the tag to determine which closure to call.
+    tagged_union: TaggedUnionInfo,
+
+    /// Single closure with captures - stored as struct containing captures.
+    /// No dispatch needed since there's only one possible closure.
+    capture_struct: CaptureStructInfo,
+
+    /// Single closure with exactly one capture - stored directly (unwrapped).
+    /// Avoids the overhead of a single-field struct.
+    unwrapped_capture: UnwrappedCaptureInfo,
+
+    /// Multiple closures with NO captures - stored as enum tag only.
+    /// Very efficient: just a tag value, no capture data needed.
+    enum_dispatch: EnumDispatchInfo,
+
+    /// No closures in the lambda set (empty or pure functions only)
+    empty,
+};
+
+/// Info for tagged union representation
+pub const TaggedUnionInfo = struct {
+    /// The closures in this union, each with their own capture types
+    closures: []const ClosureInfo,
+    /// The type variable for the union type (if known)
+    union_type_var: ?types.Var,
+};
+
+/// Info for single closure with captures as struct
+pub const CaptureStructInfo = struct {
+    /// The single closure
+    closure: ClosureInfo,
+    /// The record field types for captures
+    capture_field_types: []const types.Var,
+};
+
+/// Info for single closure with single unwrapped capture
+pub const UnwrappedCaptureInfo = struct {
+    /// The single closure
+    closure: ClosureInfo,
+    /// The type of the single capture
+    capture_type: ?types.Var,
+};
+
+/// Info for enum dispatch (multiple closures, no captures)
+pub const EnumDispatchInfo = struct {
+    /// The closures (all should have empty captures)
+    closures: []const ClosureInfo,
+    /// Number of variants (for tag size calculation)
+    variant_count: usize,
+};
 
 /// Information about a transformed closure
 pub const ClosureInfo = struct {
@@ -108,6 +173,87 @@ pub const LambdaSet = struct {
             try new_set.closures.append(allocator, info);
         }
         return new_set;
+    }
+
+    /// Determine the optimal closure representation for this lambda set.
+    /// This is used to generate efficient dispatch code.
+    pub fn determineRepresentation(self: *const LambdaSet) ClosureRepresentation {
+        const closures = self.closures.items;
+
+        // Empty lambda set
+        if (closures.len == 0) {
+            return .empty;
+        }
+
+        // Single closure case
+        if (closures.len == 1) {
+            const closure = closures[0];
+            const capture_count = closure.capture_names.items.len;
+
+            if (capture_count == 0) {
+                // Single closure with no captures - still use empty representation
+                // since it's effectively a function pointer
+                return .empty;
+            } else if (capture_count == 1) {
+                // Single closure with single capture - can unwrap
+                return .{
+                    .unwrapped_capture = .{
+                        .closure = closure,
+                        .capture_type = null, // Type info filled in later if needed
+                    },
+                };
+            } else {
+                // Single closure with multiple captures - use struct
+                return .{
+                    .capture_struct = .{
+                        .closure = closure,
+                        .capture_field_types = &.{}, // Type info filled in later if needed
+                    },
+                };
+            }
+        }
+
+        // Multiple closures - check if any have captures
+        var any_has_captures = false;
+        for (closures) |closure| {
+            if (closure.capture_names.items.len > 0) {
+                any_has_captures = true;
+                break;
+            }
+        }
+
+        if (!any_has_captures) {
+            // Multiple closures, none have captures - use enum dispatch
+            return .{ .enum_dispatch = .{
+                .closures = closures,
+                .variant_count = closures.len,
+            } };
+        }
+
+        // Multiple closures with some having captures - use tagged union
+        return .{
+            .tagged_union = .{
+                .closures = closures,
+                .union_type_var = null, // Type info filled in later if needed
+            },
+        };
+    }
+
+    /// Check if this lambda set requires runtime dispatch.
+    /// Returns false if there's at most one closure (no branching needed).
+    pub fn requiresDispatch(self: *const LambdaSet) bool {
+        return self.closures.items.len > 1;
+    }
+
+    /// Check if all closures in this set have no captures.
+    /// If true, the lambda set can use enum dispatch (tag-only representation).
+    pub fn allCapturesEmpty(self: *const LambdaSet) bool {
+        for (self.closures.items) |closure| {
+            if (closure.capture_names.items.len > 0) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
