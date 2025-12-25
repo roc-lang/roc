@@ -1246,3 +1246,127 @@ test "monomorphizer: isPolymorphic" {
     const flex_var = try module_env.types.fresh();
     try testing.expect(mono.isPolymorphic(flex_var));
 }
+
+test "monomorphizer: specialization key equality" {
+    const test_ident = base.Ident.Idx{
+        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+        .idx = 1,
+    };
+    const key1 = SpecializationKey{
+        .original_ident = test_ident,
+        .type_hash = 12345,
+    };
+    const key2 = SpecializationKey{
+        .original_ident = test_ident,
+        .type_hash = 12345,
+    };
+    const key3 = SpecializationKey{
+        .original_ident = test_ident,
+        .type_hash = 67890,
+    };
+
+    try testing.expect(key1.eql(key2));
+    try testing.expect(!key1.eql(key3));
+}
+
+test "monomorphizer: type hashing consistency" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Same type should produce same hash
+    const type_var = try module_env.types.fresh();
+    const hash1 = mono.structuralTypeHash(type_var);
+    const hash2 = mono.structuralTypeHash(type_var);
+    try testing.expectEqual(hash1, hash2);
+
+    // Note: Fresh flex vars may hash the same since they have the same structure.
+    // The important property is consistency - same var always produces same hash.
+}
+
+test "monomorphizer: recursion depth tracking" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Initially at depth 0
+    try testing.expectEqual(@as(u32, 0), mono.recursion_depth);
+    try testing.expectEqual(DEFAULT_MAX_RECURSION_DEPTH, mono.max_recursion_depth);
+
+    // Stack should be empty
+    try testing.expectEqual(@as(usize, 0), mono.specialization_stack.items.len);
+}
+
+test "monomorphizer: polymorphic recursion detection" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const func_ident = base.Ident.Idx{
+        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+        .idx = 42,
+    };
+
+    // Empty stack - no recursion
+    const key1 = SpecializationKey{ .original_ident = func_ident, .type_hash = 100 };
+    try testing.expect(!mono.detectPolymorphicRecursion(key1));
+
+    // Add same function with different type hashes to stack
+    try mono.specialization_stack.append(allocator, .{ .original_ident = func_ident, .type_hash = 200 });
+    try mono.specialization_stack.append(allocator, .{ .original_ident = func_ident, .type_hash = 300 });
+    try mono.specialization_stack.append(allocator, .{ .original_ident = func_ident, .type_hash = 400 });
+
+    // Now should detect polymorphic recursion
+    try testing.expect(mono.detectPolymorphicRecursion(key1));
+
+    // Different function should not trigger detection
+    const other_ident = base.Ident.Idx{
+        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+        .idx = 99,
+    };
+    const other_key = SpecializationKey{ .original_ident = other_ident, .type_hash = 100 };
+    try testing.expect(!mono.detectPolymorphicRecursion(other_key));
+}
+
+test "monomorphizer: process empty pending" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Processing empty pending should work without error
+    try mono.processPendingSpecializations();
+
+    try testing.expectEqual(@as(usize, 0), mono.getSpecializationCount());
+}
