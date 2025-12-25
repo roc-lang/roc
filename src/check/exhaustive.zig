@@ -98,7 +98,7 @@ pub const Pattern = union(enum) {
                     // Check if the type is empty (uninhabited)
                     return !isTypeEmpty(type_store, type_var);
                 }
-                // Unknown type - assume inhabited
+                // TODO: Track type info for all wildcards so we can check inhabitedness.
                 return true;
             },
 
@@ -259,10 +259,9 @@ pub const Literal = union(enum) {
             .byte => |aby| aby == b.byte,
             .float => |af| af == b.float,
             .decimal => |ad| ad == b.decimal,
-            // Compare indices directly. Note: since StringLiteral.Store doesn't
-            // deduplicate, different indices could represent the same string.
-            // This means some redundant patterns may not be detected, but we
-            // won't produce false positives.
+            // TODO: StringLiteral.Store doesn't deduplicate, so different indices
+            // could represent the same string. We should compare the actual string
+            // contents to properly detect redundant string patterns.
             .str => |as| as == b.str,
         };
     }
@@ -617,8 +616,8 @@ pub const ReifiedRows = struct {
     /// The overall region of the match expression
     overall_region: Region,
     /// True if any constructor patterns couldn't be fully resolved
-    /// (e.g., polymorphic types where the union structure isn't known)
-    /// When true, redundancy checking should be skipped to avoid false positives
+    /// (e.g., polymorphic types where the union structure isn't known).
+    /// TODO: We should handle polymorphic types properly instead of skipping checks.
     has_unresolved_ctor: bool,
 };
 
@@ -654,10 +653,9 @@ pub fn reifyPattern(
                 };
 
                 if (is_unresolved and arg != .anything) {
-                    // Arg type is polymorphic but pattern expects something specific.
-                    // We can't properly reify the nested pattern, so treat this
-                    // argument as 'anything'. But we KEEP the outer constructor
-                    // structure - we don't return 'anything' for the whole pattern.
+                    // TODO: Arg type is polymorphic but pattern expects something specific.
+                    // We should properly reify nested patterns for polymorphic types
+                    // instead of falling back to 'anything'.
                     args[i] = .{ .anything = null };
                 } else {
                     args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
@@ -678,8 +676,7 @@ pub fn reifyPattern(
             switch (union_result) {
                 .success => |union_info| {
                     const tag_id = findTagId(union_info, c.tag_name) orelse {
-                        // Tag not found - this can happen with open unions
-                        // Treat as anything for exhaustiveness purposes
+                        // TODO: Handle open unions properly instead of treating as anything.
                         return .{ .anything = null };
                     };
 
@@ -697,10 +694,9 @@ pub fn reifyPattern(
                         };
 
                         if (is_unresolved and arg != .anything) {
-                            // Arg type is polymorphic but pattern expects something specific.
-                            // We can't properly reify the nested pattern, so treat this
-                            // argument as 'anything'. But we KEEP the outer constructor
-                            // structure - we don't return 'anything' for the whole pattern.
+                            // TODO: Arg type is polymorphic but pattern expects something specific.
+                            // We should properly reify nested patterns for polymorphic types
+                            // instead of falling back to 'anything'.
                             args[i] = .{ .anything = null };
                         } else {
                             args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
@@ -714,7 +710,7 @@ pub fn reifyPattern(
                     } };
                 },
                 .not_a_union => {
-                    // Type variable doesn't resolve to a union - treat as anything
+                    // TODO: Handle non-union types properly instead of treating as anything.
                     return .{ .anything = null };
                 },
             }
@@ -847,8 +843,7 @@ fn getUnionFromType(
         .recursion_var => |rec| {
             return getUnionFromType(allocator, type_store, ident_store, rec.structure);
         },
-        // Flex/rigid type variables: the type is polymorphic, we can't determine
-        // the full set of constructors, so treat as not a union for exhaustiveness
+        // TODO: Handle polymorphic types properly instead of treating as not a union.
         .flex, .rigid => return .not_a_union,
         // Structure might contain tag union or nominal type info
         .structure => |flat_type| {
@@ -948,10 +943,9 @@ fn isTypeEmpty(type_store: *TypeStore, type_var: Var) bool {
                 return false; // Has tags, not empty
             },
             .nominal_type => {
-                // Nominal types like Str have internal representations that might look
-                // empty but are actually inhabited. Don't follow backing vars here.
-                // For uninhabited type parameters (like Try(I64, [])), emptiness is
-                // propagated through ColumnTypes during exhaustiveness checking.
+                // TODO: Properly check emptiness for nominal types with type parameters.
+                // Currently emptiness for types like Try(I64, []) is propagated through
+                // ColumnTypes, but we should directly inspect type arguments here.
                 return false;
             },
             else => return false, // Other structures are not empty
@@ -968,20 +962,14 @@ fn isTypeEmpty(type_store: *TypeStore, type_var: Var) bool {
 }
 
 /// Check if an extension variable represents an open union.
-/// For exhaustiveness checking, we only consider a union truly "open" if:
-/// - It has a rigid type variable (explicit polymorphism from annotation)
-/// - It has been unified with a non-empty tag extension
-/// A plain flex variable (unconstrained) is treated as closed because nothing
-/// has required additional tags to exist.
+/// TODO: Properly handle flex vs rigid extension semantics for exhaustiveness.
+/// Currently rigid vars are treated as open, flex vars as closed.
 fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
     const resolved = type_store.resolveVar(ext);
     const content = resolved.desc.content;
 
     return switch (content) {
-        // Rigid vars are explicitly polymorphic - the union is truly open
         .rigid => true,
-        // Flex vars that are unconstrained mean "could have more, but nothing required any"
-        // For exhaustiveness, treat as closed since we matched all known tags
         .flex => false,
         // Empty tag union means it's closed
         .structure => |flat_type| switch (flat_type) {
@@ -1050,12 +1038,11 @@ fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const
                 const backing_var = type_store.getNominalBackingVar(nominal);
                 const backing_args = getCtorArgTypes(type_store, backing_var, tag_id);
 
-                // If the backing args are rigid/flex (type params), substitute with nom_args
+                // TODO: Properly substitute type parameters instead of this heuristic.
                 if (backing_args.len == 1 and nom_args.len > 0) {
                     const first_arg_resolved = type_store.resolveVar(backing_args[0]);
                     switch (first_arg_resolved.desc.content) {
                         .rigid, .flex => {
-                            // Single arg is a type param - use first nom_arg as best guess
                             return nom_args[0..1];
                         },
                         else => {},
@@ -1765,8 +1752,7 @@ pub fn isUseful(
                 },
 
                 .ctors => |ctor_info| {
-                    // If the union has a flex extension, wildcards are always useful
-                    // because the type might have more tags that weren't constrained yet
+                    // TODO: Properly handle flex extensions instead of assuming wildcards useful.
                     if (ctor_info.union_info.has_flex_extension) {
                         return true;
                     }
@@ -2059,7 +2045,7 @@ pub fn checkMatch(
         scrutinee_type,
     );
 
-    // If scrutinee type is unresolved, skip checking entirely
+    // TODO: Handle unresolved scrutinee types properly instead of skipping checks.
     const skip_checks = scrutinee_unresolved or reified.has_unresolved_ctor;
 
     // Create initial column types for exhaustiveness checking
@@ -2070,9 +2056,9 @@ pub fn checkMatch(
         .type_store = type_store,
     };
 
-    // Phase 3: Check redundancy (skip if patterns couldn't be fully resolved)
-    // When we have unresolved constructors (e.g., polymorphic types), all patterns
-    // become wildcards which would incorrectly flag later patterns as redundant.
+    // Phase 3: Check redundancy
+    // TODO: Handle unresolved constructors properly instead of skipping redundancy checks.
+    // Currently polymorphic types cause patterns to become wildcards.
     const redundancy = if (skip_checks)
         RedundancyResult{
             .non_redundant_rows = reified.rows,
@@ -2088,7 +2074,7 @@ pub fn checkMatch(
         );
 
     // Phase 4: Check exhaustiveness on non-redundant patterns
-    // Also skip if patterns couldn't be resolved (can't determine exhaustiveness)
+    // TODO: Handle unresolved patterns properly instead of skipping exhaustiveness checks.
     const missing: []const Pattern = if (skip_checks)
         &[_]Pattern{}
     else blk: {
