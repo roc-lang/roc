@@ -35,6 +35,36 @@ const TypeStore = types.Store;
 const Var = types.Var;
 const Content = types.Content;
 
+/// 1-based index for user-facing error messages.
+/// Provides ordinal formatting like "1st", "2nd", "3rd", etc.
+pub const HumanIndex = struct {
+    value: u32, // 0-based internally
+
+    pub fn fromZeroBased(index: u32) HumanIndex {
+        return .{ .value = index };
+    }
+
+    /// Returns the 1-based index number
+    pub fn toHuman(self: HumanIndex) u32 {
+        return self.value + 1;
+    }
+
+    /// Returns ordinal string: "1st", "2nd", "3rd", "4th", etc.
+    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) ![]const u8 {
+        const n = self.toHuman();
+        const suffix = switch (n % 100) {
+            11, 12, 13 => "th",
+            else => switch (n % 10) {
+                1 => "st",
+                2 => "nd",
+                3 => "rd",
+                else => "th",
+            },
+        };
+        return std.fmt.allocPrint(allocator, "{d}{s}", .{ n, suffix });
+    }
+};
+
 /// A pattern for exhaustiveness checking.
 /// This is a simplified representation focused only on what matters for coverage analysis.
 pub const Pattern = union(enum) {
@@ -196,11 +226,16 @@ pub const CtorName = union(enum) {
 };
 
 /// How to render a union in error messages
-pub const RenderAs = enum {
+pub const RenderAs = union(enum) {
+    /// Tag union
     tag,
+    /// Opaque type
     opaque_type,
-    record,
+    /// Record with field names in order
+    record: []const Ident.Idx,
+    /// Tuple
     tuple,
+    /// Guard synthetic constructor
     guard,
 };
 
@@ -267,6 +302,14 @@ pub const Literal = union(enum) {
     }
 };
 
+/// Severity of exhaustiveness errors
+pub const Severity = enum {
+    /// Will crash at runtime if reached
+    runtime_error,
+    /// Suspicious but won't crash
+    warning,
+};
+
 /// Errors detected during exhaustiveness checking
 pub const Error = union(enum) {
     /// Match expression doesn't cover all cases
@@ -275,6 +318,21 @@ pub const Error = union(enum) {
     redundant: Redundant,
     /// A pattern can never match (e.g., matching uninhabited type)
     unmatchable: Unmatchable,
+
+    pub fn severity(self: Error) Severity {
+        return switch (self) {
+            .incomplete => .runtime_error,
+            .redundant, .unmatchable => .warning,
+        };
+    }
+
+    pub fn region(self: Error) Region {
+        return switch (self) {
+            .incomplete => |e| e.region,
+            .redundant => |e| e.branch_region,
+            .unmatchable => |e| e.branch_region,
+        };
+    }
 
     pub const Incomplete = struct {
         region: Region,
@@ -285,13 +343,13 @@ pub const Error = union(enum) {
     pub const Redundant = struct {
         overall_region: Region,
         branch_region: Region,
-        index: u32, // 0-based branch index
+        index: HumanIndex,
     };
 
     pub const Unmatchable = struct {
         overall_region: Region,
         branch_region: Region,
-        index: u32,
+        index: HumanIndex,
     };
 };
 
@@ -425,9 +483,11 @@ pub fn convertPattern(
         .record_destructure => |p| {
             const destructs = store.sliceRecordDestructs(p.destructs);
             const args = try allocator.alloc(UnresolvedPattern, destructs.len);
+            const field_names = try allocator.alloc(Ident.Idx, destructs.len);
 
             for (destructs, 0..) |destruct_idx, i| {
                 const destruct = store.getRecordDestruct(destruct_idx);
+                field_names[i] = destruct.label;
                 const sub_pattern_idx = destruct.kind.toPatternIdx();
                 args[i] = try convertPattern(allocator, store, sub_pattern_idx);
             }
@@ -442,7 +502,7 @@ pub fn convertPattern(
             return .{ .known_ctor = .{
                 .union_info = .{
                     .alternatives = alternatives,
-                    .render_as = .record,
+                    .render_as = .{ .record = field_names },
                 },
                 .tag_id = .only,
                 .args = args,
@@ -2100,11 +2160,12 @@ pub fn checkMatch(
 pub fn formatPattern(
     allocator: std.mem.Allocator,
     ident_store: *const Ident.Store,
+    string_store: *const StringLiteral.Store,
     pattern: Pattern,
 ) error{OutOfMemory}![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
 
-    try formatPatternInto(&buf, allocator, ident_store, pattern);
+    try formatPatternInto(&buf, allocator, ident_store, string_store, pattern);
 
     return try buf.toOwnedSlice(allocator);
 }
@@ -2113,6 +2174,7 @@ fn formatPatternInto(
     buf: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     ident_store: *const Ident.Store,
+    string_store: *const StringLiteral.Store,
     pattern: Pattern,
 ) error{OutOfMemory}!void {
     switch (pattern) {
@@ -2135,36 +2197,131 @@ fn formatPatternInto(
                 const str = std.fmt.bufPrint(&tmp, "{d}", .{b}) catch "<byte>";
                 try buf.appendSlice(allocator, str);
             },
-            .float, .decimal => try buf.appendSlice(allocator, "<number>"),
-            .str => try buf.appendSlice(allocator, "\"...\""),
+            .float => |f| {
+                const float_val: f64 = @bitCast(f);
+                var tmp: [32]u8 = undefined;
+                const str = std.fmt.bufPrint(&tmp, "{d}", .{float_val}) catch "<float>";
+                try buf.appendSlice(allocator, str);
+            },
+            .decimal => |d| {
+                var tmp: [40]u8 = undefined;
+                const str = std.fmt.bufPrint(&tmp, "{d}", .{d}) catch "<decimal>";
+                try buf.appendSlice(allocator, str);
+            },
+            .str => |idx| {
+                try buf.appendSlice(allocator, "\"");
+                const text = string_store.get(idx);
+                try buf.appendSlice(allocator, text);
+                try buf.appendSlice(allocator, "\"");
+            },
         },
 
         .ctor => |c| {
-            // Get tag name
-            const name = switch (c.union_info.alternatives[c.tag_id.toInt()].name) {
-                .tag => |t| if (t == Ident.Idx.NONE) "#Open" else ident_store.getText(t),
-                .opaque_type => |o| ident_store.getText(o),
-            };
-            try buf.appendSlice(allocator, name);
+            switch (c.union_info.render_as) {
+                .tag => {
+                    const alt = c.union_info.alternatives[c.tag_id.toInt()];
+                    switch (alt.name) {
+                        .tag => |t| {
+                            if (t == Ident.Idx.NONE) {
+                                // This is the #Open synthetic tag - show as wildcard
+                                try buf.appendSlice(allocator, "_");
+                                return;
+                            }
+                            try buf.appendSlice(allocator, ident_store.getText(t));
+                        },
+                        .opaque_type => |o| {
+                            try buf.appendSlice(allocator, ident_store.getText(o));
+                        },
+                    }
+                    // Add arguments
+                    if (c.args.len > 0) {
+                        for (c.args) |arg| {
+                            try buf.appendSlice(allocator, " ");
+                            try formatPatternInto(buf, allocator, ident_store, string_store, arg);
+                        }
+                    }
+                },
 
-            // Add arguments if any
-            if (c.args.len > 0) {
-                try buf.appendSlice(allocator, " ");
-                for (c.args, 0..) |arg, i| {
-                    if (i > 0) try buf.appendSlice(allocator, " ");
-                    try formatPatternInto(buf, allocator, ident_store, arg);
-                }
+                .record => |field_names| {
+                    try buf.appendSlice(allocator, "{ ");
+                    for (c.args, 0..) |arg, i| {
+                        if (i > 0) try buf.appendSlice(allocator, ", ");
+                        if (i < field_names.len) {
+                            try buf.appendSlice(allocator, ident_store.getText(field_names[i]));
+                        } else {
+                            try buf.appendSlice(allocator, "_");
+                        }
+                        try buf.appendSlice(allocator, ": ");
+                        try formatPatternInto(buf, allocator, ident_store, string_store, arg);
+                    }
+                    try buf.appendSlice(allocator, " }");
+                },
+
+                .tuple => {
+                    try buf.appendSlice(allocator, "(");
+                    for (c.args, 0..) |arg, i| {
+                        if (i > 0) try buf.appendSlice(allocator, ", ");
+                        try formatPatternInto(buf, allocator, ident_store, string_store, arg);
+                    }
+                    try buf.appendSlice(allocator, ")");
+                },
+
+                .guard => {
+                    // Unwrap the guard - show the actual pattern (second arg)
+                    if (c.args.len >= 2) {
+                        try formatPatternInto(buf, allocator, ident_store, string_store, c.args[1]);
+                        try buf.appendSlice(allocator, " (with guard)");
+                    }
+                },
+
+                .opaque_type => {
+                    const alt = c.union_info.alternatives[c.tag_id.toInt()];
+                    switch (alt.name) {
+                        .opaque_type => |o| {
+                            try buf.appendSlice(allocator, ident_store.getText(o));
+                        },
+                        .tag => |t| {
+                            try buf.appendSlice(allocator, ident_store.getText(t));
+                        },
+                    }
+                    if (c.args.len > 0) {
+                        try buf.appendSlice(allocator, " ");
+                        try formatPatternInto(buf, allocator, ident_store, string_store, c.args[0]);
+                    }
+                },
             }
         },
 
         .list => |l| {
             try buf.appendSlice(allocator, "[");
-            for (l.elements, 0..) |elem, i| {
-                if (i > 0) try buf.appendSlice(allocator, ", ");
-                try formatPatternInto(buf, allocator, ident_store, elem);
-            }
-            if (l.arity == .slice) {
-                try buf.appendSlice(allocator, ", ..");
+            switch (l.arity) {
+                .exact => {
+                    for (l.elements, 0..) |elem, i| {
+                        if (i > 0) try buf.appendSlice(allocator, ", ");
+                        try formatPatternInto(buf, allocator, ident_store, string_store, elem);
+                    }
+                },
+                .slice => |s| {
+                    // Format as [prefix.., suffix]
+                    for (0..s.prefix) |i| {
+                        if (i > 0) try buf.appendSlice(allocator, ", ");
+                        try formatPatternInto(buf, allocator, ident_store, string_store, l.elements[i]);
+                    }
+                    if (s.prefix > 0 and s.suffix > 0) {
+                        try buf.appendSlice(allocator, ", .., ");
+                    } else if (s.prefix > 0) {
+                        try buf.appendSlice(allocator, ", ..");
+                    } else if (s.suffix > 0) {
+                        try buf.appendSlice(allocator, ".., ");
+                    } else {
+                        try buf.appendSlice(allocator, "..");
+                    }
+                    const suffix_start = l.elements.len - s.suffix;
+                    for (suffix_start..l.elements.len) |i| {
+                        if (i > suffix_start) try buf.appendSlice(allocator, ", ");
+                        try formatPatternInto(buf, allocator, ident_store, string_store, l.elements[i]);
+                    }
+                },
             }
             try buf.appendSlice(allocator, "]");
         },

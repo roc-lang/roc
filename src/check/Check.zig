@@ -4624,7 +4624,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             // Format missing patterns and store in snapshot store for lifecycle management
             var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
             for (result.missing_patterns) |pattern| {
-                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, pattern);
+                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
                 const idx = try self.snapshots.storeExtraString(formatted);
                 try missing_indices.append(self.cir.gpa, idx);
             }
