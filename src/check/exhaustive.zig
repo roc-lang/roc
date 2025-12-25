@@ -2093,7 +2093,6 @@ pub fn checkMatch(
 
     // Phase 3: Check redundancy
     // TODO: Handle unresolved constructors properly instead of skipping redundancy checks.
-    // Currently polymorphic types cause patterns to become wildcards.
     const redundancy = if (skip_checks)
         RedundancyResult{
             .non_redundant_rows = reified.rows,
