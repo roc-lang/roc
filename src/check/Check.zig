@@ -5738,7 +5738,7 @@ fn reportConstraintError(
 ) !void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
-        .missing_method => |dispatcher_type| problem.Problem{ .static_dispach = .{
+        .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{
             .dispatcher_does_not_impl_method = .{
                 .dispatcher_var = dispatcher_var,
                 .dispatcher_snapshot = snapshot,
@@ -5748,7 +5748,7 @@ fn reportConstraintError(
                 .origin = constraint.origin,
             },
         } },
-        .not_nominal => problem.Problem{ .static_dispach = .{
+        .not_nominal => problem.Problem{ .static_dispatch = .{
             .dispatcher_not_nominal = .{
                 .dispatcher_var = dispatcher_var,
                 .dispatcher_snapshot = snapshot,
@@ -5770,7 +5770,7 @@ fn reportEqualityError(
     env: *Env,
 ) !void {
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
-    const equality_problem = problem.Problem{ .static_dispach = .{
+    const equality_problem = problem.Problem{ .static_dispatch = .{
         .type_does_not_support_equality = .{
             .dispatcher_var = dispatcher_var,
             .dispatcher_snapshot = snapshot,

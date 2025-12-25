@@ -43,7 +43,7 @@ pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     fn_call_arity_mismatch: FnCallArityMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
-    static_dispach: StaticDispatch,
+    static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     number_does_not_fit: NumberDoesNotFit,
@@ -485,7 +485,7 @@ pub const ReportBuilder = struct {
             .nominal_type_resolution_failed => |data| {
                 return self.buildNominalTypeResolutionFailed(data);
             },
-            .static_dispach => |detail| {
+            .static_dispatch => |detail| {
                 switch (detail) {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
