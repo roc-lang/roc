@@ -1,26 +1,39 @@
 //! Lambda Lifter
 //!
-//! Converts inline closures to top-level function definitions.
-//! Each closure becomes a function that takes its captures as an extra parameter.
+//! Extracts closure bodies to top-level function definitions.
+//! Works in conjunction with `ClosureTransformer` to implement Cor-style defunctionalization.
+//!
+//! ## Pipeline Overview
+//!
+//! 1. `ClosureTransformer` transforms closures to tags with capture records
+//! 2. `LambdaLifter` (this module) extracts the lambda bodies to top-level functions
+//! 3. Dispatch at call sites invokes these lifted functions
 //!
 //! ## Example
 //!
-//! Before:
+//! Before transformation:
 //! ```roc
-//! make_adder = |y| |z| x + y + z
+//! make_adder = |x| |y| x + y
+//! add5 = make_adder(5)
+//! result = add5(10)
 //! ```
 //!
-//! After:
+//! After transformation:
 //! ```roc
-//! fn closure_1(z: Dec, captures: { y: Dec }) -> Dec {
-//!     x + captures.y + z
+//! closure_make_adder_1 = |y, captures| captures.x + y
+//!
+//! make_adder = |x| Closure_make_adder_1({ x: x })
+//! add5 = make_adder(5)
+//! result = match add5 {
+//!     Closure_make_adder_1(captures) => closure_make_adder_1(10, captures)
 //! }
-//!
-//! make_adder = |y| Closure_1({ y: y })
 //! ```
 //!
-//! This is Phase 3 of the closure transformation migration, implementing
-//! the Cor-style lambda lifting approach.
+//! ## Implementation Notes
+//!
+//! - Each closure's lambda body becomes a top-level function with an extra `captures` parameter
+//! - Captured variable references are replaced with `captures.field_name` accesses
+//! - Pure lambdas (no captures) can also be lifted when they appear in mixed closure contexts
 
 const std = @import("std");
 const base = @import("base");
@@ -66,15 +79,25 @@ closure_to_function: std.AutoHashMap(Expr.Idx, base.Ident.Idx),
 /// Used during body transformation to replace captures lookups.
 capture_replacements: std.AutoHashMap(CIR.Pattern.Idx, Expr.Idx),
 
+/// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
+/// This is a reference to the ClosureTransformer's top_level_patterns set.
+top_level_patterns: *const std.AutoHashMap(CIR.Pattern.Idx, void),
+
 /// Initialize the lambda lifter
-pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
+pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv, top_level_patterns: *const std.AutoHashMap(CIR.Pattern.Idx, void)) Self {
     return .{
         .allocator = allocator,
         .module_env = module_env,
         .lifted_functions = std.ArrayList(LiftedFunction).empty,
         .closure_to_function = std.AutoHashMap(Expr.Idx, base.Ident.Idx).init(allocator),
         .capture_replacements = std.AutoHashMap(CIR.Pattern.Idx, Expr.Idx).init(allocator),
+        .top_level_patterns = top_level_patterns,
     };
+}
+
+/// Check if a pattern is a top-level definition
+fn isTopLevel(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    return self.top_level_patterns.contains(pattern_idx);
 }
 
 /// Free resources
@@ -237,6 +260,7 @@ fn buildCapturesPattern(
 ///
 /// For each captured variable, create a record field access expression
 /// that will replace lookups to that variable in the transformed body.
+/// Top-level patterns are skipped since they're always in scope and not in the captures record.
 fn buildCaptureReplacements(
     self: *Self,
     captures: []const CIR.Expr.Capture.Idx,
@@ -249,6 +273,11 @@ fn buildCaptureReplacements(
 
     for (captures) |capture_idx| {
         const capture = self.module_env.store.getCapture(capture_idx);
+
+        // Skip top-level patterns - they don't need to be captured and are not in the captures record
+        if (self.isTopLevel(capture.pattern_idx)) {
+            continue;
+        }
 
         // Create a field access: captures.field_name
         const field_access = try self.module_env.store.addExpr(Expr{
@@ -688,7 +717,11 @@ test "LambdaLifter: init and deinit" {
         allocator.destroy(module_env);
     }
 
-    var lifter = Self.init(allocator, module_env);
+    // Create an empty top-level patterns set for testing
+    var top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator);
+    defer top_level_patterns.deinit();
+
+    var lifter = Self.init(allocator, module_env, &top_level_patterns);
     defer lifter.deinit();
 
     try testing.expectEqual(@as(usize, 0), lifter.lifted_functions.items.len);
@@ -704,7 +737,11 @@ test "LambdaLifter: getLiftedFunctions returns empty on fresh lifter" {
         allocator.destroy(module_env);
     }
 
-    var lifter = Self.init(allocator, module_env);
+    // Create an empty top-level patterns set for testing
+    var top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator);
+    defer top_level_patterns.deinit();
+
+    var lifter = Self.init(allocator, module_env, &top_level_patterns);
     defer lifter.deinit();
 
     const functions = lifter.getLiftedFunctions();

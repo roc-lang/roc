@@ -18,7 +18,6 @@ closure_f_1 = |x, captures| x + captures.offset
 
 closure_f_2 = |x| x * 2
 
-func : Dec -> []
 func = |offset| {
 	condition = True
 	f = if (condition) Closure_f_1({ offset: offset }) else Closure_f_2({})
@@ -28,7 +27,6 @@ func = |offset| {
 	}
 }
 
-result : []
 result = func(1)
 ~~~
 # FORMATTED

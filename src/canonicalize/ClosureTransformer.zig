@@ -1,38 +1,52 @@
 //! Closure Transformer
 //!
 //! Transforms closures with captures into tagged values with explicit capture records.
-//! This is the first step of lambda set specialization following the Cor approach.
+//! This implements the Cor-style defunctionalization approach for lambda sets.
+//!
+//! ## Pipeline Overview
+//!
+//! The closure transformation works in conjunction with `LambdaLifter`:
+//!
+//! 1. **ClosureTransformer** (this module):
+//!    - Transforms closures to tags with capture records (`Closure_name_N({ ... })`)
+//!    - Tracks lambda sets for variables that hold closures
+//!    - Generates dispatch match expressions at call sites
+//!
+//! 2. **LambdaLifter** (see `LambdaLifter.zig`):
+//!    - Extracts closure bodies to top-level function definitions
+//!    - Transforms captured variable references to `captures.field_name` accesses
+//!    - Dispatch calls these lifted functions with the captures record
 //!
 //! ## Transformation Example
 //!
 //! Input:
 //! ```roc
-//! {
-//!     x = 42
-//!     addX = |y| x + y
-//!     addX(10)
-//! }
+//! x = 42
+//! addX = |y| x + y
+//! result = addX(10)
 //! ```
 //!
-//! Output:
+//! After ClosureTransformer + LambdaLifter:
 //! ```roc
-//! {
-//!     x = 42
-//!     addX = Closure_addX_1({ x: x })
-//!     match addX {
-//!         Closure_addX_1({ x }) => {
-//!             y = 10
-//!             (x + y)
-//!         },
-//!     }
+//! closure_addX_1 = |y, captures| captures.x + y
+//!
+//! x = 42
+//! addX = Closure_addX_1({ x: x })
+//! result = match addX {
+//!     Closure_addX_1(captures) => closure_addX_1(10, captures)
 //! }
 //! ```
 //!
 //! ## Implementation Notes
 //!
-//! - Closures become tags with capture records (using `Closure_` prefix to avoid clashing with userspace tags)
-//! - Call sites to closures become inline match expressions that dispatch based on the lambda set
-//! - Pure lambdas (no captures) are left unchanged - they don't need transformation
+//! - Closures become tags with capture records (using `Closure_` prefix to avoid name clashes)
+//! - Call sites to closures become match expressions that dispatch based on the lambda set
+//! - Pure lambdas (no captures) in mixed contexts are wrapped as closure tags with empty records
+//! - Top-level patterns are tracked to avoid unnecessary captures (they're always in scope)
+//!
+//! ## TODO (Bugs to Fix)
+//!
+//! - BUG: Type-driven dispatch using lambda sets from the type system is incomplete
 
 const std = @import("std");
 const base = @import("base");
@@ -97,14 +111,6 @@ pub const LambdaSet = struct {
     }
 };
 
-/// Information for generating a dispatch function
-pub const DispatchFunction = struct {
-    /// Name of the dispatch function (e.g., `call_addX`)
-    name: base.Ident.Idx,
-    /// The closures that can reach this call site
-    closures: std.ArrayList(ClosureInfo),
-};
-
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
 
@@ -129,9 +135,6 @@ pattern_lambda_return_sets: std.AutoHashMap(CIR.Pattern.Idx, LambdaSet),
 /// Set of top-level pattern indices (these don't need to be captured since they're always in scope)
 top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 
-/// List of dispatch functions to generate
-dispatch_functions: std.ArrayList(DispatchFunction),
-
 /// Initialize the transformer
 pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
     return .{
@@ -143,7 +146,6 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .lambda_return_sets = std.AutoHashMap(Expr.Idx, LambdaSet).init(allocator),
         .pattern_lambda_return_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
-        .dispatch_functions = std.ArrayList(DispatchFunction).empty,
     };
 }
 
@@ -190,12 +192,6 @@ pub fn deinit(self: *Self) void {
 
     // Free top-level patterns set
     self.top_level_patterns.deinit();
-
-    // Free dispatch function closure lists
-    for (self.dispatch_functions.items) |*df| {
-        df.closures.deinit(self.allocator);
-    }
-    self.dispatch_functions.deinit(self.allocator);
 }
 
 /// Generate a unique tag name for a closure
@@ -1256,12 +1252,40 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         },
         .e_match => |match| {
             const new_cond = try self.transformExpr(match.cond);
-            // Note: match branches would need deeper transformation for closures in branches
-            // For now, pass through as-is
+
+            // Transform all branch bodies and guards
+            const branch_indices = self.module_env.store.sliceMatchBranches(match.branches);
+            const branch_start = self.module_env.store.scratchMatchBranchTop();
+
+            for (branch_indices) |branch_idx| {
+                const branch = self.module_env.store.getMatchBranch(branch_idx);
+
+                // Transform the branch value (body)
+                const new_value = try self.transformExpr(branch.value);
+
+                // Transform the guard if present
+                const new_guard = if (branch.guard) |guard|
+                    try self.transformExpr(guard)
+                else
+                    null;
+
+                // Create new branch with transformed value and guard
+                const new_branch = Expr.Match.Branch{
+                    .patterns = branch.patterns,
+                    .value = new_value,
+                    .guard = new_guard,
+                    .redundant = branch.redundant,
+                };
+                const new_branch_idx = try self.module_env.store.addMatchBranch(new_branch, base.Region.zero());
+                try self.module_env.store.addScratchMatchBranch(new_branch_idx);
+            }
+
+            const new_branches_span = try self.module_env.store.matchBranchSpanFrom(branch_start);
+
             return try self.module_env.store.addExpr(Expr{
                 .e_match = .{
                     .cond = new_cond,
-                    .branches = match.branches,
+                    .branches = new_branches_span,
                     .exhaustive = match.exhaustive,
                 },
             }, base.Region.zero());

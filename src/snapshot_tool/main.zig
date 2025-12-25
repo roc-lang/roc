@@ -1467,7 +1467,7 @@ fn processSnapshotContent(
             transformer.pattern_lambda_sets.count() > 0;
 
         if (has_any_closures) {
-            lifter = LambdaLifter.init(allocator, can_ir);
+            lifter = LambdaLifter.init(allocator, can_ir, &transformer.top_level_patterns);
 
             // Iterate over all transformed closures (closures with captures)
             var closure_iter = transformer.closures.iterator();
@@ -2750,10 +2750,11 @@ fn getDefaultedTypeStringWithSeen(
 ) ![]const u8 {
     const resolved = can_ir.types.resolveVar(type_var);
 
-    // Check for cycle
+    // Check for cycle - use "_" (type wildcard) for cyclic references
+    // This is valid Roc syntax, unlike "..." which was causing parse errors
     for (seen.items) |seen_var| {
         if (seen_var == resolved.var_) {
-            return allocator.dupe(u8, "...");
+            return allocator.dupe(u8, "_");
         }
     }
 
@@ -3238,6 +3239,7 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     }
 
     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+    const has_lifted_functions = lifted_functions.len > 0;
     for (defs) |def_idx| {
         const def = can_ir.store.getDef(def_idx);
 
@@ -3247,24 +3249,35 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
         defer output.gpa.free(pattern_output);
 
-        // Get the type from the expression (not the pattern) to reflect closure transformations
-        const expr_type = try computeTransformedExprType(can_ir, def.expr);
-        const type_str = try getDefaultedTypeString(output.gpa, can_ir, expr_type);
-        defer output.gpa.free(type_str);
-
         // Emit the expression (right side of =)
         emitter.reset();
         try emitter.emitExpr(def.expr);
 
-        // Build the mono source: name : Type\nname = expr\n (separate lines for annotation and definition)
-        try mono_buffer.appendSlice(output.gpa, pattern_output);
-        try mono_buffer.appendSlice(output.gpa, " : ");
-        try mono_buffer.appendSlice(output.gpa, type_str);
-        try mono_buffer.appendSlice(output.gpa, "\n");
-        try mono_buffer.appendSlice(output.gpa, pattern_output);
-        try mono_buffer.appendSlice(output.gpa, " = ");
-        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
-        try mono_buffer.appendSlice(output.gpa, "\n\n");
+        // For closure transforms, skip type annotations since computing them correctly
+        // is complex (transformed expressions have new indices without proper type vars).
+        // For non-closure transforms, emit type annotations using the pattern's type.
+        if (has_lifted_functions) {
+            // Skip type annotations - just emit: name = expr
+            try mono_buffer.appendSlice(output.gpa, pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " = ");
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            try mono_buffer.appendSlice(output.gpa, "\n\n");
+        } else {
+            // Use the pattern's type from type checking (not computed from expression)
+            const pattern_type = ModuleEnv.varFrom(def.pattern);
+            const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
+            defer output.gpa.free(type_str);
+
+            // Build the mono source: name : Type\nname = expr\n
+            try mono_buffer.appendSlice(output.gpa, pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " : ");
+            try mono_buffer.appendSlice(output.gpa, type_str);
+            try mono_buffer.appendSlice(output.gpa, "\n");
+            try mono_buffer.appendSlice(output.gpa, pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " = ");
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            try mono_buffer.appendSlice(output.gpa, "\n\n");
+        }
     }
 
     // Trim trailing newline (we added one too many at the end)
@@ -3272,19 +3285,11 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
         _ = mono_buffer.pop();
     }
 
-    // Validate the generated MONO output - fail if it's not valid Roc code
-    // Skip type validation when there are lifted functions because the dispatch
-    // generates calls to functions that aren't in the type-checked definitions.
-    // The structure is correct, but the type system can't verify it.
-    const has_lifted_functions = lifted_functions.len > 0;
-    if (!has_lifted_functions and !validateMonoOutput(output.gpa, mono_buffer.items, source_path, config)) {
+    // Validate the MONO output for both non-closure and closure transforms
+    if (!validateMonoOutput(output.gpa, mono_buffer.items, source_path, config)) {
         return error.MonoValidationFailed;
     }
-
-    // Validate the MONO output is properly formatted
-    // Skip formatting validation when there are lifted functions as the generated
-    // format may differ slightly from what the formatter produces
-    if (!has_lifted_functions and !validateMonoFormatting(output.gpa, mono_buffer.items, source_path)) {
+    if (!validateMonoFormatting(output.gpa, mono_buffer.items, source_path)) {
         return error.MonoFormattingFailed;
     }
 

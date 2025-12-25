@@ -15,7 +15,6 @@ result = func(42)
 ~~~roc
 closure_add_x_1 = |y, captures| captures.x + y
 
-func : Dec -> []
 func = |x| {
 	add_x = Closure_add_x_1({ x: x })
 	match add_x {
@@ -23,7 +22,6 @@ func = |x| {
 	}
 }
 
-result : []
 result = func(42)
 ~~~
 # FORMATTED

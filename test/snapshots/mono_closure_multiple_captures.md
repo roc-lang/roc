@@ -15,7 +15,6 @@ result = func(1, 2)
 ~~~roc
 closure_add_ab_1 = |x, captures| captures.a + captures.b + x
 
-func : Dec, Dec -> Try(_c, [InvalidNumeral(Str)]) where [_d.from_numeral : Numeral -> Try(_e, [InvalidNumeral(Str)])]
 func = |a, b| {
 	add_ab = Closure_add_ab_1({ a, b })
 	match add_ab {
@@ -23,7 +22,6 @@ func = |a, b| {
 	}
 }
 
-result : Try(c, [InvalidNumeral(Str)]) where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)])]
 result = func(1, 2)
 ~~~
 # FORMATTED

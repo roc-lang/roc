@@ -12,18 +12,14 @@ result = add_five(3)
 ~~~
 # MONO
 ~~~roc
-closure_make_adder_1 = |z, captures| captures.x + captures.y + z
+closure_make_adder_1 = |z, captures| x + captures.y + z
 
-x : ... -> [Closure_make_adder_1({ y : ... })]
 x = 10
 
-make_adder : ... -> [Closure_make_adder_1({ y : ... })]
 make_adder = |y| Closure_make_adder_1({ y: y })
 
-add_five : [Closure_make_adder_1({ y : ... -> [Closure_make_adder_1(...)] })]
 add_five = make_adder(5)
 
-result : [InvalidNumeral([Closure_make_adder_1({ y : ... -> ... })])]
 result = match add_five {
 	Closure_make_adder_1(captures) => closure_make_adder_1(3, captures)
 }
