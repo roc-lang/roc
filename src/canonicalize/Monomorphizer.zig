@@ -127,6 +127,18 @@ specialization_counter: u32,
 /// Current phase
 phase: Phase,
 
+/// Current recursion depth for detecting polymorphic recursion
+recursion_depth: u32,
+
+/// Maximum recursion depth before using fallback (fuel-based cutoff)
+max_recursion_depth: u32,
+
+/// Stack of functions currently being specialized (for recursion detection)
+specialization_stack: std.ArrayList(SpecializationKey),
+
+/// Default maximum recursion depth for polymorphic recursion
+pub const DEFAULT_MAX_RECURSION_DEPTH: u32 = 64;
+
 /// Initialize the monomorphizer
 pub fn init(
     allocator: std.mem.Allocator,
@@ -144,6 +156,9 @@ pub fn init(
         .in_progress = std.AutoHashMap(SpecializationKey, void).init(allocator),
         .specialization_counter = 0,
         .phase = .finding,
+        .recursion_depth = 0,
+        .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
+        .specialization_stack = std.ArrayList(SpecializationKey).empty,
     };
 }
 
@@ -160,6 +175,7 @@ pub fn deinit(self: *Self) void {
     self.specialized.deinit();
     self.specialization_names.deinit();
     self.in_progress.deinit();
+    self.specialization_stack.deinit(self.allocator);
 }
 
 /// Register a polymorphic function definition as a partial proc.
@@ -281,12 +297,33 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
         return;
     }
 
+    // Check if we've exceeded recursion depth (fuel-based cutoff for polymorphic recursion)
+    if (self.recursion_depth >= self.max_recursion_depth) {
+        // Too deep - this might be polymorphic recursion that would never terminate.
+        // In the future, we could use a boxed/dynamic fallback here.
+        // For now, we just stop specializing.
+        return;
+    }
+
+    // Check for polymorphic recursion: same function with growing type structure
+    if (self.detectPolymorphicRecursion(key)) {
+        // Detected polymorphic recursion pattern - stop to prevent infinite loop
+        return;
+    }
+
     // Get the partial proc
     const partial = self.partial_procs.get(pending.original_ident) orelse return;
 
-    // Mark as in progress
+    // Mark as in progress and track depth
     try self.in_progress.put(key, {});
-    defer _ = self.in_progress.remove(key);
+    try self.specialization_stack.append(self.allocator, key);
+    self.recursion_depth += 1;
+
+    defer {
+        _ = self.in_progress.remove(key);
+        _ = self.specialization_stack.pop();
+        self.recursion_depth -= 1;
+    }
 
     // Create the specialized name
     const specialized_ident = try self.createSpecializedName(
@@ -313,6 +350,25 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     };
 
     try self.specialized.put(key, specialized);
+}
+
+/// Detect polymorphic recursion patterns.
+/// Returns true if we detect the same function being specialized with increasingly
+/// complex types, which would indicate non-terminating monomorphization.
+fn detectPolymorphicRecursion(self: *const Self, new_key: SpecializationKey) bool {
+    // Look through the specialization stack for the same function
+    var same_function_count: u32 = 0;
+    for (self.specialization_stack.items) |stack_key| {
+        if (stack_key.original_ident == new_key.original_ident) {
+            same_function_count += 1;
+            // If we see the same function more than 3 times on the stack,
+            // and with different type hashes, it's likely polymorphic recursion
+            if (same_function_count >= 3 and stack_key.type_hash != new_key.type_hash) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /// Build type substitutions by comparing polymorphic type with concrete type.
