@@ -109,9 +109,11 @@ pub fn liftClosure(
             // Get captures
             const captures = self.module_env.store.sliceCaptures(closure.captures);
 
-            // Build captures parameter pattern (record destructure)
+            // Build a simple "captures" identifier pattern for the captures parameter
+            // This gives us `|arg, captures| captures.x + captures.y` instead of
+            // `|arg, { x, y }| { x, y }.x + { x, y }.y`
             const captures_pattern = if (captures.len > 0)
-                try self.buildCapturesPattern(captures)
+                try self.buildSimpleCapturesPattern()
             else
                 null;
 
@@ -142,6 +144,19 @@ pub fn liftClosure(
         },
         else => {}, // Not a closure, skip
     }
+}
+
+/// Build a simple "captures" identifier pattern for the captures parameter.
+/// This is cleaner than a record destructure pattern for the lifted function output.
+fn buildSimpleCapturesPattern(self: *Self) !CIR.Pattern.Idx {
+    // Create the "captures" identifier
+    const captures_ident = try self.module_env.insertIdent(base.Ident.for_text("captures"));
+
+    // Create an assign pattern for "captures"
+    return try self.module_env.store.addPattern(
+        Pattern{ .assign = .{ .ident = captures_ident } },
+        base.Region.zero(),
+    );
 }
 
 /// Build a record destructure pattern for the captures.

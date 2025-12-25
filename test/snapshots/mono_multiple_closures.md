@@ -14,6 +14,10 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
+# Lifted functions (Phase 4)
+# closure_add_x_1 = |a, captures| a + captures.x
+# closure_add_y_2 = |b, captures| b + captures.y
+
 func : Dec, Dec -> Dec
 func = |x, y| {
 	add_x = Closure_add_x_1({ x: x })

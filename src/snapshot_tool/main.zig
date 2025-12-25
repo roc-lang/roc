@@ -1394,6 +1394,14 @@ fn processSnapshotContent(
     // Run closure transformation for mono tests
     // This transforms closures to tags and generates dispatch match expressions
     var has_closure_transforms = false;
+
+    // Lambda lifting storage - will be populated if we have closures
+    const LambdaLifter = can.LambdaLifter;
+    var lifter: ?LambdaLifter = null;
+    defer {
+        if (lifter) |*l| l.deinit();
+    }
+
     if (content.meta.node_type == .mono) {
         const ClosureTransformer = can.ClosureTransformer;
         var transformer = ClosureTransformer.init(allocator, can_ir);
@@ -1451,6 +1459,23 @@ fn processSnapshotContent(
         // Also check if any closures were transformed (even nested inside pure lambdas)
         // This is important because nested closures may not produce a lambda_set at the top level
         has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
+
+        // Phase 4: Lambda lifting - extract closures to top-level function definitions
+        // After the ClosureTransformer has identified all closures, use LambdaLifter
+        // to create lifted function definitions for each one.
+        if (transformer.closures.count() > 0) {
+            lifter = LambdaLifter.init(allocator, can_ir);
+
+            // Iterate over all transformed closures and lift them
+            var closure_iter = transformer.closures.iterator();
+            while (closure_iter.next()) |entry| {
+                const closure_idx = entry.key_ptr.*;
+                const closure_info = entry.value_ptr.*;
+
+                // Lift this closure to a top-level function
+                try lifter.?.liftClosure(closure_idx, closure_info.tag_name);
+            }
+        }
     }
 
     // Run constant folding for mono tests (skip if we have closure transformations)
@@ -1509,7 +1534,8 @@ fn processSnapshotContent(
 
     if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
-        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config);
+        const lifted_funcs = if (lifter) |l| l.getLiftedFunctions() else &[_]LambdaLifter.LiftedFunction{};
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config, lifted_funcs);
         try generateFormattedSection(&output, &content, &parse_ast);
         success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
         try generateProblemsSection(&output, &generated_reports);
@@ -3128,7 +3154,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
 }
 
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const can.LambdaLifter.LiftedFunction) !void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3136,6 +3162,61 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     // Emit all top-level definitions (no module header - type modules are headerless)
     var emitter = can.RocEmitter.init(output.gpa, can_ir);
     defer emitter.deinit();
+
+    // Phase 4: Output lifted function definitions first (before regular definitions)
+    // These are the closures that have been lifted to top-level functions
+    // Note: We output these as comments for now since they would change MONO output
+    // and the dispatch still inlines bodies (Phase 5 will update dispatch to call these)
+    if (lifted_functions.len > 0) {
+        try mono_buffer.appendSlice(output.gpa, "# Lifted functions (Phase 4)\n");
+        for (lifted_functions) |lifted_fn| {
+            // Get the function name and convert to lowercase for a valid identifier
+            const fn_name = can_ir.getIdent(lifted_fn.name);
+
+            // Convert first char to lowercase to make it a valid Roc identifier
+            var fn_name_lower = try output.gpa.alloc(u8, fn_name.len);
+            defer output.gpa.free(fn_name_lower);
+            @memcpy(fn_name_lower, fn_name);
+            if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
+                fn_name_lower[0] = fn_name_lower[0] + ('a' - 'A');
+            }
+
+            // Output as a comment for Phase 4 (will be proper defs in Phase 5)
+            try mono_buffer.appendSlice(output.gpa, "# ");
+            try mono_buffer.appendSlice(output.gpa, fn_name_lower);
+            try mono_buffer.appendSlice(output.gpa, " = |");
+
+            // Emit the original lambda arguments
+            const args = can_ir.store.slicePatterns(lifted_fn.args);
+            for (args, 0..) |arg_pattern, i| {
+                if (i > 0) {
+                    try mono_buffer.appendSlice(output.gpa, ", ");
+                }
+                emitter.reset();
+                try emitter.emitPattern(arg_pattern);
+                try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            }
+
+            // Add the captures parameter if there are captures
+            if (lifted_fn.captures_pattern) |captures_pat| {
+                if (args.len > 0) {
+                    try mono_buffer.appendSlice(output.gpa, ", ");
+                }
+                emitter.reset();
+                try emitter.emitPattern(captures_pat);
+                try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            }
+
+            try mono_buffer.appendSlice(output.gpa, "| ");
+
+            // Emit the transformed body
+            emitter.reset();
+            try emitter.emitExpr(lifted_fn.body);
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            try mono_buffer.appendSlice(output.gpa, "\n");
+        }
+        try mono_buffer.appendSlice(output.gpa, "\n");
+    }
 
     const defs = can_ir.store.sliceDefs(can_ir.all_defs);
     for (defs) |def_idx| {

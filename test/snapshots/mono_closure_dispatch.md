@@ -14,6 +14,9 @@ result = func(1)
 ~~~
 # MONO
 ~~~roc
+# Lifted functions (Phase 4)
+# closure_f_1 = |x, captures| x + captures.offset
+
 func : Dec -> Dec
 func = |offset| {
 	condition = True

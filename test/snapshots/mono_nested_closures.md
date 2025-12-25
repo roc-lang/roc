@@ -12,6 +12,9 @@ result = add_five(3)
 ~~~
 # MONO
 ~~~roc
+# Lifted functions (Phase 4)
+# closure_make_adder_1 = |z, captures| captures.x + captures.y + z
+
 x : Dec
 x = 10
 
