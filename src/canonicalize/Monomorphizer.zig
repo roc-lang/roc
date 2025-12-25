@@ -1218,6 +1218,57 @@ pub fn getTypeName(self: *Self, type_var: types.Var) []const u8 {
     }
 }
 
+/// Check if a type is a tag union type.
+pub fn isTagUnion(self: *const Self, type_var: types.Var) bool {
+    const mutable_self: *Self = @constCast(self);
+    const resolved = mutable_self.types_store.resolveVar(type_var);
+    switch (resolved.desc.content) {
+        .structure => |flat_type| {
+            return switch (flat_type) {
+                .tag_union, .empty_tag_union => true,
+                else => false,
+            };
+        },
+        else => return false,
+    }
+}
+
+/// Get the tag names from a tag union type.
+/// Returns null if the type is not a tag union.
+pub fn getTagNames(self: *Self, type_var: types.Var) ?[]const base.Ident.Idx {
+    const resolved = self.types_store.resolveVar(type_var);
+    switch (resolved.desc.content) {
+        .structure => |flat_type| {
+            switch (flat_type) {
+                .tag_union => |tag_union| {
+                    const tags_slice = self.types_store.getTagsSlice(tag_union.tags);
+                    return tags_slice.items(.name);
+                },
+                .empty_tag_union => return &.{},
+                else => return null,
+            }
+        },
+        else => return null,
+    }
+}
+
+/// Count the number of tags in a tag union type.
+pub fn countTags(self: *Self, type_var: types.Var) usize {
+    const resolved = self.types_store.resolveVar(type_var);
+    switch (resolved.desc.content) {
+        .structure => |flat_type| {
+            switch (flat_type) {
+                .tag_union => |tag_union| {
+                    return tag_union.tags.count;
+                },
+                .empty_tag_union => return 0,
+                else => return 0,
+            }
+        },
+        else => return 0,
+    }
+}
+
 /// Create a specialized name for a function
 pub fn createSpecializedName(
     self: *Self,
