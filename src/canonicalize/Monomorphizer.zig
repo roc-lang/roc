@@ -207,6 +207,14 @@ specialization_stack: std.ArrayList(SpecializationKey),
 /// External specializations requested from other modules
 external_requests: std.ArrayList(ExternalSpecializationRequest),
 
+/// Optional closure transformer for resolving unspecialized lambda set entries.
+/// When set, the monomorphizer will resolve unspecialized closures during specialization.
+closure_transformer: ?*ClosureTransformer,
+
+/// Optional map from method idents to their lambda sets for ambient function unification.
+/// Used during unspecialized closure resolution.
+impl_lambda_sets: ?*const std.AutoHashMap(base.Ident.Idx, *ClosureTransformer.LambdaSet),
+
 /// Default maximum recursion depth for polymorphic recursion
 pub const DEFAULT_MAX_RECURSION_DEPTH: u32 = 64;
 
@@ -231,7 +239,21 @@ pub fn init(
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
         .specialization_stack = std.ArrayList(SpecializationKey).empty,
         .external_requests = std.ArrayList(ExternalSpecializationRequest).empty,
+        .closure_transformer = null,
+        .impl_lambda_sets = null,
     };
+}
+
+/// Set the closure transformer for resolving unspecialized lambda set entries.
+/// This must be called before `processPendingSpecializations` to enable
+/// automatic resolution of static dispatch closures.
+pub fn setClosureTransformer(
+    self: *Self,
+    transformer: *ClosureTransformer,
+    impl_sets: ?*const std.AutoHashMap(base.Ident.Idx, *ClosureTransformer.LambdaSet),
+) void {
+    self.closure_transformer = transformer;
+    self.impl_lambda_sets = impl_sets;
 }
 
 /// Free resources
@@ -798,17 +820,20 @@ pub fn requestExternalSpecialization(
     concrete_type: types.Var,
     call_site: ?Expr.Idx,
 ) !ExternalSpecializationResult {
-    // Check if we already have this request
+    // Check if we already have this request (same module, ident, and concrete type)
+    const new_type_hash = self.structuralTypeHash(concrete_type);
     for (self.external_requests.items) |existing| {
         if (existing.source_module == source_module and
             existing.original_ident == original_ident)
         {
-            // TODO: Also compare concrete types when we have proper type equality
-            // For now, assume same module + ident means same specialization
-            return ExternalSpecializationResult{
-                .specialized_ident = original_ident, // Placeholder
-                .is_new = false,
-            };
+            // Compare concrete types using structural type hashing
+            const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
+            if (existing_type_hash == new_type_hash) {
+                return ExternalSpecializationResult{
+                    .specialized_ident = original_ident, // Placeholder
+                    .is_new = false,
+                };
+            }
         }
     }
 
@@ -929,17 +954,46 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     // Register the name mapping first (for recursive references)
     try self.specialization_names.put(key, specialized_ident);
 
+    // Build type substitutions from the polymorphic type to the concrete type
+    try self.buildTypeSubstitutions(
+        partial.type_var,
+        pending.concrete_type,
+        &pending.type_substitutions,
+    );
+
+    // Resolve unspecialized lambda set entries for type variables that became concrete.
+    // This is the key integration point where static dispatch closures get resolved.
+    if (self.closure_transformer) |transformer| {
+        // For each type variable that has a concrete mapping, resolve its unspecialized entries
+        var iter = pending.type_substitutions.iterator();
+        while (iter.next()) |entry| {
+            const poly_var = entry.key_ptr.*;
+            const concrete_var = entry.value_ptr.*;
+
+            // Resolve unspecialized entries with ambient function unification
+            _ = try self.resolveEntriesForTypeVarWithUnification(
+                &transformer.unspec_by_type_var,
+                poly_var,
+                concrete_var,
+                self.impl_lambda_sets,
+            );
+        }
+    }
+
     // Duplicate the body with type substitutions
     const specialized_body = try self.duplicateBody(
         partial.body_expr,
         &pending.type_substitutions,
     );
 
+    // Duplicate argument patterns
+    const specialized_args = try self.duplicatePatternSpan(partial.arg_patterns);
+
     // Create the specialized proc
     const specialized = SpecializedProc{
         .specialized_ident = specialized_ident,
         .body_expr = specialized_body,
-        .arg_patterns = partial.arg_patterns, // TODO: Duplicate patterns too
+        .arg_patterns = specialized_args,
         .concrete_type = pending.concrete_type,
         .original_ident = pending.original_ident,
     };
@@ -1195,13 +1249,16 @@ fn duplicateExpr(
             // Duplicate the lambda body
             const new_body = try self.duplicateExpr(lambda.body, type_subs);
 
-            if (new_body == lambda.body) {
+            // Duplicate argument patterns
+            const new_args = try self.duplicatePatternSpan(lambda.args);
+
+            if (new_body == lambda.body and new_args.span.start == lambda.args.span.start) {
                 return expr_idx;
             }
 
             return try self.module_env.store.addExpr(Expr{
                 .e_lambda = .{
-                    .args = lambda.args, // TODO: Duplicate patterns
+                    .args = new_args,
                     .body = new_body,
                 },
             }, base.Region.zero());
@@ -1491,8 +1548,11 @@ fn duplicateExpr(
                 else
                     null;
 
+                // Duplicate branch patterns (these are BranchPattern entries, not regular patterns)
+                const new_patterns = try self.duplicateBranchPatternSpan(branch.patterns);
+
                 const new_branch = Expr.Match.Branch{
-                    .patterns = branch.patterns, // TODO: Duplicate patterns
+                    .patterns = new_patterns,
                     .value = new_value,
                     .guard = new_guard,
                     .redundant = branch.redundant,
@@ -1572,6 +1632,235 @@ fn duplicateExpr(
         .e_crash,
         => return expr_idx,
     }
+}
+
+/// Duplicate a span of patterns with type substitutions.
+/// Used for duplicating function argument patterns and match branch patterns.
+fn duplicatePatternSpan(
+    self: *Self,
+    span: CIR.Pattern.Span,
+) std.mem.Allocator.Error!CIR.Pattern.Span {
+    const patterns = self.module_env.store.slicePatterns(span);
+    if (patterns.len == 0) {
+        return span; // Empty span - return as-is
+    }
+
+    const patterns_start = self.module_env.store.scratchPatternTop();
+
+    for (patterns) |pattern_idx| {
+        const new_pattern = try self.duplicatePattern(pattern_idx);
+        try self.module_env.store.addScratchPattern(new_pattern);
+    }
+
+    return try self.module_env.store.patternSpanFrom(patterns_start);
+}
+
+/// Duplicate a single pattern.
+fn duplicatePattern(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+) std.mem.Allocator.Error!CIR.Pattern.Idx {
+    const pattern = self.module_env.store.getPattern(pattern_idx);
+
+    switch (pattern) {
+        .assign => |assign| {
+            // Simple assignment pattern - create a new one
+            return try self.module_env.store.addPattern(
+                Pattern{ .assign = assign },
+                base.Region.zero(),
+            );
+        },
+        .underscore => {
+            return try self.module_env.store.addPattern(
+                Pattern.underscore,
+                base.Region.zero(),
+            );
+        },
+        .applied_tag => |tag| {
+            // Duplicate nested patterns
+            const args = self.module_env.store.slicePatterns(tag.args);
+            if (args.len == 0) {
+                return try self.module_env.store.addPattern(
+                    Pattern{ .applied_tag = tag },
+                    base.Region.zero(),
+                );
+            }
+
+            const args_start = self.module_env.store.scratchPatternTop();
+            for (args) |arg_idx| {
+                const new_arg = try self.duplicatePattern(arg_idx);
+                try self.module_env.store.addScratchPattern(new_arg);
+            }
+            const new_args = try self.module_env.store.patternSpanFrom(args_start);
+
+            return try self.module_env.store.addPattern(
+                Pattern{ .applied_tag = .{
+                    .name = tag.name,
+                    .args = new_args,
+                } },
+                base.Region.zero(),
+            );
+        },
+        .record_destructure => |record| {
+            // Duplicate record field patterns
+            const fields = self.module_env.store.sliceRecordDestructs(record.destructs);
+            if (fields.len == 0) {
+                return try self.module_env.store.addPattern(
+                    Pattern{ .record_destructure = record },
+                    base.Region.zero(),
+                );
+            }
+
+            const fields_start = self.module_env.store.scratchRecordDestructTop();
+            for (fields) |field_idx| {
+                const field = self.module_env.store.getRecordDestruct(field_idx);
+                // Duplicate the nested pattern if present
+                const new_kind: Pattern.RecordDestruct.Kind = switch (field.kind) {
+                    .Required => |p_idx| .{ .Required = try self.duplicatePattern(p_idx) },
+                    .SubPattern => |p_idx| .{ .SubPattern = try self.duplicatePattern(p_idx) },
+                };
+                const new_field = Pattern.RecordDestruct{
+                    .label = field.label,
+                    .ident = field.ident,
+                    .kind = new_kind,
+                };
+                const new_field_idx = try self.module_env.store.addRecordDestruct(new_field, base.Region.zero());
+                try self.module_env.store.addScratchRecordDestruct(new_field_idx);
+            }
+            const new_fields = try self.module_env.store.recordDestructSpanFrom(fields_start);
+
+            return try self.module_env.store.addPattern(
+                Pattern{ .record_destructure = .{
+                    .destructs = new_fields,
+                } },
+                base.Region.zero(),
+            );
+        },
+        .tuple => |tuple| {
+            // Duplicate tuple element patterns
+            const elems = self.module_env.store.slicePatterns(tuple.patterns);
+            if (elems.len == 0) {
+                return try self.module_env.store.addPattern(
+                    Pattern{ .tuple = tuple },
+                    base.Region.zero(),
+                );
+            }
+
+            const elems_start = self.module_env.store.scratchPatternTop();
+            for (elems) |elem_idx| {
+                const new_elem = try self.duplicatePattern(elem_idx);
+                try self.module_env.store.addScratchPattern(new_elem);
+            }
+            const new_elems = try self.module_env.store.patternSpanFrom(elems_start);
+
+            return try self.module_env.store.addPattern(
+                Pattern{ .tuple = .{
+                    .patterns = new_elems,
+                } },
+                base.Region.zero(),
+            );
+        },
+        .list => |list| {
+            // Duplicate list element patterns
+            const elems = self.module_env.store.slicePatterns(list.patterns);
+            const elems_start = self.module_env.store.scratchPatternTop();
+            for (elems) |elem_idx| {
+                const new_elem = try self.duplicatePattern(elem_idx);
+                try self.module_env.store.addScratchPattern(new_elem);
+            }
+            const new_elems = try self.module_env.store.patternSpanFrom(elems_start);
+
+            // Duplicate the rest pattern if present
+            const new_rest_info = if (list.rest_info) |rest| blk: {
+                const new_rest_pattern = if (rest.pattern) |p| try self.duplicatePattern(p) else null;
+                break :blk @as(?@TypeOf(list.rest_info.?), .{
+                    .index = rest.index,
+                    .pattern = new_rest_pattern,
+                });
+            } else null;
+
+            return try self.module_env.store.addPattern(
+                Pattern{ .list = .{
+                    .patterns = new_elems,
+                    .rest_info = new_rest_info,
+                } },
+                base.Region.zero(),
+            );
+        },
+        .as => |as| {
+            // Duplicate the inner pattern
+            const new_inner = try self.duplicatePattern(as.pattern);
+            return try self.module_env.store.addPattern(
+                Pattern{ .as = .{
+                    .pattern = new_inner,
+                    .ident = as.ident,
+                } },
+                base.Region.zero(),
+            );
+        },
+        .nominal => |nom| {
+            // Duplicate the backing pattern
+            const new_backing = try self.duplicatePattern(nom.backing_pattern);
+            return try self.module_env.store.addPattern(
+                Pattern{ .nominal = .{
+                    .nominal_type_decl = nom.nominal_type_decl,
+                    .backing_pattern = new_backing,
+                    .backing_type = nom.backing_type,
+                } },
+                base.Region.zero(),
+            );
+        },
+        .nominal_external => |nom| {
+            // Duplicate the backing pattern
+            const new_backing = try self.duplicatePattern(nom.backing_pattern);
+            return try self.module_env.store.addPattern(
+                Pattern{ .nominal_external = .{
+                    .module_idx = nom.module_idx,
+                    .target_node_idx = nom.target_node_idx,
+                    .backing_pattern = new_backing,
+                    .backing_type = nom.backing_type,
+                } },
+                base.Region.zero(),
+            );
+        },
+        // Literal patterns - create a new one with the same value
+        .str_literal,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .runtime_error,
+        => {
+            return try self.module_env.store.addPattern(pattern, base.Region.zero());
+        },
+    }
+}
+
+/// Duplicate a span of match branch patterns (BranchPattern.Span).
+fn duplicateBranchPatternSpan(
+    self: *Self,
+    span: Expr.Match.BranchPattern.Span,
+) std.mem.Allocator.Error!Expr.Match.BranchPattern.Span {
+    const branch_patterns = self.module_env.store.sliceMatchBranchPatterns(span);
+    if (branch_patterns.len == 0) {
+        return span; // Empty span - return as-is
+    }
+
+    const patterns_start = self.module_env.store.scratchMatchBranchPatternTop();
+
+    for (branch_patterns) |bp_idx| {
+        const bp = self.module_env.store.getMatchBranchPattern(bp_idx);
+        const new_pattern = try self.duplicatePattern(bp.pattern);
+        const new_bp = Expr.Match.BranchPattern{
+            .pattern = new_pattern,
+            .degenerate = bp.degenerate,
+        };
+        const new_bp_idx = try self.module_env.store.addMatchBranchPattern(new_bp, base.Region.zero());
+        try self.module_env.store.addScratchMatchBranchPattern(new_bp_idx);
+    }
+
+    return try self.module_env.store.matchBranchPatternSpanFrom(patterns_start);
 }
 
 /// Check if a type variable represents a polymorphic type
@@ -2059,4 +2348,101 @@ test "monomorphizer: getConcreteTypeName" {
     const flex_var = try module_env.types.fresh();
     const name = mono.getConcreteTypeName(flex_var);
     try testing.expect(name == null);
+}
+
+test "monomorphizer: set closure transformer integration" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a closure transformer
+    var transformer = ClosureTransformer.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // Initially closure_transformer is null
+    try testing.expect(mono.closure_transformer == null);
+
+    // Set the closure transformer
+    mono.setClosureTransformer(&transformer, null);
+
+    // Now closure_transformer should be set
+    try testing.expect(mono.closure_transformer != null);
+    try testing.expect(mono.closure_transformer.? == &transformer);
+
+    // Processing empty pending with closure transformer should work
+    try mono.processPendingSpecializations();
+    try testing.expectEqual(@as(usize, 0), mono.getSpecializationCount());
+}
+
+test "monomorphizer: pattern duplication - assign pattern" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a simple assign pattern
+    const ident = try module_env.insertIdent(base.Ident.for_text("x"));
+    const pattern_idx = try module_env.store.addPattern(
+        Pattern{ .assign = .{ .ident = ident } },
+        base.Region.zero(),
+    );
+
+    // Duplicate the pattern
+    const duplicated = try mono.duplicatePattern(pattern_idx);
+
+    // Should have created a new pattern (different index)
+    try testing.expect(duplicated != pattern_idx);
+
+    // The duplicated pattern should have the same structure
+    const orig_pattern = module_env.store.getPattern(pattern_idx);
+    const dup_pattern = module_env.store.getPattern(duplicated);
+
+    try testing.expect(orig_pattern == .assign);
+    try testing.expect(dup_pattern == .assign);
+    try testing.expectEqual(orig_pattern.assign.ident, dup_pattern.assign.ident);
+}
+
+test "monomorphizer: pattern duplication - underscore pattern" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create an underscore pattern
+    const pattern_idx = try module_env.store.addPattern(
+        Pattern.underscore,
+        base.Region.zero(),
+    );
+
+    // Duplicate the pattern
+    const duplicated = try mono.duplicatePattern(pattern_idx);
+
+    // Should have created a new pattern
+    try testing.expect(duplicated != pattern_idx);
+
+    // The duplicated pattern should be underscore
+    const dup_pattern = module_env.store.getPattern(duplicated);
+    try testing.expect(dup_pattern == .underscore);
 }
