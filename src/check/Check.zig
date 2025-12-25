@@ -4614,6 +4614,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             cond_var,
             match_region,
         );
+        defer result.deinit(self.cir.gpa);
 
         // Report non-exhaustive match if any patterns are missing
         if (!result.is_exhaustive) {

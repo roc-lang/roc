@@ -3034,6 +3034,18 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
+        // Free nested allocations in problems
+        for (self.problems.items) |problem| {
+            switch (problem) {
+                .non_exhaustive_match => |nem| {
+                    for (nem.missing_patterns) |pattern_str| {
+                        gpa.free(pattern_str);
+                    }
+                    gpa.free(nem.missing_patterns);
+                },
+                else => {},
+            }
+        }
         self.problems.deinit(gpa);
     }
 

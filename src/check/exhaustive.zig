@@ -61,6 +61,31 @@ pub const Pattern = union(enum) {
         /// Patterns for list elements
         elements: []const Pattern,
     };
+
+    /// Deep-copy to a new allocator
+    pub fn dupe(self: Pattern, allocator: std.mem.Allocator) error{OutOfMemory}!Pattern {
+        return switch (self) {
+            .anything => .anything,
+            .literal => |lit| .{ .literal = lit },
+            .ctor => |c| .{ .ctor = .{
+                .union_info = try c.union_info.dupe(allocator),
+                .tag_id = c.tag_id,
+                .args = try dupePatterns(allocator, c.args),
+            } },
+            .list => |l| .{ .list = .{
+                .arity = l.arity,
+                .elements = try dupePatterns(allocator, l.elements),
+            } },
+        };
+    }
+
+    fn dupePatterns(allocator: std.mem.Allocator, patterns: []const Pattern) error{OutOfMemory}![]const Pattern {
+        const result = try allocator.alloc(Pattern, patterns.len);
+        for (patterns, 0..) |pat, i| {
+            result[i] = try pat.dupe(allocator);
+        }
+        return result;
+    }
 };
 
 /// Identifies a tag within a union
@@ -83,6 +108,15 @@ pub const Union = struct {
     /// True if the extension is a flex var (type not fully constrained).
     /// This means wildcards shouldn't be marked redundant since more tags might exist.
     has_flex_extension: bool = false,
+
+    /// Deep-copy to a new allocator
+    pub fn dupe(self: Union, allocator: std.mem.Allocator) error{OutOfMemory}!Union {
+        return .{
+            .alternatives = try allocator.dupe(CtorInfo, self.alternatives),
+            .render_as = self.render_as,
+            .has_flex_extension = self.has_flex_extension,
+        };
+    }
 };
 
 /// Information about a single constructor
@@ -1716,6 +1750,35 @@ pub const CheckResult = struct {
     redundant_indices: []const u32,
     /// Regions of redundant branches
     redundant_regions: []const Region,
+
+    /// Free all allocated memory in the result
+    pub fn deinit(self: CheckResult, allocator: std.mem.Allocator) void {
+        for (self.missing_patterns) |pat| {
+            freePattern(allocator, pat);
+        }
+        allocator.free(self.missing_patterns);
+        allocator.free(self.redundant_indices);
+        allocator.free(self.redundant_regions);
+    }
+
+    fn freePattern(allocator: std.mem.Allocator, pattern: Pattern) void {
+        switch (pattern) {
+            .anything, .literal => {},
+            .ctor => |c| {
+                for (c.args) |arg| {
+                    freePattern(allocator, arg);
+                }
+                allocator.free(c.args);
+                allocator.free(c.union_info.alternatives);
+            },
+            .list => |l| {
+                for (l.elements) |elem| {
+                    freePattern(allocator, elem);
+                }
+                allocator.free(l.elements);
+            },
+        }
+    }
 };
 
 /// Perform full exhaustiveness and redundancy checking on a match expression.
@@ -1732,15 +1795,20 @@ pub fn checkMatch(
     scrutinee_type: Var,
     overall_region: Region,
 ) error{OutOfMemory}!CheckResult {
+    // Use an arena for all intermediate allocations to avoid leaks
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
     // Check if the scrutinee type is fully resolved
     // If it's still a flex/rigid var or can't be unwrapped to a concrete type,
     // we can't reliably do exhaustiveness checking
-    const union_result = try getUnionFromType(allocator, type_store, ident_store, scrutinee_type);
+    const union_result = try getUnionFromType(arena_alloc, type_store, ident_store, scrutinee_type);
     const scrutinee_unresolved = union_result == .not_a_union;
 
     // Phase 1: Convert CIR patterns to unresolved patterns
     const unresolved = try convertMatchBranches(
-        allocator,
+        arena_alloc,
         node_store,
         branches_span,
         overall_region,
@@ -1748,7 +1816,7 @@ pub fn checkMatch(
 
     // Phase 2: Reify patterns with type information
     const reified = try reifyRows(
-        allocator,
+        arena_alloc,
         type_store,
         ident_store,
         unresolved,
@@ -1769,7 +1837,7 @@ pub fn checkMatch(
         }
     else
         try checkRedundancy(
-            allocator,
+            arena_alloc,
             unresolved.rows,
             reified.rows,
         );
@@ -1779,15 +1847,21 @@ pub fn checkMatch(
     const missing: []const Pattern = if (skip_checks)
         &[_]Pattern{}
     else blk: {
-        const matrix = PatternMatrix.init(allocator, redundancy.non_redundant_rows);
-        break :blk try checkExhaustive(allocator, matrix, 1);
+        const matrix = PatternMatrix.init(arena_alloc, redundancy.non_redundant_rows);
+        break :blk try checkExhaustive(arena_alloc, matrix, 1);
     };
+
+    // Copy results to the original allocator before freeing the arena
+    const result_patterns = try allocator.alloc(Pattern, missing.len);
+    for (missing, 0..) |pat, i| {
+        result_patterns[i] = try pat.dupe(allocator);
+    }
 
     return .{
         .is_exhaustive = missing.len == 0,
-        .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
+        .missing_patterns = result_patterns,
+        .redundant_indices = try allocator.dupe(u32, redundancy.redundant_indices),
+        .redundant_regions = try allocator.dupe(Region, redundancy.redundant_regions),
     };
 }
 
