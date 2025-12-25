@@ -536,17 +536,15 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const idents = try CommonIdents.insert(gpa, &common);
 
     // Use source-based heuristics for initial capacities
-    // Typical Roc code generates ~1 node per 20 bytes, ~1 type per 50 bytes
+    // Typical Roc code generates ~1 node per 20 bytes
     // Use generous minimums to avoid too many reallocations for small files
     const source_len = source.len;
     const node_capacity = @max(1024, @min(100_000, source_len / 20));
-    const type_capacity = @max(2048, @min(50_000, source_len / 50));
-    const var_capacity = @max(512, @min(10_000, source_len / 100));
 
     return Self{
         .gpa = gpa,
         .common = common,
-        .types = try TypeStore.initCapacity(gpa, type_capacity, var_capacity),
+        .types = try TypeStore.initFromSourceLen(gpa, source_len),
         .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },

@@ -92,10 +92,23 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
-    /// Init the unification table
+    /// Init the unification table with default capacity.
+    /// For production use with source files, prefer initFromSourceLen() which
+    /// computes capacity based on source file size.
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
         return try Self.initCapacity(gpa, 1024, 512);
+    }
+
+    /// Init the type store with capacity heuristics based on source file size.
+    /// Larger source files typically need more type slots and variables.
+    ///
+    /// Heuristics based on typical Roc code patterns:
+    /// - ~1 type slot per 50 bytes of source
+    /// - ~1 child element (vars, tags, record fields) per 100 bytes
+    pub fn initFromSourceLen(gpa: Allocator, source_len: usize) std.mem.Allocator.Error!Self {
+        const root_capacity = @max(2048, @min(50_000, source_len / 50));
+        const child_capacity = @max(512, @min(10_000, source_len / 100));
+        return try Self.initCapacity(gpa, root_capacity, child_capacity);
     }
 
     /// Init the unification table
