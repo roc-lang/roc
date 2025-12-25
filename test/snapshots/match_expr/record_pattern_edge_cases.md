@@ -17,6 +17,10 @@ match ... {
 ~~~
 # EXPECTED
 TYPE MISMATCH - record_pattern_edge_cases.md:5:51:5:52
+REDUNDANT PATTERN - record_pattern_edge_cases.md:1:1:9:2
+REDUNDANT PATTERN - record_pattern_edge_cases.md:1:1:9:2
+REDUNDANT PATTERN - record_pattern_edge_cases.md:1:1:9:2
+REDUNDANT PATTERN - record_pattern_edge_cases.md:1:1:9:2
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -33,6 +37,74 @@ It has the type:
 But I expected it to be:
 
     Str
+
+**REDUNDANT PATTERN**
+The third branch of this `match` is redundant:
+**record_pattern_edge_cases.md:1:1:9:2:**
+```roc
+match ... {
+    { a: { b: { c } } } => "deeply nested: ${c}"
+    { x, y: {} } => "mixed with empty: ${x}"
+    { outer: { inner }, simple } => "mixed: ${inner} and ${simple}"
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+    { name: x } => "renamed: ${x}"
+    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
+    {} => "empty record"
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The fifth branch of this `match` is redundant:
+**record_pattern_edge_cases.md:1:1:9:2:**
+```roc
+match ... {
+    { a: { b: { c } } } => "deeply nested: ${c}"
+    { x, y: {} } => "mixed with empty: ${x}"
+    { outer: { inner }, simple } => "mixed: ${inner} and ${simple}"
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+    { name: x } => "renamed: ${x}"
+    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
+    {} => "empty record"
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The sixth branch of this `match` is redundant:
+**record_pattern_edge_cases.md:1:1:9:2:**
+```roc
+match ... {
+    { a: { b: { c } } } => "deeply nested: ${c}"
+    { x, y: {} } => "mixed with empty: ${x}"
+    { outer: { inner }, simple } => "mixed: ${inner} and ${simple}"
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+    { name: x } => "renamed: ${x}"
+    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
+    {} => "empty record"
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
+
+**REDUNDANT PATTERN**
+The seventh branch of this `match` is redundant:
+**record_pattern_edge_cases.md:1:1:9:2:**
+```roc
+match ... {
+    { a: { b: { c } } } => "deeply nested: ${c}"
+    { x, y: {} } => "mixed with empty: ${x}"
+    { outer: { inner }, simple } => "mixed: ${inner} and ${simple}"
+    { a: { b }, c: { d } } => "multiple nested: ${b}, ${d}"
+    { name: x } => "renamed: ${x}"
+    { person: { name: firstName, age: userAge } } => "renamed nested: ${firstName} (${userAge.to_str()})"
+    {} => "empty record"
+}
+```
+
+This pattern can never match because earlier patterns already cover all the values it would match.
 
 # TOKENS
 ~~~zig
