@@ -32,8 +32,6 @@ const NominalType = types.NominalType;
 const Record = types.Record;
 const Num = types.Num;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
-const LambdaSetEntry = types.LambdaSetEntry;
-const LambdaSetEntrySafeList = LambdaSetEntry.SafeList;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -93,7 +91,6 @@ pub const Store = struct {
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
-    lambda_set_entries: LambdaSetEntrySafeList,
 
     /// Init the unification table
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
@@ -115,7 +112,6 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
-            .lambda_set_entries = try LambdaSetEntrySafeList.initCapacity(gpa, child_capacity),
         };
     }
 
@@ -136,7 +132,6 @@ pub const Store = struct {
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
-        self.lambda_set_entries.deinit(self.gpa);
     }
 
     /// Return the number of type variables in the store.
@@ -350,7 +345,6 @@ pub const Store = struct {
         return Content{ .structure = .{ .fn_unbound = .{
             .args = args_range,
             .ret = ret,
-            .lambda_set = LambdaSetEntrySafeList.Range.empty(),
             .needs_instantiation = needs_inst,
         } } };
     }
@@ -377,7 +371,6 @@ pub const Store = struct {
         return Content{ .structure = .{ .fn_pure = .{
             .args = args_range,
             .ret = ret,
-            .lambda_set = LambdaSetEntrySafeList.Range.empty(),
             .needs_instantiation = needs_inst,
         } } };
     }
@@ -404,7 +397,6 @@ pub const Store = struct {
         return Content{ .structure = .{ .fn_effectful = .{
             .args = args_range,
             .ret = ret,
-            .lambda_set = LambdaSetEntrySafeList.Range.empty(),
             .needs_instantiation = needs_inst,
         } } };
     }
@@ -519,16 +511,6 @@ pub const Store = struct {
         return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
     }
 
-    /// Append lambda set entries to the backing list, returning the range
-    pub fn appendLambdaSetEntries(self: *Self, entries: []const LambdaSetEntry) std.mem.Allocator.Error!LambdaSetEntrySafeList.Range {
-        return try self.lambda_set_entries.appendSlice(self.gpa, entries);
-    }
-
-    /// Append a single lambda set entry to the backing list, returning the idx
-    pub fn appendLambdaSetEntry(self: *Self, entry: LambdaSetEntry) std.mem.Allocator.Error!LambdaSetEntrySafeList.Idx {
-        return try self.lambda_set_entries.append(self.gpa, entry);
-    }
-
     // sub list getters //
 
     /// Given a range, get a slice of vars from the backing array
@@ -549,11 +531,6 @@ pub const Store = struct {
     /// Given a range, get a slice of vars from the backing array
     pub fn sliceStaticDispatchConstraints(self: *const Self, range: StaticDispatchConstraint.SafeList.Range) []StaticDispatchConstraint {
         return self.static_dispatch_constraints.sliceRange(range);
-    }
-
-    /// Given a range, get a slice of lambda set entries from the backing array
-    pub fn sliceLambdaSetEntries(self: *const Self, range: LambdaSetEntrySafeList.Range) []LambdaSetEntry {
-        return self.lambda_set_entries.sliceRange(range);
     }
 
     // helpers - alias types //
@@ -788,7 +765,6 @@ pub const Store = struct {
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
-        lambda_set_entries: LambdaSetEntrySafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -804,7 +780,6 @@ pub const Store = struct {
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
-            try self.lambda_set_entries.serialize(&store.lambda_set_entries, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -828,7 +803,6 @@ pub const Store = struct {
                 .record_fields = self.record_fields.deserialize(base_addr).*,
                 .tags = self.tags.deserialize(base_addr).*,
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(base_addr).*,
-                .lambda_set_entries = self.lambda_set_entries.deserialize(base_addr).*,
             };
 
             return store;
@@ -853,7 +827,6 @@ pub const Store = struct {
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
-            .lambda_set_entries = (try self.lambda_set_entries.serialize(allocator, writer)).*,
         };
 
         return @constCast(offset_self);
@@ -867,7 +840,6 @@ pub const Store = struct {
         self.record_fields.relocate(offset);
         self.tags.relocate(offset);
         self.static_dispatch_constraints.relocate(offset);
-        self.lambda_set_entries.relocate(offset);
     }
 
     /// Calculate the size needed to serialize this Store
@@ -878,10 +850,9 @@ pub const Store = struct {
         const tags_size = self.tags.serializedSize();
         const vars_size = self.vars.serializedSize();
         const static_dispatch_constraints_size = self.static_dispatch_constraints.serializedSize();
-        const lambda_set_entries_size = self.lambda_set_entries.serializedSize();
 
         // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 7; // size headers
+        var total_size: usize = @sizeOf(u32) * 6; // size headers
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         total_size += slots_size;
@@ -900,9 +871,6 @@ pub const Store = struct {
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
 
         total_size += static_dispatch_constraints_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-
-        total_size += lambda_set_entries_size;
         total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
 
         // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
@@ -911,7 +879,7 @@ pub const Store = struct {
 
     /// Deserialize a Store from the provided buffer
     pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) !Self {
-        if (buffer.len < @sizeOf(u32) * 7) return error.BufferTooSmall;
+        if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
 
         var offset: usize = 0;
 
@@ -932,9 +900,6 @@ pub const Store = struct {
         offset += @sizeOf(u32);
 
         const static_dispatch_constraints_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const lambda_set_entries_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
         offset += @sizeOf(u32);
 
         // Deserialize data
@@ -968,11 +933,6 @@ pub const Store = struct {
         const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
         offset += static_dispatch_constraints_size;
 
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const lambda_set_entries_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + lambda_set_entries_size]));
-        const lambda_set_entries = try LambdaSetEntrySafeList.deserializeFrom(lambda_set_entries_buffer, allocator);
-        offset += lambda_set_entries_size;
-
         return Self{
             .gpa = allocator,
             .slots = slots,
@@ -981,7 +941,6 @@ pub const Store = struct {
             .tags = tags,
             .vars = vars,
             .static_dispatch_constraints = static_dispatch_constraints,
-            .lambda_set_entries = lambda_set_entries,
         };
     }
 };

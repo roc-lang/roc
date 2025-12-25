@@ -764,7 +764,6 @@ fn mkFlexWithFromNumeralConstraint(
             .fn_unbound = types_mod.Func{
                 .args = try self.types.appendVars(&.{arg_var}),
                 .ret = ret_var,
-                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             },
         },
@@ -3455,8 +3454,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
 
-            // Note: closure.tag_name is stored for later use during defunctionalization.
-            // Lambda set population will be integrated with unification in a future phase.
+            // Lambda sets are inferred in a separate phase after type checking,
+            // not during type checking. The closure's tag_name is used later
+            // during lambda set solving and dispatch generation.
         },
         // function calling //
         .e_call => |call| {
@@ -3738,7 +3738,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                         .args = dispatch_arg_vars_range,
                         .ret = dispatch_ret_var,
-                        .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                         .needs_instantiation = false,
                     } } }, env, dot_access.field_name_region);
 
@@ -3919,7 +3918,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = dispatch_arg_vars_range,
                     .ret = dispatch_ret_var,
-                    .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                     .needs_instantiation = false,
                 } } }, env, expr_region);
 
@@ -4481,9 +4479,6 @@ fn checkIfElseExpr(
     const if_expr_var: Var = ModuleEnv.varFrom(if_expr_idx);
     _ = try self.unify(if_expr_var, branch_var, env);
 
-    // TODO: Merge lambda sets from all branches when the result is a function type.
-    // This will be handled in a future phase when the unifier is updated to merge lambda sets.
-
     return does_fx;
 }
 
@@ -4626,7 +4621,6 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
         .args = args_range,
         .ret = ret_var,
-        .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
         .needs_instantiation = false,
     } } }, env, expr_region);
     try env.var_pool.addVarToRank(constraint_fn_var, env.rank());
@@ -4740,7 +4734,6 @@ fn checkBinopExpr(
                 const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                     .args = args_range,
                     .ret = ret_var,
-                    .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                     .needs_instantiation = false,
                 } } }, env, expr_region);
 
@@ -4863,7 +4856,6 @@ fn checkBinopExpr(
             const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = args_range,
                 .ret = is_eq_ret_var,
-                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             } } }, env, expr_region);
 
@@ -4917,7 +4909,6 @@ fn checkBinopExpr(
             const not_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = not_args_range,
                 .ret = not_ret_var,
-                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             } } }, env, expr_region);
 
@@ -4943,7 +4934,6 @@ fn checkBinopExpr(
             const is_eq_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = is_eq_args_range,
                 .ret = is_eq_ret_var,
-                .lambda_set = types_mod.LambdaSetEntry.SafeList.Range.empty(),
                 .needs_instantiation = false,
             } } }, env, expr_region);
 

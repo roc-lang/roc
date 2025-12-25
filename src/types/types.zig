@@ -22,15 +22,14 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(40, @sizeOf(Descriptor)); // Increased from 36 due to lambda_set in Func
-    try std.testing.expectEqual(32, @sizeOf(Content)); // Increased from 28 due to lambda_set in Func
+    try std.testing.expectEqual(36, @sizeOf(Descriptor));
+    try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(12, @sizeOf(Alias));
-    try std.testing.expectEqual(28, @sizeOf(FlatType)); // Increased from 24 due to lambda_set in Func
+    try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to is_opaque field
     try std.testing.expectEqual(72, @sizeOf(StaticDispatchConstraint)); // Includes recursion_info + num_literal fields
-    try std.testing.expectEqual(24, @sizeOf(Func)); // Increased from 16 due to lambda_set field
-    try std.testing.expectEqual(8, @sizeOf(LambdaSetEntry)); // tag_name + captures_var
+    try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
 /// A type variable
@@ -687,34 +686,12 @@ pub const NominalType = struct {
     }
 };
 
-// lambda sets //
-
-/// A single closure entry in a lambda set.
-/// Lambda sets track which closures can inhabit a function value at runtime.
-pub const LambdaSetEntry = struct {
-    const Self = @This();
-
-    /// The closure tag name (e.g., "Closure_f_1")
-    tag_name: Ident.Idx,
-    /// The capture record type variable (or empty for pure lambdas with no captures)
-    captures_var: Var,
-
-    /// A safe list of lambda set entries
-    pub const SafeList = MkSafeList(Self);
-
-    /// A safe multi list of lambda set entries
-    pub const SafeMultiList = MkSafeMultiList(Self);
-};
-
 // functions //
 
 /// Represents a function
 pub const Func = struct {
     args: Var.SafeList.Range,
     ret: Var,
-    /// Lambda set tracking which closures can inhabit this function type.
-    /// Empty range means the lambda set is unknown/unresolved.
-    lambda_set: LambdaSetEntry.SafeList.Range,
     needs_instantiation: bool,
 };
 

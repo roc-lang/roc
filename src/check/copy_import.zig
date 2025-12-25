@@ -261,7 +261,6 @@ fn copyFunc(
     return Func{
         .args = dest_args_range,
         .ret = dest_ret,
-        .lambda_set = func.lambda_set, // Preserve the original lambda set (copy should be fine as indices are local)
         .needs_instantiation = func.needs_instantiation,
     };
 }
