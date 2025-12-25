@@ -92,10 +92,23 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
-    /// Init the unification table
+    /// Init the unification table with default capacity.
+    /// For production use with source files, prefer initFromSourceLen() which
+    /// computes capacity based on source file size.
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
         return try Self.initCapacity(gpa, 1024, 512);
+    }
+
+    /// Init the type store with capacity heuristics based on source file size.
+    /// Larger source files typically need more type slots and variables.
+    ///
+    /// Heuristics based on typical Roc code patterns:
+    /// - ~1 type slot per 50 bytes of source
+    /// - ~1 child element (vars, tags, record fields) per 100 bytes
+    pub fn initFromSourceLen(gpa: Allocator, source_len: usize) std.mem.Allocator.Error!Self {
+        const root_capacity = @max(2048, @min(50_000, source_len / 50));
+        const child_capacity = @max(512, @min(10_000, source_len / 100));
+        return try Self.initCapacity(gpa, root_capacity, child_capacity);
     }
 
     /// Init the unification table
@@ -234,30 +247,26 @@ pub const Store = struct {
 
     // make builtin types //
 
-    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create fn anno
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
-
+    /// Create a Bool type as a tag union with False and True tags.
+    /// Use cached idents from CommonIdents.false_tag and CommonIdents.true_tag.
+    pub fn mkBool(self: *Self, false_ident: base.Ident.Idx, true_ident: base.Ident.Idx, ext_var: Var) std.mem.Allocator.Error!Content {
         const false_tag = try self.mkTag(false_ident, &[_]Var{});
         const true_tag = try self.mkTag(true_ident, &[_]Var{});
         return try self.mkTagUnion(&[_]Tag{ false_tag, true_tag }, ext_var);
     }
 
+    /// Create a Result type as a tag union with Ok and Err tags.
+    /// Use cached idents from CommonIdents.ok and CommonIdents.err.
     pub fn mkResult(
         self: *Self,
-        gpa: Allocator,
-        idents: *base.Ident.Store,
+        ok_ident: base.Ident.Idx,
+        err_ident: base.Ident.Idx,
         ok_var: Var,
         err_var: Var,
         ext_var: Var,
     ) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create every fn call
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("Ok"));
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("Err"));
-
-        const ok_tag = try self.mkTag(true_ident, &[_]Var{ok_var});
-        const err_tag = try self.mkTag(false_ident, &[_]Var{err_var});
+        const ok_tag = try self.mkTag(ok_ident, &[_]Var{ok_var});
+        const err_tag = try self.mkTag(err_ident, &[_]Var{err_var});
         return try self.mkTagUnion(&[_]Tag{ ok_tag, err_tag }, ext_var);
     }
 

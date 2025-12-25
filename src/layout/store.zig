@@ -311,18 +311,18 @@ pub const Store = struct {
             _ = try self.record_fields.append(self.env.gpa, sorted_field);
         }
 
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         for (temp_fields.items) |field| {
             const field_layout = self.getLayout(field.layout);
-            const field_alignment = field_layout.alignment(self.targetUsize());
-            const field_size = self.layoutSize(field_layout);
-            max_alignment = max_alignment.max(field_alignment);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
-            current_offset += field_size;
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
         }
 
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
         _ = try self.record_data.append(self.env.gpa, .{
@@ -330,7 +330,7 @@ pub const Store = struct {
             .fields = fields_range,
         });
 
-        const record_layout = Layout.record(max_alignment, record_idx);
+        const record_layout = Layout.record(std.mem.Alignment.fromByteUnits(max_alignment), record_idx);
         return try self.insertLayout(record_layout);
     }
 
@@ -384,22 +384,22 @@ pub const Store = struct {
         }
 
         // Compute size and alignment
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         for (temp_fields.items) |tf| {
             const field_layout = self.getLayout(tf.layout);
-            const field_alignment = field_layout.alignment(self.targetUsize());
-            const field_size = self.layoutSize(field_layout);
-            max_alignment = max_alignment.max(field_alignment);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
-            current_offset += field_size;
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
         }
 
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
         _ = try self.tuple_data.append(self.env.gpa, TupleData{ .size = total_size, .fields = fields_range });
-        const tuple_layout = Layout.tuple(max_alignment, tuple_idx);
+        const tuple_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
         return try self.insertLayout(tuple_layout);
     }
 
@@ -424,7 +424,6 @@ pub const Store = struct {
     }
 
     pub fn getRecordFieldOffset(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) u32 {
-        const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
 
@@ -434,25 +433,23 @@ pub const Store = struct {
         while (field_idx < field_index_in_sorted_fields) : (field_idx += 1) {
             const field = sorted_fields.get(field_idx);
             const field_layout = self.getLayout(field.layout);
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
             // Align current offset to field's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             // Add field size
-            current_offset += field_size;
+            current_offset += field_size_align.size;
         }
 
         // Now, align the offset for the requested field
         const requested_field = sorted_fields.get(field_index_in_sorted_fields);
         const requested_field_layout = self.getLayout(requested_field.layout);
-        const requested_field_alignment = requested_field_layout.alignment(target_usize);
-        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
+        const requested_field_size_align = self.layoutSizeAlign(requested_field_layout);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_size_align.alignment.toByteUnits()))));
     }
 
     pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
-        const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
 
@@ -461,23 +458,21 @@ pub const Store = struct {
         while (i < sorted_fields.len) : (i += 1) {
             const field = sorted_fields.get(i);
             const field_layout = self.getLayout(field.layout);
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             if (field.name == field_name_idx) {
                 return current_offset;
             }
 
-            current_offset += field_size;
+            current_offset += field_size_align.size;
         }
 
         return null;
     }
 
     pub fn getTupleElementOffset(self: *const Self, tuple_idx: TupleIdx, element_index_in_sorted_elements: u32) u32 {
-        const target_usize = self.targetUsize();
         const tuple_data = self.getTupleData(tuple_idx);
         const sorted_elements = self.tuple_fields.sliceRange(tuple_data.getFields());
 
@@ -487,21 +482,20 @@ pub const Store = struct {
         while (element_idx < element_index_in_sorted_elements) : (element_idx += 1) {
             const element = sorted_elements.get(element_idx);
             const element_layout = self.getLayout(element.layout);
-            const element_alignment = element_layout.alignment(target_usize);
-            const element_size = self.layoutSize(element_layout);
+            const element_size_align = self.layoutSizeAlign(element_layout);
 
             // Align current offset to element's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(element_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(element_size_align.alignment.toByteUnits()))));
 
             // Add element size
-            current_offset += element_size;
+            current_offset += element_size_align.size;
         }
 
         // Now, align the offset for the requested element
         const requested_element = sorted_elements.get(element_index_in_sorted_elements);
         const requested_element_layout = self.getLayout(requested_element.layout);
-        const requested_element_alignment = requested_element_layout.alignment(target_usize);
-        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_alignment.toByteUnits()))));
+        const requested_element_size_align = self.layoutSizeAlign(requested_element_layout);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_size_align.alignment.toByteUnits()))));
     }
 
     pub fn targetUsize(_: *const Self) target.TargetUsize {
@@ -550,36 +544,71 @@ pub const Store = struct {
         return try self.insertLayout(zst_layout);
     }
 
-    /// Get the size in bytes of a layout, given the store's target usize.
-    pub fn layoutSize(self: *const Self, layout: Layout) u32 {
-        // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)
-        // and also change it to just return that one field instead of doing any conditionals.
-        // also have it take an Idx. if you already have a Layout you can just get that.
+    /// Get both the size and alignment of a layout in a single call.
+    /// This is more efficient than calling layoutSize and alignment separately
+    /// since both values often share computation paths.
+    pub fn layoutSizeAlign(self: *const Self, layout: Layout) SizeAlign {
         const target_usize = self.targetUsize();
         return switch (layout.tag) {
             .scalar => switch (layout.data.scalar.tag) {
-                .int => layout.data.scalar.data.int.size(),
-                .frac => layout.data.scalar.data.frac.size(),
-                .str => 3 * target_usize.size(), // ptr, byte length, capacity
-                .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
+                .int => .{
+                    .size = @intCast(layout.data.scalar.data.int.size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.int.alignment().toByteUnits())),
+                },
+                .frac => .{
+                    .size = @intCast(layout.data.scalar.data.frac.size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.frac.alignment().toByteUnits())),
+                },
+                .str => .{
+                    .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                },
+                .opaque_ptr => .{
+                    .size = @intCast(target_usize.size()), // opaque_ptr is pointer-sized
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                },
             },
-            .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list => 3 * target_usize.size(), // ptr, length, capacity
-            .list_of_zst => 3 * target_usize.size(), // list_of_zst has same header structure as list
-            .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
-            .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
-            .closure => {
+            .box, .box_of_zst => .{
+                .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+            },
+            .list, .list_of_zst => .{
+                .size = @intCast(3 * target_usize.size()), // ptr, length, capacity
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+            },
+            .record => .{
+                .size = @intCast(self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.record.alignment.toByteUnits())),
+            },
+            .tuple => .{
+                .size = @intCast(self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tuple.alignment.toByteUnits())),
+            },
+            .closure => blk: {
                 // Closure layout: header + aligned capture data
                 const header_size = @sizeOf(layout_mod.Closure);
                 const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
-                const captures_alignment = captures_layout.alignment(self.targetUsize());
-                const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));
-                const captures_size = self.layoutSize(captures_layout);
-                return aligned_captures_offset + captures_size;
+                const captures_size_align = self.layoutSizeAlign(captures_layout);
+                const aligned_captures_offset = std.mem.alignForward(u32, header_size, @as(u32, @intCast(captures_size_align.alignment.toByteUnits())));
+                break :blk .{
+                    .size = @intCast(aligned_captures_offset + captures_size_align.size),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                };
             },
-            .tag_union => self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size,
-            .zst => 0, // Zero-sized types have size 0
+            .tag_union => .{
+                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tag_union.alignment.toByteUnits())),
+            },
+            .zst => .{
+                .size = 0, // Zero-sized types have size 0
+                .alignment = .@"1",
+            },
         };
+    }
+
+    /// Get the size in bytes of a layout, given the store's target usize.
+    pub fn layoutSize(self: *const Self, layout: Layout) u32 {
+        return self.layoutSizeAlign(layout).size;
     }
 
     /// Check if a layout is zero-sized
@@ -728,7 +757,6 @@ pub const Store = struct {
         self: *Store,
         updated_record: work.Work.PendingRecord,
     ) (LayoutError || std.mem.Allocator.Error)!Layout {
-        const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_record_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
         const fields_start = self.record_fields.items.len;
@@ -785,29 +813,27 @@ pub const Store = struct {
         }
 
         // Calculate max alignment and total size of all fields
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         var field_idx: u32 = 0;
 
         while (field_idx < temp_fields.items.len) : (field_idx += 1) {
             const temp_field = temp_fields.items[field_idx];
             const field_layout = self.getLayout(temp_field.layout);
-
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
             // Update max alignment
-            max_alignment = max_alignment.max(field_alignment);
+            max_alignment = @max(max_alignment, field_size_align.alignment.toByteUnits());
 
             // Align current offset to field's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             // Add field size
-            current_offset = current_offset + field_size;
+            current_offset = current_offset + field_size_align.size;
         }
 
         // Final size must be aligned to the record's alignment
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         // Create the record layout with the fields range
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
@@ -822,14 +848,13 @@ pub const Store = struct {
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return Layout.record(max_alignment, record_idx);
+        return Layout.record(std.mem.Alignment.fromByteUnits(max_alignment), record_idx);
     }
 
     fn finishTuple(
         self: *Store,
         updated_tuple: work.Work.PendingTuple,
     ) (LayoutError || std.mem.Allocator.Error)!Layout {
-        const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_tuple_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_tuple.resolved_fields_start;
         const fields_start = self.tuple_fields.items.len;
@@ -883,29 +908,27 @@ pub const Store = struct {
         }
 
         // Calculate max alignment and total size of all fields
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         var field_idx: u32 = 0;
 
         while (field_idx < temp_fields.items.len) : (field_idx += 1) {
             const temp_field = temp_fields.items[field_idx];
             const field_layout = self.getLayout(temp_field.layout);
-
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
             // Update max alignment
-            max_alignment = max_alignment.max(field_alignment);
+            max_alignment = @max(max_alignment, field_size_align.alignment.toByteUnits());
 
             // Align current offset to field's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             // Add field size
-            current_offset = current_offset + field_size;
+            current_offset = current_offset + field_size_align.size;
         }
 
         // Final size must be aligned to the tuple's alignment
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         // Create the tuple layout with the fields range
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
@@ -920,7 +943,7 @@ pub const Store = struct {
         // Remove only this tuple's resolved fields
         self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
 
-        return Layout.tuple(max_alignment, tuple_idx);
+        return Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
