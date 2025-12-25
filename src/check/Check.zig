@@ -16,6 +16,7 @@ const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
+const exhaustive = @import("exhaustive.zig");
 
 const ExposedItems = collections.ExposedItems;
 const CIR = can.CIR;
@@ -4494,6 +4495,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Get slice of branches
     const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
 
+    // Track whether we encountered any type errors during pattern checking
+    // If so, we'll skip exhaustiveness checking since the types may be invalid
+    var had_type_error = false;
+
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
     // against.
@@ -4510,6 +4515,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_cond_pattern = .{
             .match_expr = expr_idx,
         } });
+        if (!ptrn_result.isOk()) had_type_error = true;
     }
 
     // Check the first branch's value, then use that at the branch_var
@@ -4537,6 +4543,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .num_patterns = @intCast(branch_ptrn_idxs.len),
                 .problem_pattern_index = @intCast(cur_ptrn_index),
             } });
+            if (!ptrn_result.isOk()) had_type_error = true;
         }
 
         // Then, check the body
@@ -4585,6 +4592,56 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Unify the root expr with the match value
     _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
+
+    // Perform exhaustiveness and redundancy checking
+    // Only do this if there were no type errors - type errors can lead to invalid types
+    // that confuse the exhaustiveness checker
+    // Also skip if the condition type is an error type (can happen with complex inference)
+    const resolved_cond = self.types.resolveVar(cond_var);
+    const cond_is_error = resolved_cond.desc.content == .err;
+
+    if (!had_type_error and !cond_is_error) {
+        const match_region = self.cir.store.regions.get(
+            @enumFromInt(@intFromEnum(expr_idx)),
+        ).*;
+
+        const result = try exhaustive.checkMatch(
+            self.cir.gpa,
+            self.types,
+            &self.cir.store,
+            &self.cir.common.idents,
+            match.branches,
+            cond_var,
+            match_region,
+        );
+
+        // Report non-exhaustive match if any patterns are missing
+        if (!result.is_exhaustive) {
+            const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
+
+            // Format missing patterns as strings for the error message
+            var missing_strs: std.ArrayList([]const u8) = .empty;
+            for (result.missing_patterns) |pattern| {
+                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, pattern);
+                try missing_strs.append(self.cir.gpa, formatted);
+            }
+
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
+                .match_expr = expr_idx,
+                .condition_snapshot = condition_snapshot,
+                .missing_patterns = try missing_strs.toOwnedSlice(self.cir.gpa),
+            } });
+        }
+
+        // Report redundant patterns
+        for (result.redundant_indices) |idx| {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .redundant_pattern = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = idx,
+            } });
+        }
+    }
 
     return does_fx;
 }

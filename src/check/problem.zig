@@ -62,6 +62,8 @@ pub const Problem = union(enum) {
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
+    non_exhaustive_match: NonExhaustiveMatch,
+    redundant_pattern: RedundantPattern,
     bug: Bug,
 
     pub const Idx = enum(u32) { _ };
@@ -238,6 +240,22 @@ pub const IncompatibleMatchPatterns = struct {
 
 /// Problem data for when match branches have have incompatible types
 pub const IncompatibleMatchBranches = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: u32,
+    problem_branch_index: u32,
+};
+
+/// Problem data for a non-exhaustive match expression
+pub const NonExhaustiveMatch = struct {
+    match_expr: CIR.Expr.Idx,
+    /// Snapshot of the condition type for error messages
+    condition_snapshot: SnapshotContentIdx,
+    /// Human-readable representation of missing patterns
+    missing_patterns: []const []const u8,
+};
+
+/// Problem data for a redundant pattern in a match
+pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
@@ -524,6 +542,8 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
+            .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
@@ -2841,6 +2861,84 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_error_name);
+
+        return report;
+    }
+
+    fn buildNonExhaustiveMatchReport(self: *Self, data: NonExhaustiveMatch) !Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" expression doesn't cover all possible cases:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const condition_type = self.getFormattedString(data.condition_snapshot);
+        try report.document.addText("The value being matched on has type: ");
+        try report.document.addAnnotated(condition_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Missing patterns:");
+        try report.document.addLineBreak();
+
+        for (data.missing_patterns) |pattern| {
+            const owned_pattern = try report.addOwnedString(pattern);
+            try report.document.addText("    ");
+            try report.document.addCodeBlock(owned_pattern);
+            try report.document.addLineBreak();
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addText("Hint: Add branches to handle these cases, or use ");
+        try report.document.addAnnotated("_", .keyword);
+        try report.document.addText(" to match anything.");
+
+        return report;
+    }
+
+    fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) !Report {
+        var report = Report.init(self.gpa, "REDUNDANT PATTERN", .warning);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const ordinal_str = try report.addOwnedString(self.bytes_buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(ordinal_str);
+        try report.document.addText(" branch of this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" is redundant:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("This pattern can never match because earlier patterns already ");
+        try report.document.addText("cover all the values it would match.");
 
         return report;
     }

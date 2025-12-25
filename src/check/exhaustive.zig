@@ -26,10 +26,14 @@ const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
 const Can = @import("can");
+const types = @import("types");
 
 const Ident = base.Ident;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
+const TypeStore = types.Store;
+const Var = types.Var;
+const Content = types.Content;
 
 /// A pattern for exhaustiveness checking.
 /// This is a simplified representation focused only on what matters for coverage analysis.
@@ -76,6 +80,9 @@ pub const Union = struct {
     alternatives: []const CtorInfo,
     /// How to render this in error messages
     render_as: RenderAs,
+    /// True if the extension is a flex var (type not fully constrained).
+    /// This means wildcards shouldn't be marked redundant since more tags might exist.
+    has_flex_extension: bool = false,
 };
 
 /// Information about a single constructor
@@ -495,4 +502,1289 @@ pub fn convertMatchBranches(
         .rows = rows,
         .overall_region = overall_region,
     };
+}
+
+// Pattern Reification
+//
+// These functions resolve unresolved patterns to concrete patterns using type information.
+// This is the second phase of exhaustiveness checking.
+
+/// Result of reifying pattern rows
+pub const ReifiedRows = struct {
+    /// Rows that are not redundant (patterns are fully resolved)
+    rows: []const []const Pattern,
+    /// Indices of redundant branches (detected during reification)
+    redundant_indices: []const u32,
+    /// Errors found during reification
+    errors: []const Error,
+    /// The overall region of the match expression
+    overall_region: Region,
+    /// True if any constructor patterns couldn't be fully resolved
+    /// (e.g., polymorphic types where the union structure isn't known)
+    /// When true, redundancy checking should be skipped to avoid false positives
+    has_unresolved_ctor: bool,
+};
+
+/// Reify an unresolved pattern to a concrete pattern using type information.
+///
+/// This resolves tag patterns by looking up the full union type and determining
+/// the tag_id for the constructor.
+pub fn reifyPattern(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    unresolved: UnresolvedPattern,
+    type_var: Var,
+) error{OutOfMemory}!Pattern {
+    return switch (unresolved) {
+        .anything => .anything,
+
+        .literal => |lit| .{ .literal = lit },
+
+        .known_ctor => |kc| {
+            // Union is already known, just reify the args
+            const args = try allocator.alloc(Pattern, kc.args.len);
+            const arg_types = getCtorArgTypes(type_store, type_var, kc.tag_id);
+
+            for (kc.args, 0..) |arg, i| {
+                const arg_type = if (i < arg_types.len) arg_types[i] else type_var;
+
+                // Check if arg_type is a flex/rigid var (polymorphic, unresolved)
+                const resolved_arg = type_store.resolveVar(arg_type);
+                const is_unresolved = switch (resolved_arg.desc.content) {
+                    .flex, .rigid => true,
+                    else => false,
+                };
+
+                if (is_unresolved and arg != .anything) {
+                    // Arg type is polymorphic but pattern expects something specific.
+                    // We can't properly reify the nested pattern, so treat this
+                    // argument as 'anything'. But we KEEP the outer constructor
+                    // structure - we don't return 'anything' for the whole pattern.
+                    args[i] = .anything;
+                } else {
+                    args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
+                }
+            }
+
+            return .{ .ctor = .{
+                .union_info = kc.union_info,
+                .tag_id = kc.tag_id,
+                .args = args,
+            } };
+        },
+
+        .ctor => |c| {
+            // Need to look up the union type from the type variable
+            const union_result = try getUnionFromType(allocator, type_store, ident_store, type_var);
+
+            switch (union_result) {
+                .success => |union_info| {
+                    const tag_id = findTagId(union_info, c.tag_name) orelse {
+                        // Tag not found - this can happen with open unions
+                        // Treat as anything for exhaustiveness purposes
+                        return .anything;
+                    };
+
+                    const args = try allocator.alloc(Pattern, c.args.len);
+                    const arg_types = getCtorArgTypes(type_store, type_var, tag_id);
+
+                    for (c.args, 0..) |arg, i| {
+                        const arg_type = if (i < arg_types.len) arg_types[i] else type_var;
+
+                        // Check if arg_type is a flex/rigid var (polymorphic, unresolved)
+                        const resolved_arg = type_store.resolveVar(arg_type);
+                        const is_unresolved = switch (resolved_arg.desc.content) {
+                            .flex, .rigid => true,
+                            else => false,
+                        };
+
+                        if (is_unresolved and arg != .anything) {
+                            // Arg type is polymorphic but pattern expects something specific.
+                            // We can't properly reify the nested pattern, so treat this
+                            // argument as 'anything'. But we KEEP the outer constructor
+                            // structure - we don't return 'anything' for the whole pattern.
+                            args[i] = .anything;
+                        } else {
+                            args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
+                        }
+                    }
+
+                    return .{ .ctor = .{
+                        .union_info = union_info,
+                        .tag_id = tag_id,
+                        .args = args,
+                    } };
+                },
+                .not_a_union => {
+                    // Type variable doesn't resolve to a union - treat as anything
+                    return .anything;
+                },
+            }
+        },
+
+        .list => |l| {
+            const elem_type = getListElemType(type_store, type_var) orelse type_var;
+
+            const elements = try allocator.alloc(Pattern, l.elements.len);
+            for (l.elements, 0..) |elem, i| {
+                elements[i] = try reifyPattern(allocator, type_store, ident_store, elem, elem_type);
+            }
+
+            return .{ .list = .{
+                .arity = l.arity,
+                .elements = elements,
+            } };
+        },
+    };
+}
+
+/// Reify all unresolved pattern rows to concrete patterns.
+///
+/// This also performs redundancy checking as patterns are added.
+pub fn reifyRows(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    unresolved: UnresolvedRows,
+    scrutinee_type: Var,
+) error{OutOfMemory}!ReifiedRows {
+    var reified_rows: std.ArrayList([]const Pattern) = .empty;
+    var redundant_indices: std.ArrayList(u32) = .empty;
+    var errors: std.ArrayList(Error) = .empty;
+    var has_unresolved_ctor = false;
+
+    for (unresolved.rows) |row| {
+        // Reify this row's patterns
+        const reified = try allocator.alloc(Pattern, row.patterns.len);
+        for (row.patterns, 0..) |pat, i| {
+            reified[i] = try reifyPattern(allocator, type_store, ident_store, pat, scrutinee_type);
+            // Track if any constructor patterns couldn't be fully resolved
+            // (turned into .anything when they should have been .ctor)
+            // Also check known_ctor patterns that might have nested unresolved patterns
+            if ((pat == .ctor or pat == .known_ctor) and reified[i] == .anything) {
+                has_unresolved_ctor = true;
+            }
+            // Check nested patterns in constructors (tuples, records, tag unions with payloads)
+            if (pat == .known_ctor and reified[i] == .ctor) {
+                // Check if any nested pattern became .anything when it wasn't originally
+                if (hasUnresolvedNestedPatterns(pat.known_ctor.args, reified[i].ctor.args)) {
+                    has_unresolved_ctor = true;
+                }
+            }
+            // Also check .ctor patterns that resolved but have nested unresolved args
+            if (pat == .ctor and reified[i] == .ctor) {
+                if (hasUnresolvedNestedPatterns(pat.ctor.args, reified[i].ctor.args)) {
+                    has_unresolved_ctor = true;
+                }
+            }
+        }
+
+        // TODO: Check if this row is useful (redundancy checking comes in Phase 5)
+        // For now, add all rows
+        try reified_rows.append(allocator, reified);
+    }
+
+    return .{
+        .rows = try reified_rows.toOwnedSlice(allocator),
+        .redundant_indices = try redundant_indices.toOwnedSlice(allocator),
+        .errors = try errors.toOwnedSlice(allocator),
+        .overall_region = unresolved.overall_region,
+        .has_unresolved_ctor = has_unresolved_ctor,
+    };
+}
+
+/// Check if any nested constructor patterns couldn't be fully resolved.
+/// This happens when an unresolved pattern (like a tag name) became .anything
+/// because the union type couldn't be determined.
+fn hasUnresolvedNestedPatterns(unresolved_args: []const UnresolvedPattern, reified_args: []const Pattern) bool {
+    // If argument counts don't match, something went wrong but we can't check
+    if (unresolved_args.len != reified_args.len) return false;
+
+    for (unresolved_args, reified_args) |unresolved, reified| {
+        // Constructor that became anything = unresolved
+        if ((unresolved == .ctor or unresolved == .known_ctor) and reified == .anything) {
+            return true;
+        }
+        // Recursively check nested patterns
+        if (unresolved == .known_ctor and reified == .ctor) {
+            if (hasUnresolvedNestedPatterns(unresolved.known_ctor.args, reified.ctor.args)) {
+                return true;
+            }
+        }
+        if (unresolved == .ctor and reified == .ctor) {
+            if (hasUnresolvedNestedPatterns(unresolved.ctor.args, reified.ctor.args)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Helper types and functions for reification
+
+const UnionResult = union(enum) {
+    success: Union,
+    not_a_union,
+};
+
+/// Extract union information from a type variable.
+fn getUnionFromType(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    type_var: Var,
+) error{OutOfMemory}!UnionResult {
+    const resolved = type_store.resolveVar(type_var);
+    const content = resolved.desc.content;
+
+    // Try to unwrap as a tag union
+    if (content.unwrapTagUnion()) |tag_union| {
+        return try buildUnionFromTagUnion(allocator, type_store, tag_union);
+    }
+
+    // Try to follow aliases and other type wrappers
+    switch (content) {
+        .alias => |alias| {
+            const backing_var = type_store.getAliasBackingVar(alias);
+            return getUnionFromType(allocator, type_store, ident_store, backing_var);
+        },
+        .recursion_var => |rec| {
+            return getUnionFromType(allocator, type_store, ident_store, rec.structure);
+        },
+        // Flex/rigid type variables: the type is polymorphic, we can't determine
+        // the full set of constructors, so treat as not a union for exhaustiveness
+        .flex, .rigid => return .not_a_union,
+        // Structure might contain tag union or nominal type info
+        .structure => |flat_type| {
+            switch (flat_type) {
+                .tag_union => |tag_union| {
+                    return try buildUnionFromTagUnion(allocator, type_store, tag_union);
+                },
+                // Nominal types (like Try, Result) are user-defined types that wrap other types
+                // We need to unwrap them to find the underlying tag union
+                .nominal_type => |nominal| {
+                    const backing_var = type_store.getNominalBackingVar(nominal);
+                    return getUnionFromType(allocator, type_store, ident_store, backing_var);
+                },
+                else => return .not_a_union,
+            }
+        },
+        else => {},
+    }
+
+    // Not a tag union
+    return .not_a_union;
+}
+
+/// Build a Union structure from a TagUnion type.
+fn buildUnionFromTagUnion(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    tag_union: types.TagUnion,
+) error{OutOfMemory}!UnionResult {
+
+    const tags_slice = type_store.getTagsSlice(tag_union.tags);
+    const tag_names = tags_slice.items(.name);
+    const tag_args = tags_slice.items(.args);
+
+    // Check if it's an open union (has extension variable)
+    const is_open = isOpenExtension(type_store, tag_union.ext);
+
+    // Allocate alternatives (add one extra for open unions)
+    const num_alts = tag_names.len + @as(usize, if (is_open) 1 else 0);
+    const alternatives = try allocator.alloc(CtorInfo, num_alts);
+
+    for (tag_names, tag_args, 0..) |name, args_range, i| {
+        const arg_vars = type_store.sliceVars(args_range);
+        alternatives[i] = .{
+            .name = .{ .tag = name },
+            .tag_id = @enumFromInt(i),
+            .arity = arg_vars.len,
+        };
+    }
+
+    // Add synthetic #Open constructor for open unions
+    if (is_open) {
+        alternatives[tag_names.len] = .{
+            .name = .{ .tag = Ident.Idx.NONE }, // Represents "#Open"
+            .tag_id = @enumFromInt(tag_names.len),
+            .arity = 0,
+        };
+    }
+
+    // Check if extension is a flex var (type not fully constrained)
+    const has_flex = hasFlexExtension(type_store, tag_union.ext);
+
+    return .{ .success = .{
+        .alternatives = alternatives,
+        .render_as = .tag,
+        .has_flex_extension = has_flex,
+    } };
+}
+
+/// Check if an extension variable is a flex var (unconstrained).
+/// Used to determine if wildcards should be considered redundant.
+fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
+    const resolved = type_store.resolveVar(ext);
+    const content = resolved.desc.content;
+    return content == .flex;
+}
+
+/// Check if an extension variable represents an open union.
+/// For exhaustiveness checking, we only consider a union truly "open" if:
+/// - It has a rigid type variable (explicit polymorphism from annotation)
+/// - It has been unified with a non-empty tag extension
+/// A plain flex variable (unconstrained) is treated as closed because nothing
+/// has required additional tags to exist.
+fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
+    const resolved = type_store.resolveVar(ext);
+    const content = resolved.desc.content;
+
+    return switch (content) {
+        // Rigid vars are explicitly polymorphic - the union is truly open
+        .rigid => true,
+        // Flex vars that are unconstrained mean "could have more, but nothing required any"
+        // For exhaustiveness, treat as closed since we matched all known tags
+        .flex => false,
+        // Empty tag union means it's closed
+        .structure => |flat_type| switch (flat_type) {
+            .empty_tag_union => false,
+            // A tag union extension (nested tags) means more tags exist
+            .tag_union => true,
+            else => false,
+        },
+        // Recursion vars, aliases - resolve further
+        .alias => |alias| {
+            const backing = type_store.getAliasBackingVar(alias);
+            return isOpenExtension(type_store, backing);
+        },
+        .recursion_var => |rec| {
+            return isOpenExtension(type_store, rec.structure);
+        },
+        else => false,
+    };
+}
+
+/// Find the tag_id for a tag name within a union.
+/// Compares only the string index, not attributes, since the same tag name
+/// from a pattern vs a type definition may have different attributes.
+fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
+    for (union_info.alternatives, 0..) |alt, i| {
+        const alt_ident = switch (alt.name) {
+            .tag => |t| if (t == Ident.Idx.NONE) continue else t,
+            .opaque_type => |o| o,
+        };
+        // Compare just the idx (interned string index), not the full Ident.Idx
+        // which includes attributes that may differ between pattern and type
+        if (alt_ident.idx == tag_name.idx) {
+            return @enumFromInt(i);
+        }
+    }
+    return null;
+}
+
+/// Get the argument types for a constructor.
+/// For nominal types with type arguments (like Try(A, B)), we need to return
+/// the actual type arguments, not the backing type's unsubstituted type params.
+fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const Var {
+    const resolved = type_store.resolveVar(type_var);
+    const content = resolved.desc.content;
+
+    if (content.unwrapTagUnion()) |tag_union| {
+        const tags_slice = type_store.getTagsSlice(tag_union.tags);
+        const tag_args = tags_slice.items(.args);
+
+        const idx = @intFromEnum(tag_id);
+        if (idx < tag_args.len) {
+            return type_store.sliceVars(tag_args[idx]);
+        }
+    }
+
+    // Follow aliases and nominal types
+    switch (content) {
+        .alias => |alias| {
+            const backing_var = type_store.getAliasBackingVar(alias);
+            return getCtorArgTypes(type_store, backing_var, tag_id);
+        },
+        .structure => |flat_type| switch (flat_type) {
+            .nominal_type => |nominal| {
+                // For parametric nominal types like Try(A, B), get args from backing type
+                const nom_args = type_store.sliceNominalArgs(nominal);
+                const backing_var = type_store.getNominalBackingVar(nominal);
+                const backing_args = getCtorArgTypes(type_store, backing_var, tag_id);
+
+                // If the backing args are rigid/flex (type params), substitute with nom_args
+                if (backing_args.len == 1 and nom_args.len > 0) {
+                    const first_arg_resolved = type_store.resolveVar(backing_args[0]);
+                    switch (first_arg_resolved.desc.content) {
+                        .rigid, .flex => {
+                            // Single arg is a type param - use first nom_arg as best guess
+                            return nom_args[0..1];
+                        },
+                        else => {},
+                    }
+                }
+                return backing_args;
+            },
+            .tuple => |tuple| {
+                // Tuples are single-constructor types, return the element types
+                return type_store.sliceVars(tuple.elems);
+            },
+            else => {},
+        },
+        else => {},
+    }
+
+    return &[_]Var{};
+}
+
+/// Get the element type from a List type.
+fn getListElemType(type_store: *TypeStore, type_var: Var) ?Var {
+    const resolved = type_store.resolveVar(type_var);
+    const content = resolved.desc.content;
+
+    // List is a nominal type with one type argument (the element type)
+    if (content.unwrapNominalType()) |nominal| {
+        const args = type_store.sliceNominalArgs(nominal);
+        if (args.len == 1) {
+            return args[0];
+        }
+    }
+
+    // Follow aliases
+    switch (content) {
+        .alias => |alias| {
+            const backing_var = type_store.getAliasBackingVar(alias);
+            return getListElemType(type_store, backing_var);
+        },
+        else => {},
+    }
+
+    return null;
+}
+
+// Exhaustiveness Algorithm
+//
+// Implementation of Maranget's algorithm for checking pattern exhaustiveness.
+// The key insight is that we maintain a "pattern matrix" where:
+// - Each row represents one branch's patterns
+// - Each column represents one position in the scrutinee
+//
+// We recursively specialize the matrix by constructors and check if all cases are covered.
+
+/// A matrix of patterns for exhaustiveness checking.
+/// Each row represents one branch, each column represents one scrutinee position.
+pub const PatternMatrix = struct {
+    rows: []const []const Pattern,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, rows: []const []const Pattern) PatternMatrix {
+        return .{ .rows = rows, .allocator = allocator };
+    }
+
+    pub fn isEmpty(self: PatternMatrix) bool {
+        return self.rows.len == 0;
+    }
+
+    /// Get the first column of patterns
+    pub fn firstColumn(self: PatternMatrix) ![]const Pattern {
+        if (self.rows.len == 0) return &[_]Pattern{};
+        const col = try self.allocator.alloc(Pattern, self.rows.len);
+        for (self.rows, 0..) |row, i| {
+            col[i] = if (row.len > 0) row[0] else .anything;
+        }
+        return col;
+    }
+};
+
+/// Result of collecting constructors from the first column
+const CollectedCtors = union(enum) {
+    /// Only wildcards/anything - pattern is not exhaustive by itself
+    non_exhaustive_wildcards,
+    /// Specific tag constructors found
+    ctors: struct {
+        found: []const TagId,
+        union_info: Union,
+    },
+    /// List patterns found
+    lists: []const ListArity,
+    /// Literal patterns found (cannot be exhaustive for infinite domains)
+    literals,
+};
+
+/// Collect constructors from the first column of the matrix.
+fn collectCtors(allocator: std.mem.Allocator, matrix: PatternMatrix) !CollectedCtors {
+    if (matrix.isEmpty()) return .non_exhaustive_wildcards;
+
+    const first_col = try matrix.firstColumn();
+    if (first_col.len == 0) return .non_exhaustive_wildcards;
+
+    // Determine what kind of patterns we have
+    var found_ctor = false;
+    var found_list = false;
+    var found_literal = false;
+    var found_wildcard = false;
+    var union_info: ?Union = null;
+
+    for (first_col) |pat| {
+        switch (pat) {
+            .ctor => |c| {
+                found_ctor = true;
+                if (union_info == null) {
+                    union_info = c.union_info;
+                }
+            },
+            .list => {
+                found_list = true;
+            },
+            .literal => {
+                found_literal = true;
+            },
+            .anything => {
+                found_wildcard = true;
+            },
+        }
+    }
+
+    if (found_ctor) {
+        // Collect all unique tag IDs
+        var tag_set = std.AutoHashMap(TagId, void).init(allocator);
+        for (first_col) |pat| {
+            if (pat == .ctor) {
+                try tag_set.put(pat.ctor.tag_id, {});
+            }
+        }
+
+        var found_tags: std.ArrayList(TagId) = .empty;
+        var it = tag_set.keyIterator();
+        while (it.next()) |key| {
+            try found_tags.append(allocator, key.*);
+        }
+
+        return .{ .ctors = .{
+            .found = try found_tags.toOwnedSlice(allocator),
+            .union_info = union_info.?,
+        } };
+    }
+
+    if (found_list) {
+        // If there's also a wildcard, it covers all remaining list lengths
+        if (found_wildcard) {
+            return .non_exhaustive_wildcards;
+        }
+        var arities: std.ArrayList(ListArity) = .empty;
+        for (first_col) |pat| {
+            if (pat == .list) {
+                try arities.append(allocator, pat.list.arity);
+            }
+        }
+        return .{ .lists = try arities.toOwnedSlice(allocator) };
+    }
+
+    if (found_literal) {
+        // If there's also a wildcard, it covers all remaining literal values
+        // So we should treat this as having wildcards rather than incomplete literals
+        if (found_wildcard) {
+            return .non_exhaustive_wildcards;
+        }
+        return .literals;
+    }
+
+    return .non_exhaustive_wildcards;
+}
+
+/// Specialize the matrix by a constructor.
+/// Keeps only rows that match this constructor, expanding their arguments.
+fn specializeByConstructor(
+    allocator: std.mem.Allocator,
+    matrix: PatternMatrix,
+    tag_id: TagId,
+    arity: usize,
+) !PatternMatrix {
+    var new_rows: std.ArrayList([]const Pattern) = .empty;
+
+    for (matrix.rows) |row| {
+        if (row.len == 0) continue;
+
+        const first = row[0];
+        const rest = row[1..];
+
+        switch (first) {
+            .ctor => |c| {
+                if (@intFromEnum(c.tag_id) == @intFromEnum(tag_id)) {
+                    // This row matches - expand constructor args
+                    const new_row = try allocator.alloc(Pattern, c.args.len + rest.len);
+                    @memcpy(new_row[0..c.args.len], c.args);
+                    @memcpy(new_row[c.args.len..], rest);
+                    try new_rows.append(allocator, new_row);
+                }
+                // Otherwise row doesn't match, skip it
+            },
+
+            .anything => {
+                // Wildcard matches everything - expand with wildcards for args
+                const new_row = try allocator.alloc(Pattern, arity + rest.len);
+                for (0..arity) |i| {
+                    new_row[i] = .anything;
+                }
+                @memcpy(new_row[arity..], rest);
+                try new_rows.append(allocator, new_row);
+            },
+
+            else => {}, // Literals and lists don't match constructors
+        }
+    }
+
+    return PatternMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+}
+
+/// Specialize the matrix for wildcard - keep only rows starting with wildcard
+fn specializeByAnything(allocator: std.mem.Allocator, matrix: PatternMatrix) !PatternMatrix {
+    var new_rows: std.ArrayList([]const Pattern) = .empty;
+
+    for (matrix.rows) |row| {
+        if (row.len == 0) continue;
+        if (row[0] == .anything) {
+            try new_rows.append(allocator, row[1..]);
+        }
+    }
+
+    return PatternMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+}
+
+/// Specialize the matrix by a list arity.
+fn specializeByListArity(
+    allocator: std.mem.Allocator,
+    matrix: PatternMatrix,
+    arity: ListArity,
+) !PatternMatrix {
+    var new_rows: std.ArrayList([]const Pattern) = .empty;
+
+    const target_len = arity.minLen();
+
+    for (matrix.rows) |row| {
+        if (row.len == 0) continue;
+
+        const first = row[0];
+        const rest = row[1..];
+
+        switch (first) {
+            .list => |l| {
+                if (l.arity.coversLength(target_len)) {
+                    // This list pattern covers the target length
+                    const new_row = try allocator.alloc(Pattern, l.elements.len + rest.len);
+                    @memcpy(new_row[0..l.elements.len], l.elements);
+                    @memcpy(new_row[l.elements.len..], rest);
+                    try new_rows.append(allocator, new_row);
+                }
+            },
+
+            .anything => {
+                // Wildcard matches all list lengths
+                const new_row = try allocator.alloc(Pattern, target_len + rest.len);
+                for (0..target_len) |i| {
+                    new_row[i] = .anything;
+                }
+                @memcpy(new_row[target_len..], rest);
+                try new_rows.append(allocator, new_row);
+            },
+
+            else => {},
+        }
+    }
+
+    return PatternMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+}
+
+/// Check if the pattern matrix is exhaustive.
+/// Returns a list of missing patterns (empty if exhaustive).
+pub fn checkExhaustive(
+    allocator: std.mem.Allocator,
+    matrix: PatternMatrix,
+    n: usize, // number of columns
+) ![]const Pattern {
+    // Base case: empty matrix with columns to fill = not exhaustive
+    if (matrix.isEmpty()) {
+        if (n == 0) {
+            // No more columns to check - we're exhaustive
+            return &[_]Pattern{};
+        }
+        // Empty matrix but columns remain - return wildcards as missing pattern
+        const missing = try allocator.alloc(Pattern, n);
+        for (0..n) |i| {
+            missing[i] = .anything;
+        }
+        return missing;
+    }
+
+    // No more columns = we found a match, exhaustive for this path
+    if (n == 0) {
+        return &[_]Pattern{};
+    }
+
+    const ctors = try collectCtors(allocator, matrix);
+
+    return switch (ctors) {
+        .non_exhaustive_wildcards => {
+            // Only wildcards in first column - recurse on rest
+            const new_matrix = try specializeByAnything(allocator, matrix);
+            const rest = try checkExhaustive(allocator, new_matrix, n - 1);
+
+            if (rest.len == 0) return &[_]Pattern{};
+
+            // Prepend wildcard to missing patterns
+            const result = try allocator.alloc(Pattern, 1);
+            result[0] = .anything;
+            return result;
+        },
+
+        .ctors => |ctor_info| {
+            const num_found = ctor_info.found.len;
+            const num_alts = ctor_info.union_info.alternatives.len;
+
+            if (num_found < num_alts) {
+                // Not all constructors covered - find which are missing
+                var missing_alts: std.ArrayList(CtorInfo) = .empty;
+
+                for (ctor_info.union_info.alternatives) |alt| {
+                    var found = false;
+                    for (ctor_info.found) |found_id| {
+                        if (@intFromEnum(alt.tag_id) == @intFromEnum(found_id)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try missing_alts.append(allocator, alt);
+                    }
+                }
+
+                // Return the first missing constructor as a pattern
+                if (missing_alts.items.len > 0) {
+                    const alt = missing_alts.items[0];
+                    const args = try allocator.alloc(Pattern, alt.arity);
+                    for (0..alt.arity) |i| {
+                        args[i] = .anything;
+                    }
+
+                    const result = try allocator.alloc(Pattern, 1);
+                    result[0] = .{ .ctor = .{
+                        .union_info = ctor_info.union_info,
+                        .tag_id = alt.tag_id,
+                        .args = args,
+                    } };
+                    return result;
+                }
+            }
+
+            // All constructors covered - check each one recursively
+            for (ctor_info.union_info.alternatives) |alt| {
+                const specialized = try specializeByConstructor(
+                    allocator,
+                    matrix,
+                    alt.tag_id,
+                    alt.arity,
+                );
+                const missing = try checkExhaustive(allocator, specialized, alt.arity + n - 1);
+
+                if (missing.len > 0) {
+                    // Found a missing pattern in this constructor's arguments
+                    // Wrap it in this constructor
+                    const args = try allocator.alloc(Pattern, alt.arity);
+                    for (0..alt.arity) |i| {
+                        if (i < missing.len) {
+                            args[i] = missing[i];
+                        } else {
+                            args[i] = .anything;
+                        }
+                    }
+
+                    const result = try allocator.alloc(Pattern, 1);
+                    result[0] = .{ .ctor = .{
+                        .union_info = ctor_info.union_info,
+                        .tag_id = alt.tag_id,
+                        .args = args,
+                    } };
+                    return result;
+                }
+            }
+
+            // All paths exhaustive
+            return &[_]Pattern{};
+        },
+
+        .lists => |arities| {
+            // For list patterns, we need to check various lengths
+            // Build the list of lengths we need to check
+            const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
+
+            for (ctors_to_check) |list_arity| {
+                const specialized = try specializeByListArity(allocator, matrix, list_arity);
+                const min_len = list_arity.minLen();
+                const missing = try checkExhaustive(allocator, specialized, min_len + n - 1);
+
+                if (missing.len > 0) {
+                    // Found a missing pattern
+                    const elements = try allocator.alloc(Pattern, min_len);
+                    for (0..min_len) |i| {
+                        if (i < missing.len) {
+                            elements[i] = missing[i];
+                        } else {
+                            elements[i] = .anything;
+                        }
+                    }
+
+                    const result = try allocator.alloc(Pattern, 1);
+                    result[0] = .{ .list = .{
+                        .arity = list_arity,
+                        .elements = elements,
+                    } };
+                    return result;
+                }
+            }
+
+            return &[_]Pattern{};
+        },
+
+        .literals => {
+            // Literals have infinite domains (except Bool which is handled as ctor)
+            // So literal-only patterns are never exhaustive
+            const result = try allocator.alloc(Pattern, 1);
+            result[0] = .anything;
+            return result;
+        },
+    };
+}
+
+/// Build the list of list arities we need to check for exhaustiveness.
+/// This handles the complexity of variable-length list patterns.
+fn buildListCtorsForChecking(
+    allocator: std.mem.Allocator,
+    pattern_arities: []const ListArity,
+) ![]const ListArity {
+    // Find the maximum lengths we need to consider
+    var max_exact_len: usize = 0;
+    var has_slice = false;
+    var max_slice_min: usize = 0;
+
+    for (pattern_arities) |arity| {
+        switch (arity) {
+            .exact => |len| {
+                max_exact_len = @max(max_exact_len, len);
+            },
+            .slice => |s| {
+                has_slice = true;
+                max_slice_min = @max(max_slice_min, s.prefix + s.suffix);
+            },
+        }
+    }
+
+    if (!has_slice) {
+        // Only exact patterns - check each length from 0 to max+1
+        var result: std.ArrayList(ListArity) = .empty;
+        for (0..max_exact_len + 2) |len| {
+            try result.append(allocator, .{ .exact = len });
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    // Has slice patterns - check each length from 0 to the point where slices take over
+    var result: std.ArrayList(ListArity) = .empty;
+    const check_until = @max(max_exact_len + 1, max_slice_min);
+
+    for (0..check_until) |len| {
+        try result.append(allocator, .{ .exact = len });
+    }
+
+    // Add one slice pattern to cover all remaining lengths
+    try result.append(allocator, .{ .slice = .{
+        .prefix = check_until,
+        .suffix = 0,
+    } });
+
+    return try result.toOwnedSlice(allocator);
+}
+
+/// Main entry point: check exhaustiveness and return an error if not exhaustive.
+pub fn check(
+    allocator: std.mem.Allocator,
+    region: Region,
+    context: Context,
+    rows: []const []const Pattern,
+) !?Error {
+    const matrix = PatternMatrix.init(allocator, rows);
+    const missing = try checkExhaustive(allocator, matrix, 1);
+
+    if (missing.len > 0) {
+        return .{ .incomplete = .{
+            .region = region,
+            .context = context,
+            .missing_patterns = missing,
+        } };
+    }
+
+    return null;
+}
+
+// Redundancy Checking
+//
+// A pattern is "useful" if it can match something that existing patterns don't.
+// If a pattern is not useful, it's redundant (unreachable).
+
+/// Check if a new pattern row is "useful" given existing rows.
+/// A pattern is useful if it can match something the existing patterns don't.
+/// If not useful, it's redundant.
+pub fn isUseful(
+    allocator: std.mem.Allocator,
+    existing_matrix: PatternMatrix,
+    new_row: []const Pattern,
+) !bool {
+    // Empty matrix = new row is definitely useful
+    if (existing_matrix.isEmpty()) return true;
+
+    // No more patterns to check = not useful (existing rows cover everything)
+    if (new_row.len == 0) return false;
+
+    const first = new_row[0];
+    const rest = new_row[1..];
+
+    return switch (first) {
+        .ctor => |c| {
+            // Specialize matrix by this constructor
+            const specialized = try specializeByConstructor(
+                allocator,
+                existing_matrix,
+                c.tag_id,
+                c.args.len,
+            );
+
+            // Check if args + rest is useful in specialized matrix
+            const extended_row = try allocator.alloc(Pattern, c.args.len + rest.len);
+            @memcpy(extended_row[0..c.args.len], c.args);
+            @memcpy(extended_row[c.args.len..], rest);
+
+            return isUseful(allocator, specialized, extended_row);
+        },
+
+        .anything => {
+            // Check if matrix is complete (covers all constructors)
+            const ctors = try collectCtors(allocator, existing_matrix);
+
+            switch (ctors) {
+                .non_exhaustive_wildcards => {
+                    // Not complete - check if any existing wildcard already covers this
+                    const specialized = try specializeByAnything(allocator, existing_matrix);
+                    return isUseful(allocator, specialized, rest);
+                },
+
+                .ctors => |ctor_info| {
+                    // If the union has a flex extension, wildcards are always useful
+                    // because the type might have more tags that weren't constrained yet
+                    if (ctor_info.union_info.has_flex_extension) {
+                        return true;
+                    }
+
+                    const num_found = ctor_info.found.len;
+                    const num_alts = ctor_info.union_info.alternatives.len;
+
+                    if (num_found < num_alts) {
+                        // Not all constructors covered - wildcard might be useful
+                        // Check the default (wildcard) path
+                        const specialized = try specializeByAnything(allocator, existing_matrix);
+                        return isUseful(allocator, specialized, rest);
+                    }
+
+                    // All constructors covered - check each one
+                    for (ctor_info.union_info.alternatives) |alt| {
+                        const specialized = try specializeByConstructor(
+                            allocator,
+                            existing_matrix,
+                            alt.tag_id,
+                            alt.arity,
+                        );
+
+                        const extended = try allocator.alloc(Pattern, alt.arity + rest.len);
+                        for (0..alt.arity) |i| {
+                            extended[i] = .anything;
+                        }
+                        @memcpy(extended[alt.arity..], rest);
+
+                        if (try isUseful(allocator, specialized, extended)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+
+                .lists => |arities| {
+                    // For list patterns, check if wildcard is useful for any length
+                    const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
+
+                    for (ctors_to_check) |list_arity| {
+                        const specialized = try specializeByListArity(allocator, existing_matrix, list_arity);
+                        const min_len = list_arity.minLen();
+
+                        const extended = try allocator.alloc(Pattern, min_len + rest.len);
+                        for (0..min_len) |i| {
+                            extended[i] = .anything;
+                        }
+                        @memcpy(extended[min_len..], rest);
+
+                        if (try isUseful(allocator, specialized, extended)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+
+                .literals => {
+                    // Literals have infinite domains, so wildcard is always useful
+                    return true;
+                },
+            }
+        },
+
+        .literal => |lit| {
+            // Keep rows that match this literal or are wildcards
+            var matching_rows: std.ArrayList([]const Pattern) = .empty;
+
+            for (existing_matrix.rows) |row| {
+                if (row.len == 0) continue;
+                const row_first = row[0];
+
+                const matches = switch (row_first) {
+                    .literal => |l| Literal.eql(l, lit),
+                    .anything => true,
+                    else => false,
+                };
+
+                if (matches) {
+                    try matching_rows.append(allocator, row[1..]);
+                }
+            }
+
+            const filtered = PatternMatrix.init(
+                allocator,
+                try matching_rows.toOwnedSlice(allocator),
+            );
+            return isUseful(allocator, filtered, rest);
+        },
+
+        .list => |l| {
+            // Specialize by this list arity
+            const specialized = try specializeByListArity(allocator, existing_matrix, l.arity);
+
+            const extended_row = try allocator.alloc(Pattern, l.elements.len + rest.len);
+            @memcpy(extended_row[0..l.elements.len], l.elements);
+            @memcpy(extended_row[l.elements.len..], rest);
+
+            return isUseful(allocator, specialized, extended_row);
+        },
+    };
+}
+
+/// Result of checking rows for redundancy
+pub const RedundancyResult = struct {
+    /// Non-redundant rows (useful patterns)
+    non_redundant_rows: []const []const Pattern,
+    /// Indices of redundant branches
+    redundant_indices: []const u32,
+    /// Regions of redundant branches
+    redundant_regions: []const Region,
+};
+
+/// Process pattern rows and identify redundant patterns.
+/// Returns non-redundant rows and information about which rows were redundant.
+pub fn checkRedundancy(
+    allocator: std.mem.Allocator,
+    rows: []const UnresolvedRow,
+    reified_patterns: []const []const Pattern,
+) !RedundancyResult {
+    var non_redundant: std.ArrayList([]const Pattern) = .empty;
+    var redundant_indices: std.ArrayList(u32) = .empty;
+    var redundant_regions: std.ArrayList(Region) = .empty;
+
+    for (rows, reified_patterns) |row, patterns| {
+        // Rows with guards are always considered useful (guard might fail at runtime)
+        const is_useful = row.guard == .has_guard or
+            try isUseful(allocator, PatternMatrix.init(allocator, non_redundant.items), patterns);
+
+        if (is_useful) {
+            try non_redundant.append(allocator, patterns);
+        } else {
+            try redundant_indices.append(allocator, row.branch_index);
+            try redundant_regions.append(allocator, row.region);
+        }
+    }
+
+    return .{
+        .non_redundant_rows = try non_redundant.toOwnedSlice(allocator),
+        .redundant_indices = try redundant_indices.toOwnedSlice(allocator),
+        .redundant_regions = try redundant_regions.toOwnedSlice(allocator),
+    };
+}
+
+// High-level Integration API
+//
+// These functions provide a simpler interface for the type checker to call.
+
+/// Result of exhaustiveness and redundancy checking
+pub const CheckResult = struct {
+    /// Whether the match is exhaustive
+    is_exhaustive: bool,
+    /// Missing patterns if not exhaustive (for error messages)
+    missing_patterns: []const Pattern,
+    /// Indices of redundant branches
+    redundant_indices: []const u32,
+    /// Regions of redundant branches
+    redundant_regions: []const Region,
+};
+
+/// Perform full exhaustiveness and redundancy checking on a match expression.
+///
+/// This is the main entry point for the type checker.
+/// It converts patterns, reifies them with type info, and checks both
+/// exhaustiveness and redundancy.
+pub fn checkMatch(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    node_store: *const NodeStore,
+    ident_store: *const Ident.Store,
+    branches_span: CIR.Expr.Match.Branch.Span,
+    scrutinee_type: Var,
+    overall_region: Region,
+) error{OutOfMemory}!CheckResult {
+    // Check if the scrutinee type is fully resolved
+    // If it's still a flex/rigid var or can't be unwrapped to a concrete type,
+    // we can't reliably do exhaustiveness checking
+    const union_result = try getUnionFromType(allocator, type_store, ident_store, scrutinee_type);
+    const scrutinee_unresolved = union_result == .not_a_union;
+
+    // Phase 1: Convert CIR patterns to unresolved patterns
+    const unresolved = try convertMatchBranches(
+        allocator,
+        node_store,
+        branches_span,
+        overall_region,
+    );
+
+    // Phase 2: Reify patterns with type information
+    const reified = try reifyRows(
+        allocator,
+        type_store,
+        ident_store,
+        unresolved,
+        scrutinee_type,
+    );
+
+    // If scrutinee type is unresolved, skip checking entirely
+    const skip_checks = scrutinee_unresolved or reified.has_unresolved_ctor;
+
+    // Phase 3: Check redundancy (skip if patterns couldn't be fully resolved)
+    // When we have unresolved constructors (e.g., polymorphic types), all patterns
+    // become wildcards which would incorrectly flag later patterns as redundant.
+    const redundancy = if (skip_checks)
+        RedundancyResult{
+            .non_redundant_rows = reified.rows,
+            .redundant_indices = &[_]u32{},
+            .redundant_regions = &[_]Region{},
+        }
+    else
+        try checkRedundancy(
+            allocator,
+            unresolved.rows,
+            reified.rows,
+        );
+
+    // Phase 4: Check exhaustiveness on non-redundant patterns
+    // Also skip if patterns couldn't be resolved (can't determine exhaustiveness)
+    const missing: []const Pattern = if (skip_checks)
+        &[_]Pattern{}
+    else blk: {
+        const matrix = PatternMatrix.init(allocator, redundancy.non_redundant_rows);
+        break :blk try checkExhaustive(allocator, matrix, 1);
+    };
+
+    return .{
+        .is_exhaustive = missing.len == 0,
+        .missing_patterns = missing,
+        .redundant_indices = redundancy.redundant_indices,
+        .redundant_regions = redundancy.redundant_regions,
+    };
+}
+
+/// Format a pattern for display in error messages.
+pub fn formatPattern(
+    allocator: std.mem.Allocator,
+    ident_store: *const Ident.Store,
+    pattern: Pattern,
+) error{OutOfMemory}![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+
+    try formatPatternInto(&buf, allocator, ident_store, pattern);
+
+    return try buf.toOwnedSlice(allocator);
+}
+
+fn formatPatternInto(
+    buf: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ident_store: *const Ident.Store,
+    pattern: Pattern,
+) error{OutOfMemory}!void {
+    switch (pattern) {
+        .anything => try buf.appendSlice(allocator, "_"),
+
+        .literal => |lit| switch (lit) {
+            .int => |i| {
+                var tmp: [40]u8 = undefined;
+                const str = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch "<int>";
+                try buf.appendSlice(allocator, str);
+            },
+            .uint => |u| {
+                var tmp: [40]u8 = undefined;
+                const str = std.fmt.bufPrint(&tmp, "{d}", .{u}) catch "<uint>";
+                try buf.appendSlice(allocator, str);
+            },
+            .bit => |b| try buf.appendSlice(allocator, if (b) "Bool.true" else "Bool.false"),
+            .byte => |b| {
+                var tmp: [4]u8 = undefined;
+                const str = std.fmt.bufPrint(&tmp, "{d}", .{b}) catch "<byte>";
+                try buf.appendSlice(allocator, str);
+            },
+            .float, .decimal => try buf.appendSlice(allocator, "<number>"),
+            .str => try buf.appendSlice(allocator, "\"...\""),
+        },
+
+        .ctor => |c| {
+            // Get tag name
+            const name = switch (c.union_info.alternatives[c.tag_id.toInt()].name) {
+                .tag => |t| if (t == Ident.Idx.NONE) "#Open" else ident_store.getText(t),
+                .opaque_type => |o| ident_store.getText(o),
+            };
+            try buf.appendSlice(allocator, name);
+
+            // Add arguments if any
+            if (c.args.len > 0) {
+                try buf.appendSlice(allocator, " ");
+                for (c.args, 0..) |arg, i| {
+                    if (i > 0) try buf.appendSlice(allocator, " ");
+                    try formatPatternInto(buf, allocator, ident_store, arg);
+                }
+            }
+        },
+
+        .list => |l| {
+            try buf.appendSlice(allocator, "[");
+            for (l.elements, 0..) |elem, i| {
+                if (i > 0) try buf.appendSlice(allocator, ", ");
+                try formatPatternInto(buf, allocator, ident_store, elem);
+            }
+            if (l.arity == .slice) {
+                try buf.appendSlice(allocator, ", ..");
+            }
+            try buf.appendSlice(allocator, "]");
+        },
+    }
 }
