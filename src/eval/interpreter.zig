@@ -7160,7 +7160,7 @@ pub const Interpreter = struct {
 
         // Note: Tags are already sorted alphabetically in runtime_types.
         // translateTypeVar flattens tag union extensions and sorts tags before storing,
-        // so no sorting is needed here. See translateTypeVar lines 9235-9240.
+        // so no sorting is needed here. See the translateTypeVar function.
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
