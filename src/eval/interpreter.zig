@@ -14897,10 +14897,9 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // No branch matched
+                // No branch matched - this should be caught by compile-time exhaustiveness checking
                 scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                self.triggerCrash("non-exhaustive match", false, roc_ops);
-                return error.Crash;
+                unreachable;
             },
             .match_guard => |mg| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.match_guard");
@@ -14929,11 +14928,10 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
 
                     if (mg.remaining_branches.len == 0) {
-                        // No more branches
+                        // No more branches - this should be caught by compile-time exhaustiveness checking
                         const scrutinee = value_stack.pop() orelse return error.Crash;
                         scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                        self.triggerCrash("non-exhaustive match", false, roc_ops);
-                        return error.Crash;
+                        unreachable;
                     }
 
                     // Continue with remaining branches
