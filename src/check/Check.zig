@@ -4292,6 +4292,10 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_runtime_error => {
                 try self.unifyWith(stmt_var, .err, env);
             },
+            .s_break => |_| {
+                // Nothing to do for break
+                // try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+            },
         }
     }
     return .{ .does_fx = does_fx, .diverges = diverges };
@@ -4380,7 +4384,7 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
             try self.unifyEarlyReturns(s.expr, return_var, env);
         },
         // These statements don't contain expressions with potential returns
-        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
+        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error, .s_break => {},
     }
 }
 

@@ -68,6 +68,11 @@ pub const Problem = union(enum) {
     pub const Tag = std.meta.Tag(@This());
 };
 
+/// Error for when a break statement appears outside of a loop
+pub const BreakOutsideLoop = struct {
+    region: base.Region,
+};
+
 /// Error for when a platform expects an alias to be defined, but it's not there
 pub const PlatformAliasNotFound = struct {
     expected_alias_ident: Ident.Idx,

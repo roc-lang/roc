@@ -393,6 +393,10 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.rhs = @intFromEnum(w.body);
             node.region = w.region;
         },
+        .@"break" => |b| {
+            node.tag = .@"break";
+            node.region = b.region;
+        },
         .@"return" => |r| {
             node.tag = .@"return";
             node.data.lhs = @intFromEnum(r.expr);
@@ -1289,6 +1293,11 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         .@"return" => {
             return .{ .@"return" = .{
                 .expr = @enumFromInt(node.data.lhs),
+                .region = node.region,
+            } };
+        },
+        .@"break" => {
+            return .{ .@"break" = .{
                 .region = node.region,
             } };
         },
