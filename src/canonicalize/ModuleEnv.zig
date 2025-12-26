@@ -1947,6 +1947,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .break_outside_loop => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "BREAK OUTSIDE LOOP", .runtime_error);
+            try report.document.addReflowingText("The ");
+            try report.document.addAnnotated("break", .inline_code);
+            try report.document.addReflowingText(" statement can only be used inside loops like ");
+            try report.document.addAnnotated("while", .inline_code);
+            try report.document.addReflowingText(" or ");
+            try report.document.addAnnotated("for", .inline_code);
+            try report.document.addReflowingText(" to exit the loop early.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => unreachable, // All diagnostics must have explicit handlers
     };
 }
