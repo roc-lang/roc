@@ -248,6 +248,48 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>False",
         .description = "Regression test: Method lookup for nominal types in roc build executables (issue #8654)",
     },
+
+    // Early return (?) operator tests
+    .{
+        .roc_file = "test/fx/early_return_simple.roc",
+        .io_spec = "1>Err!",
+        .description = "Regression test: Basic early return with ? operator",
+    },
+    .{
+        .roc_file = "test/fx/early_return_hof.roc",
+        .io_spec = "1>Err!",
+        .description = "Regression test: Early return in higher-order function body",
+    },
+    .{
+        .roc_file = "test/fx/early_return_in_map.roc",
+        .io_spec = "1>Count: 2",
+        .description = "Regression test: Early return in closure passed to List.map",
+    },
+    .{
+        .roc_file = "test/fx/early_return_fold.roc",
+        .io_spec = "1>Count: 2",
+        .description = "Regression test: Early return in closure passed to List.fold",
+    },
+    .{
+        .roc_file = "test/fx/early_return_fold2.roc",
+        .io_spec = "1>Count: 1",
+        .description = "Regression test: Early return in closure passed to List.fold with single element",
+    },
+    .{
+        .roc_file = "test/fx/early_return_fold3.roc",
+        .io_spec = "1>Err!",
+        .description = "Regression test: Early return from fold closure returning result directly",
+    },
+    .{
+        .roc_file = "test/fx/early_return_two_args.roc",
+        .io_spec = "1>Err!",
+        .description = "Regression test: Early return in second argument of multi-arg call",
+    },
+    .{
+        .roc_file = "test/fx/early_return_first_arg.roc",
+        .io_spec = "1>Err!",
+        .description = "Regression test: Early return in first argument of multi-arg call",
+    },
 };
 
 /// Get the total number of IO spec tests
