@@ -410,15 +410,15 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
 			from_str : Str -> Try(U8, [BadNumStr, ..others])
 
-			# # List of integers beginning with this `U8` and ending with the other `U8`.
-			# # (Use [until] instead to end with the other `U8` minus one.)
-			# # Returns an empty list if this `U8` is greater than the other.
+			## List of integers beginning with this `U8` and ending with the other `U8`.
+			## (Use [until] instead to end with the other `U8` minus one.)
+			## Returns an empty list if this `U8` is greater than the other.
 			to : U8, U8 -> List(U8)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `U8` and ending with the other `U8` minus one.
-			# # (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
-			# # Returns an empty list if this `U8` is greater than or equal to the other.
+			## List of integers beginning with this `U8` and ending with the other `U8` minus one.
+			## (Use [to] instead to end with the other `U8` exactly, instead of minus one.)
+			## Returns an empty list if this `U8` is greater than or equal to the other.
 			until : U8, U8 -> List(U8)
 			until = |start, end| range_until(start, end)
 
@@ -471,15 +471,15 @@ Builtin :: [].{
 			shift_right_by : I8, U8 -> I8
 			shift_right_zf_by : I8, U8 -> I8
 
-			# # List of integers beginning with this `I8` and ending with the other `I8`.
-			# # (Use [until] instead to end with the other `I8` minus one.)
-			# # Returns an empty list if this `I8` is greater than the other.
+			## List of integers beginning with this `I8` and ending with the other `I8`.
+			## (Use [until] instead to end with the other `I8` minus one.)
+			## Returns an empty list if this `I8` is greater than the other.
 			to : I8, I8 -> List(I8)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `I8` and ending with the other `I8` minus one.
-			# # (Use [to] instead to end with the other `I8` exactly, instead of minus one.)
-			# # Returns an empty list if this `I8` is greater than or equal to the other.
+			## List of integers beginning with this `I8` and ending with the other `I8` minus one.
+			## (Use [to] instead to end with the other `I8` exactly, instead of minus one.)
+			## Returns an empty list if this `I8` is greater than or equal to the other.
 			until : I8, I8 -> List(I8)
 			until = |start, end| range_until(start, end)
 
@@ -536,15 +536,15 @@ Builtin :: [].{
 			shift_right_by : U16, U8 -> U16
 			shift_right_zf_by : U16, U8 -> U16
 
-			# # List of integers beginning with this `U16` and ending with the other `U16`.
-			# # (Use [until] instead to end with the other `U16` minus one.)
-			# # Returns an empty list if this `U16` is greater than the other.
+			## List of integers beginning with this `U16` and ending with the other `U16`.
+			## (Use [until] instead to end with the other `U16` minus one.)
+			## Returns an empty list if this `U16` is greater than the other.
 			to : U16, U16 -> List(U16)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `U16` and ending with the other `U16` minus one.
-			# # (Use [to] instead to end with the other `U16` exactly, instead of minus one.)
-			# # Returns an empty list if this `U16` is greater than or equal to the other.
+			## List of integers beginning with this `U16` and ending with the other `U16` minus one.
+			## (Use [to] instead to end with the other `U16` exactly, instead of minus one.)
+			## Returns an empty list if this `U16` is greater than or equal to the other.
 			until : U16, U16 -> List(U16)
 			until = |start, end| range_until(start, end)
 
@@ -603,15 +603,15 @@ Builtin :: [].{
 			shift_right_by : I16, U8 -> I16
 			shift_right_zf_by : I16, U8 -> I16
 
-			# # List of integers beginning with this `I16` and ending with the other `I16`.
-			# # (Use [until] instead to end with the other `I16` minus one.)
-			# # Returns an empty list if this `I16` is greater than the other.
+			## List of integers beginning with this `I16` and ending with the other `I16`.
+			## (Use [until] instead to end with the other `I16` minus one.)
+			## Returns an empty list if this `I16` is greater than the other.
 			to : I16, I16 -> List(I16)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `I16` and ending with the other `I16` minus one.
-			# # (Use [to] instead to end with the other `I16` exactly, instead of minus one.)
-			# # Returns an empty list if this `I16` is greater than or equal to the other.
+			## List of integers beginning with this `I16` and ending with the other `I16` minus one.
+			## (Use [to] instead to end with the other `I16` exactly, instead of minus one.)
+			## Returns an empty list if this `I16` is greater than or equal to the other.
 			until : I16, I16 -> List(I16)
 			until = |start, end| range_until(start, end)
 
@@ -669,15 +669,15 @@ Builtin :: [].{
 			shift_right_by : U32, U8 -> U32
 			shift_right_zf_by : U32, U8 -> U32
 
-			# # List of integers beginning with this `U32` and ending with the other `U32`.
-			# # (Use [until] instead to end with the other `U32` minus one.)
-			# # Returns an empty list if this `U32` is greater than the other.
+			## List of integers beginning with this `U32` and ending with the other `U32`.
+			## (Use [until] instead to end with the other `U32` minus one.)
+			## Returns an empty list if this `U32` is greater than the other.
 			to : U32, U32 -> List(U32)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `U32` and ending with the other `U32` minus one.
-			# # (Use [to] instead to end with the other `U32` exactly, instead of minus one.)
-			# # Returns an empty list if this `U32` is greater than or equal to the other.
+			## List of integers beginning with this `U32` and ending with the other `U32` minus one.
+			## (Use [to] instead to end with the other `U32` exactly, instead of minus one.)
+			## Returns an empty list if this `U32` is greater than or equal to the other.
 			until : U32, U32 -> List(U32)
 			until = |start, end| range_until(start, end)
 
@@ -738,15 +738,15 @@ Builtin :: [].{
 			shift_right_by : I32, U8 -> I32
 			shift_right_zf_by : I32, U8 -> I32
 
-			# # List of integers beginning with this `I32` and ending with the other `I32`.
-			# # (Use [until] instead to end with the other `I32` minus one.)
-			# # Returns an empty list if this `I32` is greater than the other.
+			## List of integers beginning with this `I32` and ending with the other `I32`.
+			## (Use [until] instead to end with the other `I32` minus one.)
+			## Returns an empty list if this `I32` is greater than the other.
 			to : I32, I32 -> List(I32)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `I32` and ending with the other `I32` minus one.
-			# # (Use [to] instead to end with the other `I32` exactly, instead of minus one.)
-			# # Returns an empty list if this `I32` is greater than or equal to the other.
+			## List of integers beginning with this `I32` and ending with the other `I32` minus one.
+			## (Use [to] instead to end with the other `I32` exactly, instead of minus one.)
+			## Returns an empty list if this `I32` is greater than or equal to the other.
 			until : I32, I32 -> List(I32)
 			until = |start, end| range_until(start, end)
 
@@ -805,15 +805,15 @@ Builtin :: [].{
 			shift_right_by : U64, U8 -> U64
 			shift_right_zf_by : U64, U8 -> U64
 
-			# # List of integers beginning with this `U64` and ending with the other `U64`.
-			# # (Use [until] instead to end with the other `U64` minus one.)
-			# # Returns an empty list if this `U64` is greater than the other.
+			## List of integers beginning with this `U64` and ending with the other `U64`.
+			## (Use [until] instead to end with the other `U64` minus one.)
+			## Returns an empty list if this `U64` is greater than the other.
 			to : U64, U64 -> List(U64)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `U64` and ending with the other `U64` minus one.
-			# # (Use [to] instead to end with the other `U64` exactly, instead of minus one.)
-			# # Returns an empty list if this `U64` is greater than or equal to the other.
+			## List of integers beginning with this `U64` and ending with the other `U64` minus one.
+			## (Use [to] instead to end with the other `U64` exactly, instead of minus one.)
+			## Returns an empty list if this `U64` is greater than or equal to the other.
 			until : U64, U64 -> List(U64)
 			until = |start, end| range_until(start, end)
 
@@ -876,15 +876,15 @@ Builtin :: [].{
 			shift_right_by : I64, U8 -> I64
 			shift_right_zf_by : I64, U8 -> I64
 
-			# # List of integers beginning with this `I64` and ending with the other `I64`.
-			# # (Use [until] instead to end with the other `I64` minus one.)
-			# # Returns an empty list if this `I64` is greater than the other.
+			## List of integers beginning with this `I64` and ending with the other `I64`.
+			## (Use [until] instead to end with the other `I64` minus one.)
+			## Returns an empty list if this `I64` is greater than the other.
 			to : I64, I64 -> List(I64)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `I64` and ending with the other `I64` minus one.
-			# # (Use [to] instead to end with the other `I64` exactly, instead of minus one.)
-			# # Returns an empty list if this `I64` is greater than or equal to the other.
+			## List of integers beginning with this `I64` and ending with the other `I64` minus one.
+			## (Use [to] instead to end with the other `I64` exactly, instead of minus one.)
+			## Returns an empty list if this `I64` is greater than or equal to the other.
 			until : I64, I64 -> List(I64)
 			until = |start, end| range_until(start, end)
 
@@ -944,15 +944,15 @@ Builtin :: [].{
 			shift_right_by : U128, U8 -> U128
 			shift_right_zf_by : U128, U8 -> U128
 
-			# # List of integers beginning with this `U128` and ending with the other `U128`.
-			# # (Use [until] instead to end with the other `U128` minus one.)
-			# # Returns an empty list if this `U128` is greater than the other.
+			## List of integers beginning with this `U128` and ending with the other `U128`.
+			## (Use [until] instead to end with the other `U128` minus one.)
+			## Returns an empty list if this `U128` is greater than the other.
 			to : U128, U128 -> List(U128)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `U128` and ending with the other `U128` minus one.
-			# # (Use [to] instead to end with the other `U128` exactly, instead of minus one.)
-			# # Returns an empty list if this `U128` is greater than or equal to the other.
+			## List of integers beginning with this `U128` and ending with the other `U128` minus one.
+			## (Use [to] instead to end with the other `U128` exactly, instead of minus one.)
+			## Returns an empty list if this `U128` is greater than or equal to the other.
 			until : U128, U128 -> List(U128)
 			until = |start, end| range_until(start, end)
 
@@ -1019,15 +1019,15 @@ Builtin :: [].{
 			shift_right_by : I128, U8 -> I128
 			shift_right_zf_by : I128, U8 -> I128
 
-			# # List of integers beginning with this `I128` and ending with the other `I128`.
-			# # (Use [until] instead to end with the other `I128` minus one.)
-			# # Returns an empty list if this `I128` is greater than the other.
+			## List of integers beginning with this `I128` and ending with the other `I128`.
+			## (Use [until] instead to end with the other `I128` minus one.)
+			## Returns an empty list if this `I128` is greater than the other.
 			to : I128, I128 -> List(I128)
 			to = |start, end| range_to(start, end)
 
-			# # List of integers beginning with this `I128` and ending with the other `I128` minus one.
-			# # (Use [to] instead to end with the other `I128` exactly, instead of minus one.)
-			# # Returns an empty list if this `I128` is greater than or equal to the other.
+			## List of integers beginning with this `I128` and ending with the other `I128` minus one.
+			## (Use [to] instead to end with the other `I128` exactly, instead of minus one.)
+			## Returns an empty list if this `I128` is greater than or equal to the other.
 			until : I128, I128 -> List(I128)
 			until = |start, end| range_until(start, end)
 
@@ -1123,15 +1123,15 @@ Builtin :: [].{
 			to_f32_try : Dec -> Try(F32, [OutOfRange, ..others])
 			to_f64 : Dec -> F64
 
-			# # List of decimals beginning with this `Dec` and ending with the other `Dec`.
-			# # (Use [until] instead to end with the other `Dec` minus one.)
-			# # Returns an empty list if this `Dec` is greater than the other.
+			## List of decimals beginning with this `Dec` and ending with the other `Dec`.
+			## (Use [until] instead to end with the other `Dec` minus one.)
+			## Returns an empty list if this `Dec` is greater than the other.
 			to : Dec, Dec -> List(Dec)
 			to = |start, end| range_to(start, end)
 
-			# # List of decimals beginning with this `Dec` and ending with the other `Dec` minus one.
-			# # (Use [to] instead to end with the other `Dec` exactly, instead of minus one.)
-			# # Returns an empty list if this `Dec` is greater than or equal to the other.
+			## List of decimals beginning with this `Dec` and ending with the other `Dec` minus one.
+			## (Use [to] instead to end with the other `Dec` exactly, instead of minus one.)
+			## Returns an empty list if this `Dec` is greater than or equal to the other.
 			until : Dec, Dec -> List(Dec)
 			until = |start, end| range_until(start, end)
 		}
