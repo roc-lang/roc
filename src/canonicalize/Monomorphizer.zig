@@ -172,6 +172,151 @@ pub const ExternalSpecKey = struct {
     type_hash: u64,
 };
 
+/// Key for tracking which lambda sets are awaiting a specific ability implementation.
+/// When an ability implementation becomes available, we can quickly find all lambda sets
+/// that were waiting for it.
+pub const ImplKey = struct {
+    /// The ability identifier (e.g., "Hash", "Eq")
+    ability: base.Ident.Idx,
+    /// The concrete type identifier (e.g., "List", "Dict")
+    type_ident: base.Ident.Idx,
+
+    pub fn eql(a: ImplKey, b: ImplKey) bool {
+        return a.ability == b.ability and a.type_ident == b.type_ident;
+    }
+
+    pub fn hash(self: ImplKey) u64 {
+        var h: u64 = 0;
+        h = h *% 31 +% @intFromEnum(self.ability);
+        h = h *% 31 +% @intFromEnum(self.type_ident);
+        return h;
+    }
+};
+
+/// Tracks lambda sets that are waiting for ability implementations to be resolved.
+///
+/// When resolving unspecialized closures, some may depend on ability implementations
+/// that haven't been resolved yet. This structure tracks:
+/// - Which type variables are waiting for which ability implementations
+/// - Which lambda sets depend on those type variables
+///
+/// When an implementation becomes available (via `removeForSpecialized`), we can
+/// retrieve all the lambda sets that were waiting for it.
+pub const AwaitingSpecializations = struct {
+    /// Map from ImplKey to set of type variables waiting for this implementation
+    waiting: std.AutoHashMap(ImplKey, std.ArrayList(types.Var)),
+
+    /// Map from type variable to lambda sets that depend on it
+    /// (reusing the same structure from ClosureTransformer)
+    uls_of_var: ClosureTransformer.UnspecializedByTypeVar,
+
+    /// The allocator used for internal allocations
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) AwaitingSpecializations {
+        return .{
+            .waiting = std.AutoHashMap(ImplKey, std.ArrayList(types.Var)).init(allocator),
+            .uls_of_var = ClosureTransformer.UnspecializedByTypeVar.init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *AwaitingSpecializations) void {
+        // Free all the ArrayLists in waiting
+        var iter = self.waiting.valueIterator();
+        while (iter.next()) |list| {
+            list.deinit(self.allocator);
+        }
+        self.waiting.deinit();
+        self.uls_of_var.deinit();
+    }
+
+    /// Add a type variable and its dependent lambda sets to the waiting list
+    /// for a specific ability implementation.
+    pub fn add(
+        self: *AwaitingSpecializations,
+        impl_key: ImplKey,
+        type_var: types.Var,
+        lambda_sets: []const ClosureTransformer.UnspecializedEntryRef,
+    ) !void {
+        // Add type_var to the waiting list for this impl_key
+        const gop = try self.waiting.getOrPut(impl_key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = std.ArrayList(types.Var).empty;
+        }
+
+        // Check if type_var is already in the list
+        var found = false;
+        for (gop.value_ptr.items) |v| {
+            if (v == type_var) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try gop.value_ptr.append(self.allocator, type_var);
+        }
+
+        // Track the lambda sets for this type variable
+        for (lambda_sets) |entry_ref| {
+            try self.uls_of_var.trackEntry(type_var, entry_ref);
+        }
+    }
+
+    /// Remove and return all lambda set entries that were waiting for a specific
+    /// ability implementation.
+    ///
+    /// This is called when an ability implementation becomes available.
+    /// Returns the UnspecializedByTypeVar containing all entries that were waiting.
+    pub fn removeForSpecialized(
+        self: *AwaitingSpecializations,
+        impl_key: ImplKey,
+    ) ClosureTransformer.UnspecializedByTypeVar {
+        // Get the type variables waiting for this implementation
+        const removed = self.waiting.fetchRemove(impl_key);
+        if (removed == null) {
+            return ClosureTransformer.UnspecializedByTypeVar.init(self.allocator);
+        }
+
+        const spec_vars = removed.?.value;
+        defer {
+            var vars_to_free = spec_vars;
+            vars_to_free.deinit(self.allocator);
+        }
+
+        // Create a new tracker with the entries for these type variables
+        var result = ClosureTransformer.UnspecializedByTypeVar.init(self.allocator);
+        for (spec_vars.items) |type_var| {
+            if (self.uls_of_var.getEntriesForVar(type_var)) |entries| {
+                for (entries) |entry| {
+                    result.trackEntry(type_var, entry) catch {};
+                }
+            }
+            self.uls_of_var.removeVar(type_var);
+        }
+
+        return result;
+    }
+
+    /// Check if any lambda sets are waiting for a specific ability implementation.
+    pub fn waitingFor(self: *const AwaitingSpecializations, impl_key: ImplKey) bool {
+        return self.waiting.contains(impl_key);
+    }
+
+    /// Get the count of type variables waiting for a specific implementation.
+    pub fn waitingCount(self: *const AwaitingSpecializations, impl_key: ImplKey) usize {
+        if (self.waiting.get(impl_key)) |vars| {
+            return vars.items.len;
+        }
+        return 0;
+    }
+
+    /// Check if there are any awaiting specializations.
+    pub fn isEmpty(self: *const AwaitingSpecializations) bool {
+        return self.waiting.count() == 0;
+    }
+};
+
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
 
@@ -566,18 +711,66 @@ pub fn resolveEntriesForTypeVar(
     // If no entries, nothing to do
     if (entry_refs.len == 0) return 0;
 
-    // Copy to slice for sorting (sort mutates in place)
-    const entries = try self.allocator.alloc(ClosureTransformer.UnspecializedEntryRef, entry_refs.len);
-    defer self.allocator.free(entries);
-    @memcpy(entries, entry_refs);
+    // Step 1: Flatten lambda sets that have multiple entries for the same concrete type.
+    // This is required when a lambda set has multiple unspecialized entries (e.g., C:f:1 + C:f:2)
+    // that all depend on the same type variable becoming concrete.
+    // Each entry needs its own lambda set after flattening.
+    //
+    // See Rust implementation: specialize.rs:331-400
+    var flattened_lambda_sets = std.ArrayList(*ClosureTransformer.LambdaSet).empty;
+    defer flattened_lambda_sets.deinit(self.allocator);
+
+    // Find unique lambda sets and flatten each one
+    var seen_lambda_sets = std.AutoHashMap(*ClosureTransformer.LambdaSet, void).init(self.allocator);
+    defer seen_lambda_sets.deinit();
+
+    for (entry_refs) |entry_ref| {
+        const gop = try seen_lambda_sets.getOrPut(entry_ref.lambda_set);
+        if (!gop.found_existing) {
+            // Flatten this lambda set if it has multiple entries for the concrete type
+            var additional_sets = try entry_ref.lambda_set.flattenForConcreteType(
+                self.allocator,
+                concrete_type,
+                self.types_store,
+            );
+            defer additional_sets.deinit(self.allocator);
+
+            // Track the additional lambda sets for processing
+            for (additional_sets.items) |new_set| {
+                try flattened_lambda_sets.append(self.allocator, new_set);
+            }
+        }
+    }
+
+    // Step 2: Collect all entries to process (from original and flattened lambda sets)
+    // We need to re-fetch entry_refs since flattening may have modified indices
+    const updated_entry_refs = tracker.getEntriesForVar(type_var) orelse return 0;
+
+    var all_entries = std.ArrayList(ClosureTransformer.UnspecializedEntryRef).empty;
+    defer all_entries.deinit(self.allocator);
+
+    // Add original entries
+    for (updated_entry_refs) |entry_ref| {
+        try all_entries.append(self.allocator, entry_ref);
+    }
+
+    // Add entries from flattened lambda sets
+    for (flattened_lambda_sets.items) |lambda_set| {
+        for (lambda_set.unspecialized.items, 0..) |_, i| {
+            try all_entries.append(self.allocator, .{
+                .lambda_set = lambda_set,
+                .index = i,
+            });
+        }
+    }
 
     // Sort by region DESCENDING (innermost first - higher region numbers first)
-    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, entries, {}, compareByRegionDesc);
+    std.mem.sort(ClosureTransformer.UnspecializedEntryRef, all_entries.items, {}, compareByRegionDesc);
 
     var resolved_count: usize = 0;
 
-    // Process each entry in region order
-    for (entries) |entry_ref| {
+    // Step 3: Process each entry in region order
+    for (all_entries.items) |entry_ref| {
         // Validate the entry is still valid (index might be stale after swapRemove)
         if (entry_ref.index >= entry_ref.lambda_set.unspecialized.items.len) {
             continue;
@@ -966,6 +1159,98 @@ pub fn resolveExternalSpecialization(
         .type_hash = type_hash,
     };
     try self.resolved_external_specs.put(ext_key, specialized_ident);
+}
+
+/// Copy an ambient function type from an external module to the current type store.
+///
+/// When resolving unspecialized lambda sets that reference ability implementations
+/// from external modules, we need to copy the ambient function type information
+/// so that type unification can properly connect the type variables.
+///
+/// This is part of the ambient lambda set unification algorithm - when an
+/// implementation's lambda set is resolved, its ambient function must be
+/// unified with the caller's expectations.
+///
+/// Parameters:
+/// - external_lambda_set_var: The lambda set variable in the external module
+/// - external_module: Reference to the external module
+///
+/// Returns: A new type variable in the current module's type store that represents
+///          the copied ambient function type.
+pub fn copyExternalAmbientFunction(
+    self: *Self,
+    external_lambda_set_var: types.Var,
+    external_module: CIR.Import.Idx,
+) !types.Var {
+    _ = external_module; // Will be used for cross-module type lookup
+
+    // For now, we'll get the ambient function from the lambda set if it exists
+    // in our closure transformer, and return it directly.
+    //
+    // Full cross-module type copying will be implemented when the module
+    // coordination layer is complete. This requires:
+    // 1. Access to the external module's type store
+    // 2. Deep copying of type structures
+    // 3. Re-mapping type variables to the local store
+    //
+    // TODO: Implement full cross-module type copying when module coordination is added
+
+    if (self.closure_transformer) |ct| {
+        // Look through all lambda sets to find one that might correspond to this var
+        var iter = ct.pattern_lambda_sets.valueIterator();
+        while (iter.next()) |lambda_set| {
+            if (lambda_set.ambient_function_var) |amb_fn| {
+                // Check if this is the right lambda set by comparing the var
+                // This is a heuristic - proper implementation needs module coordination
+                if (@intFromEnum(amb_fn) == @intFromEnum(external_lambda_set_var)) {
+                    return amb_fn;
+                }
+            }
+        }
+    }
+
+    // If we can't find it locally, return the original var
+    // The type system will handle any mismatches
+    return external_lambda_set_var;
+}
+
+/// Get and copy the ambient function for an ability member definition.
+///
+/// Finds the ambient function variable at a given region for an ability member
+/// definition (not a specialization), and copies it to the current type store.
+///
+/// This is used when resolving unspecialized closures that reference ability
+/// members defined in external modules.
+///
+/// Parameters:
+/// - ability_member: The ability member symbol (e.g., "Hash.hash")
+/// - region: The region number within the member definition
+/// - external_module: The module where the ability member is defined
+///
+/// Returns: A type variable representing the ambient function at that region.
+pub fn getAndCopyAbilityMemberAmbientFunction(
+    _: *Self,
+    _: base.Ident.Idx, // ability_member
+    _: u8, // region
+    _: CIR.Import.Idx, // external_module
+) !?types.Var {
+    // TODO: Implement when ability store is available for cross-module queries
+    //
+    // Parameters:
+    // - ability_member: The ability member to look up
+    // - region: The region number within the member definition
+    // - external_module: The module where the ability member is defined
+    //
+    // The implementation should:
+    // 1. Look up the ability member in the external module's ability store
+    // 2. Find the lambda set at the given region
+    // 3. Get its ambient function variable
+    // 4. Copy the type to the local type store
+    //
+    // For now, return null to indicate the ambient function couldn't be found.
+    // The caller should handle this gracefully (skip ambient unification).
+
+    return null;
 }
 
 /// Process all pending specializations.

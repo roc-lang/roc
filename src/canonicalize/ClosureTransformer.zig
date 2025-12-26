@@ -150,6 +150,10 @@ pub const ClosureInfo = struct {
 ///
 /// These are resolved during monomorphization when concrete types are known.
 pub const UnspecializedClosure = struct {
+    /// The type variable this closure depends on.
+    /// When this type variable becomes concrete, we can resolve which implementation to use.
+    type_var: types.Var,
+
     /// The static dispatch member symbol (e.g., `hash` from Hash ability)
     member: base.Ident.Idx,
 
@@ -635,6 +639,112 @@ pub const LambdaSet = struct {
         const max_caps = self.maxCaptureCount();
         return max_caps <= 1;
     }
+
+    /// Flatten a lambda set that has multiple unspecialized entries for the same concrete type.
+    ///
+    /// When a lambda set has multiple unspecialized entries that all depend on the same
+    /// type variable (which is now becoming concrete), we need to split it into multiple
+    /// lambda sets, one for each entry.
+    ///
+    /// The algorithm (matching Rust specialize.rs:331-400):
+    /// 1. Partition unspecialized entries into those matching the concrete type and those not
+    /// 2. If only one entry matches, no flattening needed
+    /// 3. If multiple match:
+    ///    - First lambda set (this one): gets all solved closures + non-matching entries + first matching entry
+    ///    - Additional lambda sets: each gets only one matching entry
+    ///
+    /// Parameters:
+    /// - allocator: Allocator for new lambda sets
+    /// - concrete_type_var: The type variable that has become concrete
+    /// - types_store: Type store for checking type equivalence
+    ///
+    /// Returns: A list of additional lambda sets created by flattening (not including this one).
+    ///          The original lambda set is modified in place.
+    ///          Returns empty list if no flattening was needed.
+    pub fn flattenForConcreteType(
+        self: *LambdaSet,
+        allocator: std.mem.Allocator,
+        concrete_type_var: types.Var,
+        types_store: *types.Store,
+    ) !std.ArrayList(*LambdaSet) {
+        var additional_sets = std.ArrayList(*LambdaSet).empty;
+
+        // Partition unspecialized entries: those matching concrete_type_var vs those not
+        var matching_indices = std.ArrayList(usize).empty;
+        defer matching_indices.deinit(allocator);
+
+        var non_matching_entries = std.ArrayList(UnspecializedClosure).empty;
+        defer non_matching_entries.deinit(allocator);
+
+        for (self.unspecialized.items, 0..) |entry, i| {
+            // Check if this entry's type variable is equivalent to the concrete type
+            const equiv_result = types_store.checkVarsEquiv(entry.type_var, concrete_type_var);
+            switch (equiv_result) {
+                .equiv => try matching_indices.append(allocator, i),
+                .not_equiv => try non_matching_entries.append(allocator, entry),
+            }
+        }
+
+        // If 0 or 1 entries match, no flattening needed
+        if (matching_indices.items.len <= 1) {
+            return additional_sets;
+        }
+
+        // Multiple entries match - need to flatten
+        // First, collect all matching entries
+        var matching_entries = try allocator.alloc(UnspecializedClosure, matching_indices.items.len);
+        defer allocator.free(matching_entries);
+        for (matching_indices.items, 0..) |idx, i| {
+            matching_entries[i] = self.unspecialized.items[idx];
+        }
+
+        // Update the original lambda set:
+        // - Keep all solved closures
+        // - Add all non-matching entries
+        // - Add the FIRST matching entry
+        self.unspecialized.clearRetainingCapacity();
+        for (non_matching_entries.items) |entry| {
+            try self.unspecialized.append(allocator, entry);
+        }
+        if (matching_entries.len > 0) {
+            try self.unspecialized.append(allocator, matching_entries[0]);
+        }
+
+        // Create additional lambda sets for remaining matching entries
+        for (matching_entries[1..]) |entry| {
+            const new_set = try allocator.create(LambdaSet);
+            new_set.* = LambdaSet.init();
+            // Copy solved closures and recursion info from original
+            for (self.closures.items) |closure| {
+                try new_set.closures.append(allocator, closure);
+            }
+            new_set.recursion_closure = self.recursion_closure;
+            new_set.ambient_function_var = self.ambient_function_var;
+            // Add only this one matching entry
+            try new_set.unspecialized.append(allocator, entry);
+
+            try additional_sets.append(allocator, new_set);
+        }
+
+        return additional_sets;
+    }
+
+    /// Count how many unspecialized entries depend on a specific type variable.
+    /// Useful for determining if flattening is needed.
+    pub fn countEntriesForTypeVar(
+        self: *const LambdaSet,
+        type_var: types.Var,
+        types_store: *types.Store,
+    ) usize {
+        var count: usize = 0;
+        for (self.unspecialized.items) |entry| {
+            const equiv_result = types_store.checkVarsEquiv(entry.type_var, type_var);
+            if (equiv_result == .equiv) {
+                count += 1;
+            }
+        }
+        return count;
+    }
 };
 
 /// Information about a capture for layout optimization
@@ -789,7 +899,14 @@ pub fn createUnspecializedClosure(
     expr_idx: Expr.Idx,
 ) UnspecializedClosure {
     _ = member_info.args; // Will be used when generating dispatch
+
+    // Extract the type variable from the type var alias statement
+    const stmt = self.module_env.store.getStatement(member_info.type_var_alias_stmt);
+    const type_var_anno = stmt.s_type_var_alias.type_var_anno;
+    const type_var = ModuleEnv.varFrom(type_var_anno);
+
     return UnspecializedClosure{
+        .type_var = type_var,
         .member = member_info.method_name,
         .member_expr = expr_idx,
         .region = self.current_region,
@@ -816,8 +933,9 @@ pub fn getTypeVarFromExpr(self: *const Self, expr_idx: Expr.Idx) ?types.Var {
 /// This is the main entry point for adding unspecialized closures during
 /// closure transformation. It:
 /// 1. Adds the entry to the lambda set's unspecialized list
-/// 2. Extracts the type variable from the expression
-/// 3. Tracks the entry in unspec_by_type_var for efficient lookup during monomorphization
+/// 2. Tracks the entry in unspec_by_type_var for efficient lookup during monomorphization
+///
+/// The type variable is now stored in the UnspecializedClosure itself.
 ///
 /// Returns error if allocation fails.
 pub fn addUnspecializedWithTracking(
@@ -831,14 +949,11 @@ pub fn addUnspecializedWithTracking(
     // Add to the lambda set
     try lambda_set.unspecialized.append(self.allocator, unspec);
 
-    // Extract the type variable from the member expression
-    if (self.getTypeVarFromExpr(unspec.member_expr)) |type_var| {
-        // Track this entry by its type variable
-        try self.unspec_by_type_var.trackEntry(type_var, .{
-            .lambda_set = lambda_set,
-            .index = index,
-        });
-    }
+    // Track this entry by its type variable
+    try self.unspec_by_type_var.trackEntry(unspec.type_var, .{
+        .lambda_set = lambda_set,
+        .index = index,
+    });
 }
 
 /// Add an unspecialized entry with tracking, creating the entry from member info.
@@ -2349,6 +2464,18 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         // Track this pattern's lambda set if it has closures
                         if (result.lambda_set) |lambda_set| {
                             try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
+
+                            // Detect recursive closures: check if any closure in the lambda set
+                            // references the binding pattern in its body
+                            if (self.pattern_lambda_sets.getPtr(decl.pattern)) |stored_lambda_set| {
+                                for (stored_lambda_set.closures.items, 0..) |*closure_info, i| {
+                                    // Check if this closure references the binding pattern
+                                    if (self.detectRecursion(decl.pattern, closure_info.lambda_body)) {
+                                        markLambdaSetRecursive(stored_lambda_set, &stored_lambda_set.closures.items[i]);
+                                        break; // Only one closure needs to be marked recursive
+                                    }
+                                }
+                            }
                         }
 
                         // Create new statement with transformed expression
@@ -2375,6 +2502,18 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         // Track this pattern's lambda set if it has closures
                         if (result.lambda_set) |lambda_set| {
                             try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
+
+                            // Detect recursive closures: check if any closure in the lambda set
+                            // references the binding pattern in its body
+                            if (self.pattern_lambda_sets.getPtr(decl.pattern)) |stored_lambda_set| {
+                                for (stored_lambda_set.closures.items, 0..) |*closure_info, i| {
+                                    // Check if this closure references the binding pattern
+                                    if (self.detectRecursion(decl.pattern, closure_info.lambda_body)) {
+                                        markLambdaSetRecursive(stored_lambda_set, &stored_lambda_set.closures.items[i]);
+                                        break; // Only one closure needs to be marked recursive
+                                    }
+                                }
+                            }
                         }
 
                         const new_stmt_idx = try self.module_env.store.addStatement(
@@ -2864,6 +3003,7 @@ test "LambdaSet: unspecialized closures" {
 
     // Add an unspecialized closure
     const unspec = UnspecializedClosure{
+        .type_var = @enumFromInt(100), // Dummy type var for test
         .member = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 42,
@@ -2890,6 +3030,7 @@ test "LambdaSet: merge with unspecialized" {
 
     // Add unspecialized to set1
     const unspec1 = UnspecializedClosure{
+        .type_var = @enumFromInt(100), // Dummy type var for test
         .member = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 10,
@@ -2901,6 +3042,7 @@ test "LambdaSet: merge with unspecialized" {
 
     // Add unspecialized to set2
     const unspec2 = UnspecializedClosure{
+        .type_var = @enumFromInt(101), // Dummy type var for test
         .member = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 20,
@@ -2936,6 +3078,7 @@ test "ClosureTransformer: external lambda set requests" {
 
     // Create a dummy unspecialized closure
     const unspec = UnspecializedClosure{
+        .type_var = @enumFromInt(100), // Dummy type var for test
         .member = ability_member,
         .member_expr = @enumFromInt(1),
         .region = 0,
@@ -3024,6 +3167,7 @@ test "LambdaSet: isEmpty" {
 
     // Add an unspecialized closure
     const unspec = UnspecializedClosure{
+        .type_var = @enumFromInt(100), // Dummy type var for test
         .member = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 1,
@@ -3240,6 +3384,7 @@ test "ClosureTransformer: validateAllResolved detects unresolved" {
     // pattern_lambda_sets which is cleaned up by transformer.deinit()
     var lambda_set = LambdaSet.init();
     const unspec = UnspecializedClosure{
+        .type_var = @enumFromInt(100), // Dummy type var for test
         .member = base.Ident.Idx{
             .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
             .idx = 42,
