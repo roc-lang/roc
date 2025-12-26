@@ -7869,6 +7869,26 @@ pub const Interpreter = struct {
         list.items.len = new_len;
     }
 
+    /// Pop and decref values from the value stack during early return cleanup.
+    /// Used when draining collect-style continuations (tag_collect, list_collect, etc.).
+    ///
+    /// The `collected_count` in these continuations is incremented BEFORE pushing
+    /// eval_expr for the next item, so when we're early-returning, the current
+    /// item being evaluated isn't done yet. Thus we pop `collected_count - 1` values.
+    fn popCollectedValues(
+        self: *Interpreter,
+        value_stack: *ValueStack,
+        collected_count: usize,
+        roc_ops: *RocOps,
+    ) void {
+        const actual_collected = if (collected_count > 0) collected_count - 1 else 0;
+        for (0..actual_collected) |_| {
+            if (value_stack.pop()) |val| {
+                val.decref(&self.runtime_layout_store, roc_ops);
+            }
+        }
+    }
+
     fn patternMatchesBind(
         self: *Interpreter,
         pattern_idx: can.CIR.Pattern.Idx,
@@ -14495,7 +14515,11 @@ pub const Interpreter = struct {
                                     return error.Crash;
                                 },
                                 .call_invoke_closure => |ci| {
-                                    // Free resources if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation.
+                                    // Note: We don't pop values from value_stack here because
+                                    // call_invoke_closure is scheduled BEFORE call_collect_args
+                                    // finishes, so the function and args aren't on the stack yet.
+                                    // The call_collect_args cleanup handles the partial values.
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                     if (ci.saved_rigid_subst) |saved| {
                                         var saved_copy = saved;
@@ -14512,37 +14536,17 @@ pub const Interpreter = struct {
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
                                 .str_collect => |sc| {
-                                    // Clean up any already-collected string segments on the value stack
-                                    for (0..sc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, sc.collected_count, roc_ops);
                                 },
                                 .tuple_collect => |tc| {
-                                    // Clean up any already-collected tuple elements on the value stack
-                                    for (0..tc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, tc.collected_count, roc_ops);
                                 },
                                 .list_collect => |lc| {
-                                    // Clean up any already-collected list elements on the value stack
-                                    for (0..lc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, lc.collected_count, roc_ops);
                                 },
                                 .record_collect => |rc| {
-                                    // Clean up any already-collected record fields on the value stack
+                                    self.popCollectedValues(value_stack, rc.collected_count, roc_ops);
                                     // Also clean up base record value if present (from record extension)
-                                    for (0..rc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
                                     if (rc.has_extension) {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
@@ -14550,21 +14554,10 @@ pub const Interpreter = struct {
                                     }
                                 },
                                 .tag_collect => |tc| {
-                                    // Clean up any already-collected tag arguments on the value stack
-                                    for (0..tc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, tc.collected_count, roc_ops);
                                 },
                                 .call_collect_args => |cc| {
-                                    // Clean up any already-collected arguments on the value stack
-                                    // Also clean up function value
-                                    for (0..cc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, cc.collected_count, roc_ops);
                                     // Function value is also on the stack
                                     if (value_stack.pop()) |val| {
                                         val.decref(&self.runtime_layout_store, roc_ops);

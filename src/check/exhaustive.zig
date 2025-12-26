@@ -2660,29 +2660,8 @@ fn isSketchedPatternInhabited(
             }
             return true;
         },
-        .known_ctor => |kc| {
-            // For known_ctor, we have the union_info directly
-            // Check argument types through the column_types
-            const specialized_types = try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len);
-
-            for (specialized_types.types[0..kc.args.len], 0..) |arg_type, i| {
-                if (isTypeEmpty(type_store, arg_type)) {
-                    return false;
-                }
-                // Recursively check nested patterns
-                const arg_col_types = try allocator.alloc(Var, 1);
-                arg_col_types[0] = arg_type;
-                const nested_patterns = try allocator.alloc(UnresolvedPattern, 1);
-                nested_patterns[0] = kc.args[i];
-                if (!try isSketchedPatternInhabited(allocator, type_store, ident_store, nested_patterns, .{
-                    .types = arg_col_types,
-                    .type_store = type_store,
-                })) {
-                    return false;
-                }
-            }
-            return true;
-        },
+        // known_ctor is for records - records are always inhabited
+        .known_ctor => return true,
         .anything => {
             // Wildcard - check if the type itself is uninhabited
             return !isTypeEmpty(type_store, first_col_type);
