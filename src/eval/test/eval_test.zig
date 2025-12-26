@@ -24,6 +24,7 @@ const testing = std.testing;
 const test_allocator = testing.allocator;
 
 const runExpectI64 = helpers.runExpectI64;
+const runExpectIntDec = helpers.runExpectIntDec;
 const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
@@ -1382,6 +1383,25 @@ test "List.with_capacity - append case" {
         &[_]i64{10},
         .trace,
     );
+}
+
+// Tests for List.sum
+
+test "List.sum - basic case" {
+    // Sum of a list of integers (untyped literals default to Dec)
+    try runExpectIntDec("List.sum([1, 2, 3, 4])", 10, .no_trace);
+}
+
+test "List.sum - single element" {
+    try runExpectIntDec("List.sum([42])", 42, .no_trace);
+}
+
+test "List.sum - negative numbers" {
+    try runExpectIntDec("List.sum([-1, -2, 3, 4])", 4, .no_trace);
+}
+
+test "List.sum - larger list" {
+    try runExpectIntDec("List.sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])", 55, .no_trace);
 }
 
 // Bug regression tests - interpreter crash issues
