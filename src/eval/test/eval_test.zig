@@ -1654,3 +1654,90 @@ test "issue 8727: function returning closure that captures outer variable" {
     // Triple currying
     try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
 }
+
+test "issue 8737: tag union with tuple payload containing tag union" {
+    // Regression test for GitHub issue #8737
+    // A tag union whose payload is a tuple containing another tag union as the first element
+    // would crash during pattern matching due to incorrect discriminant reading.
+    // The bug is specifically triggered when:
+    // 1. Outer tag union has a tuple payload
+    // 2. The tuple's first element is another tag union (with a payload)
+    // 3. The tuple has 2+ elements
+    // 4. Pattern matching is used on the outer tag union
+
+    // Test: Inner tag union inside tuple inside outer tag union (the bug trigger)
+    // The match branches force type inference to produce a 2-variant type
+    try runExpectI64(
+        \\{
+        \\    result = XYZ((QQQ(1u8), 3u64))
+        \\    match result {
+        \\        XYZ(_) => 42
+        \\        BBB => 0
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "early return: basic ? operator with Ok" {
+    // The ? operator on Ok should unwrap the value
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
+        \\}
+    , 42, .no_trace);
+}
+
+test "early return: basic ? operator with Err" {
+    // The ? operator on Err should early return
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Err({})) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "early return: ? in closure passed to List.map" {
+    // Regression test: early return from closure in List.map would crash
+    // with "call_invoke_closure: value_stack empty when popping function"
+    try runExpectI64(
+        \\{
+        \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
+        \\    List.len(result)
+        \\}
+    , 2, .no_trace);
+}
+
+test "early return: ? in closure passed to List.fold" {
+    // Regression test: early return from closure in List.fold would crash
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
+        \\    List.len(result)
+        \\}
+    , 2, .no_trace);
+}
+
+test "early return: ? in second argument of multi-arg call" {
+    // Regression test: early return in second arg corrupted value stack
+    try runExpectI64(
+        \\{
+        \\    my_func = |_a, b| b
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(42, compute(Err({}))) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "early return: ? in first argument of multi-arg call" {
+    // Regression test: early return in first arg corrupted value stack
+    try runExpectI64(
+        \\{
+        \\    my_func = |a, _b| a
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}

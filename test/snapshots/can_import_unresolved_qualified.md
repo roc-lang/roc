@@ -274,7 +274,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error -> Error"))
+		(patt (type "Error -> Str"))
 		(patt (type "Error -> Error"))
 		(patt (type "Error"))
 		(patt (type "Error"))

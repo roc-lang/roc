@@ -122,7 +122,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Str -> Str"))
 		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "Str -> Error"))

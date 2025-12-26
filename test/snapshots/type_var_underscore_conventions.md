@@ -298,7 +298,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "List(elem) -> Str"))
-		(patt (type "List($elem) -> Error"))
+		(patt (type "List($elem) -> $elem"))
 		(patt (type "List($bad) -> Str"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))

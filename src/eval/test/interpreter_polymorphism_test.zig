@@ -533,5 +533,36 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
     try std.testing.expectEqualStrings(expected, rendered);
 }
 
+test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8750
+    // This previously caused a stack overflow in layout computation due to
+    // recursive addTypeVar calls for deeply nested tag union structures.
+    // The key test is that this doesn't crash - the rendering format is secondary.
+    const roc_src =
+        \\Ok((Name("hello"), 5))
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp2.deinit();
+
+    var host = TestHost{ .allocator = std.testing.allocator };
+    var ops = makeOps(&host);
+    const result = try interp2.eval(resources.expr_idx, &ops);
+    const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
+    const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
+    const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
+    defer std.testing.allocator.free(rendered);
+    // The nested tag union renders with variant index since the renderer doesn't
+    // have full type info for the inner tag. The key is that we get here without
+    // stack overflow.
+    const expected =
+        \\Ok((<tag_union variant=0>, 5))
+    ;
+    try std.testing.expectEqualStrings(expected, rendered);
+}
+
 // Recursion via Z-combinator using if, ==, and subtraction
 // Recursion tests will follow after we add minimal tail recursion support

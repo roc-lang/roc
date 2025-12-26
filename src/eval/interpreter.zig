@@ -7158,11 +7158,9 @@ pub const Interpreter = struct {
             }
         }
 
-        // Sort the tags alphabetically to match gatherTags and layout store ordering
-        // This ensures tag discriminants are consistent between evaluation and rendering
-        // Use runtime_layout_store.env since runtime type tag names are translated to that env
-        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
-        std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
+        // Note: Tags are already sorted alphabetically in runtime_types.
+        // translateTypeVar flattens tag union extensions and sorts tags before storing,
+        // so no sorting is needed here. See the translateTypeVar function.
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
@@ -7370,16 +7368,72 @@ pub const Interpreter = struct {
                 var acc = try value.asTagUnion(&self.runtime_layout_store);
                 const tag_index = acc.getDiscriminant();
 
+                // Validate discriminant against the LAYOUT's variant count, not the type's tag list.
+                // This is critical because the value may have been created with a structurally
+                // equivalent but differently-indexed type. The layout is authoritative for the
+                // actual memory representation.
+                const tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+                const layout_variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                // If discriminant is out of range for the layout's variant count, this indicates
+                // a mismatch between the value's layout and the expected type. This can happen when:
+                // 1. A value was created with a narrower type (e.g., [XYZ]) that the type system
+                //    didn't properly unify with a wider type used in pattern matching (e.g., [XYZ, BBB])
+                // 2. The layout's discriminant offset is reading from the wrong memory location
+                //    because the payload layout doesn't match expectations
+                //
+                // For single-variant unions, the discriminant doesn't carry useful information
+                // (there's only one possible tag), so we can safely use index 0.
+                // For multi-variant unions with out-of-range discriminants, return an error.
+                if (tag_index >= layout_variants.len) {
+                    if (layout_variants.len == 1) {
+                        // Single-variant union: discriminant is irrelevant, use index 0
+                        // This handles the case where the value was created with a narrower
+                        // type that has only one variant, even if the discriminant memory
+                        // contains uninitialized/garbage data.
+                        const payload_layout = acc.getVariantLayout(0);
+                        if (payload_layout.tag != .zst) {
+                            return .{
+                                .index = 0,
+                                .payload = StackValue{
+                                    .layout = payload_layout,
+                                    .ptr = value.ptr,
+                                    .is_initialized = true,
+                                    .rt_var = value.rt_var,
+                                },
+                            };
+                        } else {
+                            return .{ .index = 0, .payload = null };
+                        }
+                    }
+                    return error.TypeMismatch;
+                }
+
                 var payload_value: ?StackValue = null;
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
                 try self.appendUnionTags(union_rt_var, &tag_list);
-                if (tag_index >= tag_list.items.len) return error.TypeMismatch;
-                const tag_info = tag_list.items[tag_index];
-                const arg_vars = self.runtime_types.sliceVars(tag_info.args);
+
+                // Get tag info from the type if available, with graceful fallback
+                const has_type_info = tag_index < tag_list.items.len;
+                const arg_vars = if (has_type_info)
+                    self.runtime_types.sliceVars(tag_list.items[tag_index].args)
+                else
+                    &[_]types.Var{};
 
                 if (arg_vars.len == 0) {
-                    payload_value = null;
+                    // No payload or type info unavailable - check layout for payload
+                    const variant_layout = acc.getVariantLayout(tag_index);
+                    if (variant_layout.tag != .zst) {
+                        // Layout says there's a payload even though type says no args
+                        payload_value = StackValue{
+                            .layout = variant_layout,
+                            .ptr = value.ptr,
+                            .is_initialized = true,
+                            .rt_var = value.rt_var,
+                        };
+                    } else {
+                        payload_value = null;
+                    }
                 } else if (arg_vars.len == 1) {
                     // Get the payload layout from the variant
                     const variant_layout = acc.getVariantLayout(tag_index);
@@ -7815,6 +7869,26 @@ pub const Interpreter = struct {
         list.items.len = new_len;
     }
 
+    /// Pop and decref values from the value stack during early return cleanup.
+    /// Used when draining collect-style continuations (tag_collect, list_collect, etc.).
+    ///
+    /// The `collected_count` in these continuations is incremented BEFORE pushing
+    /// eval_expr for the next item, so when we're early-returning, the current
+    /// item being evaluated isn't done yet. Thus we pop `collected_count - 1` values.
+    fn popCollectedValues(
+        self: *Interpreter,
+        value_stack: *ValueStack,
+        collected_count: usize,
+        roc_ops: *RocOps,
+    ) void {
+        const actual_collected = if (collected_count > 0) collected_count - 1 else 0;
+        for (0..actual_collected) |_| {
+            if (value_stack.pop()) |val| {
+                val.decref(&self.runtime_layout_store, roc_ops);
+            }
+        }
+    }
+
     fn patternMatchesBind(
         self: *Interpreter,
         pattern_idx: can.CIR.Pattern.Idx,
@@ -8086,7 +8160,10 @@ pub const Interpreter = struct {
                 defer value_tag_list.deinit();
                 try self.appendUnionTags(value.rt_var, &value_tag_list);
 
-                const tag_data = try self.extractTagValue(value, value_rt_var);
+                // Use value.rt_var (the value's actual type) for extracting tag data, not value_rt_var
+                // (the expected/pattern type). The value's discriminant was written based on its actual
+                // type's tag ordering, so we must use that same type to read it correctly.
+                const tag_data = try self.extractTagValue(value, value.rt_var);
 
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
@@ -14438,7 +14515,11 @@ pub const Interpreter = struct {
                                     return error.Crash;
                                 },
                                 .call_invoke_closure => |ci| {
-                                    // Free resources if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation.
+                                    // Note: We don't pop values from value_stack here because
+                                    // call_invoke_closure is scheduled BEFORE call_collect_args
+                                    // finishes, so the function and args aren't on the stack yet.
+                                    // The call_collect_args cleanup handles the partial values.
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                     if (ci.saved_rigid_subst) |saved| {
                                         var saved_copy = saved;
@@ -14455,37 +14536,17 @@ pub const Interpreter = struct {
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
                                 .str_collect => |sc| {
-                                    // Clean up any already-collected string segments on the value stack
-                                    for (0..sc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, sc.collected_count, roc_ops);
                                 },
                                 .tuple_collect => |tc| {
-                                    // Clean up any already-collected tuple elements on the value stack
-                                    for (0..tc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, tc.collected_count, roc_ops);
                                 },
                                 .list_collect => |lc| {
-                                    // Clean up any already-collected list elements on the value stack
-                                    for (0..lc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, lc.collected_count, roc_ops);
                                 },
                                 .record_collect => |rc| {
-                                    // Clean up any already-collected record fields on the value stack
+                                    self.popCollectedValues(value_stack, rc.collected_count, roc_ops);
                                     // Also clean up base record value if present (from record extension)
-                                    for (0..rc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
                                     if (rc.has_extension) {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
@@ -14493,21 +14554,10 @@ pub const Interpreter = struct {
                                     }
                                 },
                                 .tag_collect => |tc| {
-                                    // Clean up any already-collected tag arguments on the value stack
-                                    for (0..tc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, tc.collected_count, roc_ops);
                                 },
                                 .call_collect_args => |cc| {
-                                    // Clean up any already-collected arguments on the value stack
-                                    // Also clean up function value
-                                    for (0..cc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, cc.collected_count, roc_ops);
                                     // Function value is also on the stack
                                     if (value_stack.pop()) |val| {
                                         val.decref(&self.runtime_layout_store, roc_ops);
@@ -14827,8 +14877,12 @@ pub const Interpreter = struct {
                 const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
                 scrutinee_temp.decref(&self.runtime_layout_store, roc_ops);
 
-                // Use the scrutinee's own rt_var (preserves type through polymorphic calls)
-                const effective_scrutinee_rt_var = scrutinee.rt_var;
+                // Use the match expression's scrutinee_rt_var (from the unified type after type checking)
+                // instead of the value's rt_var. The value's rt_var may reflect a narrower type
+                // that was computed before unification with all pattern variants.
+                // For example, `result = XYZ(...)` creates a 1-variant type, but the match expression
+                // `match result { XYZ(_) => ..., BBB => ... }` unifies it to a 2-variant type.
+                const effective_scrutinee_rt_var = mb.scrutinee_rt_var;
 
                 // Try branches starting from current_branch
                 var branch_idx = mb.current_branch;
