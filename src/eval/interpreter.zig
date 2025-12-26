@@ -9235,7 +9235,6 @@ pub const Interpreter = struct {
         defer trace.end();
 
         const resolved = module.types.resolveVar(compile_var);
-
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
         // Check flex_type_context BEFORE translate_cache for flex and rigid types.
@@ -9268,7 +9267,6 @@ pub const Interpreter = struct {
             if (entry.generation == self.poly_context_generation) {
                 return entry.var_;
             }
-            // Entry is from a different generation - treat as cache miss
         }
 
         // Mark this type as in-progress to detect cycles
@@ -9610,7 +9608,8 @@ pub const Interpreter = struct {
                     };
 
                     const content: types.Content = .{ .flex = rt_flex };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    const fresh_flex = try self.runtime_types.freshFromContent(content);
+                    break :blk fresh_flex;
                 },
                 .rigid => |rigid| {
                     // Check if this rigid should be substituted (during nominal type backing translation)
@@ -10612,14 +10611,14 @@ pub const Interpreter = struct {
 
         /// Dbg statement - print value
         pub const DbgPrintStmt = struct {
-            /// Runtime type for rendering
-            rt_var: types.Var,
             /// Remaining statements after dbg
             remaining_stmts: []const can.CIR.Statement.Idx,
             /// Final expression to evaluate after all statements
             final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// Expected runtime type for the final expression (from block's expected type)
+            expected_rt_var: ?types.Var,
         };
     };
 
@@ -13817,21 +13816,28 @@ pub const Interpreter = struct {
             },
             .s_dbg => |dbg_stmt| {
                 // Evaluate expression, then print
-                const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
-                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                // NOTE: We intentionally do NOT call translateTypeVar here.
+                // Doing so would create a cache entry for a fresh flex var, which
+                // can corrupt type resolution for subsequent method calls on the
+                // returned value (see issue #8750). Instead, we get the runtime
+                // type from the evaluated value in dbg_print_stmt.
 
                 // Push dbg_print_stmt continuation
+                // CRITICAL: Pass expected_rt_var through to the continuation so it can
+                // be used when evaluating the final expression. Without this, polymorphic
+                // blocks like `{ dbg v; v }` would lose the expected type information,
+                // causing downstream method calls (like List.fold) to infer wrong types.
                 try work_stack.push(.{ .apply_continuation = .{ .dbg_print_stmt = .{
-                    .rt_var = inner_rt_var,
                     .remaining_stmts = remaining_stmts,
                     .final_expr = final_expr,
                     .bindings_start = bindings_start,
+                    .expected_rt_var = expected_rt_var,
                 } } });
 
-                // Evaluate the expression
+                // Evaluate the expression without an expected type
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_stmt.expr,
-                    .expected_rt_var = inner_rt_var,
+                    .expected_rt_var = null,
                 } });
             },
             .s_return => |ret| {
@@ -16737,14 +16743,9 @@ pub const Interpreter = struct {
                 } } });
 
                 // Start evaluating first arg
-                // For static dispatch methods like I64.to_str(x), use the receiver type
-                // as the expected type for the first argument. This enables proper type
-                // inference for polymorphic numeric literals.
-                // Note: This assumes methods take their receiver type as first arg, which
-                // is true for common patterns like I64.to_str. For multi-arg methods,
-                // only the first arg gets this treatment.
                 const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
                 const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
                     .expected_rt_var = first_arg_rt_var,
@@ -17556,18 +17557,22 @@ pub const Interpreter = struct {
                 // Dbg statement: print value
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.rt_var, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, value.rt_var, roc_ops);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Continue with remaining statements
+                // CRITICAL: Pass expected_rt_var through to ensure polymorphic type information
+                // is preserved. This is the fix for issue #8750 - without this, blocks
+                // containing dbg lose their expected type, causing downstream method calls
+                // to infer wrong types (e.g., numeric literals defaulting to Dec).
                 if (dp.remaining_stmts.len == 0) {
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = dp.final_expr,
-                        .expected_rt_var = null,
+                        .expected_rt_var = dp.expected_rt_var,
                     } });
                 } else {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, null, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, dp.expected_rt_var, roc_ops);
                 }
                 return true;
             },
