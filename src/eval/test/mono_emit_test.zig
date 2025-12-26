@@ -28,6 +28,18 @@ const Monomorphizer = can.Monomorphizer;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
+/// Helper to check if output contains a closure tag (format: C followed by digit)
+/// Closure tags use internal format #N_hint which RocEmitter transforms to CN_hint
+fn hasClosureTag(output: []const u8) bool {
+    var i: usize = 0;
+    while (i < output.len) : (i += 1) {
+        if (output[i] == 'C' and i + 1 < output.len and output[i + 1] >= '0' and output[i + 1] <= '9') {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Helper to parse, canonicalize, type check, and emit Roc code
 fn emitFromSource(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
     const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
@@ -491,7 +503,8 @@ test "pure lambda is left unchanged" {
     defer test_allocator.free(output);
 
     // Pure lambda should be left as-is, NOT transformed to a tag
-    try testing.expect(std.mem.indexOf(u8, output, "Closure_") == null);
+    // Closure tags now use format C1_hint or C1 (# prefix transformed to C by RocEmitter)
+    try testing.expect(!hasClosureTag(output));
     try testing.expectEqualStrings("|x| x + 1", output);
 }
 
@@ -528,8 +541,8 @@ test "transform closure with single capture to tag" {
     const output = try transformBlockAndEmit(test_allocator, source);
     defer test_allocator.free(output);
 
-    // The closure should have been transformed to a # tag
-    try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
+    // The closure should have been transformed to a # tag (emitted as C1_...)
+    try testing.expect(hasClosureTag(output));
 
     // The capture 'x' should appear in the tag's record argument
     // RocEmitter uses shorthand syntax { x } for captures
@@ -553,8 +566,8 @@ test "transform closure with multiple captures" {
     const output = try transformBlockAndEmit(test_allocator, source);
     defer test_allocator.free(output);
 
-    // The closure should have been transformed to a # tag
-    try testing.expect(std.mem.indexOf(u8, output, "Closure_") != null);
+    // The closure should have been transformed to a # tag (emitted as C1_...)
+    try testing.expect(hasClosureTag(output));
 
     // Both captures 'a' and 'b' should appear in the tag's record
     // RocEmitter uses shorthand syntax { a, b } for captures
@@ -582,10 +595,10 @@ test "verify: closure with single capture transforms correctly" {
     defer test_allocator.free(transformed);
 
     // Verify transformation structure:
-    // - Should have a # tag (internal closure tag)
+    // - Should have a # tag (internal closure tag, emitted as C1_...)
     // - Should have a match expression for the call site
     // - Should reference the captured variable x
-    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
+    try testing.expect(hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -604,9 +617,9 @@ test "verify: closure with multiple captures transforms correctly" {
     defer test_allocator.free(transformed);
 
     // Verify transformation structure:
-    // - Should have a # tag (internal closure tag)
+    // - Should have a # tag (internal closure tag, emitted as C1_...)
     // - Should have a match expression for the call site
-    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
+    try testing.expect(hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -623,10 +636,10 @@ test "verify: pure lambda (no captures) is left unchanged" {
     defer test_allocator.free(transformed);
 
     // Verify pure lambda is NOT transformed:
-    // - Should NOT have a Closure_ tag
+    // - Should NOT have a closure tag (C followed by digit)
     // - Should NOT have a match expression
     // - Should have the lambda preserved as-is
-    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") == null);
+    try testing.expect(!hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") == null);
     try testing.expect(std.mem.indexOf(u8, transformed, "|x|") != null);
     try testing.expect(std.mem.indexOf(u8, transformed, "f(41)") != null);
@@ -648,9 +661,9 @@ test "verify: nested closures with captures transforms correctly" {
     defer test_allocator.free(transformed);
 
     // Verify transformation structure:
-    // - Should have # tags (internal closure tags)
+    // - Should have # tags (internal closure tags, emitted as C1_...)
     // - Should have match expressions for the call sites
-    try testing.expect(std.mem.indexOf(u8, transformed, "Closure_") != null);
+    try testing.expect(hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
