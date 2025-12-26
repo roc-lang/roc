@@ -6,14 +6,14 @@ type=mono
 # SOURCE
 ~~~roc
 func = |x| {
-    result = match True {
-        True => {
-            add_x = |y| x + y
-            add_x(10)
-        }
-        False => 0
-    }
-    result
+	result = match True {
+		True => {
+			add_x = |y| x + y
+			add_x(10)
+		}
+		False => 0
+	}
+	result
 }
 answer = func(42)
 ~~~
@@ -38,17 +38,7 @@ answer = func(42)
 ~~~
 # FORMATTED
 ~~~roc
-func = |x| {
-	result = match True {
-		True => {
-			add_x = |y| x + y
-			add_x(10)
-		}
-		False => 0
-	}
-	result
-}
-answer = func(42)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

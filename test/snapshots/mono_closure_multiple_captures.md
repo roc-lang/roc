@@ -6,8 +6,8 @@ type=mono
 # SOURCE
 ~~~roc
 func = |a, b| {
-    add_ab = |x| a + b + x
-    add_ab(10)
+	add_ab = |x| a + b + x
+	add_ab(10)
 }
 result = func(1, 2)
 ~~~
@@ -26,11 +26,7 @@ result = func(1, 2)
 ~~~
 # FORMATTED
 ~~~roc
-func = |a, b| {
-	add_ab = |x| a + b + x
-	add_ab(10)
-}
-result = func(1, 2)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

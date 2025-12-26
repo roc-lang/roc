@@ -6,9 +6,9 @@ type=mono
 # SOURCE
 ~~~roc
 func = |offset| {
-    condition = True
-    f = if condition |x| x + offset else |x| x * 2
-    f(10)
+	condition = True
+	f = if condition |x| x + offset else |x| x * 2
+	f(10)
 }
 result = func(1)
 ~~~
@@ -31,12 +31,7 @@ result = func(1)
 ~~~
 # FORMATTED
 ~~~roc
-func = |offset| {
-	condition = True
-	f = if condition |x| x + offset else |x| x * 2
-	f(10)
-}
-result = func(1)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL

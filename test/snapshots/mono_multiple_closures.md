@@ -6,9 +6,9 @@ type=mono
 # SOURCE
 ~~~roc
 func = |x, y| {
-    add_x = |a| a + x
-    add_y = |b| b + y
-    add_x(5) + add_y(5)
+	add_x = |a| a + x
+	add_y = |b| b + y
+	add_x(5) + add_y(5)
 }
 result = func(10, 20)
 ~~~
@@ -32,12 +32,7 @@ result = func(10, 20)
 ~~~
 # FORMATTED
 ~~~roc
-func = |x, y| {
-	add_x = |a| a + x
-	add_y = |b| b + y
-	add_x(5) + add_y(5)
-}
-result = func(10, 20)
+NO CHANGE
 ~~~
 # EXPECTED
 NIL
