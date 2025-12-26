@@ -3086,7 +3086,7 @@ test "ClosureTransformer: external lambda set requests" {
 
     // Request an external lambda set
     // source_module is only used for equality comparison in tests, never dereferenced
-    const source_module: CIR.Import.Idx = undefined;
+    const source_module: CIR.Import.Idx = .first;
     const concrete_type_info = ConcreteTypeInfo{
         .type_ident = null,
         .type_args_hash = 12345,
