@@ -11146,6 +11146,37 @@ pub const Interpreter = struct {
                         },
                         else => null,
                     },
+                    .flex => |flex| blk: {
+                        // Check if this flex var has a from_numeral constraint,
+                        // indicating it's an unresolved numeric type that should default to Dec.
+                        if (!flex.constraints.isEmpty()) {
+                            for (self.runtime_types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    // Default to Dec
+                                    break :blk .{
+                                        .origin = self.root_env.idents.builtin_module,
+                                        .ident = self.root_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :blk null;
+                    },
+                    .rigid => |rigid| blk: {
+                        // Same handling for rigid vars
+                        if (!rigid.constraints.isEmpty()) {
+                            for (self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    // Default to Dec
+                                    break :blk .{
+                                        .origin = self.root_env.idents.builtin_module,
+                                        .ident = self.root_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :blk null;
+                    },
                     else => null,
                 };
 
