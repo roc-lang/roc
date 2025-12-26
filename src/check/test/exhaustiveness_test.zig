@@ -413,3 +413,58 @@ test "non-exhaustive - non-empty error type requires Err case" {
     // Str is NOT empty, so Err is required
     try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
+
+test "redundant - second wildcard after first on empty error type" {
+    // When matching on a type where one constructor is uninhabited,
+    // patterns after the first one should be redundant
+    const source =
+        \\x : Try(I64, [])
+        \\x = Ok(42i64)
+        \\
+        \\result = match x {
+        \\    Ok(n) => n
+        \\    Ok(_) => 0i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The second Ok pattern is redundant (same constructor already matched)
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+test "redundant - wildcard after complete coverage on type with empty variant" {
+    // When Ok covers everything (because Err is empty), a following wildcard is redundant
+    const source =
+        \\x : Try(I64, [])
+        \\x = Ok(42i64)
+        \\
+        \\result = match x {
+        \\    Ok(n) => n
+        \\    _ => 0i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The wildcard is redundant because Ok already covers all inhabited cases
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+test "redundant - Err pattern first on empty error type is unreachable" {
+    // When the error type is empty [], an Err(_) pattern can never match
+    // because no Err values can exist. This should be flagged as redundant.
+    const source =
+        \\x : Try(I64, [])
+        \\x = Ok(42i64)
+        \\
+        \\result = match x {
+        \\    Err(_) => 0i64
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}

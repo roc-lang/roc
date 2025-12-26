@@ -706,7 +706,8 @@ pub fn reifyPattern(
     type_var: Var,
 ) ReifyError!Pattern {
     return switch (unresolved) {
-        .anything => .{ .anything = null },
+        // Carry the type for inhabitedness checking
+        .anything => .{ .anything = type_var },
 
         .literal => |lit| .{ .literal = lit },
 
@@ -1069,21 +1070,8 @@ fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const
         .structure => |flat_type| switch (flat_type) {
             .nominal_type => |nominal| {
                 // For parametric nominal types like Try(A, B), get args from backing type
-                const nom_args = type_store.sliceNominalArgs(nominal);
                 const backing_var = type_store.getNominalBackingVar(nominal);
-                const backing_args = getCtorArgTypes(type_store, backing_var, tag_id);
-
-                // TODO: Properly substitute type parameters instead of this heuristic.
-                if (backing_args.len == 1 and nom_args.len > 0) {
-                    const first_arg_resolved = type_store.resolveVar(backing_args[0]);
-                    switch (first_arg_resolved.desc.content) {
-                        .rigid, .flex => {
-                            return nom_args[0..1];
-                        },
-                        else => {},
-                    }
-                }
-                return backing_args;
+                return getCtorArgTypes(type_store, backing_var, tag_id);
             },
             .tuple => |tuple| {
                 // Tuples are single-constructor types, return the element types
@@ -2622,6 +2610,88 @@ pub fn checkExhaustiveSketched(
     };
 }
 
+/// Check if a sketched pattern row is on inhabited types.
+/// A pattern is uninhabited if it matches a constructor whose argument types are uninhabited.
+/// For example, Err(_) on Try(I64, []) is uninhabited because [] has no values.
+fn isSketchedPatternInhabited(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    ident_store: *const Ident.Store,
+    patterns: []const UnresolvedPattern,
+    column_types: ColumnTypes,
+) ReifyError!bool {
+    if (patterns.len == 0) return true;
+    if (column_types.types.len == 0) return true;
+
+    const first = patterns[0];
+    const first_col_type = column_types.types[0];
+
+    switch (first) {
+        .ctor => |c| {
+            // Look up the union type to get tag_id and argument types
+            const union_result = try getUnionFromType(allocator, type_store, ident_store, first_col_type);
+            const union_info = switch (union_result) {
+                .success => |u| u,
+                .not_a_union => return error.TypeError,
+            };
+            const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
+
+            // Get the constructor's argument types
+            const arg_types = getCtorArgTypes(type_store, first_col_type, tag_id);
+
+            // Check if any argument type is uninhabited
+            for (arg_types, 0..) |arg_type, i| {
+                if (isTypeEmpty(type_store, arg_type)) {
+                    return false; // Uninhabited argument = uninhabited pattern
+                }
+                // Also recursively check nested patterns
+                if (i < c.args.len) {
+                    const arg_col_types = try allocator.alloc(Var, 1);
+                    arg_col_types[0] = arg_type;
+                    const nested_patterns = try allocator.alloc(UnresolvedPattern, 1);
+                    nested_patterns[0] = c.args[i];
+                    if (!try isSketchedPatternInhabited(allocator, type_store, ident_store, nested_patterns, .{
+                        .types = arg_col_types,
+                        .type_store = type_store,
+                    })) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        },
+        .known_ctor => |kc| {
+            // For known_ctor, we have the union_info directly
+            // Check argument types through the column_types
+            const specialized_types = try column_types.specializeByConstructor(allocator, kc.tag_id, kc.args.len);
+
+            for (specialized_types.types[0..kc.args.len], 0..) |arg_type, i| {
+                if (isTypeEmpty(type_store, arg_type)) {
+                    return false;
+                }
+                // Recursively check nested patterns
+                const arg_col_types = try allocator.alloc(Var, 1);
+                arg_col_types[0] = arg_type;
+                const nested_patterns = try allocator.alloc(UnresolvedPattern, 1);
+                nested_patterns[0] = kc.args[i];
+                if (!try isSketchedPatternInhabited(allocator, type_store, ident_store, nested_patterns, .{
+                    .types = arg_col_types,
+                    .type_store = type_store,
+                })) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        .anything => {
+            // Wildcard - check if the type itself is uninhabited
+            return !isTypeEmpty(type_store, first_col_type);
+        },
+        .literal => return true, // Literals are always inhabited
+        .list => return true, // Lists can be empty, so always inhabited
+    }
+}
+
 /// Check if a new sketched pattern row is "useful" given existing sketched rows.
 /// Reifies patterns on-demand when type information is needed.
 pub fn isUsefulSketched(
@@ -2632,8 +2702,12 @@ pub fn isUsefulSketched(
     new_row: []const UnresolvedPattern,
     column_types: ColumnTypes,
 ) ReifyError!bool {
-    // Empty matrix = new row is definitely useful
-    if (existing_matrix.isEmpty()) return true;
+    // Empty matrix = new row is definitely useful, UNLESS the pattern is uninhabited
+    if (existing_matrix.isEmpty()) {
+        // Check if the pattern is on an uninhabited type
+        // For ctor patterns, check if any argument type is uninhabited
+        return isSketchedPatternInhabited(allocator, type_store, ident_store, new_row, column_types);
+    }
 
     // No more patterns to check = not useful (existing rows cover everything)
     if (new_row.len == 0) return false;
@@ -2803,6 +2877,38 @@ pub fn isUsefulSketched(
                     const num_alts = ctor_info.union_info.alternatives.len;
 
                     if (num_found < num_alts) {
+                        // Not all constructors covered - but check if missing constructors are all uninhabited
+                        var any_missing_inhabited = false;
+                        for (ctor_info.union_info.alternatives) |alt| {
+                            var found = false;
+                            for (ctor_info.found) |found_id| {
+                                if (@intFromEnum(alt.tag_id) == @intFromEnum(found_id)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                // This constructor is missing - check if it's inhabited
+                                const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
+                                var ctor_uninhabited = false;
+                                for (arg_types) |arg_type| {
+                                    if (isTypeEmpty(type_store, arg_type)) {
+                                        ctor_uninhabited = true;
+                                        break;
+                                    }
+                                }
+                                if (!ctor_uninhabited) {
+                                    any_missing_inhabited = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!any_missing_inhabited) {
+                            // All missing constructors are uninhabited - wildcard is not useful
+                            return false;
+                        }
+
                         const specialized = try specializeByAnythingSketched(allocator, existing_matrix);
                         const rest_types = column_types.dropFirst();
                         return isUsefulSketched(allocator, type_store, ident_store, specialized, rest, rest_types);
