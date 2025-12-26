@@ -52,6 +52,7 @@ main = |_| {
 MISSING METHOD - let_polymorphism_records.md:26:47:26:49
 UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
 MISSING METHOD - let_polymorphism_records.md:38:2:38:3
+MISSING METHOD - let_polymorphism_records.md:38:2:38:17
 # PROBLEMS
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -88,6 +89,18 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 	^
 
 The value's type, which does not have a method named **from_numeral**, is:
+
+    { ..a, data: b }, b -> { ..a, data: b }
+
+**MISSING METHOD**
+This **plus** method is being called on a value whose type doesn't have that method:
+**let_polymorphism_records.md:38:2:38:17:**
+```roc
+	1 + update_data
+```
+	^^^^^^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
 
     { ..a, data: b }, b -> { ..a, data: b }
 
@@ -430,7 +443,7 @@ NO CHANGE
 		(patt (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "{ value: Str }"))
 		(patt (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]")))
 	(expressions
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
@@ -449,5 +462,5 @@ NO CHANGE
 		(expr (type "{ value: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "{ value: Str }"))
 		(expr (type "{ value: List(a) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))))
 ~~~
