@@ -35,6 +35,51 @@ const TypeStore = types.Store;
 const Var = types.Var;
 const Content = types.Content;
 
+/// Builtin type identifiers needed for special-casing in exhaustiveness checking.
+/// These types have special backing representations that would incorrectly appear uninhabited.
+pub const BuiltinIdents = struct {
+    /// The Builtin module identifier
+    builtin_module: Ident.Idx,
+    /// Numeric type identifiers (Builtin.Num.*)
+    u8_type: Ident.Idx,
+    i8_type: Ident.Idx,
+    u16_type: Ident.Idx,
+    i16_type: Ident.Idx,
+    u32_type: Ident.Idx,
+    i32_type: Ident.Idx,
+    u64_type: Ident.Idx,
+    i64_type: Ident.Idx,
+    u128_type: Ident.Idx,
+    i128_type: Ident.Idx,
+    f32_type: Ident.Idx,
+    f64_type: Ident.Idx,
+    dec_type: Ident.Idx,
+
+    /// Check if a nominal type is a builtin numeric type.
+    /// Numeric types have [] as backing but are inhabited primitives.
+    pub fn isBuiltinNumericType(self: BuiltinIdents, nominal: types.NominalType) bool {
+        // First check if it's from the Builtin module
+        if (nominal.origin_module != self.builtin_module) {
+            return false;
+        }
+        // Then check if it's one of the numeric types
+        const ident = nominal.ident.ident_idx;
+        return ident == self.u8_type or
+            ident == self.i8_type or
+            ident == self.u16_type or
+            ident == self.i16_type or
+            ident == self.u32_type or
+            ident == self.i32_type or
+            ident == self.u64_type or
+            ident == self.i64_type or
+            ident == self.u128_type or
+            ident == self.i128_type or
+            ident == self.f32_type or
+            ident == self.f64_type or
+            ident == self.dec_type;
+    }
+};
+
 /// 1-based index for user-facing error messages.
 /// Provides ordinal formatting like "1st", "2nd", "3rd", etc.
 pub const HumanIndex = struct {
@@ -121,14 +166,22 @@ pub const Pattern = union(enum) {
     /// Check if this pattern can ever match a value (is inhabited).
     /// A pattern is uninhabited if it matches a type with no possible values,
     /// such as an empty tag union or a constructor with uninhabited arguments.
-    pub fn isInhabited(self: Pattern, type_store: *TypeStore) bool {
+    ///
+    /// Note: Uninhabited constructors are filtered out during union construction
+    /// (in buildUnionFromTagUnion), so patterns referencing them won't find their
+    /// tag_id in the union's alternatives.
+    pub fn isInhabited(self: Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
         return switch (self) {
             .anything => |maybe_type| {
                 if (maybe_type) |type_var| {
-                    // Check if the type is empty (uninhabited)
-                    return !isTypeEmpty(type_store, type_var);
+                    // Check if the type is inhabited using our comprehensive check
+                    return isTypeInhabited(type_store, builtin_idents, type_var);
                 }
-                // TODO: Track type info for all wildcards so we can check inhabitedness.
+                // Wildcards without type info only occur in error recovery paths
+                // (when reifyPattern returns TypeError and we create a placeholder).
+                // In those cases, we're already skipping exhaustiveness checking
+                // (has_unresolved_ctor is set), so the return value doesn't matter.
+                // We return true to avoid cascading errors.
                 return true;
             },
 
@@ -141,7 +194,9 @@ pub const Pattern = union(enum) {
                     return false;
                 }
 
-                // Check if this constructor exists in the union
+                // Check if this constructor exists in the union.
+                // With uninhabited constructor filtering, constructors like Err on Try(A, [])
+                // are removed from the union during construction, so they won't be found here.
                 var found = false;
                 for (c.union_info.alternatives) |alt| {
                     if (alt.tag_id == c.tag_id) {
@@ -150,13 +205,14 @@ pub const Pattern = union(enum) {
                     }
                 }
                 if (!found and !c.union_info.has_flex_extension) {
-                    // Constructor was removed from union (shouldn't happen in practice)
+                    // Constructor is not in the union - it was filtered out because
+                    // its arguments are uninhabited, making this pattern unmatchable.
                     return false;
                 }
 
                 // All arguments must be inhabited for the pattern to be inhabited
                 for (c.args) |arg| {
-                    if (!arg.isInhabited(type_store)) return false;
+                    if (!try arg.isInhabited(type_store, builtin_idents)) return false;
                 }
                 return true;
             },
@@ -164,7 +220,7 @@ pub const Pattern = union(enum) {
             .list => |l| {
                 // All elements must be inhabited
                 for (l.elements) |elem| {
-                    if (!elem.isInhabited(type_store)) return false;
+                    if (!try elem.isInhabited(type_store, builtin_idents)) return false;
                 }
                 return true;
             },
@@ -701,7 +757,6 @@ pub const ReifiedRows = struct {
 pub fn reifyPattern(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
     unresolved: UnresolvedPattern,
     type_var: Var,
 ) ReifyError!Pattern {
@@ -731,7 +786,7 @@ pub fn reifyPattern(
                     // We can't reliably do exhaustiveness checking.
                     return error.TypeError;
                 } else {
-                    args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
+                    args[i] = try reifyPattern(allocator, type_store, arg, arg_type);
                 }
             }
 
@@ -744,7 +799,7 @@ pub fn reifyPattern(
 
         .ctor => |c| {
             // Need to look up the union type from the type variable
-            const union_result = try getUnionFromType(allocator, type_store, ident_store, type_var);
+            const union_result = try getUnionFromType(allocator, type_store, type_var);
 
             switch (union_result) {
                 .success => |union_info| {
@@ -771,7 +826,7 @@ pub fn reifyPattern(
                             // We can't reliably do exhaustiveness checking.
                             return error.TypeError;
                         } else {
-                            args[i] = try reifyPattern(allocator, type_store, ident_store, arg, arg_type);
+                            args[i] = try reifyPattern(allocator, type_store, arg, arg_type);
                         }
                     }
 
@@ -793,7 +848,7 @@ pub fn reifyPattern(
 
             const elements = try allocator.alloc(Pattern, l.elements.len);
             for (l.elements, 0..) |elem, i| {
-                elements[i] = try reifyPattern(allocator, type_store, ident_store, elem, elem_type);
+                elements[i] = try reifyPattern(allocator, type_store, elem, elem_type);
             }
 
             return .{ .list = .{
@@ -812,7 +867,6 @@ pub fn reifyPattern(
 pub fn reifyRows(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
     unresolved: UnresolvedRows,
     scrutinee_type: Var,
 ) error{OutOfMemory}!ReifiedRows {
@@ -825,7 +879,7 @@ pub fn reifyRows(
         // Reify this row's patterns
         const reified = try allocator.alloc(Pattern, row.patterns.len);
         for (row.patterns, 0..) |pat, i| {
-            reified[i] = reifyPattern(allocator, type_store, ident_store, pat, scrutinee_type) catch |err| switch (err) {
+            reified[i] = reifyPattern(allocator, type_store, pat, scrutinee_type) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.TypeError => blk: {
                     // Type error during reification - pattern couldn't be resolved.
@@ -859,7 +913,6 @@ const UnionResult = union(enum) {
 fn getUnionFromType(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
     type_var: Var,
 ) error{OutOfMemory}!UnionResult {
     const resolved = type_store.resolveVar(type_var);
@@ -874,10 +927,10 @@ fn getUnionFromType(
     switch (content) {
         .alias => |alias| {
             const backing_var = type_store.getAliasBackingVar(alias);
-            return getUnionFromType(allocator, type_store, ident_store, backing_var);
+            return getUnionFromType(allocator, type_store, backing_var);
         },
         .recursion_var => |rec| {
-            return getUnionFromType(allocator, type_store, ident_store, rec.structure);
+            return getUnionFromType(allocator, type_store, rec.structure);
         },
         // TODO: Handle polymorphic types properly instead of treating as not a union.
         .flex, .rigid => return .not_a_union,
@@ -891,7 +944,7 @@ fn getUnionFromType(
                 // We need to unwrap them to find the underlying tag union
                 .nominal_type => |nominal| {
                     const backing_var = type_store.getNominalBackingVar(nominal);
-                    return getUnionFromType(allocator, type_store, ident_store, backing_var);
+                    return getUnionFromType(allocator, type_store, backing_var);
                 },
                 else => return .not_a_union,
             }
@@ -956,45 +1009,165 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
     return content == .flex;
 }
 
-/// Check if a type is an empty tag union (uninhabited).
-/// Returns true if the type is definitely uninhabited (empty closed tag union).
-/// Returns false (inhabited) for any other type or if uncertain.
-fn isTypeEmpty(type_store: *TypeStore, type_var: Var) bool {
-    const resolved = type_store.resolveVar(type_var);
-    const content = resolved.desc.content;
+/// Check if a type is inhabited (has at least one possible value).
+/// This is a comprehensive check that handles all type structures.
+///
+/// Based on the algorithm from the Rust implementation in crates/compiler/types/src/subs.rs.
+///
+/// A type is uninhabited if:
+/// - It's an empty tag union with no flex extension
+/// - It's a tag union where ALL variants have at least one uninhabited argument
+/// - It's a record/tuple with any uninhabited field
+/// - It's a nominal type whose backing type is uninhabited
+///
+/// A type is inhabited if:
+/// - It's a flex/rigid variable (unconstrained, could be anything)
+/// - It's a recursion var (these only appear in valid recursive types)
+/// - It's a builtin primitive type (Builtin.Num.*, Builtin.Str, etc.)
+/// - It's a function type
+/// - It has at least one constructor with all inhabited arguments
+fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
+    var stack: std.ArrayList(Var) = .empty;
+    defer stack.deinit(type_store.gpa);
+    return isTypeInhabitedImpl(type_store, builtin_idents, type_var, &stack);
+}
 
-    // Check for empty_tag_union structure directly
-    switch (content) {
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => return true,
-            .tag_union => |tag_union| {
-                const tags_slice = type_store.getTagsSlice(tag_union.tags);
-                if (tags_slice.len == 0) {
-                    // Empty but check extension
-                    if (isOpenExtension(type_store, tag_union.ext) or hasFlexExtension(type_store, tag_union.ext)) {
-                        return false; // Might have more tags
+/// Internal implementation that uses a shared stack for efficiency.
+fn isTypeInhabitedImpl(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var, stack: *std.ArrayList(Var)) error{OutOfMemory}!bool {
+    try stack.append(type_store.gpa, type_var);
+
+    while (stack.items.len > 0) {
+        const var_to_check = stack.pop().?;
+        const resolved = type_store.resolveVar(var_to_check);
+        const content = resolved.desc.content;
+
+        switch (content) {
+            // Flex and rigid variables are unconstrained - assume inhabited
+            .flex, .rigid => {},
+
+            // Recursion vars are always inhabited because:
+            // - If inferred from a value, a value of that type exists
+            // - If from an annotation, illegal recursive types are caught in canonicalization
+            .recursion_var => |_| {},
+
+            // Error types are treated as inhabited (we don't want to cascade errors)
+            .err => {},
+
+            // Aliases - check the backing type
+            .alias => |alias| {
+                const backing_var = type_store.getAliasBackingVar(alias);
+                try stack.append(type_store.gpa, backing_var);
+            },
+
+            .structure => |flat_type| switch (flat_type) {
+                // Empty tag union is uninhabited
+                .empty_tag_union => return false,
+
+                // Empty record is inhabited (the unit type)
+                .empty_record => {},
+
+                // Tag unions: uninhabited only if ALL variants have at least one uninhabited arg
+                .tag_union => |tag_union| {
+                    const tags_slice = type_store.getTagsSlice(tag_union.tags);
+
+                    if (tags_slice.len == 0) {
+                        // No tags - check extension
+                        if (isOpenExtension(type_store, tag_union.ext) or hasFlexExtension(type_store, tag_union.ext)) {
+                            // Might have more tags, assume inhabited
+                            continue;
+                        }
+                        // Definitely empty and closed
+                        return false;
                     }
-                    return true; // Definitely empty
-                }
-                return false; // Has tags, not empty
+
+                    // Check if at least one tag variant is inhabited
+                    // Use fresh isTypeInhabited calls (not Impl) to avoid corrupting our stack
+                    const tag_args = tags_slice.items(.args);
+                    var any_tag_inhabited = false;
+
+                    for (tag_args) |args_range| {
+                        const arg_vars = type_store.sliceVars(args_range);
+                        var all_args_inhabited = true;
+
+                        for (arg_vars) |arg_var| {
+                            if (!try isTypeInhabited(type_store, builtin_idents, arg_var)) {
+                                all_args_inhabited = false;
+                                break;
+                            }
+                        }
+
+                        if (all_args_inhabited) {
+                            any_tag_inhabited = true;
+                            break;
+                        }
+                    }
+
+                    if (!any_tag_inhabited) {
+                        // Check extension - if open/flex, might have more inhabited tags
+                        if (!isOpenExtension(type_store, tag_union.ext) and !hasFlexExtension(type_store, tag_union.ext)) {
+                            return false;
+                        }
+                    }
+                },
+
+                // Nominal types - check for builtin primitives which have special backing.
+                .nominal_type => |nominal| {
+                    // Check if this is a builtin number type (Builtin.Num.*)
+                    // These have [] as backing type but are inhabited primitives.
+                    // This mirrors Rust's handling in is_inhabited() which special-cases
+                    // types from ModuleId::NUM.
+                    if (builtin_idents.isBuiltinNumericType(nominal)) {
+                        // Builtin number types (I64, U8, F32, Dec, etc.) are always inhabited
+                        continue;
+                    }
+                    // For other nominal types, check the backing var
+                    const backing_var = type_store.getNominalBackingVar(nominal);
+                    try stack.append(type_store.gpa, backing_var);
+                },
+
+                // Records - all fields must be inhabited (use fresh checks)
+                .record => |record| {
+                    const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+                    const field_vars = fields_slice.items(.var_);
+                    for (field_vars) |field_var| {
+                        if (!try isTypeInhabited(type_store, builtin_idents, field_var)) {
+                            return false;
+                        }
+                    }
+                },
+
+                .record_unbound => |fields| {
+                    const fields_slice = type_store.getRecordFieldsSlice(fields);
+                    const field_vars = fields_slice.items(.var_);
+                    for (field_vars) |field_var| {
+                        if (!try isTypeInhabited(type_store, builtin_idents, field_var)) {
+                            return false;
+                        }
+                    }
+                },
+
+                // Tuples - all elements must be inhabited (use fresh checks)
+                .tuple => |tuple| {
+                    const elem_vars = type_store.sliceVars(tuple.elems);
+                    for (elem_vars) |elem_var| {
+                        if (!try isTypeInhabited(type_store, builtin_idents, elem_var)) {
+                            return false;
+                        }
+                    }
+                },
+
+                // Functions are always inhabited (they're values)
+                .fn_pure, .fn_effectful, .fn_unbound => {},
             },
-            .nominal_type => {
-                // TODO: Properly check emptiness for nominal types with type parameters.
-                // Currently emptiness for types like Try(I64, []) is propagated through
-                // ColumnTypes, but we should directly inspect type arguments here.
-                return false;
-            },
-            else => return false, // Other structures are not empty
-        },
-        .alias => |alias| {
-            const backing_var = type_store.getAliasBackingVar(alias);
-            return isTypeEmpty(type_store, backing_var);
-        },
-        .recursion_var => |rec| {
-            return isTypeEmpty(type_store, rec.structure);
-        },
-        else => return false, // Default: not empty
+        }
     }
+
+    return true;
+}
+
+/// Check if a type is empty (uninhabited). Convenience wrapper around isTypeInhabited.
+fn isTypeEmpty(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
+    return !try isTypeInhabited(type_store, builtin_idents, type_var);
 }
 
 /// Check if an extension variable represents an open union.
@@ -1215,6 +1388,8 @@ pub const ColumnTypes = struct {
     types: []const Var,
     /// Reference to type store for lookups
     type_store: *TypeStore,
+    /// Builtin type identifiers for special-casing
+    builtin_idents: BuiltinIdents,
 
     /// Get the number of columns
     pub fn len(self: ColumnTypes) usize {
@@ -1256,7 +1431,7 @@ pub const ColumnTypes = struct {
             @memcpy(new_types[payload_types.len..], self.types[1..]);
         }
 
-        return .{ .types = new_types, .type_store = self.type_store };
+        return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
     }
 
     /// Specialize column types for a record pattern.
@@ -1285,15 +1460,15 @@ pub const ColumnTypes = struct {
             @memcpy(new_types[field_types.len..], self.types[1..]);
         }
 
-        return .{ .types = new_types, .type_store = self.type_store };
+        return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
     }
 
     /// Remove the first column type
     pub fn dropFirst(self: ColumnTypes) ColumnTypes {
         if (self.types.len == 0) {
-            return .{ .types = &[_]Var{}, .type_store = self.type_store };
+            return .{ .types = &[_]Var{}, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
         }
-        return .{ .types = self.types[1..], .type_store = self.type_store };
+        return .{ .types = self.types[1..], .type_store = self.type_store, .builtin_idents = self.builtin_idents };
     }
 
     /// Expand for list specialization
@@ -1303,7 +1478,7 @@ pub const ColumnTypes = struct {
         elem_count: usize,
     ) !ColumnTypes {
         if (self.types.len == 0) {
-            return .{ .types = &[_]Var{}, .type_store = self.type_store };
+            return .{ .types = &[_]Var{}, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
         }
 
         const elem_type = getListElemType(self.type_store, self.types[0]) orelse self.types[0];
@@ -1316,7 +1491,7 @@ pub const ColumnTypes = struct {
             @memcpy(new_types[elem_count..], self.types[1..]);
         }
 
-        return .{ .types = new_types, .type_store = self.type_store };
+        return .{ .types = new_types, .type_store = self.type_store, .builtin_idents = self.builtin_idents };
     }
 };
 
@@ -1625,7 +1800,7 @@ pub fn checkExhaustive(
                             } };
                             // Only report as missing if the pattern is inhabited
                             // (e.g., Err on a Try with empty error type is uninhabited)
-                            if (missing_pattern.isInhabited(column_types.type_store)) {
+                            if (try missing_pattern.isInhabited(column_types.type_store, column_types.builtin_idents)) {
                                 const result = try allocator.alloc(Pattern, 1);
                                 result[0] = missing_pattern;
                                 return result;
@@ -1672,7 +1847,7 @@ pub fn checkExhaustive(
                     } };
 
                     // Only report as missing if the pattern is inhabited
-                    if (missing_pattern.isInhabited(column_types.type_store)) {
+                    if (try missing_pattern.isInhabited(column_types.type_store, column_types.builtin_idents)) {
                         const result = try allocator.alloc(Pattern, 1);
                         result[0] = missing_pattern;
                         return result;
@@ -1785,6 +1960,7 @@ fn buildListCtorsForChecking(
 pub fn check(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
     region: Region,
     context: Context,
     rows: []const []const Pattern,
@@ -1798,6 +1974,7 @@ pub fn check(
     const column_types = ColumnTypes{
         .types = initial_types,
         .type_store = type_store,
+        .builtin_idents = builtin_idents,
     };
 
     const missing = try checkExhaustive(allocator, matrix, column_types);
@@ -2123,10 +2300,11 @@ const CollectedCtorsSketched = union(enum) {
 fn collectCtorsSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
+    builtin_idents: BuiltinIdents,
     matrix: SketchedMatrix,
     first_col_type: Var,
 ) ReifyError!CollectedCtorsSketched {
+    _ = builtin_idents; // Unused - kept for API consistency
     if (matrix.isEmpty()) return .non_exhaustive_wildcards;
 
     const first_col = try matrix.firstColumn();
@@ -2148,7 +2326,7 @@ fn collectCtorsSketched(
             .ctor => |c| {
                 found_ctor = true;
                 if (union_info == null) {
-                    const union_result = try getUnionFromType(allocator, type_store, ident_store, first_col_type);
+                    const union_result = try getUnionFromType(allocator, type_store, first_col_type);
                     switch (union_result) {
                         .success => |u| union_info = u,
                         .not_a_union => return error.TypeError,
@@ -2434,7 +2612,7 @@ fn specializeByListAritySketched(
 pub fn checkExhaustiveSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
+    builtin_idents: BuiltinIdents,
     matrix: SketchedMatrix,
     column_types: ColumnTypes,
 ) ReifyError![]const Pattern {
@@ -2461,13 +2639,13 @@ pub fn checkExhaustiveSketched(
     // If this assertion fails, it indicates a compiler bug - likely incomplete type inference.
     std.debug.assert(column_types.types.len > 0);
     const first_col_type = column_types.types[0];
-    const ctors = try collectCtorsSketched(allocator, type_store, ident_store, matrix, first_col_type);
+    const ctors = try collectCtorsSketched(allocator, type_store, builtin_idents, matrix, first_col_type);
 
     return switch (ctors) {
         .non_exhaustive_wildcards => {
             const new_matrix = try specializeByAnythingSketched(allocator, matrix);
             const rest_types = column_types.dropFirst();
-            const rest = try checkExhaustiveSketched(allocator, type_store, ident_store, new_matrix, rest_types);
+            const rest = try checkExhaustiveSketched(allocator, type_store, builtin_idents, new_matrix, rest_types);
 
             if (rest.len == 0) return &[_]Pattern{};
 
@@ -2505,7 +2683,7 @@ pub fn checkExhaustiveSketched(
                             .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
                             else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                         };
-                        const inner_missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
+                        const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
                         if (inner_missing.len > 0) {
                             const missing_pattern = Pattern{ .ctor = .{
@@ -2513,7 +2691,7 @@ pub fn checkExhaustiveSketched(
                                 .tag_id = alt.tag_id,
                                 .args = inner_missing,
                             } };
-                            if (missing_pattern.isInhabited(column_types.type_store)) {
+                            if (try missing_pattern.isInhabited(column_types.type_store, column_types.builtin_idents)) {
                                 const result = try allocator.alloc(Pattern, 1);
                                 result[0] = missing_pattern;
                                 return result;
@@ -2539,7 +2717,7 @@ pub fn checkExhaustiveSketched(
                     .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
                     else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
                 };
-                const missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
+                const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
                 if (missing.len > 0) {
                     const args = try allocator.alloc(Pattern, alt.arity);
@@ -2558,7 +2736,7 @@ pub fn checkExhaustiveSketched(
                         .args = args,
                     } };
 
-                    if (missing_pattern.isInhabited(column_types.type_store)) {
+                    if (try missing_pattern.isInhabited(column_types.type_store, column_types.builtin_idents)) {
                         const result = try allocator.alloc(Pattern, 1);
                         result[0] = missing_pattern;
                         return result;
@@ -2576,7 +2754,7 @@ pub fn checkExhaustiveSketched(
                 const specialized = try specializeByListAritySketched(allocator, matrix, list_arity);
                 const min_len = list_arity.minLen();
                 const specialized_types = try column_types.specializeForList(allocator, min_len);
-                const missing = try checkExhaustiveSketched(allocator, type_store, ident_store, specialized, specialized_types);
+                const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
                 if (missing.len > 0) {
                     const elements = try allocator.alloc(Pattern, min_len);
@@ -2616,7 +2794,7 @@ pub fn checkExhaustiveSketched(
 fn isSketchedPatternInhabited(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
+    builtin_idents: BuiltinIdents,
     patterns: []const UnresolvedPattern,
     column_types: ColumnTypes,
 ) ReifyError!bool {
@@ -2629,7 +2807,7 @@ fn isSketchedPatternInhabited(
     switch (first) {
         .ctor => |c| {
             // Look up the union type to get tag_id and argument types
-            const union_result = try getUnionFromType(allocator, type_store, ident_store, first_col_type);
+            const union_result = try getUnionFromType(allocator, type_store, first_col_type);
             const union_info = switch (union_result) {
                 .success => |u| u,
                 .not_a_union => return error.TypeError,
@@ -2641,7 +2819,7 @@ fn isSketchedPatternInhabited(
 
             // Check if any argument type is uninhabited
             for (arg_types, 0..) |arg_type, i| {
-                if (isTypeEmpty(type_store, arg_type)) {
+                if (try isTypeEmpty(type_store, builtin_idents, arg_type)) {
                     return false; // Uninhabited argument = uninhabited pattern
                 }
                 // Also recursively check nested patterns
@@ -2650,9 +2828,10 @@ fn isSketchedPatternInhabited(
                     arg_col_types[0] = arg_type;
                     const nested_patterns = try allocator.alloc(UnresolvedPattern, 1);
                     nested_patterns[0] = c.args[i];
-                    if (!try isSketchedPatternInhabited(allocator, type_store, ident_store, nested_patterns, .{
+                    if (!try isSketchedPatternInhabited(allocator, type_store, builtin_idents, nested_patterns, .{
                         .types = arg_col_types,
                         .type_store = type_store,
+                        .builtin_idents = builtin_idents,
                     })) {
                         return false;
                     }
@@ -2664,7 +2843,7 @@ fn isSketchedPatternInhabited(
         .known_ctor => return true,
         .anything => {
             // Wildcard - check if the type itself is uninhabited
-            return !isTypeEmpty(type_store, first_col_type);
+            return !try isTypeEmpty(type_store, builtin_idents, first_col_type);
         },
         .literal => return true, // Literals are always inhabited
         .list => return true, // Lists can be empty, so always inhabited
@@ -2676,7 +2855,7 @@ fn isSketchedPatternInhabited(
 pub fn isUsefulSketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
+    builtin_idents: BuiltinIdents,
     existing_matrix: SketchedMatrix,
     new_row: []const UnresolvedPattern,
     column_types: ColumnTypes,
@@ -2685,7 +2864,7 @@ pub fn isUsefulSketched(
     if (existing_matrix.isEmpty()) {
         // Check if the pattern is on an uninhabited type
         // For ctor patterns, check if any argument type is uninhabited
-        return isSketchedPatternInhabited(allocator, type_store, ident_store, new_row, column_types);
+        return isSketchedPatternInhabited(allocator, type_store, builtin_idents, new_row, column_types);
     }
 
     // No more patterns to check = not useful (existing rows cover everything)
@@ -2701,7 +2880,7 @@ pub fn isUsefulSketched(
 
     return switch (first) {
         .ctor => |c| {
-            const union_result = try getUnionFromType(allocator, type_store, ident_store, first_col_type);
+            const union_result = try getUnionFromType(allocator, type_store, first_col_type);
             const union_info = switch (union_result) {
                 .success => |u| u,
                 .not_a_union => return error.TypeError,
@@ -2721,7 +2900,7 @@ pub fn isUsefulSketched(
             @memcpy(extended_row[0..c.args.len], c.args);
             @memcpy(extended_row[c.args.len..], rest);
 
-            return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
+            return isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended_row, specialized_types);
         },
 
         .known_ctor => |kc| {
@@ -2833,18 +3012,18 @@ pub fn isUsefulSketched(
                 },
             };
 
-            return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
+            return isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended_row, specialized_types);
         },
 
         .anything => {
             // Check if matrix is complete (covers all constructors)
-            const ctors = try collectCtorsSketched(allocator, type_store, ident_store, existing_matrix, first_col_type);
+            const ctors = try collectCtorsSketched(allocator, type_store, builtin_idents, existing_matrix, first_col_type);
 
             switch (ctors) {
                 .non_exhaustive_wildcards => {
                     const specialized = try specializeByAnythingSketched(allocator, existing_matrix);
                     const rest_types = column_types.dropFirst();
-                    return isUsefulSketched(allocator, type_store, ident_store, specialized, rest, rest_types);
+                    return isUsefulSketched(allocator, type_store, builtin_idents, specialized, rest, rest_types);
                 },
 
                 .ctors => |ctor_info| {
@@ -2871,7 +3050,7 @@ pub fn isUsefulSketched(
                                 const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
                                 var ctor_uninhabited = false;
                                 for (arg_types) |arg_type| {
-                                    if (isTypeEmpty(type_store, arg_type)) {
+                                    if (try isTypeEmpty(type_store, builtin_idents, arg_type)) {
                                         ctor_uninhabited = true;
                                         break;
                                     }
@@ -2890,7 +3069,7 @@ pub fn isUsefulSketched(
 
                         const specialized = try specializeByAnythingSketched(allocator, existing_matrix);
                         const rest_types = column_types.dropFirst();
-                        return isUsefulSketched(allocator, type_store, ident_store, specialized, rest, rest_types);
+                        return isUsefulSketched(allocator, type_store, builtin_idents, specialized, rest, rest_types);
                     }
 
                     // All constructors covered - check each one
@@ -2915,7 +3094,7 @@ pub fn isUsefulSketched(
                         }
                         @memcpy(extended[alt.arity..], rest);
 
-                        if (try isUsefulSketched(allocator, type_store, ident_store, specialized, extended, specialized_types)) {
+                        if (try isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended, specialized_types)) {
                             return true;
                         }
                     }
@@ -2936,7 +3115,7 @@ pub fn isUsefulSketched(
                         }
                         @memcpy(extended[min_len..], rest);
 
-                        if (try isUsefulSketched(allocator, type_store, ident_store, specialized, extended, specialized_types)) {
+                        if (try isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended, specialized_types)) {
                             return true;
                         }
                     }
@@ -2969,7 +3148,7 @@ pub fn isUsefulSketched(
 
             const filtered = SketchedMatrix.init(allocator, try matching_rows.toOwnedSlice(allocator));
             const rest_types = column_types.dropFirst();
-            return isUsefulSketched(allocator, type_store, ident_store, filtered, rest, rest_types);
+            return isUsefulSketched(allocator, type_store, builtin_idents, filtered, rest, rest_types);
         },
 
         .list => |l| {
@@ -2982,7 +3161,7 @@ pub fn isUsefulSketched(
                     @memcpy(extended_row[0..l.elements.len], l.elements);
                     @memcpy(extended_row[l.elements.len..], rest);
 
-                    return isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types);
+                    return isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended_row, specialized_types);
                 },
                 .slice => |s| {
                     const first_col = try existing_matrix.firstColumn();
@@ -3015,7 +3194,7 @@ pub fn isUsefulSketched(
                         }
                         @memcpy(extended_row[len..], rest);
 
-                        if (try isUsefulSketched(allocator, type_store, ident_store, specialized, extended_row, specialized_types)) {
+                        if (try isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended_row, specialized_types)) {
                             return true;
                         }
                     }
@@ -3041,7 +3220,7 @@ pub const RedundancyResultSketched = struct {
 pub fn checkRedundancySketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    ident_store: *const Ident.Store,
+    builtin_idents: BuiltinIdents,
     rows: []const UnresolvedRow,
     column_types: ColumnTypes,
 ) ReifyError!RedundancyResultSketched {
@@ -3053,7 +3232,7 @@ pub fn checkRedundancySketched(
         // Rows with guards are always considered useful (guard might fail at runtime)
         const matrix = SketchedMatrix.init(allocator, non_redundant.items);
         const is_useful = row.guard == .has_guard or
-            try isUsefulSketched(allocator, type_store, ident_store, matrix, row.patterns, column_types);
+            try isUsefulSketched(allocator, type_store, builtin_idents, matrix, row.patterns, column_types);
 
         if (is_useful) {
             try non_redundant.append(allocator, row.patterns);
@@ -3128,7 +3307,7 @@ pub fn checkMatch(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
     node_store: *const NodeStore,
-    ident_store: *const Ident.Store,
+    builtin_idents: BuiltinIdents,
     branches_span: CIR.Expr.Match.Branch.Span,
     scrutinee_type: Var,
     overall_region: Region,
@@ -3160,6 +3339,7 @@ pub fn checkMatch(
     const column_types = ColumnTypes{
         .types = initial_types,
         .type_store = type_store,
+        .builtin_idents = builtin_idents,
     };
 
     // Phase 2: Check redundancy with on-demand reification
@@ -3167,7 +3347,7 @@ pub fn checkMatch(
     const redundancy = try checkRedundancySketched(
         arena_alloc,
         type_store,
-        ident_store,
+        builtin_idents,
         sketched.rows,
         column_types,
     );
@@ -3177,7 +3357,7 @@ pub fn checkMatch(
     const missing = try checkExhaustiveSketched(
         arena_alloc,
         type_store,
-        ident_store,
+        builtin_idents,
         sketched_matrix,
         column_types,
     );

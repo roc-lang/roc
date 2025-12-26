@@ -4614,11 +4614,28 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             @enumFromInt(@intFromEnum(expr_idx)),
         ).*;
 
+        const builtin_idents = exhaustive.BuiltinIdents{
+            .builtin_module = self.cir.idents.builtin_module,
+            .u8_type = self.cir.idents.u8_type,
+            .i8_type = self.cir.idents.i8_type,
+            .u16_type = self.cir.idents.u16_type,
+            .i16_type = self.cir.idents.i16_type,
+            .u32_type = self.cir.idents.u32_type,
+            .i32_type = self.cir.idents.i32_type,
+            .u64_type = self.cir.idents.u64_type,
+            .i64_type = self.cir.idents.i64_type,
+            .u128_type = self.cir.idents.u128_type,
+            .i128_type = self.cir.idents.i128_type,
+            .f32_type = self.cir.idents.f32_type,
+            .f64_type = self.cir.idents.f64_type,
+            .dec_type = self.cir.idents.dec_type,
+        };
+
         const result = exhaustive.checkMatch(
             self.cir.gpa,
             self.types,
             &self.cir.store,
-            &self.cir.common.idents,
+            builtin_idents,
             match.branches,
             cond_var,
             match_region,
