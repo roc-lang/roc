@@ -1677,3 +1677,67 @@ test "issue 8737: tag union with tuple payload containing tag union" {
         \\}
     , 42, .no_trace);
 }
+
+test "early return: basic ? operator with Ok" {
+    // The ? operator on Ok should unwrap the value
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
+        \\}
+    , 42, .no_trace);
+}
+
+test "early return: basic ? operator with Err" {
+    // The ? operator on Err should early return
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Err({})) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "early return: ? in closure passed to List.map" {
+    // Regression test: early return from closure in List.map would crash
+    // with "call_invoke_closure: value_stack empty when popping function"
+    try runExpectI64(
+        \\{
+        \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
+        \\    List.len(result)
+        \\}
+    , 2, .no_trace);
+}
+
+test "early return: ? in closure passed to List.fold" {
+    // Regression test: early return from closure in List.fold would crash
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
+        \\    List.len(result)
+        \\}
+    , 2, .no_trace);
+}
+
+test "early return: ? in second argument of multi-arg call" {
+    // Regression test: early return in second arg corrupted value stack
+    try runExpectI64(
+        \\{
+        \\    my_func = |_a, b| b
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(42, compute(Err({}))) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "early return: ? in first argument of multi-arg call" {
+    // Regression test: early return in first arg corrupted value stack
+    try runExpectI64(
+        \\{
+        \\    my_func = |a, _b| a
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
