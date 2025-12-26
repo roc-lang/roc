@@ -139,7 +139,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
@@ -3220,6 +3220,15 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.data_1 = if (r.is_alias) 1 else 0;
         },
+        .polymorphic_recursion => |r| {
+            node.tag = .diag_polymorphic_recursion;
+            region = r.region;
+            node.data_1 = @bitCast(r.function_name);
+        },
+        .empty_lambda_set => |r| {
+            node.tag = .diag_empty_lambda_set;
+            region = r.region;
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -3541,6 +3550,13 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
             .is_alias = node.data_1 != 0,
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_polymorphic_recursion => return CIR.Diagnostic{ .polymorphic_recursion = .{
+            .function_name = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_empty_lambda_set => return CIR.Diagnostic{ .empty_lambda_set = .{
             .region = store.getRegionAt(node_idx),
         } },
         else => {

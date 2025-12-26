@@ -250,6 +250,18 @@ pub const Diagnostic = union(enum) {
         suggested_name: Ident.Idx,
         region: Region,
     },
+    /// Polymorphic recursion detected during monomorphization.
+    /// This occurs when a function calls itself with a different type at each
+    /// recursive call, which would require infinite specializations.
+    polymorphic_recursion: struct {
+        function_name: Ident.Idx,
+        region: Region,
+    },
+    /// Empty lambda set at call site - no closures can reach this variable.
+    /// This indicates a compiler bug or unreachable code.
+    empty_lambda_set: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -316,6 +328,8 @@ pub const Diagnostic = union(enum) {
             .type_var_marked_unused => |d| d.region,
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
+            .polymorphic_recursion => |d| d.region,
+            .empty_lambda_set => |d| d.region,
         };
     }
 

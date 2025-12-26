@@ -1460,6 +1460,24 @@ fn processSnapshotContent(
         // This is important because nested closures may not produce a lambda_set at the top level
         has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
 
+        // Validate that all lambda sets have been fully resolved.
+        // Any remaining unspecialized closures indicate a failure to resolve ability implementations.
+        const validation_result = transformer.validateAllResolved();
+        if (!validation_result.is_valid) {
+            // Log the validation failure
+            if (validation_result.first_error) |err| {
+                std.log.err("Lambda set validation failed: {d} unresolved closures. First error: {s}", .{
+                    validation_result.unresolved_count,
+                    @tagName(err.kind),
+                });
+            } else {
+                std.log.err("Lambda set validation failed: {d} unresolved closures", .{
+                    validation_result.unresolved_count,
+                });
+            }
+            return error.UnresolvedLambdaSets;
+        }
+
         // Phase 4 & 5: Lambda lifting - extract closures to top-level function definitions
         // After the ClosureTransformer has identified all closures, use LambdaLifter
         // to create lifted function definitions for each one.

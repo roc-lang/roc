@@ -1468,19 +1468,28 @@ pub fn detectRecursionInLambdaSet(
 
 /// Handle an empty lambda set at a call site.
 ///
-/// This returns the original call site expression for cases where a closure
+/// This generates a runtime error expression for cases where a closure
 /// is called but the lambda set is empty. This shouldn't happen in valid
 /// programs - it indicates either a compiler bug or a program that's guaranteed
 /// to fail at runtime.
-///
-/// In the future, this could generate a runtime error expression with proper
-/// diagnostic information.
 pub fn handleEmptyLambdaSet(
+    self: *Self,
     call_site: Expr.Idx,
-) Expr.Idx {
-    // Return the original call site - this is an error case that shouldn't
-    // happen in valid programs. Type checking should catch this.
-    return call_site;
+) !Expr.Idx {
+    // Get the region for the call site for error reporting
+    const region = self.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(call_site)));
+
+    // Create a diagnostic for the empty lambda set error
+    const diagnostic = try self.module_env.addDiagnostic(CIR.Diagnostic{
+        .empty_lambda_set = .{
+            .region = region,
+        },
+    });
+
+    // Create a runtime error expression with the diagnostic
+    return try self.module_env.store.addExpr(Expr{
+        .e_runtime_error = .{ .diagnostic = diagnostic },
+    }, region);
 }
 
 /// Check if a lambda set is empty (no closures can reach the variable).
@@ -1499,24 +1508,25 @@ pub fn deinit(self: *Self) void {
     self.closures.deinit();
 
     // Free lambda sets (they own their ClosureInfo copies)
+    // Note: LambdaSet.deinit frees both closures and unspecialized arrays,
+    // but does NOT free individual capture_names since they share data with closures map
     var lambda_set_iter = self.pattern_lambda_sets.valueIterator();
     while (lambda_set_iter.next()) |lambda_set| {
-        // Don't free individual capture_names here since they share data with closures map
-        lambda_set.closures.deinit(self.allocator);
+        lambda_set.deinit(self.allocator);
     }
     self.pattern_lambda_sets.deinit();
 
     // Free lambda return sets
     var return_set_iter = self.lambda_return_sets.valueIterator();
     while (return_set_iter.next()) |lambda_set| {
-        lambda_set.closures.deinit(self.allocator);
+        lambda_set.deinit(self.allocator);
     }
     self.lambda_return_sets.deinit();
 
     // Free pattern lambda return sets
     var pattern_return_iter = self.pattern_lambda_return_sets.valueIterator();
     while (pattern_return_iter.next()) |lambda_set| {
-        lambda_set.closures.deinit(self.allocator);
+        lambda_set.deinit(self.allocator);
     }
     self.pattern_lambda_return_sets.deinit();
 
@@ -2416,6 +2426,11 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                 .e_lookup_local => |lookup| {
                     // Check if this pattern has a lambda set (one or more closures)
                     if (self.pattern_lambda_sets.getPtr(lookup.pattern_idx)) |lambda_set| {
+                        // Check for empty lambda set - this indicates unreachable code
+                        // or a compiler bug where no closures can flow to this variable
+                        if (isLambdaSetEmpty(lambda_set)) {
+                            return try self.handleEmptyLambdaSet(expr_idx);
+                        }
                         // Generate a dispatch match expression for all possible closures
                         return try self.generateLambdaSetDispatchMatch(
                             call.func,
@@ -3197,4 +3212,50 @@ test "LambdaSet: clone preserves ambient_function_var" {
     defer cloned.deinit(allocator);
 
     try testing.expectEqual(func_var, cloned.ambient_function_var.?);
+}
+
+test "ClosureTransformer: validateAllResolved detects unresolved" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // Initially valid (no lambda sets with unspecialized closures)
+    const initial_result = transformer.validateAllResolved();
+    try testing.expect(initial_result.is_valid);
+    try testing.expectEqual(@as(usize, 0), initial_result.unresolved_count);
+
+    // Create a pattern index for testing
+    const pattern_idx: CIR.Pattern.Idx = @enumFromInt(1);
+
+    // Create a lambda set with an unspecialized closure
+    // Note: We don't defer deinit on lambda_set because it gets moved into
+    // pattern_lambda_sets which is cleaned up by transformer.deinit()
+    var lambda_set = LambdaSet.init();
+    const unspec = UnspecializedClosure{
+        .member = base.Ident.Idx{
+            .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
+            .idx = 42,
+        },
+        .member_expr = @enumFromInt(1),
+        .region = 0,
+    };
+    try lambda_set.addUnspecialized(allocator, unspec);
+
+    // Add to pattern_lambda_sets (note: this transfers ownership)
+    try transformer.pattern_lambda_sets.put(pattern_idx, lambda_set);
+
+    // Now validation should fail
+    const result = transformer.validateAllResolved();
+    try testing.expect(!result.is_valid);
+    try testing.expectEqual(@as(usize, 1), result.unresolved_count);
+    try testing.expect(result.first_error != null);
+    try testing.expectEqual(ResolutionError.Kind.missing_ability_impl, result.first_error.?.kind);
 }

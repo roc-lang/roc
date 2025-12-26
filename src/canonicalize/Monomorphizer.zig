@@ -788,13 +788,15 @@ pub fn requestSpecialization(
         return specialized_name;
     }
 
-    // Check if it's already pending
+    // Check if it's already pending - if so, look up or create the specialized name
     for (self.pending_specializations.items) |pending| {
         if (pending.original_ident == original_ident) {
             const pending_hash = self.structuralTypeHash(pending.concrete_type);
             if (pending_hash == type_hash) {
-                // Already pending, return null (will be resolved later)
-                return null;
+                // Already pending - create and return the specialized name so call sites
+                // can reference it. The name will be reused when the spec is processed.
+                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
+                return specialized_name;
             }
         }
     }
@@ -804,6 +806,10 @@ pub fn requestSpecialization(
         // Not a polymorphic function we know about - might be external
         return null;
     }
+
+    // Create the specialized name now so call sites can reference it.
+    // This ensures all references to the same specialization use the same name.
+    const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
 
     // Create type substitutions by unifying the polymorphic type with concrete
     const type_subs = types.VarMap.init(self.allocator);
@@ -817,7 +823,7 @@ pub fn requestSpecialization(
         .type_substitutions = type_subs,
     });
 
-    return null;
+    return specialized_name;
 }
 
 /// Request a specialization from an external module.
@@ -857,14 +863,20 @@ pub fn requestExternalSpecialization(
             // Compare concrete types using structural type hashing
             const existing_type_hash = self.structuralTypeHash(existing.concrete_type);
             if (existing_type_hash == new_type_hash) {
-                // Pending but not yet resolved - return original ident for now
+                // Pending but not yet resolved - create/lookup the specialized name
+                // so all call sites use a consistent reference
+                const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
                 return ExternalSpecializationResult{
-                    .specialized_ident = original_ident,
+                    .specialized_ident = specialized_name,
                     .is_new = false,
                 };
             }
         }
     }
+
+    // Create the specialized name now so all call sites use a consistent reference.
+    // When the external module resolves this, it will use the same naming scheme.
+    const specialized_name = try self.createSpecializedName(original_ident, concrete_type);
 
     // Add new external request
     try self.external_requests.append(self.allocator, ExternalSpecializationRequest{
@@ -875,7 +887,7 @@ pub fn requestExternalSpecialization(
     });
 
     return ExternalSpecializationResult{
-        .specialized_ident = original_ident, // Will be resolved later
+        .specialized_ident = specialized_name,
         .is_new = true,
     };
 }
@@ -885,6 +897,48 @@ pub fn requestExternalSpecialization(
 /// specializations needed from external modules.
 pub fn getExternalRequests(self: *const Self) []const ExternalSpecializationRequest {
     return self.external_requests.items;
+}
+
+/// Verify that all external specialization requests have been resolved.
+/// This should be called before code generation to ensure no unresolved
+/// external specializations remain.
+///
+/// Returns a list of unresolved requests. If empty, all are resolved.
+pub fn getUnresolvedExternalRequests(self: *Self) !std.ArrayList(ExternalSpecializationRequest) {
+    var unresolved = std.ArrayList(ExternalSpecializationRequest).empty;
+
+    for (self.external_requests.items) |request| {
+        const type_hash = self.structuralTypeHash(request.concrete_type);
+        const ext_key = ExternalSpecKey{
+            .source_module = request.source_module,
+            .original_ident = request.original_ident,
+            .type_hash = type_hash,
+        };
+
+        if (!self.resolved_external_specs.contains(ext_key)) {
+            try unresolved.append(self.allocator, request);
+        }
+    }
+
+    return unresolved;
+}
+
+/// Check if all external specialization requests have been resolved.
+/// Returns true if all are resolved, false otherwise.
+pub fn allExternalSpecializationsResolved(self: *Self) bool {
+    for (self.external_requests.items) |request| {
+        const type_hash = self.structuralTypeHash(request.concrete_type);
+        const ext_key = ExternalSpecKey{
+            .source_module = request.source_module,
+            .original_ident = request.original_ident,
+            .type_hash = type_hash,
+        };
+
+        if (!self.resolved_external_specs.contains(ext_key)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /// Resolve an external specialization request with the actual specialized name.
@@ -955,15 +1009,15 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
 
     // Check if we've exceeded recursion depth (fuel-based cutoff for polymorphic recursion)
     if (self.recursion_depth >= self.max_recursion_depth) {
-        // Too deep - this might be polymorphic recursion that would never terminate.
-        // In the future, we could use a boxed/dynamic fallback here.
-        // For now, we just stop specializing.
+        // Polymorphic recursion detected - create an error specialization
+        try self.createPolymorphicRecursionError(pending, key);
         return;
     }
 
     // Check for polymorphic recursion: same function with growing type structure
     if (self.detectPolymorphicRecursion(key)) {
-        // Detected polymorphic recursion pattern - stop to prevent infinite loop
+        // Polymorphic recursion detected - create an error specialization
+        try self.createPolymorphicRecursionError(pending, key);
         return;
     }
 
@@ -1054,6 +1108,58 @@ fn detectPolymorphicRecursion(self: *const Self, new_key: SpecializationKey) boo
         }
     }
     return false;
+}
+
+/// Create an error specialization for polymorphic recursion.
+/// This creates a SpecializedProc with a runtime error body instead of the
+/// normal duplicated body, ensuring that any call to this specialization
+/// will produce a clear error message.
+fn createPolymorphicRecursionError(
+    self: *Self,
+    pending: *const PendingSpecialization,
+    key: SpecializationKey,
+) !void {
+    // Get the partial proc for region info
+    const partial = self.partial_procs.get(pending.original_ident) orelse return;
+
+    // Get the region from the call site or the function body
+    const region = if (pending.call_site) |call_site|
+        self.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(call_site)))
+    else
+        self.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(partial.body_expr)));
+
+    // Create a diagnostic for the polymorphic recursion error
+    const diagnostic = try self.module_env.addDiagnostic(CIR.Diagnostic{
+        .polymorphic_recursion = .{
+            .function_name = pending.original_ident,
+            .region = region,
+        },
+    });
+
+    // Create a runtime error expression with the diagnostic
+    const error_body = try self.module_env.store.addExpr(Expr{
+        .e_runtime_error = .{ .diagnostic = diagnostic },
+    }, region);
+
+    // Create the specialized name (may already exist from requestSpecialization)
+    const specialized_ident = try self.createSpecializedName(
+        pending.original_ident,
+        pending.concrete_type,
+    );
+
+    // Duplicate argument patterns (they're still valid)
+    const specialized_args = try self.duplicatePatternSpan(partial.arg_patterns);
+
+    // Create the specialized proc with the error body
+    const specialized = SpecializedProc{
+        .specialized_ident = specialized_ident,
+        .body_expr = error_body,
+        .arg_patterns = specialized_args,
+        .concrete_type = pending.concrete_type,
+        .original_ident = pending.original_ident,
+    };
+
+    try self.specialized.put(key, specialized);
 }
 
 /// Build type substitutions by comparing polymorphic type with concrete type.
@@ -1264,8 +1370,8 @@ fn duplicateExpr(
                                         .e_lookup_local = .{ .pattern_idx = new_pattern },
                                     }, base.Region.zero());
                                 }
-                                // If requestSpecialization returned null, the specialization is pending.
-                                // We'll handle this during a later pass when all specializations are resolved.
+                                // If requestSpecialization returned null, the function is not a known
+                                // partial proc (it might be external or already monomorphic).
                             }
                         },
                         else => {},
@@ -2522,15 +2628,24 @@ test "monomorphizer: external specialization resolution stores and retrieves" {
     // Create a source module index (using an arbitrary test value)
     const source_module: CIR.Import.Idx = @enumFromInt(1);
 
-    // First request should be new
+    // First request should be new and return a generated specialized name
     const result1 = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
     try testing.expect(result1.is_new);
-    try testing.expectEqual(original_ident, result1.specialized_ident);
+    // The specialized_ident is now a generated name, not the original_ident
+    try testing.expect(result1.specialized_ident.idx != original_ident.idx);
 
-    // Resolve the external specialization
+    // Store the generated name for comparison
+    const generated_specialized_ident = result1.specialized_ident;
+
+    // Second request (before resolution) should return the same generated name
+    const result1b = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
+    try testing.expect(!result1b.is_new);
+    try testing.expectEqual(generated_specialized_ident, result1b.specialized_ident);
+
+    // Resolve the external specialization with the actual specialized name
     try mono.resolveExternalSpecialization(source_module, original_ident, specialized_ident, concrete_type);
 
-    // Second request should return the resolved specialized ident
+    // After resolution, request should return the resolved specialized ident
     const result2 = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
     try testing.expect(!result2.is_new);
     try testing.expectEqual(specialized_ident, result2.specialized_ident);
@@ -2559,4 +2674,44 @@ test "monomorphizer: ExternalSpecKey stores module info" {
     const hash1 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key1));
     const hash2 = std.hash.Wyhash.hash(0, std.mem.asBytes(&key2));
     try testing.expect(hash1 != hash2);
+}
+
+test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Initially all resolved (no requests)
+    try testing.expect(mono.allExternalSpecializationsResolved());
+
+    // Create test identifiers
+    const original_ident = try module_env.insertIdent(base.Ident.for_text("external_fn"));
+    const concrete_type = try module_env.types.fresh();
+    const source_module: CIR.Import.Idx = @enumFromInt(1);
+
+    // Request an external specialization (not resolved)
+    _ = try mono.requestExternalSpecialization(source_module, original_ident, concrete_type, null);
+
+    // Now should report unresolved
+    try testing.expect(!mono.allExternalSpecializationsResolved());
+
+    // Get unresolved requests
+    var unresolved = try mono.getUnresolvedExternalRequests();
+    defer unresolved.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), unresolved.items.len);
+
+    // Resolve it
+    const specialized_ident = try module_env.insertIdent(base.Ident.for_text("external_fn_I64"));
+    try mono.resolveExternalSpecialization(source_module, original_ident, specialized_ident, concrete_type);
+
+    // Now all resolved
+    try testing.expect(mono.allExternalSpecializationsResolved());
 }
