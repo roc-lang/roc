@@ -1170,6 +1170,21 @@ fn isTypeEmpty(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: 
     return !try isTypeInhabited(type_store, builtin_idents, type_var);
 }
 
+/// Check if all types in a slice are inhabited.
+/// Returns false if any type is uninhabited.
+fn areAllTypesInhabited(
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    type_vars: []const Var,
+) error{OutOfMemory}!bool {
+    for (type_vars) |type_var| {
+        if (!try isTypeInhabited(type_store, builtin_idents, type_var)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// Check if an extension variable represents an open union.
 /// TODO: Properly handle flex vs rigid extension semantics for exhaustiveness.
 /// Currently rigid vars are treated as open, flex vars as closed.
@@ -1203,7 +1218,7 @@ fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
 /// Compares only the string index, not attributes, since the same tag name
 /// from a pattern vs a type definition may have different attributes.
 fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
-    for (union_info.alternatives, 0..) |alt, i| {
+    for (union_info.alternatives) |alt| {
         const alt_ident = switch (alt.name) {
             .tag => |t| if (t == Ident.Idx.NONE) continue else t,
             .opaque_type => |o| o,
@@ -1211,7 +1226,10 @@ fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
         // Compare just the idx (interned string index), not the full Ident.Idx
         // which includes attributes that may differ between pattern and type
         if (alt_ident.idx == tag_name.idx) {
-            return @enumFromInt(i);
+            // Return the stored tag_id, not the array position.
+            // This is important when uninhabited constructors are filtered out,
+            // as the tag_id preserves the original index for getCtorArgTypes.
+            return alt.tag_id;
         }
     }
     return null;
@@ -2670,6 +2688,13 @@ pub fn checkExhaustiveSketched(
                         }
                     }
                     if (!found) {
+                        // Optimization: Skip uninhabited constructors entirely.
+                        // A constructor is uninhabited if any of its argument types are uninhabited.
+                        const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
+                        if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
+                            continue; // Skip this uninhabited constructor
+                        }
+
                         const specialized = try specializeByConstructorSketched(
                             allocator,
                             matrix,
@@ -2704,6 +2729,12 @@ pub fn checkExhaustiveSketched(
 
             // All constructors covered - check each recursively
             for (ctor_info.union_info.alternatives) |alt| {
+                // Optimization: Skip uninhabited constructors entirely.
+                const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
+                if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
+                    continue; // Skip this uninhabited constructor
+                }
+
                 const specialized = try specializeByConstructorSketched(
                     allocator,
                     matrix,
