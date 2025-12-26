@@ -613,8 +613,63 @@ pub const Store = struct {
 
     /// Check if a layout is zero-sized
     /// This simply checks if the layout has size 0
-    pub fn isZeroSized(self: *const Self, layout: Layout) bool {
-        return self.layoutSize(layout) == 0;
+    pub fn isZeroSized(self: *const Self, l: Layout) bool {
+        return self.layoutSize(l) == 0;
+    }
+
+    /// Check if a layout contains any refcounted data (directly or transitively).
+    /// This is more comprehensive than Layout.isRefcounted() which only checks if
+    /// the layout itself is heap-allocated. This function also returns true for
+    /// tuples/records that contain strings, lists, or boxes.
+    pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
+        return switch (l.tag) {
+            .scalar => switch (l.data.scalar.tag) {
+                .str => true,
+                else => false,
+            },
+            .list, .list_of_zst => true,
+            .box, .box_of_zst => true,
+            .tuple => {
+                const tuple_data = self.getTupleData(l.data.tuple.idx);
+                const fields = self.tuple_fields.sliceRange(tuple_data.getFields());
+                for (0..fields.len) |i| {
+                    const field_layout = self.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsRefcounted(field_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .record => {
+                const record_data = self.getRecordData(l.data.record.idx);
+                const fields = self.record_fields.sliceRange(record_data.getFields());
+                for (0..fields.len) |i| {
+                    const field_layout = self.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsRefcounted(field_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .tag_union => {
+                const tu_data = self.getTagUnionData(l.data.tag_union.idx);
+                const variants = self.getTagUnionVariants(tu_data);
+                for (0..variants.len) |i| {
+                    const variant_layout = self.getLayout(variants.get(i).payload_layout);
+                    if (self.layoutContainsRefcounted(variant_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .closure => {
+                // Closures capture variables which may be refcounted
+                // TODO: Check the captures layout for refcounted data
+                // For now, assume closures may contain refcounted data
+                return true;
+            },
+            .zst => false,
+        };
     }
 
     /// Add the tag union's tags to self.pending_tags,
