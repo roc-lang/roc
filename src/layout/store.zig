@@ -66,6 +66,11 @@ pub const Store = struct {
     // Cache to avoid duplicate work
     layouts_by_var: collections.ArrayListMap(Var, Idx),
 
+    // Persistent cache for nominal types by identity (ident + origin_module).
+    // This is needed because the same nominal type may be encountered through
+    // different type variables, and we need to return the same layout index.
+    layouts_by_nominal: std.AutoArrayHashMap(work.NominalKey, Idx),
+
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
@@ -179,6 +184,7 @@ pub const Store = struct {
             .tag_union_variants = try TagUnionVariant.SafeMultiList.initCapacity(env.gpa, 64),
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(env.gpa, 64),
             .layouts_by_var = layouts_by_var,
+            .layouts_by_nominal = std.AutoArrayHashMap(work.NominalKey, Idx).init(env.gpa),
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -210,6 +216,7 @@ pub const Store = struct {
         self.tag_union_variants.deinit(self.env.gpa);
         self.tag_union_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
+        self.layouts_by_nominal.deinit();
         self.work.deinit(self.env.gpa);
     }
 
@@ -1070,6 +1077,11 @@ pub const Store = struct {
         // recursively (e.g., when processing tag union variant payloads), and nested
         // calls must not destroy the work state from outer calls.
 
+        // Track the initial container depth so we only process containers pushed by THIS call.
+        // This prevents nested calls (e.g., for tag union variant payloads) from accidentally
+        // finalizing containers that belong to outer calls.
+        const initial_container_depth = self.work.pending_containers.len;
+
         var layout_idx: Idx = undefined;
 
         // Debug-only: track vars visited via TypeScope lookup to detect cycles.
@@ -1106,16 +1118,37 @@ pub const Store = struct {
                     return LayoutError.TypeContainedMismatch;
                 }
             } else if (current.desc.content == .structure) blk: {
-                // Early cycle detection for nominal types from other modules.
-                // These have different vars but same identity (ident + origin_module).
+                // Check persistent nominal cache first - this handles the case where
+                // the same nominal type is encountered through different type variables.
                 const flat_type = current.desc.content.structure;
                 if (flat_type != .nominal_type) break :blk;
                 const nominal_type = flat_type.nominal_type;
+
+                // Skip cache for parameterized builtin types (Box, List) - they need
+                // different layouts for different type arguments (e.g., Box(Str) vs Box(I64)).
+                // These are handled specially below with their type arguments.
+                const is_parameterized_builtin = nominal_type.origin_module == self.env.idents.builtin_module and
+                    ((self.box_ident != null and nominal_type.ident.ident_idx == self.box_ident.?) or
+                        (self.list_ident != null and nominal_type.ident.ident_idx == self.list_ident.?));
+
+                if (is_parameterized_builtin) break :blk;
+
                 const nominal_key = work.NominalKey{
                     .ident_idx = nominal_type.ident.ident_idx,
                     .origin_module = nominal_type.origin_module,
                 };
 
+                // Check persistent cache - if we've already computed a layout for this
+                // nominal type, reuse it regardless of which type variable we're coming from.
+                if (self.layouts_by_nominal.get(nominal_key)) |cached_idx| {
+                    layout_idx = cached_idx;
+                    // Also cache by this var for faster future lookups
+                    try self.layouts_by_var.put(self.env.gpa, current.var_, cached_idx);
+                    skip_layout_computation = true;
+                    break :blk;
+                }
+
+                // Cycle detection for in-progress nominals (within the same addTypeVar call tree)
                 if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
                     // This nominal type is already being processed - we have a cycle.
                     // Use the cached placeholder index for the nominal.
@@ -1315,6 +1348,8 @@ pub const Store = struct {
                             // 3. It can be updated with updateLayout() once the real layout is known
                             const reserved_idx = try self.insertLayout(Layout.box(.opaque_ptr));
                             try self.layouts_by_var.put(self.env.gpa, current.var_, reserved_idx);
+                            // Also cache by nominal key so other vars for the same nominal find it
+                            try self.layouts_by_nominal.put(nominal_key, reserved_idx);
 
                             // Mark this nominal type as in-progress.
                             // Store both the nominal var (for cache lookup) and backing var (to know when to update).
@@ -1761,7 +1796,8 @@ pub const Store = struct {
             } // end if (!skip_layout_computation)
 
             // If this was part of a pending container that we're working on, update that container.
-            while (self.work.pending_containers.len > 0) {
+            // Only process containers pushed by THIS call (not containers from outer recursive calls).
+            while (self.work.pending_containers.len > initial_container_depth) {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
@@ -1915,10 +1951,9 @@ pub const Store = struct {
                 }
             }
 
-            // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.
-            std.debug.assert(self.work.pending_record_fields.len == 0);
-            std.debug.assert(self.work.pending_tuple_fields.len == 0);
-            std.debug.assert(self.work.pending_tag_union_variants.len == 0);
+            // Since there are no pending containers remaining FOR THIS CALL, we're done.
+            // Note: There may still be pending containers from outer calls, which is fine.
+            std.debug.assert(self.work.pending_containers.len == initial_container_depth);
 
             // No more pending containers; we're done!
             // Note: Work fields (in_progress_vars, in_progress_nominals, etc.) are not cleared
