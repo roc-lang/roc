@@ -674,6 +674,9 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(r.expr);
             },
+            .@"break" => |_| {
+                try fmt.pushAll("break");
+            },
             .malformed => {
                 // Output nothing for malformed node
             },

@@ -917,6 +917,9 @@ pub const Statement = union(enum) {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
+    @"break": struct {
+        region: TokenizedRegion,
+    },
     import: struct {
         module_name_tok: Token.Idx,
         qualifier_tok: ?Token.Idx,
@@ -1156,6 +1159,13 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .@"break" => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-break");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .@"return" => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("s-return");
@@ -1212,6 +1222,7 @@ pub const Statement = union(enum) {
             .@"for" => |s| s.region,
             .@"while" => |s| s.region,
             .@"return" => |s| s.region,
+            .@"break" => |s| s.region,
             .type_anno => |s| s.region,
             .malformed => |m| m.region,
         };
