@@ -3404,3 +3404,182 @@ test "ClosureTransformer: validateAllResolved detects unresolved" {
     try testing.expect(result.first_error != null);
     try testing.expectEqual(ResolutionError.Kind.missing_ability_impl, result.first_error.?.kind);
 }
+
+test "ClosureTransformer: processExternalLambdaSetRequests resolves matching requests" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // Create test identifiers
+    const hash_member = try module_env.insertIdent(base.Ident.for_text("hash"));
+    const eq_member = try module_env.insertIdent(base.Ident.for_text("eq"));
+
+    // Create unspecialized closures for the requests
+    const unspec1 = UnspecializedClosure{
+        .type_var = @enumFromInt(100),
+        .member = hash_member,
+        .member_expr = @enumFromInt(1),
+        .region = 0,
+    };
+    const unspec2 = UnspecializedClosure{
+        .type_var = @enumFromInt(101),
+        .member = eq_member,
+        .member_expr = @enumFromInt(2),
+        .region = 0,
+    };
+
+    // Add external lambda set requests
+    // source_module is only used for equality comparison in tests, never dereferenced
+    const source_module: CIR.Import.Idx = undefined;
+    const concrete_type_info1 = ConcreteTypeInfo{ .type_ident = null, .type_args_hash = 111 };
+    const concrete_type_info2 = ConcreteTypeInfo{ .type_ident = null, .type_args_hash = 222 };
+
+    _ = try transformer.requestExternalLambdaSet(source_module, hash_member, concrete_type_info1, unspec1);
+    _ = try transformer.requestExternalLambdaSet(source_module, eq_member, concrete_type_info2, unspec2);
+
+    // Verify we have 2 pending requests
+    try testing.expectEqual(@as(usize, 2), transformer.pendingExternalRequestCount());
+
+    // Context for our mock lookup - tracks which member was requested
+    const MockContext = struct {
+        hash_member: base.Ident.Idx,
+        calls: usize = 0,
+    };
+    var mock_ctx = MockContext{ .hash_member = hash_member };
+
+    // Mock lookup function - only resolves "hash", not "eq"
+    const mockLookup = struct {
+        fn lookup(
+            _: CIR.Import.Idx,
+            ability_member: base.Ident.Idx,
+            _: ConcreteTypeInfo,
+            context: *anyopaque,
+        ) ?ClosureInfo {
+            const ctx: *MockContext = @ptrCast(@alignCast(context));
+            ctx.calls += 1;
+
+            // Only resolve hash, not eq
+            if (ability_member.idx == ctx.hash_member.idx) {
+                return ClosureInfo{
+                    .tag_name = ability_member, // Use member as tag name for test
+                    .lambda_body = @enumFromInt(99),
+                    .lambda_args = .{ .span = .{ .start = 0, .len = 0 } },
+                    .capture_names = std.ArrayList(base.Ident.Idx).empty,
+                    .lifted_fn_pattern = null,
+                    .lifted_captures_pattern = null,
+                };
+            }
+            return null;
+        }
+    }.lookup;
+
+    // Process the requests
+    const result = transformer.processExternalLambdaSetRequests(mockLookup, @ptrCast(&mock_ctx));
+
+    // Verify results
+    try testing.expectEqual(@as(usize, 2), mock_ctx.calls); // Both requests were attempted
+    try testing.expectEqual(@as(usize, 1), result.resolved_count); // hash was resolved
+    try testing.expectEqual(@as(usize, 1), result.failed_count); // eq failed
+    try testing.expectEqual(@as(usize, 1), result.pending_count); // eq still pending
+
+    // Verify only eq request remains
+    try testing.expectEqual(@as(usize, 1), transformer.pendingExternalRequestCount());
+    const remaining = transformer.getExternalLambdaSetRequests();
+    try testing.expectEqual(eq_member.idx, remaining[0].ability_member.idx);
+}
+
+test "ClosureTransformer: processExternalLambdaSetRequests with no requests" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    // No requests added
+
+    const MockContext = struct { calls: usize = 0 };
+    var mock_ctx = MockContext{};
+
+    const mockLookup = struct {
+        fn lookup(_: CIR.Import.Idx, _: base.Ident.Idx, _: ConcreteTypeInfo, context: *anyopaque) ?ClosureInfo {
+            const ctx: *MockContext = @ptrCast(@alignCast(context));
+            ctx.calls += 1;
+            return null;
+        }
+    }.lookup;
+
+    const result = transformer.processExternalLambdaSetRequests(mockLookup, @ptrCast(&mock_ctx));
+
+    // No calls should be made, all counts should be zero
+    try testing.expectEqual(@as(usize, 0), mock_ctx.calls);
+    try testing.expectEqual(@as(usize, 0), result.resolved_count);
+    try testing.expectEqual(@as(usize, 0), result.failed_count);
+    try testing.expectEqual(@as(usize, 0), result.pending_count);
+}
+
+test "ClosureTransformer: processExternalLambdaSetRequests resolves all" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var transformer = Self.init(allocator, module_env);
+    defer transformer.deinit();
+
+    const hash_member = try module_env.insertIdent(base.Ident.for_text("hash"));
+
+    const unspec = UnspecializedClosure{
+        .type_var = @enumFromInt(100),
+        .member = hash_member,
+        .member_expr = @enumFromInt(1),
+        .region = 0,
+    };
+
+    // source_module is only used for equality comparison in tests, never dereferenced
+    const source_module: CIR.Import.Idx = undefined;
+    const concrete_type_info = ConcreteTypeInfo{ .type_ident = null, .type_args_hash = 111 };
+
+    _ = try transformer.requestExternalLambdaSet(source_module, hash_member, concrete_type_info, unspec);
+
+    try testing.expectEqual(@as(usize, 1), transformer.pendingExternalRequestCount());
+
+    // Mock that resolves everything
+    const mockLookupAll = struct {
+        fn lookup(_: CIR.Import.Idx, ability_member: base.Ident.Idx, _: ConcreteTypeInfo, _: *anyopaque) ?ClosureInfo {
+            return ClosureInfo{
+                .tag_name = ability_member,
+                .lambda_body = @enumFromInt(99),
+                .lambda_args = .{ .span = .{ .start = 0, .len = 0 } },
+                .capture_names = std.ArrayList(base.Ident.Idx).empty,
+                .lifted_fn_pattern = null,
+                .lifted_captures_pattern = null,
+            };
+        }
+    }.lookup;
+
+    var dummy: usize = 0;
+    const result = transformer.processExternalLambdaSetRequests(mockLookupAll, @ptrCast(&dummy));
+
+    try testing.expectEqual(@as(usize, 1), result.resolved_count);
+    try testing.expectEqual(@as(usize, 0), result.failed_count);
+    try testing.expectEqual(@as(usize, 0), result.pending_count);
+    try testing.expectEqual(@as(usize, 0), transformer.pendingExternalRequestCount());
+}
