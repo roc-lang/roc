@@ -663,10 +663,9 @@ pub const Store = struct {
                 return false;
             },
             .closure => {
-                // Closures capture variables which may be refcounted
-                // TODO: Check the captures layout for refcounted data
-                // For now, assume closures may contain refcounted data
-                return true;
+                // Check if the captured variables contain refcounted data
+                const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
+                return self.layoutContainsRefcounted(captures_layout);
             },
             .zst => false,
         };
