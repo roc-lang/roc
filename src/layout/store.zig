@@ -1227,6 +1227,20 @@ pub const Store = struct {
 
                             // Mark this nominal type as in-progress.
                             // Store both the nominal var (for cache lookup) and backing var (to know when to update).
+                            // Check if the backing type is already cached.
+                            // This can happen when the same nominal type is processed with different vars.
+                            // In this case, we can immediately update the placeholder and return.
+                            if (self.layouts_by_var.get(resolved_backing.var_)) |backing_layout_idx| {
+                                // Backing type already computed! Update placeholder immediately.
+                                const backing_layout = self.getLayout(backing_layout_idx);
+                                self.updateLayout(reserved_idx, backing_layout);
+                                // Cache this nominal var to point to the same layout
+                                try self.layouts_by_var.put(self.env.gpa, current.var_, reserved_idx);
+                                layout_idx = reserved_idx;
+                                // Skip to pending container handling
+                                break :flat_type backing_layout;
+                            }
+
                             try self.work.in_progress_nominals.put(nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,

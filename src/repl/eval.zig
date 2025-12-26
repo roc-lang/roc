@@ -28,6 +28,8 @@ pub const Repl = struct {
     allocator: Allocator,
     /// Map from variable name to source string for definitions
     definitions: std.StringHashMap([]const u8),
+    /// List of type declaration source strings
+    type_declarations: std.array_list.Managed([]const u8),
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
     /// Shared crash context managed by the host (optional)
@@ -61,6 +63,7 @@ pub const Repl = struct {
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
+            .type_declarations = std.array_list.Managed([]const u8).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
             //.trace_writer = null,
@@ -172,6 +175,12 @@ pub const Repl = struct {
         }
         self.definitions.deinit();
 
+        // Clean up type declaration strings
+        for (self.type_declarations.items) |type_decl| {
+            self.allocator.free(type_decl);
+        }
+        self.type_declarations.deinit();
+
         // Clean up debug HTML storage
         for (self.debug_can_html.items) |html| {
             self.allocator.free(html);
@@ -269,9 +278,11 @@ pub const Repl = struct {
 
                 return try self.evaluateSourceStructured(full_source);
             },
-            .type_decl => {
-                // Type declarations can't be evaluated
-                return .empty;
+            .type_decl => |source| {
+                // Store the type declaration for use in future expressions
+                const owned_source = try self.allocator.dupe(u8, source);
+                try self.type_declarations.append(owned_source);
+                return .{ .definition = try std.fmt.allocPrint(self.allocator, "defined type", .{}) };
             },
             .parse_error => |msg| {
                 defer self.allocator.free(msg);
@@ -303,7 +314,7 @@ pub const Repl = struct {
         },
         import,
         expression,
-        type_decl,
+        type_decl: []const u8, // Borrowed from input - the full type declaration source
         parse_error: []const u8, // Must be allocator.dupe'd
     };
 
@@ -400,7 +411,7 @@ pub const Repl = struct {
                         return ParseResult.expression;
                     },
                     .import => return ParseResult.import,
-                    .type_decl => return ParseResult.type_decl,
+                    .type_decl => return .{ .type_decl = input },
                     else => return ParseResult.expression,
                 }
             }
@@ -424,18 +435,24 @@ pub const Repl = struct {
 
     /// Build full source including all definitions wrapped in block syntax
     pub fn buildFullSource(self: *Repl, current_expr: []const u8) ![]const u8 {
-        // If no definitions exist, just return the expression as-is
-        if (self.definitions.count() == 0) {
+        // If no definitions or type declarations exist, just return the expression as-is
+        if (self.definitions.count() == 0 and self.type_declarations.items.len == 0) {
             return try self.allocator.dupe(u8, current_expr);
         }
 
         var buffer = std.ArrayList(u8).empty;
         errdefer buffer.deinit(self.allocator);
 
+        // Add all type declarations first (these go outside the block)
+        for (self.type_declarations.items) |type_decl| {
+            try buffer.appendSlice(self.allocator, type_decl);
+            try buffer.append(self.allocator, '\n');
+        }
+
         // Start block
         try buffer.appendSlice(self.allocator, "{\n");
 
-        // Add all definitions in order
+        // Add all variable definitions in order
         var iterator = self.definitions.iterator();
         while (iterator.next()) |kv| {
             try buffer.appendSlice(self.allocator, "    ");
