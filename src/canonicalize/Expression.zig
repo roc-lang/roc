@@ -398,13 +398,13 @@ pub const Expr = union(enum) {
     /// This is created when the user writes `Thing.method(args)` inside a function body
     /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
     ///
-    /// The actual function to call is resolved during type-checking once the type variable
+    /// The actual function to call is resolved during monomorphization once the type variable
     /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
     /// then `Thing.len(x)` becomes `List.len(x)`.
     ///
     /// ```roc
-    /// default_value : |thing| thing where thing implements Default
-    /// default_value = |thing|
+    /// # Static dispatch: method is resolved based on concrete type at monomorphization time
+    /// call_default = |thing|
     ///     Thing : thing
     ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
     /// ```

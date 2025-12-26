@@ -147,9 +147,9 @@ pub const ClosureInfo = struct {
 /// Unspecialized Closure - represents a static-dispatch-dependent closure.
 ///
 /// These are closures that depend on static dispatch implementations which won't be
-/// known until monomorphization. For example, when code uses `hash` from the
-/// Hash ability, we don't know which concrete `hash` implementation to dispatch
-/// to until we know the concrete type.
+/// known until monomorphization. For example, when code uses `Thing.hash`, we don't
+/// know which concrete `hash` implementation to dispatch to until we know the
+/// concrete type that `Thing` resolves to.
 ///
 /// These are resolved during monomorphization when concrete types are known.
 pub const UnspecializedClosure = struct {
@@ -157,10 +157,10 @@ pub const UnspecializedClosure = struct {
     /// When this type variable becomes concrete, we can resolve which implementation to use.
     type_var: types.Var,
 
-    /// The static dispatch member symbol (e.g., `hash` from Hash ability)
+    /// The static dispatch method symbol (e.g., `hash`, `eq`, `map`)
     member: base.Ident.Idx,
 
-    /// The expression that references the static dispatch member.
+    /// The expression that references the static dispatch method.
     /// Used to locate this in the IR for resolution.
     member_expr: Expr.Idx,
 
@@ -182,15 +182,15 @@ pub const ConcreteTypeInfo = struct {
 
 /// External Lambda Set Request - for cross-module lambda set resolution.
 ///
-/// When a call crosses module boundaries and involves an ability-polymorphic
-/// closure, we need to request the ability implementation from the external
+/// When a call crosses module boundaries and involves a static-dispatch-dependent
+/// closure, we need to request the method implementation from the external
 /// module. This struct captures that request.
 pub const ExternalLambdaSetRequest = struct {
-    /// The module containing the ability implementation
+    /// The module containing the method implementation
     source_module: CIR.Import.Idx,
 
-    /// The ability member being requested (e.g., `hash`, `eq`)
-    ability_member: base.Ident.Idx,
+    /// The dispatch method being requested (e.g., `hash`, `eq`)
+    dispatch_method: base.Ident.Idx,
 
     /// The concrete type for which we need the implementation
     concrete_type_info: ConcreteTypeInfo,
@@ -200,7 +200,7 @@ pub const ExternalLambdaSetRequest = struct {
 
     pub fn eql(a: ExternalLambdaSetRequest, b: ExternalLambdaSetRequest) bool {
         return a.source_module == b.source_module and
-            a.ability_member == b.ability_member and
+            a.dispatch_method == b.dispatch_method and
             a.concrete_type_info.type_args_hash == b.concrete_type_info.type_args_hash;
     }
 };
@@ -208,7 +208,7 @@ pub const ExternalLambdaSetRequest = struct {
 /// Result of an external lambda set resolution.
 /// Returned when the external module provides the closure info.
 pub const ExternalLambdaSetResult = struct {
-    /// The closure info for the resolved ability implementation
+    /// The closure info for the resolved static dispatch implementation
     closure_info: ClosureInfo,
     /// Whether this is a new resolution or was already cached
     is_new: bool,
@@ -226,8 +226,8 @@ pub const ResolutionError = struct {
     context: ?base.Ident.Idx,
 
     pub const Kind = enum {
-        /// No implementation found for the ability method on this type
-        missing_ability_impl,
+        /// No implementation found for the static dispatch method on this type
+        missing_static_dispatch,
         /// External module doesn't export the required closure
         external_closure_not_found,
         /// Type variable couldn't be resolved to a concrete type
@@ -238,10 +238,10 @@ pub const ResolutionError = struct {
         empty_lambda_set,
     };
 
-    /// Create a missing ability implementation error.
+    /// Create a missing static dispatch implementation error.
     pub fn missingImpl(expr: Expr.Idx, method_name: base.Ident.Idx, type_name: ?base.Ident.Idx) ResolutionError {
         return .{
-            .kind = .missing_ability_impl,
+            .kind = .missing_static_dispatch,
             .expr = expr,
             .method_name = method_name,
             .context = type_name,
@@ -301,14 +301,14 @@ pub const ExportedClosureInfo = struct {
     /// The lifted function pattern for dispatch
     lifted_fn_pattern: ?CIR.Pattern.Idx,
 
-    /// Ability member this implements (if any)
-    implements_ability: ?AbilityImpl,
+    /// Static dispatch implementation info (if any)
+    static_dispatch_impl: ?StaticDispatchImpl,
 
-    pub const AbilityImpl = struct {
-        /// The ability identifier (e.g., "Hash", "Eq")
-        ability: base.Ident.Idx,
-        /// The member within the ability (e.g., "hash", "eq")
-        member: base.Ident.Idx,
+    pub const StaticDispatchImpl = struct {
+        /// The type this method belongs to (e.g., "List", "Dict")
+        type_name: base.Ident.Idx,
+        /// The method name (e.g., "hash", "eq", "map")
+        method: base.Ident.Idx,
         /// The type this implementation is for (e.g., "List", "Dict")
         for_type: base.Ident.Idx,
     };
@@ -438,13 +438,13 @@ pub const LambdaSet = struct {
         try self.closures.append(allocator, info);
     }
 
-    /// Add an unspecialized (ability-polymorphic) closure to this lambda set.
+    /// Add an unspecialized (static-dispatch-dependent) closure to this lambda set.
     /// These will be resolved during monomorphization.
     pub fn addUnspecialized(self: *LambdaSet, allocator: std.mem.Allocator, unspec: UnspecializedClosure) !void {
         try self.unspecialized.append(allocator, unspec);
     }
 
-    /// Check if this lambda set has any unresolved ability-polymorphic closures.
+    /// Check if this lambda set has any unresolved static-dispatch-dependent closures.
     pub fn hasUnspecialized(self: *const LambdaSet) bool {
         return self.unspecialized.items.len > 0;
     }
@@ -484,7 +484,7 @@ pub const LambdaSet = struct {
     /// IMPORTANT: This should only be called after all unspecialized closures
     /// have been resolved during monomorphization.
     pub fn determineRepresentation(self: *const LambdaSet) ClosureRepresentation {
-        // All ability-polymorphic closures must be resolved before we can
+        // All static-dispatch-dependent closures must be resolved before we can
         // determine representation. This happens during monomorphization.
         std.debug.assert(self.unspecialized.items.len == 0);
 
@@ -566,15 +566,15 @@ pub const LambdaSet = struct {
         return true;
     }
 
-    /// Count how many closures in this set are ability-derived (have no captures
-    /// and were likely resolved from ability member references).
+    /// Count how many closures in this set are static-dispatch-resolved (have no captures
+    /// and were likely resolved from static dispatch method references).
     ///
-    /// Ability implementations are typically top-level functions without captures,
+    /// Static dispatch implementations are typically top-level functions without captures,
     /// so they're very efficient to dispatch to (no closure environment needed).
-    pub fn countAbilityDerivedClosures(self: *const LambdaSet) usize {
+    pub fn countStaticDispatchClosures(self: *const LambdaSet) usize {
         var count: usize = 0;
         for (self.closures.items) |closure| {
-            // Ability-derived closures typically have:
+            // Static-dispatch-resolved closures typically have:
             // - No captures (empty capture_names)
             // - No lifted captures pattern
             // - May have a lifted fn pattern for dispatch
@@ -587,7 +587,7 @@ pub const LambdaSet = struct {
         return count;
     }
 
-    /// Check if this lambda set is "pure" (all closures are ability-derived
+    /// Check if this lambda set is "pure" (all closures are resolved static dispatch
     /// or otherwise have no captures).
     ///
     /// Pure lambda sets can use the most efficient representation (enum dispatch)
@@ -599,7 +599,7 @@ pub const LambdaSet = struct {
     /// Check if this lambda set has mixed captures (some closures have captures,
     /// some don't).
     ///
-    /// Mixed lambda sets require tagged union representation where ability-derived
+    /// Mixed lambda sets require tagged union representation where static-dispatch-resolved
     /// closures effectively have an empty capture record.
     pub fn hasMixedCaptures(self: *const LambdaSet) bool {
         var has_with_captures = false;
@@ -825,7 +825,7 @@ top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 current_region: u8,
 
 /// External lambda set requests - for cross-module resolution.
-/// These are requests for ability implementations from other modules.
+/// These are requests for static dispatch implementations from other modules.
 external_lambda_set_requests: std.ArrayList(ExternalLambdaSetRequest),
 
 /// Exported closure information for module interface.
@@ -870,8 +870,8 @@ pub fn exitRegion(self: *Self, prev_region: u8) void {
     self.current_region = prev_region;
 }
 
-/// Info extracted from an ability member reference expression.
-pub const AbilityMemberInfo = struct {
+/// Info extracted from a static dispatch reference expression.
+pub const StaticDispatchInfo = struct {
     /// The method name being called (e.g., "hash", "eq", "default")
     method_name: base.Ident.Idx,
     /// Reference to the type var alias statement (for type resolution)
@@ -880,12 +880,12 @@ pub const AbilityMemberInfo = struct {
     args: CIR.Expr.Span,
 };
 
-/// Check if an expression is an ability member reference (e_type_var_dispatch).
-/// Returns the ability member info if so, null otherwise.
-pub fn isAbilityMemberRef(self: *const Self, expr_idx: Expr.Idx) ?AbilityMemberInfo {
+/// Check if an expression is a static dispatch reference (e_type_var_dispatch).
+/// Returns the static dispatch info if so, null otherwise.
+pub fn isStaticDispatchRef(self: *const Self, expr_idx: Expr.Idx) ?StaticDispatchInfo {
     const expr = self.module_env.store.getExpr(expr_idx);
     return switch (expr) {
-        .e_type_var_dispatch => |tvd| AbilityMemberInfo{
+        .e_type_var_dispatch => |tvd| StaticDispatchInfo{
             .method_name = tvd.method_name,
             .type_var_alias_stmt = tvd.type_var_alias_stmt,
             .args = tvd.args,
@@ -894,11 +894,11 @@ pub fn isAbilityMemberRef(self: *const Self, expr_idx: Expr.Idx) ?AbilityMemberI
     };
 }
 
-/// Create an unspecialized closure entry for an ability member reference.
-/// This records that we need to resolve this ability dispatch at monomorphization time.
+/// Create an unspecialized closure entry for a static dispatch reference.
+/// This records that we need to resolve this dispatch at monomorphization time.
 pub fn createUnspecializedClosure(
     self: *const Self,
-    member_info: AbilityMemberInfo,
+    member_info: StaticDispatchInfo,
     expr_idx: Expr.Idx,
 ) UnspecializedClosure {
     _ = member_info.args; // Will be used when generating dispatch
@@ -959,15 +959,15 @@ pub fn addUnspecializedWithTracking(
     });
 }
 
-/// Add an unspecialized entry with tracking, creating the entry from member info.
+/// Add an unspecialized entry with tracking, creating the entry from dispatch info.
 /// Convenience method that combines createUnspecializedClosure and addUnspecializedWithTracking.
-pub fn addUnspecializedFromMemberInfo(
+pub fn addUnspecializedFromDispatchInfo(
     self: *Self,
     lambda_set: *LambdaSet,
-    member_info: AbilityMemberInfo,
+    dispatch_info: StaticDispatchInfo,
     expr_idx: Expr.Idx,
 ) !void {
-    const unspec = self.createUnspecializedClosure(member_info, expr_idx);
+    const unspec = self.createUnspecializedClosure(dispatch_info, expr_idx);
     try self.addUnspecializedWithTracking(lambda_set, unspec);
 }
 
@@ -981,16 +981,16 @@ pub fn isTopLevel(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     return self.top_level_patterns.contains(pattern_idx);
 }
 
-/// Request an ability implementation from an external module.
+/// Request a static dispatch implementation from an external module.
 ///
-/// Called when transforming code that references an ability member where
+/// Called when transforming code that references a static dispatch method where
 /// the implementation is defined in another module.
 ///
 /// Returns true if this is a new request, false if already requested.
 pub fn requestExternalLambdaSet(
     self: *Self,
     source_module: CIR.Import.Idx,
-    ability_member: base.Ident.Idx,
+    dispatch_method: base.Ident.Idx,
     concrete_type_info: ConcreteTypeInfo,
     original_unspec: UnspecializedClosure,
 ) !bool {
@@ -998,7 +998,7 @@ pub fn requestExternalLambdaSet(
     for (self.external_lambda_set_requests.items) |existing| {
         if (existing.eql(.{
             .source_module = source_module,
-            .ability_member = ability_member,
+            .dispatch_method = dispatch_method,
             .concrete_type_info = concrete_type_info,
             .original_unspec = original_unspec,
         })) {
@@ -1009,7 +1009,7 @@ pub fn requestExternalLambdaSet(
     // Add new request
     try self.external_lambda_set_requests.append(self.allocator, .{
         .source_module = source_module,
-        .ability_member = ability_member,
+        .dispatch_method = dispatch_method,
         .concrete_type_info = concrete_type_info,
         .original_unspec = original_unspec,
     });
@@ -1020,14 +1020,14 @@ pub fn requestExternalLambdaSet(
 /// Get all pending external lambda set requests.
 ///
 /// These should be processed after the transformation pass to resolve
-/// cross-module ability implementations.
+/// cross-module static dispatch implementations.
 pub fn getExternalLambdaSetRequests(self: *const Self) []const ExternalLambdaSetRequest {
     return self.external_lambda_set_requests.items;
 }
 
 /// Resolve an external lambda set request with the closure info from the external module.
 ///
-/// Called when the external module provides the ability implementation closure.
+/// Called when the external module provides the static dispatch implementation closure.
 /// Returns the resolved result which includes the closure info.
 pub fn resolveExternalLambdaSet(
     self: *Self,
@@ -1054,43 +1054,43 @@ pub fn resolveExternalLambdaSet(
 
 /// Export a closure for the module interface.
 ///
-/// Called for closures that implement abilities and should be accessible
-/// from other modules.
+/// Called for closures that should be accessible from other modules
+/// for static dispatch resolution.
 pub fn exportClosure(
     self: *Self,
     closure_name: base.Ident.Idx,
     lifted_fn_pattern: ?CIR.Pattern.Idx,
-    implements_ability: ?ExportedClosureInfo.AbilityImpl,
+    static_dispatch_impl: ?ExportedClosureInfo.StaticDispatchImpl,
 ) !void {
     try self.exported_closures.append(self.allocator, .{
         .closure_name = closure_name,
         .lifted_fn_pattern = lifted_fn_pattern,
-        .implements_ability = implements_ability,
+        .static_dispatch_impl = static_dispatch_impl,
     });
 }
 
 /// Get all exported closures for the module interface.
 ///
 /// These are closures that other modules can reference when resolving
-/// their ability-polymorphic lambda sets.
+/// their static dispatch lambda sets.
 pub fn getExportedClosures(self: *const Self) []const ExportedClosureInfo {
     return self.exported_closures.items;
 }
 
-/// Find an exported closure by ability implementation.
+/// Find an exported closure by static dispatch implementation.
 ///
-/// Used when an external module requests a specific ability implementation
+/// Used when an external module requests a specific method implementation
 /// for a concrete type.
-pub fn findExportedClosureByAbility(
+pub fn findExportedClosureByStaticDispatch(
     self: *const Self,
-    ability: base.Ident.Idx,
-    member: base.Ident.Idx,
+    type_name: base.Ident.Idx,
+    method: base.Ident.Idx,
     for_type: base.Ident.Idx,
 ) ?ExportedClosureInfo {
     for (self.exported_closures.items) |exported| {
-        if (exported.implements_ability) |impl| {
-            if (impl.ability == ability and
-                impl.member == member and
+        if (exported.static_dispatch_impl) |impl| {
+            if (impl.type_name == type_name and
+                impl.method == method and
                 impl.for_type == for_type)
             {
                 return exported;
@@ -1115,8 +1115,8 @@ pub const ExternalResolutionResult = struct {
 pub const ExternalClosureLookupFn = *const fn (
     /// The module to look in
     source_module: CIR.Import.Idx,
-    /// The ability member to find
-    ability_member: base.Ident.Idx,
+    /// The dispatch method to find
+    dispatch_method: base.Ident.Idx,
     /// Type information for the concrete type
     concrete_type_info: ConcreteTypeInfo,
     /// User context passed through
@@ -1125,14 +1125,14 @@ pub const ExternalClosureLookupFn = *const fn (
 
 /// Process all pending external lambda set requests.
 ///
-/// This is called after the transformation pass to resolve ability implementations
+/// This is called after the transformation pass to resolve static dispatch implementations
 /// from external modules. For each pending request:
 /// 1. Look up the closure from the external module using the provided callback
 /// 2. If found, resolve the request and add the closure to the lambda set
 /// 3. If not found, track as failed (for error reporting)
 ///
 /// The `lookup_fn` callback should use the module's exported closures to find
-/// the matching ability implementation.
+/// the matching static dispatch implementation.
 ///
 /// Returns statistics about the resolution process.
 pub fn processExternalLambdaSetRequests(
@@ -1155,7 +1155,7 @@ pub fn processExternalLambdaSetRequests(
         // Try to look up the closure from the external module
         if (lookup_fn(
             request.source_module,
-            request.ability_member,
+            request.dispatch_method,
             request.concrete_type_info,
             context,
         )) |closure_info| {
@@ -1187,7 +1187,7 @@ pub fn pendingExternalRequestCount(self: *const Self) usize {
 ///
 /// This should be called after monomorphization to ensure no unspecialized
 /// closures remain. Any remaining unspecialized entries indicate a failure
-/// to resolve ability implementations.
+/// to resolve static dispatch implementations.
 ///
 /// Returns a ValidationResult indicating whether validation passed and
 /// providing error details if it failed.
@@ -1296,7 +1296,7 @@ pub fn getUnresolvedEntries(self: *const Self, allocator: std.mem.Allocator) !st
 
     // Collect from external requests
     for (self.external_lambda_set_requests.items) |request| {
-        try errors.append(allocator, ResolutionError.externalNotFound(request.ability_member));
+        try errors.append(allocator, ResolutionError.externalNotFound(request.dispatch_method));
     }
 
     return errors;
@@ -1884,7 +1884,7 @@ fn generateLambdaSetDispatchMatch(
     call_args: []const Expr.Idx,
 ) !Expr.Idx {
     // All unspecialized closures must be resolved before generating dispatch.
-    // Unspecialized closures (ability-polymorphic entries) are resolved during
+    // Unspecialized closures (static-dispatch-dependent entries) are resolved during
     // monomorphization when concrete types are known.
     std.debug.assert(lambda_set.isFullyResolved());
 
@@ -2242,13 +2242,13 @@ pub fn transformExprWithLambdaSet(
             return .{ .expr = transformed, .lambda_set = null };
         },
         .e_type_var_dispatch => |tvd| {
-            // Ability member reference - this is an unspecialized closure.
+            // Static dispatch reference - this is an unspecialized closure.
             // We record it as an unspecialized entry that will be resolved
             // during monomorphization when the concrete type is known.
             //
-            // For example, `hash` from `Hash has hash : a -> U64 | a has Hash`
-            // becomes an unspecialized closure until we know what type `a` is.
-            const member_info = AbilityMemberInfo{
+            // For example, `Thing.hash` becomes an unspecialized closure until
+            // we know what concrete type `Thing` resolves to.
+            const dispatch_info = StaticDispatchInfo{
                 .method_name = tvd.method_name,
                 .type_var_alias_stmt = tvd.type_var_alias_stmt,
                 .args = tvd.args,
@@ -2256,7 +2256,7 @@ pub fn transformExprWithLambdaSet(
 
             // Create a lambda set with this unspecialized closure
             var lambda_set = LambdaSet.init();
-            const unspec = self.createUnspecializedClosure(member_info, expr_idx);
+            const unspec = self.createUnspecializedClosure(dispatch_info, expr_idx);
             try lambda_set.addUnspecialized(self.allocator, unspec);
 
             // Transform arguments if any
@@ -2667,7 +2667,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         => return expr_idx,
 
         .e_type_var_dispatch => |tvd| {
-            // Transform arguments of the ability member dispatch
+            // Transform arguments of the static dispatch
             const args = self.module_env.store.sliceExpr(tvd.args);
             if (args.len == 0) {
                 return expr_idx;
@@ -3084,12 +3084,12 @@ test "ClosureTransformer: external lambda set requests" {
     defer transformer.deinit();
 
     // Create test identifiers
-    const ability_member = try module_env.insertIdent(base.Ident.for_text("hash"));
+    const dispatch_method = try module_env.insertIdent(base.Ident.for_text("hash"));
 
     // Create a dummy unspecialized closure
     const unspec = UnspecializedClosure{
         .type_var = @enumFromInt(100), // Dummy type var for test
-        .member = ability_member,
+        .member = dispatch_method,
         .member_expr = @enumFromInt(1),
         .region = 0,
     };
@@ -3104,7 +3104,7 @@ test "ClosureTransformer: external lambda set requests" {
 
     const is_new = try transformer.requestExternalLambdaSet(
         source_module,
-        ability_member,
+        dispatch_method,
         concrete_type_info,
         unspec,
     );
@@ -3113,12 +3113,12 @@ test "ClosureTransformer: external lambda set requests" {
     // Get the pending requests
     const requests = transformer.getExternalLambdaSetRequests();
     try testing.expectEqual(@as(usize, 1), requests.len);
-    try testing.expect(requests[0].ability_member == ability_member);
+    try testing.expect(requests[0].dispatch_method == dispatch_method);
 
     // Duplicate request should return false
     const is_new2 = try transformer.requestExternalLambdaSet(
         source_module,
-        ability_member,
+        dispatch_method,
         concrete_type_info,
         unspec,
     );
@@ -3140,17 +3140,17 @@ test "ClosureTransformer: export closure" {
 
     // Create test identifiers
     const closure_name = try module_env.insertIdent(base.Ident.for_text("#1_hash"));
-    const ability = try module_env.insertIdent(base.Ident.for_text("Hash"));
-    const member = try module_env.insertIdent(base.Ident.for_text("hash"));
+    const type_name = try module_env.insertIdent(base.Ident.for_text("List"));
+    const method = try module_env.insertIdent(base.Ident.for_text("hash"));
     const for_type = try module_env.insertIdent(base.Ident.for_text("List"));
 
     // Export a closure
     try transformer.exportClosure(
         closure_name,
         null,
-        ExportedClosureInfo.AbilityImpl{
-            .ability = ability,
-            .member = member,
+        ExportedClosureInfo.StaticDispatchImpl{
+            .type_name = type_name,
+            .method = method,
             .for_type = for_type,
         },
     );
@@ -3160,8 +3160,8 @@ test "ClosureTransformer: export closure" {
     try testing.expectEqual(@as(usize, 1), exported.len);
     try testing.expect(exported[0].closure_name == closure_name);
 
-    // Find by ability
-    const found = transformer.findExportedClosureByAbility(ability, member, for_type);
+    // Find by static dispatch
+    const found = transformer.findExportedClosureByStaticDispatch(type_name, method, for_type);
     try testing.expect(found != null);
     try testing.expect(found.?.closure_name == closure_name);
 }
@@ -3412,7 +3412,7 @@ test "ClosureTransformer: validateAllResolved detects unresolved" {
     try testing.expect(!result.is_valid);
     try testing.expectEqual(@as(usize, 1), result.unresolved_count);
     try testing.expect(result.first_error != null);
-    try testing.expectEqual(ResolutionError.Kind.missing_ability_impl, result.first_error.?.kind);
+    try testing.expectEqual(ResolutionError.Kind.missing_static_dispatch, result.first_error.?.kind);
 }
 
 test "ClosureTransformer: processExternalLambdaSetRequests resolves matching requests" {
@@ -3469,7 +3469,7 @@ test "ClosureTransformer: processExternalLambdaSetRequests resolves matching req
     const mockLookup = struct {
         fn lookup(
             _: CIR.Import.Idx,
-            ability_member: base.Ident.Idx,
+            dispatch_method: base.Ident.Idx,
             _: ConcreteTypeInfo,
             context: *anyopaque,
         ) ?ClosureInfo {
@@ -3477,9 +3477,9 @@ test "ClosureTransformer: processExternalLambdaSetRequests resolves matching req
             ctx.calls += 1;
 
             // Only resolve hash, not eq
-            if (ability_member.idx == ctx.hash_member.idx) {
+            if (dispatch_method.idx == ctx.hash_member.idx) {
                 return ClosureInfo{
-                    .tag_name = ability_member, // Use member as tag name for test
+                    .tag_name = dispatch_method, // Use method as tag name for test
                     .lambda_body = @enumFromInt(99),
                     .lambda_args = .{ .span = .{ .start = 0, .len = 0 } },
                     .capture_names = std.ArrayList(base.Ident.Idx).empty,
@@ -3503,7 +3503,7 @@ test "ClosureTransformer: processExternalLambdaSetRequests resolves matching req
     // Verify only eq request remains
     try testing.expectEqual(@as(usize, 1), transformer.pendingExternalRequestCount());
     const remaining = transformer.getExternalLambdaSetRequests();
-    try testing.expectEqual(eq_member.idx, remaining[0].ability_member.idx);
+    try testing.expectEqual(eq_member.idx, remaining[0].dispatch_method.idx);
 }
 
 test "ClosureTransformer: processExternalLambdaSetRequests with no requests" {
@@ -3573,9 +3573,9 @@ test "ClosureTransformer: processExternalLambdaSetRequests resolves all" {
 
     // Mock that resolves everything
     const mockLookupAll = struct {
-        fn lookup(_: CIR.Import.Idx, ability_member: base.Ident.Idx, _: ConcreteTypeInfo, _: *anyopaque) ?ClosureInfo {
+        fn lookup(_: CIR.Import.Idx, dispatch_method: base.Ident.Idx, _: ConcreteTypeInfo, _: *anyopaque) ?ClosureInfo {
             return ClosureInfo{
-                .tag_name = ability_member,
+                .tag_name = dispatch_method,
                 .lambda_body = @enumFromInt(99),
                 .lambda_args = .{ .span = .{ .start = 0, .len = 0 } },
                 .capture_names = std.ArrayList(base.Ident.Idx).empty,

@@ -1461,7 +1461,7 @@ fn processSnapshotContent(
         has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
 
         // Validate that all lambda sets have been fully resolved.
-        // Any remaining unspecialized closures indicate a failure to resolve ability implementations.
+        // Any remaining unspecialized closures indicate a failure to resolve static dispatch implementations.
         const validation_result = transformer.validateAllResolved();
         if (!validation_result.is_valid) {
             // Log the validation failure

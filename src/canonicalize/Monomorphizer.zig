@@ -286,9 +286,9 @@ pub fn deinit(self: *Self) void {
     self.resolved_external_specs.deinit();
 }
 
-/// Result of looking up an ability implementation for a concrete type.
+/// Result of looking up a static dispatch implementation for a concrete type.
 /// Contains the information needed to create a ClosureInfo for dispatch.
-pub const AbilityImplLookup = struct {
+pub const StaticDispatchLookup = struct {
     /// The identifier of the method implementation (e.g., "List.hash")
     method_ident: base.Ident.Idx,
     /// The type identifier this implementation is for (e.g., "List")
@@ -297,23 +297,23 @@ pub const AbilityImplLookup = struct {
     node_idx: ?u16,
 };
 
-/// Looks up the implementation of an ability method for a concrete type.
+/// Looks up the implementation of a static dispatch method for a concrete type.
 ///
 /// Given a concrete type (e.g., List U64) and a method name (e.g., "hash"),
 /// this looks up the qualified method identifier (e.g., "List.hash") and
 /// finds the function definition that implements it.
 ///
 /// This is used during monomorphization to resolve unspecialized closures
-/// (ability-polymorphic lambda set entries) to concrete implementations.
+/// (static-dispatch-dependent lambda set entries) to concrete implementations.
 ///
 /// Returns null if:
 /// - The type is not resolved to a concrete type
 /// - No implementation is registered for this type/method combination
-pub fn lookupAbilityImpl(
+pub fn lookupStaticDispatch(
     self: *Self,
     concrete_type: types.Var,
     method_name: base.Ident.Idx,
-) ?AbilityImplLookup {
+) ?StaticDispatchLookup {
     // Resolve the type to get the concrete structure
     const resolved = self.types_store.resolveVar(concrete_type);
 
@@ -360,7 +360,7 @@ pub fn lookupAbilityImpl(
     // Find the node index for this method (for later lookup)
     const node_idx = self.module_env.getExposedNodeIndexById(qualified_method);
 
-    return AbilityImplLookup{
+    return StaticDispatchLookup{
         .method_ident = qualified_method,
         .type_ident = resolved_type_ident,
         .node_idx = node_idx,
@@ -390,18 +390,18 @@ const ClosureTransformer = @import("ClosureTransformer.zig");
 pub const ResolvedClosure = struct {
     /// The original unspecialized closure that was resolved
     unspecialized: ClosureTransformer.UnspecializedClosure,
-    /// The looked up ability implementation
-    impl_lookup: AbilityImplLookup,
+    /// The looked up static dispatch implementation
+    impl_lookup: StaticDispatchLookup,
 };
 
 /// Resolve unspecialized closures in a lambda set.
 ///
 /// This function is called during monomorphization when we have concrete type
-/// information available. For each unspecialized closure (ability member reference),
+/// information available. For each unspecialized closure (static dispatch reference),
 /// it looks up the concrete implementation.
 ///
 /// Returns a list of resolved closures. Closures that couldn't be resolved
-/// (e.g., the type doesn't implement the ability) are left unresolved.
+/// (e.g., the type doesn't have the method) are left unresolved.
 pub fn resolveUnspecializedClosures(
     self: *Self,
     lambda_set: *ClosureTransformer.LambdaSet,
@@ -415,8 +415,8 @@ pub fn resolveUnspecializedClosures(
     while (i < lambda_set.unspecialized.items.len) {
         const unspec = lambda_set.unspecialized.items[i];
 
-        // Look up the ability implementation for this concrete type
-        if (self.lookupAbilityImpl(type_var, unspec.member)) |impl| {
+        // Look up the static dispatch implementation for this concrete type
+        if (self.lookupStaticDispatch(type_var, unspec.member)) |impl| {
             // Found the implementation - add to resolved list
             try resolved.append(self.allocator, .{
                 .unspecialized = unspec,
@@ -428,7 +428,7 @@ pub fn resolveUnspecializedClosures(
             // Don't increment i since we removed an element
         } else {
             // Implementation not found for this type
-            // This could mean the type doesn't implement the ability
+            // This could mean the type doesn't have the method
             // Keep it in unspecialized for now (error will be reported later)
             i += 1;
         }
@@ -472,8 +472,8 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
         };
 
         if (type_var) |tv| {
-            // Look up the ability implementation for this concrete type
-            if (self.lookupAbilityImpl(tv, unspec.member)) |impl| {
+            // Look up the static dispatch implementation for this concrete type
+            if (self.lookupStaticDispatch(tv, unspec.member)) |impl| {
                 // Found the implementation - add to resolved list
                 try resolved.append(self.allocator, .{
                     .unspecialized = unspec,
@@ -494,21 +494,21 @@ pub fn resolveUnspecializedClosuresWithSubstitutions(
     return resolved;
 }
 
-/// Add a resolved ability implementation as a closure to a lambda set.
+/// Add a resolved static dispatch implementation as a closure to a lambda set.
 ///
 /// This is called after `resolveUnspecializedClosures` to add the resolved
 /// implementations back into the lambda set as proper closures that can be
 /// used for dispatch generation.
 ///
-/// Note: For ability implementations that are simple functions (not closures with
+/// Note: For static dispatch implementations that are simple functions (not closures with
 /// captures), this creates a "pure lambda" closure info with no captures.
 pub fn addResolvedToLambdaSet(
     self: *Self,
     lambda_set: *ClosureTransformer.LambdaSet,
     resolved: ResolvedClosure,
 ) !void {
-    // Create a ClosureInfo for the resolved ability implementation.
-    // Ability implementations are typically top-level functions without captures,
+    // Create a ClosureInfo for the resolved static dispatch implementation.
+    // Static dispatch implementations are typically top-level functions without captures,
     // so we create a simple closure with the method ident as the tag name.
     //
     // Note: The lambda_body is set to the member_expr from the original unspecialized
@@ -519,7 +519,7 @@ pub fn addResolvedToLambdaSet(
         .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
         .capture_names = std.ArrayList(base.Ident.Idx).empty,
         .lifted_fn_pattern = null, // Will be set during further processing if needed
-        .lifted_captures_pattern = null, // No captures for top-level ability impls
+        .lifted_captures_pattern = null, // No captures for top-level static dispatch impls
     };
 
     try lambda_set.addClosure(self.allocator, closure_info);
@@ -633,8 +633,8 @@ pub fn resolveEntriesForTypeVar(
 
         const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
 
-        // Look up the ability implementation for the concrete type
-        if (self.lookupAbilityImpl(concrete_type, unspec.member)) |impl| {
+        // Look up the static dispatch implementation for the concrete type
+        if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
             // Resolve this entry
             const resolved = ResolvedClosure{
                 .unspecialized = unspec,
@@ -763,7 +763,7 @@ pub fn resolveEntriesForTypeVarWithUnification(
 
         const unspec = entry_ref.lambda_set.unspecialized.items[entry_ref.index];
 
-        if (self.lookupAbilityImpl(concrete_type, unspec.member)) |impl| {
+        if (self.lookupStaticDispatch(concrete_type, unspec.member)) |impl| {
             // Perform ambient function unification if we have the implementation's lambda set
             if (impl_lambda_sets) |ls_map| {
                 if (ls_map.get(impl.method_ident)) |impl_ls| {
@@ -2512,7 +2512,7 @@ test "monomorphizer: process empty pending" {
     try testing.expectEqual(@as(usize, 0), mono.getSpecializationCount());
 }
 
-test "monomorphizer: ability impl lookup returns null for flex vars" {
+test "monomorphizer: static dispatch lookup returns null for flex vars" {
     const allocator = testing.allocator;
 
     const module_env = try allocator.create(ModuleEnv);
@@ -2531,9 +2531,9 @@ test "monomorphizer: ability impl lookup returns null for flex vars" {
     // Create a method name
     const method_name = try module_env.insertIdent(base.Ident.for_text("hash"));
 
-    // Looking up ability impl for a flex var should return null
+    // Looking up static dispatch for a flex var should return null
     // (can't dispatch until we know the concrete type)
-    const result = mono.lookupAbilityImpl(flex_var, method_name);
+    const result = mono.lookupStaticDispatch(flex_var, method_name);
     try testing.expect(result == null);
 }
 
