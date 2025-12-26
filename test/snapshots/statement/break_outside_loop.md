@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=For loop with break
+description=break outside loop
 type=snippet
 ~~~
 # SOURCE
