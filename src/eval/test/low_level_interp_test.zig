@@ -929,6 +929,20 @@ test "e_low_level_lambda - List.append for list of tuples with strings (issue 86
     try testing.expectEqual(@as(i128, 2), len_value);
 }
 
+test "e_low_level_lambda - List.append tuple to empty list (issue 8758)" {
+    // This test reproduces issue #8758 - integer overflow when appending tuples containing
+    // strings to an empty list. The bug was that isRefcounted() returns false for tuples,
+    // causing allocation to use one memory layout but deallocation to use another, leading
+    // to integer overflow when reading from the wrong offset during cleanup.
+    const src =
+        \\x = List.append([], ("hello", "world"))
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1), len_value);
+}
+
 test "e_low_level_lambda - List.drop_at on an empty list at index 0" {
     const src =
         \\x = List.drop_at([], 0)
