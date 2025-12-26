@@ -14,16 +14,16 @@ result = func(1)
 ~~~
 # MONO
 ~~~roc
-closure_f_1 = |x, captures| x + captures.offset
+c1_f = |x, captures| x + captures.offset
 
-closure_f_2 = |x| x * 2
+c2_f = |x| x * 2
 
 func = |offset| {
 	condition = True
-	f = if (condition) Closure_f_1({ offset: offset }) else Closure_f_2({})
+	f = if (condition) C1_f({ offset: offset }) else C2_f({})
 	match f {
-		Closure_f_1(captures) => closure_f_1(10, captures)
-		Closure_f_2({}) => closure_f_2(10)
+		C1_f(captures) => c1_f(10, captures)
+		C2_f({}) => c2_f(10)
 	}
 }
 
@@ -106,7 +106,7 @@ EndOfFile,
 							(if-branch
 								(e-lookup-local
 									(p-assign (ident "condition")))
-								(e-tag (name "Closure_f_1")
+								(e-tag (name "#1_f")
 									(args
 										(e-record
 											(fields
@@ -114,7 +114,7 @@ EndOfFile,
 													(e-lookup-local
 														(p-assign (ident "offset"))))))))))
 						(if-else
-							(e-tag (name "Closure_f_2")
+							(e-tag (name "#2_f")
 								(args
 									(e-empty_record))))))
 				(e-match
@@ -130,7 +130,7 @@ EndOfFile,
 								(value
 									(e-call
 										(e-lookup-local
-											(p-assign (ident "closure_f_1")))
+											(p-assign (ident "c1_f")))
 										(e-num (value "10"))
 										(e-lookup-local
 											(p-assign (ident "captures"))))))
@@ -141,7 +141,7 @@ EndOfFile,
 								(value
 									(e-call
 										(e-lookup-local
-											(p-assign (ident "closure_f_2")))
+											(p-assign (ident "c2_f")))
 										(e-num (value "10")))))))))))
 	(d-let
 		(p-assign (ident "result"))

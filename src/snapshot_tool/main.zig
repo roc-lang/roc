@@ -3211,14 +3211,17 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     // These are the closures that have been lifted to top-level functions.
     // Dispatch now calls these functions instead of inlining the lambda bodies.
     for (lifted_functions) |lifted_fn| {
-        // Get the function name and convert to lowercase for a valid identifier
+        // Get the function name and convert to a valid Roc identifier
         const fn_name = can_ir.getIdent(lifted_fn.name);
 
-        // Convert first char to lowercase to make it a valid Roc identifier
+        // Convert # prefix to 'c' (for compiler-generated closures like #1_foo -> c1_foo)
+        // or uppercase first char to lowercase for backwards compatibility
         var fn_name_lower = try output.gpa.alloc(u8, fn_name.len);
         defer output.gpa.free(fn_name_lower);
         @memcpy(fn_name_lower, fn_name);
-        if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
+        if (fn_name_lower.len > 0 and fn_name_lower[0] == '#') {
+            fn_name_lower[0] = 'c';
+        } else if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
             fn_name_lower[0] = fn_name_lower[0] + ('a' - 'A');
         }
 

@@ -8,7 +8,7 @@
 //! The closure transformation works in conjunction with `LambdaLifter`:
 //!
 //! 1. **ClosureTransformer** (this module):
-//!    - Transforms closures to tags with capture records (`Closure_name_N({ ... })`)
+//!    - Transforms closures to tags with capture records (`#N_name({ ... })`)
 //!    - Tracks lambda sets for variables that hold closures
 //!    - Generates dispatch match expressions at call sites
 //!
@@ -26,20 +26,23 @@
 //! result = addX(10)
 //! ```
 //!
-//! After ClosureTransformer + LambdaLifter:
+//! After ClosureTransformer + LambdaLifter (internal representation):
 //! ```roc
-//! closure_addX_1 = |y, captures| captures.x + y
+//! c1_addX = |y, captures| captures.x + y
 //!
 //! x = 42
-//! addX = Closure_addX_1({ x: x })
+//! addX = #1_addX({ x: x })
 //! result = match addX {
-//!     Closure_addX_1(captures) => closure_addX_1(10, captures)
+//!     #1_addX(captures) => c1_addX(10, captures)
 //! }
 //! ```
 //!
+//! When emitted by RocEmitter, `#` becomes `C`, so `#1_addX` prints as `C1_addX`.
+//!
 //! ## Implementation Notes
 //!
-//! - Closures become tags with capture records (using `Closure_` prefix to avoid name clashes)
+//! - Closures become tags with capture records (using `#` prefix to avoid name clashes)
+//! - The `#` prefix is reserved for comments in Roc source, so it can't collide with user tags
 //! - Call sites to closures become match expressions that dispatch based on the lambda set
 //! - Pure lambdas (no captures) in mixed contexts are wrapped as closure tags with empty records
 //! - Top-level patterns are tracked to avoid unnecessary captures (they're always in scope)
@@ -126,7 +129,7 @@ pub const EnumDispatchInfo = struct {
 
 /// Information about a transformed closure
 pub const ClosureInfo = struct {
-    /// The tag name for this closure (e.g., `Closure_addX_1`)
+    /// The tag name for this closure (e.g., `#1_addX`)
     tag_name: base.Ident.Idx,
     /// The lambda body expression
     lambda_body: Expr.Idx,
@@ -292,7 +295,7 @@ pub const ValidationResult = struct {
 /// might need when resolving their own lambda sets. It's part of the
 /// module's exported interface.
 pub const ExportedClosureInfo = struct {
-    /// The closure's tag name (e.g., "Closure_hash_1")
+    /// The closure's tag name (e.g., "#1_hash")
     closure_name: base.Ident.Idx,
 
     /// The lifted function pattern for dispatch
@@ -1658,19 +1661,25 @@ pub fn deinit(self: *Self) void {
     self.unspec_by_type_var.deinit();
 }
 
-/// Generate a unique tag name for a closure
+/// Generate a unique tag name for a closure.
+///
+/// This generates names like "#1_addX", "#2_addX" when a hint is provided,
+/// or "#1", "#2" when no hint is available. The `#` prefix is used because
+/// it's reserved for comments in Roc source code, so these names cannot
+/// collide with user-defined tags. RocEmitter transforms `#` to `C` when
+/// printing, so `#1_foo` becomes `C1_foo` in emitted code.
 pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Idx {
     self.closure_counter += 1;
 
     // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
     if (hint) |h| {
         const hint_name = self.module_env.getIdent(h);
-        // Use Closure_ prefix (capitalized) to create valid Roc tag names that won't clash with userspace tags
-        // Include counter to ensure uniqueness, e.g., "myFunc" becomes "Closure_myFunc_1", "Closure_myFunc_2", etc.
+        // Use # prefix which can't appear in user code (reserved for comments)
+        // Format: #N_hint where N is the counter
         const tag_name = try std.fmt.allocPrint(
             self.allocator,
-            "Closure_{s}_{d}",
-            .{ hint_name, self.closure_counter },
+            "#{d}_{s}",
+            .{ self.closure_counter, hint_name },
         );
         defer self.allocator.free(tag_name);
         return try self.module_env.insertIdent(base.Ident.for_text(tag_name));
@@ -1679,7 +1688,7 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
     // Otherwise generate a numeric name
     const tag_name = try std.fmt.allocPrint(
         self.allocator,
-        "Closure_{d}",
+        "#{d}",
         .{self.closure_counter},
     );
     defer self.allocator.free(tag_name);
@@ -1687,17 +1696,18 @@ pub fn generateClosureTagName(self: *Self, hint: ?base.Ident.Idx) !base.Ident.Id
 }
 
 /// Generate the lowercase function name from a closure tag name.
-/// E.g., "Closure_addX_1" -> "closure_addX_1"
+/// E.g., "#1_foo" -> "c1_foo" (replaces # with lowercase c)
 fn generateLiftedFunctionName(self: *Self, tag_name: base.Ident.Idx) !base.Ident.Idx {
     const tag_str = self.module_env.getIdent(tag_name);
 
-    // Allocate a copy with first char lowercased
+    // Allocate a copy with # replaced by lowercase 'c'
     var fn_name = try self.allocator.alloc(u8, tag_str.len);
     defer self.allocator.free(fn_name);
     @memcpy(fn_name, tag_str);
 
-    if (fn_name.len > 0 and fn_name[0] >= 'A' and fn_name[0] <= 'Z') {
-        fn_name[0] = fn_name[0] + ('a' - 'A');
+    // Replace leading # with lowercase 'c' for function name
+    if (fn_name.len > 0 and fn_name[0] == '#') {
+        fn_name[0] = 'c';
     }
 
     return try self.module_env.insertIdent(base.Ident.for_text(fn_name));
@@ -1740,7 +1750,7 @@ fn createLiftedFunctionPatterns(
 /// Transforms a call like `f(10)` where `f` is a closure into:
 /// ```roc
 /// match f {
-///     Closure_f_1(captures) => closure_f_1(10, captures)
+///     #1_f(captures) => c1_f(10, captures)
 /// }
 /// ```
 fn generateDispatchMatch(
@@ -1764,7 +1774,7 @@ fn generateDispatchMatch(
         );
     };
 
-    // Step 2: Create the applied_tag pattern: `Closure_f_1(captures)`
+    // Step 2: Create the applied_tag pattern: `#1_f(captures)`
     const pattern_args_start = self.module_env.store.scratchPatternTop();
     try self.module_env.store.addScratchPattern(captures_pattern);
     const pattern_args_span = try self.module_env.store.patternSpanFrom(pattern_args_start);
@@ -1863,8 +1873,8 @@ fn generateDispatchMatch(
 /// Transforms a call like `f(10)` where `f` could be one of several closures into:
 /// ```roc
 /// match f {
-///     Closure_add1_1(captures) => closure_add1_1(10, captures),
-///     Closure_mul2_2({}) => closure_mul2_2(10),
+///     #1_add1(captures) => c1_add1(10, captures),
+///     #2_mul2({}) => c2_mul2(10),
 /// }
 /// ```
 fn generateLambdaSetDispatchMatch(
@@ -2936,7 +2946,7 @@ test "ClosureTransformer: generateClosureTagName with hint" {
     const tag_name = try transformer.generateClosureTagName(hint);
     const tag_str = module_env.getIdent(tag_name);
 
-    try testing.expectEqualStrings("Closure_addX_1", tag_str);
+    try testing.expectEqualStrings("#1_addX", tag_str);
 }
 
 test "ClosureTransformer: generateClosureTagName without hint" {
@@ -2955,7 +2965,7 @@ test "ClosureTransformer: generateClosureTagName without hint" {
     const tag_name = try transformer.generateClosureTagName(null);
     const tag_str = module_env.getIdent(tag_name);
 
-    try testing.expectEqualStrings("Closure_1", tag_str);
+    try testing.expectEqualStrings("#1", tag_str);
 }
 
 test "ClosureTransformer: region tracking" {
@@ -3129,7 +3139,7 @@ test "ClosureTransformer: export closure" {
     defer transformer.deinit();
 
     // Create test identifiers
-    const closure_name = try module_env.insertIdent(base.Ident.for_text("Closure_hash_1"));
+    const closure_name = try module_env.insertIdent(base.Ident.for_text("#1_hash"));
     const ability = try module_env.insertIdent(base.Ident.for_text("Hash"));
     const member = try module_env.insertIdent(base.Ident.for_text("hash"));
     const for_type = try module_env.insertIdent(base.Ident.for_text("List"));

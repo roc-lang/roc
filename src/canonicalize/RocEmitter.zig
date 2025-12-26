@@ -113,10 +113,10 @@ fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
             // Store the rename mapping
             try self.capture_renames.put(pattern_idx, unique_name);
             try self.names_in_scope.put(unique_name, {});
-            try self.write(unique_name);
+            try self.emitIdent(unique_name);
         } else {
             try self.names_in_scope.put(name, {});
-            try self.write(name);
+            try self.emitIdent(name);
         }
     } else {
         // For other pattern types, just emit normally
@@ -209,7 +209,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_lookup_local => |lookup| {
             // Check if this lookup refers to a renamed capture
             if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
-                try self.write(renamed);
+                try self.emitIdent(renamed);
             } else {
                 const pattern = self.module_env.store.getPattern(lookup.pattern_idx);
                 try self.emitPatternValue(pattern);
@@ -218,7 +218,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_lookup_external => |ext| {
             // Get the identifier name from the ident_idx
             const ident_text = self.module_env.getIdent(ext.ident_idx);
-            try self.write(ident_text);
+            try self.emitIdent(ident_text);
         },
         .e_list => |list| {
             try self.write("[");
@@ -328,7 +328,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
-            try self.write(name);
+            try self.emitTagName(name);
             const args = self.module_env.store.sliceExpr(tag.args);
             if (args.len > 0) {
                 try self.write("(");
@@ -341,7 +341,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_zero_argument_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
-            try self.write(name);
+            try self.emitTagName(name);
         },
         .e_closure => |closure| {
             // Emit closure as a lambda with non-top-level captures as leading arguments
@@ -523,7 +523,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
     switch (pattern) {
         .assign => |ident| {
             const name = self.module_env.getIdent(ident.ident);
-            try self.write(name);
+            try self.emitIdent(name);
         },
         .underscore => {
             try self.write("_");
@@ -537,7 +537,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
         },
         .applied_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
-            try self.write(name);
+            try self.emitTagName(name);
             const args = self.module_env.store.slicePatterns(tag.args);
             if (args.len > 0) {
                 try self.write("(");
@@ -722,6 +722,36 @@ fn emitIndent(self: *Self) !void {
 
 fn write(self: *Self, str: []const u8) !void {
     try self.output.appendSlice(self.allocator, str);
+}
+
+/// Emit a tag name, transforming compiler-generated `#` prefix to `C`.
+/// This handles closure tag names like "#1_foo" which become "C1_foo" in output.
+/// The `#` prefix is used internally because it's reserved for comments in Roc
+/// source code, ensuring no collision with user-defined tag names.
+fn emitTagName(self: *Self, name: []const u8) !void {
+    if (name.len > 0 and name[0] == '#') {
+        // Compiler-generated tag: replace # with C (uppercase for tags)
+        try self.output.append(self.allocator, 'C');
+        try self.output.appendSlice(self.allocator, name[1..]);
+    } else {
+        // Regular user tag: emit as-is
+        try self.output.appendSlice(self.allocator, name);
+    }
+}
+
+/// Emit an identifier, transforming compiler-generated `#` prefix to `c`.
+/// This handles lifted function names like "#1_foo" which become "c1_foo" in output.
+/// The `#` prefix is used internally because it's reserved for comments in Roc
+/// source code, ensuring no collision with user-defined identifiers.
+fn emitIdent(self: *Self, name: []const u8) !void {
+    if (name.len > 0 and name[0] == '#') {
+        // Compiler-generated ident: replace # with c (lowercase for functions)
+        try self.output.append(self.allocator, 'c');
+        try self.output.appendSlice(self.allocator, name[1..]);
+    } else {
+        // Regular user identifier: emit as-is
+        try self.output.appendSlice(self.allocator, name);
+    }
 }
 
 fn writer(self: *Self) std.ArrayList(u8).Writer {

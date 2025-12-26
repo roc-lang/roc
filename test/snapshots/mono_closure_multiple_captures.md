@@ -13,12 +13,12 @@ result = func(1, 2)
 ~~~
 # MONO
 ~~~roc
-closure_add_ab_1 = |x, captures| captures.a + captures.b + x
+c1_add_ab = |x, captures| captures.a + captures.b + x
 
 func = |a, b| {
-	add_ab = Closure_add_ab_1({ a, b })
+	add_ab = C1_add_ab({ a, b })
 	match add_ab {
-		Closure_add_ab_1(captures) => closure_add_ab_1(10, captures)
+		C1_add_ab(captures) => c1_add_ab(10, captures)
 	}
 }
 
@@ -86,7 +86,7 @@ EndOfFile,
 			(e-block
 				(s-let
 					(p-assign (ident "add_ab"))
-					(e-tag (name "Closure_add_ab_1")
+					(e-tag (name "#1_add_ab")
 						(args
 							(e-record
 								(fields
@@ -109,7 +109,7 @@ EndOfFile,
 								(value
 									(e-call
 										(e-lookup-local
-											(p-assign (ident "closure_add_ab_1")))
+											(p-assign (ident "c1_add_ab")))
 										(e-num (value "10"))
 										(e-lookup-local
 											(p-assign (ident "captures"))))))))))))

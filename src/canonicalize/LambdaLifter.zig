@@ -18,16 +18,18 @@
 //! result = add5(10)
 //! ```
 //!
-//! After transformation:
+//! After transformation (internal representation):
 //! ```roc
-//! closure_make_adder_1 = |y, captures| captures.x + y
+//! c1_make_adder = |y, captures| captures.x + y
 //!
-//! make_adder = |x| Closure_make_adder_1({ x: x })
+//! make_adder = |x| #1_make_adder({ x: x })
 //! add5 = make_adder(5)
 //! result = match add5 {
-//!     Closure_make_adder_1(captures) => closure_make_adder_1(10, captures)
+//!     #1_make_adder(captures) => c1_make_adder(10, captures)
 //! }
 //! ```
+//!
+//! When emitted by RocEmitter, `#` becomes `C`, so `#1_make_adder` prints as `C1_make_adder`.
 //!
 //! ## Implementation Notes
 //!
@@ -49,7 +51,7 @@ const Self = @This();
 /// A lifted function definition.
 /// Represents a closure that has been extracted to a top-level function.
 pub const LiftedFunction = struct {
-    /// The function name (matches the closure tag name, e.g., "Closure_addX_1")
+    /// The function name (lowercase version of closure tag, e.g., "#1_addX" -> "c1_addX")
     name: base.Ident.Idx,
     /// The original lambda arguments
     args: CIR.Pattern.Span,

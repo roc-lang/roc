@@ -14,17 +14,17 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
-closure_add_x_1 = |a, captures| a + captures.x
+c1_add_x = |a, captures| a + captures.x
 
-closure_add_y_2 = |b, captures| b + captures.y
+c2_add_y = |b, captures| b + captures.y
 
 func = |x, y| {
-	add_x = Closure_add_x_1({ x: x })
-	add_y = Closure_add_y_2({ y: y })
+	add_x = C1_add_x({ x: x })
+	add_y = C2_add_y({ y: y })
 	match add_x {
-		Closure_add_x_1(captures) => closure_add_x_1(5, captures)
+		C1_add_x(captures) => c1_add_x(5, captures)
 	} + match add_y {
-		Closure_add_y_2(captures) => closure_add_y_2(5, captures)
+		C2_add_y(captures) => c2_add_y(5, captures)
 	}
 }
 
@@ -103,7 +103,7 @@ EndOfFile,
 			(e-block
 				(s-let
 					(p-assign (ident "add_x"))
-					(e-tag (name "Closure_add_x_1")
+					(e-tag (name "#1_add_x")
 						(args
 							(e-record
 								(fields
@@ -112,7 +112,7 @@ EndOfFile,
 											(p-assign (ident "x")))))))))
 				(s-let
 					(p-assign (ident "add_y"))
-					(e-tag (name "Closure_add_y_2")
+					(e-tag (name "#2_add_y")
 						(args
 							(e-record
 								(fields
@@ -133,7 +133,7 @@ EndOfFile,
 									(value
 										(e-call
 											(e-lookup-local
-												(p-assign (ident "closure_add_x_1")))
+												(p-assign (ident "c1_add_x")))
 											(e-num (value "5"))
 											(e-lookup-local
 												(p-assign (ident "captures")))))))))
@@ -150,7 +150,7 @@ EndOfFile,
 									(value
 										(e-call
 											(e-lookup-local
-												(p-assign (ident "closure_add_y_2")))
+												(p-assign (ident "c2_add_y")))
 											(e-num (value "5"))
 											(e-lookup-local
 												(p-assign (ident "captures")))))))))))))

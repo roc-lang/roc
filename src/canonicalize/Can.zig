@@ -11597,21 +11597,23 @@ fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
 
 /// Generate a unique tag name for a closure.
 ///
-/// This generates names like "Closure_addX_1", "Closure_addX_2" when a hint is provided,
-/// or "Closure_1", "Closure_2" when no hint is available. The tag names are used for
-/// lambda set tracking in the type system during defunctionalization.
+/// This generates names like "#1_addX", "#2_addX" when a hint is provided,
+/// or "#1", "#2" when no hint is available. The `#` prefix is used because
+/// it's reserved for comments in Roc source code, so these names cannot
+/// collide with user-defined tags. RocEmitter transforms `#` to `C` when
+/// printing, so `#1_foo` becomes `C1_foo` in emitted code.
 fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
     self.closure_counter += 1;
 
     // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
     if (hint) |h| {
         const hint_name = self.env.getIdent(h);
-        // Use Closure_ prefix (capitalized) to create valid Roc tag names that won't clash with userspace tags
-        // Include counter to ensure uniqueness, e.g., "myFunc" becomes "Closure_myFunc_1", "Closure_myFunc_2", etc.
+        // Use # prefix which can't appear in user code (reserved for comments)
+        // Format: #N_hint where N is the counter
         const tag_name = try std.fmt.allocPrint(
             self.env.gpa,
-            "Closure_{s}_{d}",
-            .{ hint_name, self.closure_counter },
+            "#{d}_{s}",
+            .{ self.closure_counter, hint_name },
         );
         defer self.env.gpa.free(tag_name);
         return try self.env.insertIdent(base.Ident.for_text(tag_name));
@@ -11620,7 +11622,7 @@ fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error
     // Otherwise generate a numeric name
     const tag_name = try std.fmt.allocPrint(
         self.env.gpa,
-        "Closure_{d}",
+        "#{d}",
         .{self.closure_counter},
     );
     defer self.env.gpa.free(tag_name);
