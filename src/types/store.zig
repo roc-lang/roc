@@ -92,10 +92,23 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
-    /// Init the unification table
+    /// Init the unification table with default capacity.
+    /// For production use with source files, prefer initFromSourceLen() which
+    /// computes capacity based on source file size.
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
         return try Self.initCapacity(gpa, 1024, 512);
+    }
+
+    /// Init the type store with capacity heuristics based on source file size.
+    /// Larger source files typically need more type slots and variables.
+    ///
+    /// Heuristics based on typical Roc code patterns:
+    /// - ~1 type slot per 50 bytes of source
+    /// - ~1 child element (vars, tags, record fields) per 100 bytes
+    pub fn initFromSourceLen(gpa: Allocator, source_len: usize) std.mem.Allocator.Error!Self {
+        const root_capacity = @max(2048, @min(50_000, source_len / 50));
+        const child_capacity = @max(512, @min(10_000, source_len / 100));
+        return try Self.initCapacity(gpa, root_capacity, child_capacity);
     }
 
     /// Init the unification table
@@ -234,30 +247,26 @@ pub const Store = struct {
 
     // make builtin types //
 
-    pub fn mkBool(self: *Self, gpa: Allocator, idents: *base.Ident.Store, ext_var: Var) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create fn anno
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("False"));
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("True"));
-
+    /// Create a Bool type as a tag union with False and True tags.
+    /// Use cached idents from CommonIdents.false_tag and CommonIdents.true_tag.
+    pub fn mkBool(self: *Self, false_ident: base.Ident.Idx, true_ident: base.Ident.Idx, ext_var: Var) std.mem.Allocator.Error!Content {
         const false_tag = try self.mkTag(false_ident, &[_]Var{});
         const true_tag = try self.mkTag(true_ident, &[_]Var{});
         return try self.mkTagUnion(&[_]Tag{ false_tag, true_tag }, ext_var);
     }
 
+    /// Create a Result type as a tag union with Ok and Err tags.
+    /// Use cached idents from CommonIdents.ok and CommonIdents.err.
     pub fn mkResult(
         self: *Self,
-        gpa: Allocator,
-        idents: *base.Ident.Store,
+        ok_ident: base.Ident.Idx,
+        err_ident: base.Ident.Idx,
         ok_var: Var,
         err_var: Var,
         ext_var: Var,
     ) std.mem.Allocator.Error!Content {
-        // TODO: Hardcode idents once in store, do no create every fn call
-        const true_ident = try idents.insert(gpa, base.Ident.for_text("Ok"));
-        const false_ident = try idents.insert(gpa, base.Ident.for_text("Err"));
-
-        const ok_tag = try self.mkTag(true_ident, &[_]Var{ok_var});
-        const err_tag = try self.mkTag(false_ident, &[_]Var{err_var});
+        const ok_tag = try self.mkTag(ok_ident, &[_]Var{ok_var});
+        const err_tag = try self.mkTag(err_ident, &[_]Var{err_var});
         return try self.mkTagUnion(&[_]Tag{ ok_tag, err_tag }, ext_var);
     }
 
@@ -779,21 +788,22 @@ pub const Store = struct {
         }
 
         /// Deserialize this Serialized struct into a Store
-        pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *Store {
+        /// The base parameter is the base address of the serialized buffer in memory.
+        pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *Store {
             // Note: Serialized may be smaller than the runtime struct because:
-            // - Uses i64 offsets instead of usize pointers
+            // - Uses u64 offsets instead of usize pointers
             // - Omits runtime-only fields like the allocator
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
             store.* = Store{
                 .gpa = gpa,
-                .slots = self.slots.deserialize(offset).*,
-                .descs = self.descs.deserialize(offset).*,
-                .vars = self.vars.deserialize(offset).*,
-                .record_fields = self.record_fields.deserialize(offset).*,
-                .tags = self.tags.deserialize(offset).*,
-                .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(offset).*,
+                .slots = self.slots.deserialize(base_addr).*,
+                .descs = self.descs.deserialize(base_addr).*,
+                .vars = self.vars.deserialize(base_addr).*,
+                .record_fields = self.record_fields.deserialize(base_addr).*,
+                .tags = self.tags.deserialize(base_addr).*,
+                .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(base_addr).*,
             };
 
             return store;
@@ -966,13 +976,14 @@ const SlotStore = struct {
         }
 
         /// Deserialize this Serialized struct into a SlotStore
-        pub fn deserialize(self: *Serialized, offset: i64) *SlotStore {
+        /// The base parameter is the base address of the serialized buffer in memory.
+        pub fn deserialize(self: *Serialized, base_addr: usize) *SlotStore {
             // Note: Serialized may be smaller than the runtime struct.
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
 
             slot_store.* = SlotStore{
-                .backing = self.backing.deserialize(offset).*,
+                .backing = self.backing.deserialize(base_addr).*,
             };
 
             return slot_store;
@@ -1072,13 +1083,14 @@ const DescStore = struct {
         }
 
         /// Deserialize this Serialized struct into a DescStore
-        pub fn deserialize(self: *Serialized, offset: i64) *DescStore {
+        /// The base parameter is the base address of the serialized buffer in memory.
+        pub fn deserialize(self: *Serialized, base_addr: usize) *DescStore {
             // Note: Serialized may be smaller than the runtime struct.
             // We deserialize by overwriting the Serialized memory with the runtime struct.
             const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
 
             desc_store.* = DescStore{
-                .backing = self.backing.deserialize(offset).*,
+                .backing = self.backing.deserialize(base_addr).*,
             };
 
             return desc_store;
@@ -1467,7 +1479,7 @@ test "SlotStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*SlotStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr));
 
     // Verify using captured indices
     try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
@@ -1531,7 +1543,7 @@ test "DescStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr));
     // Note: deserialize already handles relocation, don't call relocate again
 
     // Verify using captured indices
@@ -1581,7 +1593,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());

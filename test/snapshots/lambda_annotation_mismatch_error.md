@@ -28,7 +28,7 @@ string_function = |x| x + 42
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -42,7 +42,7 @@ string_function = |x| x + 42
 
 The value's type, which does not have a method named **plus**, is:
 
-    _Str_
+    Str
 
 **Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
@@ -122,7 +122,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str -> Error"))
+		(patt (type "Str -> Str"))
 		(patt (type "I64 -> I64")))
 	(expressions
 		(expr (type "Str -> Error"))

@@ -36,10 +36,12 @@ value = "test"
         ^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But the type annotation says it should have the type:
-    _GoodAlias_
+
+    GoodAlias
 
 # TOKENS
 ~~~zig
@@ -93,7 +95,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "GoodAlias")))
 	(type_decls
 		(nominal (type "BadBase")
 			(ty-header (name "BadBase")))

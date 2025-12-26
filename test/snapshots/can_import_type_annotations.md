@@ -600,7 +600,7 @@ combineTrys = |result1, result2|
 		(patt (type "Str -> Error"))
 		(patt (type "Error -> Try(Error, Error)"))
 		(patt (type "Error"))
-		(patt (type "Error, Str -> Error"))
+		(patt (type "Error, Str -> Try(Error, Error)"))
 		(patt (type "Try(a, err), Try(b, err) -> Try((a, b), err)")))
 	(expressions
 		(expr (type "Error -> Error"))

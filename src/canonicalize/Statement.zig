@@ -70,6 +70,7 @@ pub const Statement = union(enum) {
     s_var: struct {
         pattern_idx: Pattern.Idx,
         expr: Expr.Idx,
+        anno: ?Annotation.Idx,
     },
     /// Reassignment of a previously declared var
     ///

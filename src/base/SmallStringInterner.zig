@@ -290,7 +290,8 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize this Serialized struct into a SmallStringInterner
-    pub fn deserialize(self: *Serialized, offset: i64) *SmallStringInterner {
+    /// The base parameter is the base address of the serialized buffer in memory.
+    pub fn deserialize(self: *Serialized, base: usize) *SmallStringInterner {
         // Verify that Serialized is at least as large as the runtime struct.
         comptime {
             if (@sizeOf(Serialized) < @sizeOf(SmallStringInterner)) {
@@ -308,8 +309,8 @@ pub const Serialized = extern struct {
         const saved_entry_count = self.entry_count;
 
         // Now deserialize (which does in-place writes)
-        const bytes_val = self.bytes.deserialize(offset).*;
-        const hash_table_val = self.hash_table.deserialize(offset).*;
+        const bytes_val = self.bytes.deserialize(base).*;
+        const hash_table_val = self.hash_table.deserialize(base).*;
 
         interner.* = .{
             .bytes = bytes_val,

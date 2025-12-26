@@ -258,10 +258,21 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 },
             } };
         },
-        .statement_var => return CIR.Statement{ .s_var = .{
-            .pattern_idx = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
+        .statement_var => {
+            return CIR.Statement{ .s_var = .{
+                .pattern_idx = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    if (extra_data[0] != 0) {
+                        break :blk @enumFromInt(extra_data[1]);
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_reassign => return CIR.Statement{ .s_reassign = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
@@ -1390,9 +1401,18 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_3 = extra_data_start;
         },
         .s_var => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
             node.tag = .statement_var;
             node.data_1 = @intFromEnum(s.pattern_idx);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
@@ -3637,16 +3657,17 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
+    /// The base_addr parameter is the base address of the serialized buffer in memory.
+    pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *NodeStore {
         // Note: Serialized may be smaller than the runtime struct.
         // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order: extra_data, regions, then nodes
-        const deserialized_extra_data = self.extra_data.deserialize(offset).*;
-        const deserialized_regions = self.regions.deserialize(offset).*;
-        const deserialized_nodes = self.nodes.deserialize(offset).*;
+        const deserialized_extra_data = self.extra_data.deserialize(base_addr).*;
+        const deserialized_regions = self.regions.deserialize(base_addr).*;
+        const deserialized_nodes = self.nodes.deserialize(base_addr).*;
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
@@ -3698,7 +3719,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
@@ -3765,7 +3786,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
@@ -3865,7 +3886,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());

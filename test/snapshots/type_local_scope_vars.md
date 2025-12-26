@@ -50,10 +50,12 @@ The first argument being passed to this function has the wrong type:
 		             ^
 
 This argument has the type:
-    _b_
+
+    b
 
 But `f` needs the first argument to be:
-    _a_
+
+    a
 
 # TOKENS
 ~~~zig
@@ -261,7 +263,7 @@ main! = |_| {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, Error -> a"))
+		(patt (type "a, b -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
 		(expr (type "a, Error -> a"))

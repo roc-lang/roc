@@ -894,7 +894,6 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
-
 **INVALID IF CONDITION**
 This `if` condition needs to be a _Bool_:
 **fuzz_crash_027.md:50:5:**
@@ -904,7 +903,8 @@ This `if` condition needs to be a _Bool_:
     ^^^
 
 Right now, it has the type:
-    _U64_
+
+    U64
 
 Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
 
@@ -947,14 +947,14 @@ ist
   ^^^^^
 
 The third pattern has this type:
-    _Str_
+
+    Str
 
 But all the previous patterns have this type: 
-    _[Red, Blue, .._others2]_
+
+    [Red, Blue, .._others2]
 
 All patterns in an `match` must have compatible types.
-
-
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -965,7 +965,8 @@ This expression produces a value, but it's not being used:
 ^
 
 It has the type:
-    __d_
+
+    _d
 
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
@@ -977,7 +978,8 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 ```
 
 The function has the signature:
-    _[Blue, Red, .._others2], _arg -> Error_
+
+    [Blue, Red, .._others2], _arg -> Error
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -989,7 +991,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -1003,7 +1005,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -1017,7 +1019,7 @@ The value before this **+** operator has a type that doesn't have a **plus** met
 
 The value's type, which does not have a method named **plus**, is:
 
-    _Str_
+    Str
 
 **Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
@@ -1033,10 +1035,12 @@ This expression is used in an unexpected way:
 ```
 
 It has the type:
-    _[Stdoline!(Error), ..[Err(_d), Ok({  }), .._others2]]_
+
+    [Stdoline!(Error), ..[Err(_d), Ok({  }), .._others2]]
 
 But the type annotation says it should have the type:
-    _Try({  }, _d)_
+
+    Try({  }, _d)
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1094,10 +1098,12 @@ e[, # afarg
 ```
 
 It has the type:
-    _List(Error) => Error_
+
+    List(Error) => Error
 
 But the type annotation says it should have the type:
-    _List(Error) -> Error_
+
+    List(Error) -> Error
 
 # TOKENS
 ~~~zig
@@ -1654,20 +1660,20 @@ EndOfFile,
 											(e-int (raw "5")))))))
 						(s-decl
 							(p-ident (raw "stale"))
-							(e-field-access
+							(e-question-suffix
 								(e-field-access
-									(e-field-access
-										(e-question-suffix
-											(e-apply
-												(e-ident (raw "some_fn"))
-												(e-ident (raw "arg1"))))
-										(e-question-suffix
-											(e-apply
-												(e-ident (raw "statod")))))
 									(e-question-suffix
-										(e-apply
-											(e-ident (raw "ned")))))
-								(e-question-suffix
+										(e-field-access
+											(e-question-suffix
+												(e-field-access
+													(e-question-suffix
+														(e-apply
+															(e-ident (raw "some_fn"))
+															(e-ident (raw "arg1"))))
+													(e-apply
+														(e-ident (raw "statod")))))
+											(e-apply
+												(e-ident (raw "ned")))))
 									(e-ident (raw "recd")))))
 						(e-apply
 							(e-tag (raw "Stdoline!"))
@@ -2249,36 +2255,101 @@ expect {
 										(e-num (value "5")))))))
 					(s-let
 						(p-assign (ident "stale"))
-						(e-dot-access (field "unknown")
-							(receiver
-								(e-dot-access (field "unknown")
-									(receiver
-										(e-dot-access (field "unknown")
-											(receiver
-												(e-match
-													(match
-														(cond
-															(e-call
-																(e-runtime-error (tag "ident_not_in_scope"))
-																(e-runtime-error (tag "ident_not_in_scope"))))
-														(branches
-															(branch
-																(patterns
-																	(pattern (degenerate false)
-																		(p-applied-tag)))
-																(value
-																	(e-lookup-local
-																		(p-assign (ident "#ok")))))
-															(branch
-																(patterns
-																	(pattern (degenerate false)
-																		(p-applied-tag)))
-																(value
-																	(e-return
-																		(e-tag (name "Err")
-																			(args
-																				(e-lookup-local
-																					(p-assign (ident "#err"))))))))))))))))))
+						(e-match
+							(match
+								(cond
+									(e-dot-access (field "recd")
+										(receiver
+											(e-match
+												(match
+													(cond
+														(e-dot-access (field "ned")
+															(receiver
+																(e-match
+																	(match
+																		(cond
+																			(e-dot-access (field "statod")
+																				(receiver
+																					(e-match
+																						(match
+																							(cond
+																								(e-call
+																									(e-runtime-error (tag "ident_not_in_scope"))
+																									(e-runtime-error (tag "ident_not_in_scope"))))
+																							(branches
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-lookup-local
+																											(p-assign (ident "#ok")))))
+																								(branch
+																									(patterns
+																										(pattern (degenerate false)
+																											(p-applied-tag)))
+																									(value
+																										(e-return
+																											(e-tag (name "Err")
+																												(args
+																													(e-lookup-local
+																														(p-assign (ident "#err"))))))))))))
+																				(args)))
+																		(branches
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-lookup-local
+																						(p-assign (ident "#ok")))))
+																			(branch
+																				(patterns
+																					(pattern (degenerate false)
+																						(p-applied-tag)))
+																				(value
+																					(e-return
+																						(e-tag (name "Err")
+																							(args
+																								(e-lookup-local
+																									(p-assign (ident "#err"))))))))))))
+															(args)))
+													(branches
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-lookup-local
+																	(p-assign (ident "#ok")))))
+														(branch
+															(patterns
+																(pattern (degenerate false)
+																	(p-applied-tag)))
+															(value
+																(e-return
+																	(e-tag (name "Err")
+																		(args
+																			(e-lookup-local
+																				(p-assign (ident "#err"))))))))))))))
+								(branches
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-lookup-local
+												(p-assign (ident "#ok")))))
+									(branch
+										(patterns
+											(pattern (degenerate false)
+												(p-applied-tag)))
+										(value
+											(e-return
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err"))))))))))))
 					(e-tag (name "Stdoline!")
 						(args
 							(e-string
@@ -2406,9 +2477,9 @@ expect {
 	(defs
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
+		(patt (type "U64 -> U64"))
 		(patt (type "[Red, Blue, .._others2], _arg -> Error"))
-		(patt (type "Error"))
+		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
 	(type_decls

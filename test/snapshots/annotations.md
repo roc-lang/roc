@@ -44,10 +44,12 @@ failPairDiffTypes = mkPair("1", 2)
                     ^^^^^^^^^^^^^^
 
 It has the type:
-    _Pair(Str)_
+
+    Pair(Str)
 
 But the type annotation says it should have the type:
-    _Pair(U8)_
+
+    Pair(U8)
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -59,7 +61,7 @@ failPairDiffTypes = mkPair("1", 2)
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -72,10 +74,12 @@ failPairDiffTypes2 = Pair.Pair(1, "str")
                      ^^^^^^^^^^^^^^^^^^^
 
 It has the type:
-    _Pair(Str)_
+
+    Pair(Str)
 
 But the type annotation says it should have the type:
-    _Pair(U64)_
+
+    Pair(U64)
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -87,7 +91,7 @@ failPairDiffTypes2 = Pair.Pair(1, "str")
 
 The value's type, which does not have a method named **from_numeral**, is:
 
-    _Str_
+    Str
 
 **Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
@@ -100,10 +104,12 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
                        ^^^^^^^^^^^^^^^
 
 The tag is:
-    _Pair a b_
+
+    Pair a b
 
 But the nominal type needs it to be:
-    _Pair a a_
+
+    Pair a a
 
 # TOKENS
 ~~~zig
@@ -344,9 +350,9 @@ NO CHANGE
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(U8)"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "a, b -> Error")))
+		(patt (type "Pair(U8)"))
+		(patt (type "Pair(U64)"))
+		(patt (type "a, b -> Pair(a)")))
 	(type_decls
 		(nominal (type "Pair(a)")
 			(ty-header (name "Pair")

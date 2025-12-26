@@ -185,13 +185,13 @@ test "var reassignment within same function" {
     const declare_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern1, true, true);
     try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, declare_result);
 
-    // Reassign var (not a declaration)
+    // Reassign var (not a declaration) - returns the existing pattern for reuse
     const reassign_result = ctx.self.scopeIntroduceInternal(gpa, .ident, count_ident, pattern2, true, false);
-    try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, reassign_result);
+    try std.testing.expectEqual(Scope.IntroduceResult{ .var_reassignment_ok = pattern1 }, reassign_result);
 
-    // Should resolve to the reassigned value
+    // Should still resolve to original pattern (var reassignment reuses existing pattern)
     const lookup_result = ctx.self.scopeLookup(.ident, count_ident);
-    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern2 }, lookup_result);
+    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern1 }, lookup_result);
 }
 
 test "var reassignment across function boundary fails" {
