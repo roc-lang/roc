@@ -248,6 +248,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>False",
         .description = "Regression test: Method lookup for nominal types in roc build executables (issue #8654)",
     },
+    .{
+        .roc_file = "test/fx/box_closure_field_access_bug.roc",
+        .io_spec = "1>PASS",
+        .description = "Regression test: Field access on boxed closure with boxed record parameter",
+    },
 };
 
 /// Get the total number of IO spec tests

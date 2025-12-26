@@ -9137,8 +9137,23 @@ pub const Interpreter = struct {
     /// This ensures that when we later encounter just `a` (e.g., in `List a` for an empty list),
     /// we can find the mapping.
     fn propagateFlexMappings(self: *Interpreter, module: *can.ModuleEnv, ct_var: types.Var, rt_var: types.Var) Error!void {
-        const ct_resolved = module.types.resolveVar(ct_var);
-        const rt_resolved = self.runtime_types.resolveVar(rt_var);
+        var ct_resolved = module.types.resolveVar(ct_var);
+        var rt_resolved = self.runtime_types.resolveVar(rt_var);
+
+        // Unwrap aliases on both sides to get to the underlying structure
+        var ct_alias_depth: u32 = 0;
+        while (ct_resolved.desc.content == .alias and ct_alias_depth < 100) : (ct_alias_depth += 1) {
+            const a = ct_resolved.desc.content.alias;
+            const backing = module.types.getAliasBackingVar(a);
+            ct_resolved = module.types.resolveVar(backing);
+        }
+
+        var rt_alias_depth: u32 = 0;
+        while (rt_resolved.desc.content == .alias and rt_alias_depth < 100) : (rt_alias_depth += 1) {
+            const a = rt_resolved.desc.content.alias;
+            const backing = self.runtime_types.getAliasBackingVar(a);
+            rt_resolved = self.runtime_types.resolveVar(backing);
+        }
 
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
@@ -9210,9 +9225,31 @@ pub const Interpreter = struct {
                     // Tag union propagation is complex - skip for now
                     // This case is less common for the numeric range use case we're fixing
                 },
-                .record => {
-                    // Record propagation is complex - skip for now
-                    // This case is less common for the numeric range use case we're fixing
+                .record => |ct_rec| {
+                    // Propagate flex mappings for record fields by position.
+                    // Fields are ordered consistently (by alignment, then alphabetically),
+                    // so positional matching works when both records have the same fields.
+                    if (rt_resolved.desc.content == .structure) {
+                        const rt_flat = rt_resolved.desc.content.structure;
+                        const rt_fields_range = switch (rt_flat) {
+                            .record => |rt_rec| rt_rec.fields,
+                            .record_unbound => |r| r,
+                            else => null,
+                        };
+                        if (rt_fields_range) |rt_range| {
+                            const ct_fields = module.types.getRecordFieldsSlice(ct_rec.fields);
+                            const rt_fields = self.runtime_types.getRecordFieldsSlice(rt_range);
+
+                            // Match fields by position (only if counts match)
+                            const ct_vars = ct_fields.items(.var_);
+                            const rt_vars = rt_fields.items(.var_);
+                            if (ct_vars.len == rt_vars.len) {
+                                for (0..ct_vars.len) |i| {
+                                    try self.propagateFlexMappings(module, ct_vars[i], rt_vars[i]);
+                                }
+                            }
+                        }
+                    }
                 },
                 else => {
                     // For other structure types, no recursive propagation needed
@@ -12120,7 +12157,48 @@ pub const Interpreter = struct {
                             // Check if this is Box.box
                             if (is_box_method and arg_indices.len == 1) {
                                 const arg_expr = arg_indices[0];
-                                const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, null);
+
+                                // Extract expected element type from Box's CT type annotation.
+                                // This ensures that when boxing a record with flex-typed fields,
+                                // the fields get the correct concrete types (e.g., I64 instead of Dec).
+                                const elem_expected_rt_var: ?types.Var = blk: {
+                                    // Get the Box type from the expression's CT type
+                                    const expr_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                                    var ct_resolved = self.env.types.resolveVar(expr_ct_var);
+
+                                    // Unwrap CT aliases to get to the Box nominal type
+                                    var ct_alias_depth: u32 = 0;
+                                    while (ct_resolved.desc.content == .alias and ct_alias_depth < 100) : (ct_alias_depth += 1) {
+                                        const a = ct_resolved.desc.content.alias;
+                                        const backing = self.env.types.getAliasBackingVar(a);
+                                        ct_resolved = self.env.types.resolveVar(backing);
+                                    }
+
+                                    // Extract the CT element type from Box(elem)
+                                    if (ct_resolved.desc.content == .structure) {
+                                        const flat = ct_resolved.desc.content.structure;
+                                        if (flat == .nominal_type) {
+                                            const nom = flat.nominal_type;
+                                            const ct_type_args = self.env.types.sliceNominalArgs(nom);
+                                            if (ct_type_args.len > 0) {
+                                                // Translate the CT element type to RT
+                                                // This gets us the concrete types from the unified CT types
+                                                break :blk self.translateTypeVar(self.env, ct_type_args[0]) catch null;
+                                            }
+                                        }
+                                    }
+                                    break :blk null;
+                                };
+
+                                // Seed flex_type_context with mappings from the argument's CT type to the expected RT type.
+                                // This ensures that when the record literal is evaluated, its flex-typed fields
+                                // will find the correct concrete type mappings (e.g., flex -> I64 instead of Dec).
+                                if (elem_expected_rt_var) |expected_rt| {
+                                    const arg_ct_var = can.ModuleEnv.varFrom(arg_expr);
+                                    try self.propagateFlexMappings(self.env, arg_ct_var, expected_rt);
+                                }
+
+                                const arg_value = try self.evalWithExpectedType(arg_expr, roc_ops, elem_expected_rt_var);
                                 defer arg_value.decref(&self.runtime_layout_store, roc_ops);
 
                                 const result = try self.evalBoxIntrinsic(arg_value, expr_idx, roc_ops);
