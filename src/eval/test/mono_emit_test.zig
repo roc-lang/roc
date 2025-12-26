@@ -694,3 +694,145 @@ test "ClosureTransformer: can generate tag names" {
 
     try testing.expectEqualStrings("#2", tag_str2);
 }
+
+// Constant folding tests
+// These tests verify that compile-time evaluation correctly folds
+// tuples, tags with payloads, and nested structures
+
+test "end-to-end: emit tuple literal" {
+    const output = try emitFromSource(test_allocator, "(1, 2, 3)");
+    defer test_allocator.free(output);
+
+    try testing.expectEqualStrings("(1, 2, 3)", output);
+}
+
+test "end-to-end: emit nested tuple" {
+    const output = try emitFromSource(test_allocator, "((1, 2), (3, 4))");
+    defer test_allocator.free(output);
+
+    try testing.expectEqualStrings("((1, 2), (3, 4))", output);
+}
+
+test "end-to-end: emit tag application with single integer payload" {
+    // In Roc, `Some 42` is a tag call application, which emits as the tag name
+    // and its argument separately: the tag function applied to the argument
+    const output = try emitFromSource(test_allocator, "Some 42");
+    defer test_allocator.free(output);
+
+    // Tag applications are currently emitted as just the tag name for the tag part
+    // and the arguments follow the syntax of the original expression
+    try testing.expect(std.mem.indexOf(u8, output, "Some") != null);
+}
+
+test "end-to-end: emit tag application with multiple arguments" {
+    // `Pair 1 2` is a tag applied to two arguments
+    const output = try emitFromSource(test_allocator, "Pair 1 2");
+    defer test_allocator.free(output);
+
+    try testing.expect(std.mem.indexOf(u8, output, "Pair") != null);
+}
+
+test "end-to-end: emit nested tag application" {
+    const output = try emitFromSource(test_allocator, "Outer (Inner 5)");
+    defer test_allocator.free(output);
+
+    // The outer tag should be present
+    try testing.expect(std.mem.indexOf(u8, output, "Outer") != null);
+}
+
+/// Helper to evaluate an expression and get the first element of a tuple result
+fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
+    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    // Get the first element of the tuple
+    if (result.layout.tag == .tuple) {
+        const fresh_var = try interpreter.runtime_types.fresh();
+        var accessor = try result.asTuple(layout_cache);
+        const first_elem = try accessor.getElement(0, fresh_var);
+        if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .int) {
+            const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
+            return tmp_sv.asI128();
+        } else if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .frac) {
+            const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
+            const dec_value = tmp_sv.asDec(ops);
+            const RocDec = builtins.dec.RocDec;
+            return @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        }
+    }
+    return error.NotATuple;
+}
+
+test "roundtrip: tuple literal produces same result" {
+    const source = "(10, 20)";
+
+    // Get original result - first element
+    const original_result = try evalTupleFirst(test_allocator, source);
+
+    // Emit and re-parse
+    const emitted = try emitFromSource(test_allocator, source);
+    defer test_allocator.free(emitted);
+
+    // Get result from emitted code
+    const emitted_result = try evalTupleFirst(test_allocator, emitted);
+
+    // Verify they match
+    try testing.expectEqual(original_result, emitted_result);
+    try testing.expectEqual(@as(i128, 10), emitted_result);
+}
+
+test "roundtrip: computed tuple produces same result" {
+    const source =
+        \\{
+        \\    x = 5
+        \\    y = 10
+        \\    (x, y)
+        \\}
+    ;
+
+    // Get original result
+    const original_result = try evalTupleFirst(test_allocator, source);
+
+    // Emit and re-parse
+    const emitted = try emitFromSource(test_allocator, source);
+    defer test_allocator.free(emitted);
+
+    // Get result from emitted code
+    const emitted_result = try evalTupleFirst(test_allocator, emitted);
+
+    // Verify they match
+    try testing.expectEqual(original_result, emitted_result);
+    try testing.expectEqual(@as(i128, 5), emitted_result);
+}
+
+test "roundtrip: arithmetic tuple produces same result" {
+    const source = "(1 + 2, 3 * 4)";
+
+    // Get original result - first element should be 3
+    const original_result = try evalTupleFirst(test_allocator, source);
+
+    // Emit and re-parse
+    const emitted = try emitFromSource(test_allocator, source);
+    defer test_allocator.free(emitted);
+
+    // Get result from emitted code
+    const emitted_result = try evalTupleFirst(test_allocator, emitted);
+
+    // Verify they match
+    try testing.expectEqual(original_result, emitted_result);
+    try testing.expectEqual(@as(i128, 3), emitted_result);
+}

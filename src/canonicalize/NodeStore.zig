@@ -871,6 +871,59 @@ pub fn replaceExprWithZeroArgumentTag(
     });
 }
 
+/// Replaces an existing expression with an e_tuple expression in-place.
+/// This is used for constant folding tuples during compile-time evaluation.
+/// The elem_indices slice contains the indices of the tuple element expressions.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithTuple(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    elem_indices: []const CIR.Expr.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store element indices in extra_data
+    const extra_data_start = store.extra_data.len();
+    for (elem_indices) |elem_idx| {
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(elem_idx));
+    }
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_tuple,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = @intCast(elem_indices.len),
+        .data_3 = 0,
+    });
+}
+
+/// Replaces an existing expression with an e_tag expression in-place.
+/// This is used for constant folding tag unions with payloads during compile-time evaluation.
+/// The arg_indices slice contains the indices of the tag argument expressions.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    name: Ident.Idx,
+    arg_indices: []const CIR.Expr.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store argument indices in extra_data
+    const extra_data_start = store.extra_data.len();
+    for (arg_indices) |arg_idx| {
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
+    }
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_tag,
+        .data_1 = @bitCast(name),
+        .data_2 = @intCast(extra_data_start),
+        .data_3 = @intCast(arg_indices.len),
+    });
+}
+
 /// Get the more-specific expr index. Used to make error messages nicer.
 ///
 /// For example, if the provided expr is a `block`, then this will return the
