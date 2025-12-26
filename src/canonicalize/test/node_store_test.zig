@@ -179,6 +179,8 @@ test "NodeStore round trip - Statements" {
         .diagnostic = rand_idx(CIR.Diagnostic.Idx),
     } });
 
+    try statements.append(gpa, CIR.Statement{ .s_break = .{} });
+
     for (statements.items, 0..) |stmt, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
         const idx = try store.addStatement(stmt, region);
@@ -874,6 +876,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .empty_lambda_set = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .break_outside_loop = .{
             .region = rand_region(),
         },
     });

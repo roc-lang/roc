@@ -102,6 +102,8 @@ scratch_bound_vars: base.Scratch(Pattern.Idx),
 malformed_import_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
 closure_counter: u32 = 0,
+/// Current loop depth for validating break statements
+loop_depth: u32 = 0,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -2021,6 +2023,15 @@ pub fn canonicalizeFile(
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("return");
                 const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
+            .@"break" => |break_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("break");
+                const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                     .region = region,
@@ -5730,7 +5741,6 @@ fn canonicalizeForLoop(
     ast_list_expr: AST.Expr.Idx,
     ast_body: AST.Expr.Idx,
 ) std.mem.Allocator.Error!CanonicalizedForLoop {
-
     // Use scratch_captures to collect free vars from both expr & body
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
@@ -5763,6 +5773,8 @@ fn canonicalizeForLoop(
 
     // Canonicalize the body
     const body = blk: {
+        self.loop_depth += 1;
+        defer self.loop_depth -= 1;
         const body_free_vars_start = self.scratch_free_vars.top();
         defer self.scratch_free_vars.clearFrom(body_free_vars_start);
 
@@ -9578,6 +9590,8 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             //     $count = $count + 1
             // }
             const body = blk: {
+                self.loop_depth += 1;
+                defer self.loop_depth -= 1;
                 const body_free_vars_start = self.scratch_free_vars.top();
                 defer self.scratch_free_vars.clearFrom(body_free_vars_start);
 
@@ -9612,6 +9626,21 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .@"break" => |break_stmt| {
+            const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
+            if (self.loop_depth == 0) {
+                const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
+                    .region = region,
+                } });
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            }
+
+            const stmt_idx = try self.env.addStatement(Statement{
+                .s_break = .{},
+            }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
         },
         .malformed => |_| {
             // Stmt was malformed, parse reports this error, so do nothing here

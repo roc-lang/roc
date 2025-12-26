@@ -97,6 +97,10 @@ pub const Tag = enum {
     /// * lhs - node index for condition expression
     /// * rhs - node index for loop body expression
     @"while",
+    /// A break statement
+    /// * lhs - ignored
+    /// * rhs - ignored
+    @"break",
     /// An early return statement
     /// * lhs - node index for expr
     /// * rhs - ignored

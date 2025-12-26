@@ -262,6 +262,9 @@ pub const Diagnostic = union(enum) {
     empty_lambda_set: struct {
         region: Region,
     },
+    break_outside_loop: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -330,6 +333,7 @@ pub const Diagnostic = union(enum) {
             .underscore_in_type_declaration => |d| d.region,
             .polymorphic_recursion => |d| d.region,
             .empty_lambda_set => |d| d.region,
+            .break_outside_loop => |d| d.region,
         };
     }
 

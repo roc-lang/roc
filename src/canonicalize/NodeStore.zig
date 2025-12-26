@@ -139,11 +139,11 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 62;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 18;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -298,6 +298,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             .cond = @enumFromInt(node.data_1),
             .body = @enumFromInt(node.data_2),
         } },
+        .statement_break => return CIR.Statement{ .s_break = .{} },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
             .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
@@ -1447,6 +1448,9 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_while;
             node.data_1 = @intFromEnum(s.cond);
             node.data_2 = @intFromEnum(s.body);
+        },
+        .s_break => |_| {
+            node.tag = .statement_break;
         },
         .s_return => |s| {
             node.tag = .statement_return;
@@ -3229,6 +3233,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_empty_lambda_set;
             region = r.region;
         },
+        .break_outside_loop => |r| {
+            node.tag = .diag_break_outside_loop;
+            region = r.region;
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -3557,6 +3565,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_empty_lambda_set => return CIR.Diagnostic{ .empty_lambda_set = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
             .region = store.getRegionAt(node_idx),
         } },
         else => {
