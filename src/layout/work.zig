@@ -14,7 +14,12 @@ pub const NominalKey = struct {
     origin_module: Ident.Idx,
 };
 
-/// Work queue for layout computation, tracking pending and resolved containers
+/// Work queue for layout computation, tracking pending and resolved containers.
+///
+/// Layout computation uses an iterative work queue instead of recursion to be stack-safe.
+/// Container types (records, tuples, tag unions) push their fields/variants to pending
+/// lists, then process them one at a time. When a field/variant layout is computed,
+/// it moves to the resolved list. When all are resolved, the container is finalized.
 pub const Work = struct {
     pending_containers: std.MultiArrayList(PendingContainerItem),
     pending_record_fields: std.MultiArrayList(types.RecordField),
@@ -23,6 +28,10 @@ pub const Work = struct {
     resolved_tags: std.MultiArrayList(ResolvedTag),
     pending_tuple_fields: std.MultiArrayList(TupleField),
     resolved_tuple_fields: std.MultiArrayList(ResolvedTupleField),
+    /// Tag union variants waiting for payload layout computation
+    pending_tag_union_variants: std.MultiArrayList(TagUnionVariant),
+    /// Tag union variants whose payload layouts have been computed
+    resolved_tag_union_variants: std.MultiArrayList(ResolvedTagUnionVariant),
     /// Vars currently being processed - used to detect recursive type references
     in_progress_vars: std.AutoArrayHashMap(types.Var, void),
     /// Nominal types currently being processed - used to detect recursive nominal types.
@@ -68,6 +77,39 @@ pub const Work = struct {
         list,
         record: PendingRecord,
         tuple: PendingTuple,
+        tag_union: PendingTagUnion,
+    };
+
+    /// A tag union variant whose payload layout is pending computation.
+    /// Used in iterative tag union processing to avoid stack overflow.
+    pub const TagUnionVariant = struct {
+        /// Index of this variant in the sorted tag list (for correct ordering in final layout)
+        index: u16,
+        /// Type vars for this variant's payload args. For single-arg variants, this has
+        /// length 1. For multi-arg variants like `Point(1, 2)`, this contains all args
+        /// which will be processed as a tuple.
+        args: types.Var.SafeList.Range,
+    };
+
+    /// A tag union variant whose payload layout has been computed.
+    pub const ResolvedTagUnionVariant = struct {
+        /// Index of this variant in the sorted tag list
+        index: u16,
+        /// The computed layout for this variant's payload
+        layout_idx: layout.Idx,
+    };
+
+    /// Tracks a tag union being processed iteratively.
+    /// Sits on `pending_containers` while its variants are being resolved.
+    pub const PendingTagUnion = struct {
+        /// Total number of variants in this tag union
+        num_variants: u32,
+        /// Number of variants with payloads still waiting to be processed
+        pending_variants: u32,
+        /// Index into `resolved_tag_union_variants` where this tag union's resolved variants start
+        resolved_variants_start: u32,
+        /// Pre-computed discriminant layout (u8/u16/u32 based on variant count)
+        discriminant_layout: layout.Idx,
     };
 
     pub const PendingRecord = struct {
@@ -104,6 +146,12 @@ pub const Work = struct {
         var resolved_tuple_fields = std.MultiArrayList(ResolvedTupleField){};
         try resolved_tuple_fields.ensureTotalCapacity(allocator, capacity);
 
+        var pending_tag_union_variants = std.MultiArrayList(TagUnionVariant){};
+        try pending_tag_union_variants.ensureTotalCapacity(allocator, capacity);
+
+        var resolved_tag_union_variants = std.MultiArrayList(ResolvedTagUnionVariant){};
+        try resolved_tag_union_variants.ensureTotalCapacity(allocator, capacity);
+
         return .{
             .pending_containers = pending_containers,
             .pending_record_fields = pending_record_fields,
@@ -112,6 +160,8 @@ pub const Work = struct {
             .resolved_tags = resolved_tags,
             .pending_tuple_fields = pending_tuple_fields,
             .resolved_tuple_fields = resolved_tuple_fields,
+            .pending_tag_union_variants = pending_tag_union_variants,
+            .resolved_tag_union_variants = resolved_tag_union_variants,
             .in_progress_vars = std.AutoArrayHashMap(types.Var, void).init(allocator),
             .in_progress_nominals = std.AutoArrayHashMap(NominalKey, NominalProgress).init(allocator),
         };
@@ -125,24 +175,26 @@ pub const Work = struct {
         self.resolved_tags.deinit(allocator);
         self.pending_tuple_fields.deinit(allocator);
         self.resolved_tuple_fields.deinit(allocator);
+        self.pending_tag_union_variants.deinit(allocator);
+        self.resolved_tag_union_variants.deinit(allocator);
         self.in_progress_vars.deinit();
         self.in_progress_nominals.deinit();
     }
 
     // NOTE: We do NOT have a clearRetainingCapacity function because all work fields
-    // must persist across recursive addTypeVar calls (e.g., when processing tag union
-    // variant payloads). Fields are cleaned up individually when types finish processing:
+    // must persist across nested container processing. Fields are cleaned up individually
+    // when types finish processing:
     // - pending_containers: pop() when container layout is finalized
     // - in_progress_vars: swapRemove() when type is cached
     // - in_progress_nominals: swapRemove() when nominal type is updated
     // - pending_record_fields, pending_tuple_fields: pop() when field is resolved
-    // - resolved_record_fields, resolved_tuple_fields: used then left for next call
+    // - resolved_record_fields, resolved_tuple_fields: shrinkRetainingCapacity() when done
     // - pending_tags, resolved_tags: shrinkRetainingCapacity() via defer
+    // - pending_tag_union_variants, resolved_tag_union_variants: same as record/tuple fields
     //
     // Example problem case that would occur if we cleared fields:
     //   { tag: Str, attrs: List([StringAttr(Str, Str), BoolAttr(Str, Bool)]) }
     // When processing this record, we push record fields. Then when processing
-    // the tag union element of the List, we make recursive addTypeVar calls for
-    // variant payloads. If we cleared pending_record_fields, the outer record's
-    // field tracking would be destroyed, causing unreachable panics.
+    // the tag union element of the List, we push tag union variants. If we cleared
+    // pending_record_fields, the outer record's field tracking would be destroyed.
 };
