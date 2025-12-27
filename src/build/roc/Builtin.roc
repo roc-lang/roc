@@ -345,7 +345,13 @@ Builtin :: [].{
 		}
 	}
 
-	Dict :: [EmptyDict].{}
+	Dict(k, v) :: {
+		buckets : List({ dist_and_fingerprint : U32, data_index : U32 }),
+		data : List((k, v)),
+		max_bucket_capacity : U64,
+		max_load_factor : F32,
+		shifts : U8,
+	}.{}
 
 	Set(item) :: [].{
 		is_eq : Set(item), Set(item) -> Bool

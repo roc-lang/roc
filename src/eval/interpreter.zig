@@ -2370,6 +2370,10 @@ pub const Interpreter = struct {
                     resolved.desc.content.structure == .nominal_type)
                 blk: {
                     const nom = resolved.desc.content.structure.nominal_type;
+                    // Check if this is a Dict - use special rendering
+                    if (nom.ident.ident_idx == self.root_env.idents.dict) {
+                        break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                    }
                     if (nom.is_opaque) {
                         // Check if this is a builtin type with a primitive layout
                         const is_builtin_primitive = value.layout.tag == .scalar and

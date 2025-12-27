@@ -221,6 +221,52 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         try out.append(']');
                         return out.toOwnedSlice();
                     }
+                    // Special handling for Dict - render as {key: value, ...}
+                    if (nt.ident.ident_idx == ctx.env.idents.dict) {
+                        var out = std.array_list.AlignedManaged(u8, null).init(gpa);
+                        errdefer out.deinit();
+
+                        // Dict layout: struct { buckets: RocList, data: RocList, max_bucket_capacity: u64, max_load_factor: f32, shifts: u8 }
+                        // We need to read the 'data' field which contains the key-value pairs
+                        if (value.ptr) |dict_ptr| {
+                            const base_ptr: [*]const u8 = @ptrCast(dict_ptr);
+                            // data is at offset 24 (after buckets which is a RocList of size 24)
+                            const data_ptr: *const builtins.list.RocList = @ptrCast(@alignCast(base_ptr + 24));
+                            const data_len = data_ptr.len();
+
+                            if (data_len == 0) {
+                                try out.appendSlice("{}");
+                            } else {
+                                try out.append('{');
+                                // Each entry is a (key, value) tuple - for Dict(Str, Str), each is 48 bytes (24 + 24)
+                                const entry_size: usize = 48; // RocStr (24) + RocStr (24)
+                                if (data_ptr.bytes) |bytes| {
+                                    var i: usize = 0;
+                                    while (i < data_len) : (i += 1) {
+                                        const entry_ptr = bytes + i * entry_size;
+                                        // Read key RocStr
+                                        const key_str: *const builtins.str.RocStr = @ptrCast(@alignCast(entry_ptr));
+                                        const key_slice = key_str.asSlice();
+                                        // Read value RocStr
+                                        const val_str: *const builtins.str.RocStr = @ptrCast(@alignCast(entry_ptr + 24));
+                                        const val_slice = val_str.asSlice();
+
+                                        try out.append('"');
+                                        try out.appendSlice(key_slice);
+                                        try out.appendSlice("\": \"");
+                                        try out.appendSlice(val_slice);
+                                        try out.append('"');
+                                        if (i + 1 < data_len) try out.appendSlice(", ");
+                                    }
+                                }
+                                try out.append('}');
+                            }
+                        } else {
+                            try out.appendSlice("{}");
+                        }
+
+                        return out.toOwnedSlice();
+                    }
                     // No custom to_inspect, unwrap to backing type
                     const backing = ctx.runtime_types.getNominalBackingVar(nt);
                     resolved = ctx.runtime_types.resolveVar(backing);

@@ -121,6 +121,7 @@ pub const CommonIdents = extern struct {
     str: Ident.Idx,
     list: Ident.Idx,
     box: Ident.Idx,
+    dict: Ident.Idx,
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
     num: Ident.Idx,
@@ -213,6 +214,7 @@ pub const CommonIdents = extern struct {
             .str = try common.insertIdent(gpa, Ident.for_text("Str")),
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
+            .dict = try common.insertIdent(gpa, Ident.for_text("Dict")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
             .u8 = try common.insertIdent(gpa, Ident.for_text("U8")),
@@ -303,6 +305,7 @@ pub const CommonIdents = extern struct {
             .str = common.findIdent("Str") orelse unreachable,
             .list = common.findIdent("List") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
+            .dict = common.findIdent("Dict") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
             .u8 = common.findIdent("U8") orelse unreachable,
