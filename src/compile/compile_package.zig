@@ -885,7 +885,7 @@ pub const PackageEnv = struct {
 
         // Type check using the SAME module_envs_map
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try env.insertIdent(base.Ident.for_text("test")),
+            .module_name = env.module_name_idx,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
@@ -1034,7 +1034,7 @@ pub const PackageEnv = struct {
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
 
         const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try env.insertIdent(base.Ident.for_text("test")),
+            .module_name = env.module_name_idx,
             .bool_stmt = builtin_indices.bool_type,
             .try_stmt = builtin_indices.try_type,
             .str_stmt = builtin_indices.str_type,
