@@ -148,13 +148,16 @@ pub const Generalizer = struct {
     ///
     /// 4. **Update var pool:**
     ///    - Move escaped vars to their (now lower) rank pools
-    ///    - Set generalizable vars to rank ∞ (Rank.generalized)
+    ///    - Set generalizable vars to rank ∞ (Rank.generalized) if should_generalize is true
     ///    - Clear the original rank pool
     ///
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    /// - `should_generalize`: If true, actually generalize eligible vars. If false, just
+    ///   clean up the rank pool without generalizing. Only lambda expressions should
+    ///   have their types generalized (value restriction).
+    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank, should_generalize: bool) std.mem.Allocator.Error!void {
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
         const rank_to_generalize_int = @intFromEnum(rank_to_generalize);
 
@@ -205,18 +208,18 @@ pub const Generalizer = struct {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                } else if (!should_generalize) {
+                    // Non-lambda (value restriction) - don't generalize, keep at current rank.
+                    // This ensures records/tuples containing numeric literals stay monomorphic
+                    // so type constraints propagate correctly (GitHub #8765).
+                    try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else if (self.hasDirectNumeralConstraint(resolved.desc.content)) {
                     // Direct flex var with numeric constraint - don't generalize.
-                    // This ensures numeric literals like `x = 15` stay monomorphic so that
-                    // later usage like `List.get(list, x)` can constrain x to U64 (GitHub #8666).
-                    //
-                    // Note: Nested cases like Box({ count: 0 }) ARE generalized here, but
-                    // instantiation is skipped in Check.zig to preserve constraint propagation
-                    // (GitHub #8765). This split is necessary because not generalizing nested
-                    // types causes rank mismatch panics.
+                    // This ensures numeric literals like `[0]` inside lambdas stay monomorphic
+                    // so that later usage can constrain them to the correct type (GitHub #8666).
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
-                    // Rank unchanged - safe to generalize
+                    // Rank unchanged, generalizing a lambda, and no numeral constraint - safe to generalize
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
@@ -227,11 +230,7 @@ pub const Generalizer = struct {
     }
 
     /// Check if a type content is a DIRECT flex var with a from_numeral constraint.
-    /// This is used to prevent generalization of simple numeric literals like `x = 15`.
-    ///
-    /// Note: This only checks the immediate content, not nested structures. For nested
-    /// cases like Box({ count: 0 }), the type IS generalized here, but instantiation
-    /// is skipped in Check.zig (see containsFromNumeralConstraint there).
+    /// Used to prevent generalization of numeric literals inside lambda bodies.
     fn hasDirectNumeralConstraint(self: *Self, content: Content) bool {
         switch (content) {
             .flex => |flex| {

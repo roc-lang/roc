@@ -767,6 +767,15 @@ fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) std.
     }
 }
 
+/// Format a single tag and return the result as a string slice.
+/// The returned slice is only valid until the next call to any write method.
+pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error![]const u8 {
+    self.reset();
+    var writer = self.buf.writer();
+    try self.writeTag(&writer, tag, root_var);
+    return self.get();
+}
+
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) std.mem.Allocator.Error!void {
     for (self.static_dispatch_constraints.items) |item| {

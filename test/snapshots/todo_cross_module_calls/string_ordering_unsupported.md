@@ -11,12 +11,12 @@ type=repl
 » "first" <= "second"
 ~~~
 # OUTPUT
-Evaluation error: error.StringOrderingNotSupported
+Evaluation error: error.MethodLookupFailed
 ---
-Evaluation error: error.StringOrderingNotSupported
+Evaluation error: error.MethodLookupFailed
 ---
-Evaluation error: error.StringOrderingNotSupported
+Evaluation error: error.MethodLookupFailed
 ---
-Evaluation error: error.StringOrderingNotSupported
+Evaluation error: error.MethodLookupFailed
 # PROBLEMS
 NIL
