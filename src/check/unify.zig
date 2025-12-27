@@ -194,11 +194,6 @@ pub fn unifyWithConf(
     // First reset the scratch store
     unify_scratch.reset();
 
-    // Snapshot types BEFORE unification - this preserves type information
-    // for error messages even if early merging corrupts the types during unification
-    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
@@ -208,6 +203,9 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+
                     break :blk .{ .type_mismatch = .{
                         .types = .{
                             .expected_var = a,
@@ -235,12 +233,12 @@ pub fn unifyWithConf(
                     };
 
                     const literal_var = if (literal_is_a) a else b;
-                    const num_expected_var = if (literal_is_a) b else a;
-                    const num_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, num_expected_var);
+                    const expected_var = if (literal_is_a) b else a;
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
-                        .expected_type = num_expected_snapshot,
+                        .expected_type = expected_snapshot,
                     } };
                 },
                 error.NegativeUnsignedInt => {
@@ -258,12 +256,12 @@ pub fn unifyWithConf(
                     };
 
                     const literal_var = if (literal_is_a) a else b;
-                    const neg_expected_var = if (literal_is_a) b else a;
-                    const neg_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, neg_expected_var);
+                    const expected_var = if (literal_is_a) b else a;
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
-                        .expected_type = neg_expected_snapshot,
+                        .expected_type = expected_snapshot,
                     } };
                 },
                 error.UnifyErr => {
@@ -979,7 +977,7 @@ const Unifier = struct {
                         }
                     },
                     .tag_union => |b_tag_union| {
-                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
+                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union, true);
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
@@ -1191,8 +1189,9 @@ const Unifier = struct {
             }
         }
 
-        // Now safe to proceed with full unification
-        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
+        // Now safe to proceed with full unification.
+        // Don't do early merge here - preserve types for error messages if payload unification fails.
+        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union, false);
 
         // If we get here, unification succeeded!
         // Merge to the NOMINAL type (not the tag union)
@@ -1775,6 +1774,7 @@ const Unifier = struct {
         vars: *const ResolvedVarDescs,
         a_tag_union: TagUnion,
         b_tag_union: TagUnion,
+        comptime do_early_merge: bool,
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -1828,8 +1828,12 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Early merge so self-referential types don't infinitely recurse
-        self.merge(vars, vars.b.desc.content);
+        // Early merge so self-referential types don't infinitely recurse.
+        // Only do this when the caller expects it (e.g., general tag union unification).
+        // Don't do this when called from nominal type checking, to preserve type info for errors.
+        if (do_early_merge) {
+            self.merge(vars, vars.b.desc.content);
+        }
 
         // Unify tags
         switch (tags_ext) {
