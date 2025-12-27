@@ -1685,6 +1685,10 @@ fn generateStandaloneTypeAnno(
     // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
 
+    // Push a new rank for generalization
+    try env.var_pool.pushRank();
+    defer env.var_pool.popRank();
+
     // Save top of scratch static dispatch constraints
     const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
     defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
@@ -1703,6 +1707,11 @@ fn generateStandaloneTypeAnno(
 
     // Unify the statement variable with the generated annotation type
     _ = try self.unify(stmt_var, anno_var, env);
+
+    // Generalize the type variables in the annotation.
+    // Standalone type annotations represent polymorphic function declarations,
+    // so they should always be generalized to allow proper instantiation at use sites.
+    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 }
 
 /// Generate types for type anno args
@@ -5714,12 +5723,20 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
     };
 }
 
-/// Check if an expression is a lambda (closure or pure lambda).
-/// Only lambda expressions should have their types generalized (value restriction).
+/// Check if an expression represents a function definition that should be generalized.
+/// This includes lambdas and function declarations (even those without bodies).
+/// Value restriction: only function definitions should have their types generalized,
+/// not arbitrary value definitions like records, tuples, or numerals.
 fn isLambdaExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
     const expr = self.cir.store.getExpr(expr_idx);
     return switch (expr) {
+        // Actual lambda expressions
         .e_closure, .e_lambda => true,
+        // Annotation-only function declarations (e.g., `is_empty : List(a) -> Bool`)
+        // These represent polymorphic function signatures and should be generalized
+        .e_anno_only => true,
+        // Hosted/low-level lambdas also represent function declarations
+        .e_hosted_lambda, .e_low_level_lambda => true,
         else => false,
     };
 }
