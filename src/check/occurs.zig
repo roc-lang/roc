@@ -218,7 +218,6 @@ const CheckOccurs = struct {
                 .flex => {
                     // Flex variables are not checked for cycles - they are allowed to have
                     // self-referential constraints. Only structural content is checked.
-                    // This matches the Rust compiler behavior (see subs.rs occurs function).
                 },
                 .rigid => {},
                 .recursion_var => |rec_var| {

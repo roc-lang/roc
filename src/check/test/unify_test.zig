@@ -1302,7 +1302,7 @@ test "unify - closed tag union extends open" {
 
 test "unify - infinite type detected by occurs check" {
     // Unification succeeds but creates an infinite type.
-    // The occurs check (run after definition solving, like Rust does) detects it.
+    // The occurs check (run after definition solving) detects it.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -1330,7 +1330,7 @@ test "unify - infinite type detected by occurs check" {
 
 test "unify - anonymous recursion detected by occurs check" {
     // Unification succeeds but creates an anonymous recursive type.
-    // The occurs check (run after definition solving, like Rust does) detects it.
+    // The occurs check (run after definition solving) detects it.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();

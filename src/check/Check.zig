@@ -464,7 +464,6 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
 
 /// Check if a variable contains an infinite type after solving a definition.
 /// This catches cases like `f = |x| f([x])` which creates `a = List a`.
-/// Similar to Rust's check_for_infinite_type called after LetCon.
 fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
 
@@ -1588,7 +1587,6 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
         // After solving the definition, check for infinite types.
         // This catches cases like `f = |x| f([x])` which creates `a = List a`.
-        // Similar to Rust's check_for_infinite_type called after LetCon.
         try self.checkForInfiniteType(def_var);
     }
 
