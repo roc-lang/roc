@@ -1652,8 +1652,7 @@ pub fn build(b: *std.Build) void {
     const test_filters = parsed_args.test_filters;
 
     // llvm configuration
-    const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
-    const enable_llvm = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
+    const enable_llvm = true; // LLVM is always enabled
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
@@ -1805,7 +1804,7 @@ pub fn build(b: *std.Build) void {
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -2441,7 +2440,6 @@ fn addMainExe(
     strip: bool,
     omit_frame_pointer: ?bool,
     enable_llvm: bool,
-    use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
     zstd: *Dependency,
@@ -2643,7 +2641,7 @@ fn addMainExe(
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
+        const llvm_paths = llvmPaths(b, target, user_llvm_path) orelse return null;
 
         exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
         exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
@@ -2788,35 +2786,15 @@ const LlvmPaths = struct {
     lib: []const u8,
 };
 
-// This functions is not used right now due to AFL requiring system llvm.
-// This will be used once we begin linking roc to llvm.
+/// Get LLVM library and include paths.
+/// If user_llvm_path is provided, use that. Otherwise, download from roc-bootstrap.
 fn llvmPaths(
     b: *std.Build,
     target: ResolvedTarget,
-    use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
 ) ?LlvmPaths {
-    if (use_system_llvm and user_llvm_path != null) {
-        std.log.err("-Dsystem-llvm and -Dllvm-path cannot both be specified", .{});
-        std.process.exit(1);
-    }
-
-    if (use_system_llvm) {
-        const llvm_config_path = b.findProgram(&.{"llvm-config"}, &.{""}) catch {
-            std.log.err("Failed to find system llvm-config binary", .{});
-            std.process.exit(1);
-        };
-        const llvm_lib_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--libdir" }), "\n");
-        const llvm_include_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--includedir" }), "\n");
-
-        return .{
-            .include = llvm_include_dir,
-            .lib = llvm_lib_dir,
-        };
-    }
-
     if (user_llvm_path) |llvm_path| {
-        // We are just trust the user.
+        // User specified a custom LLVM path
         return .{
             .include = b.pathJoin(&.{ llvm_path, "include" }),
             .lib = b.pathJoin(&.{ llvm_path, "lib" }),
@@ -2827,7 +2805,7 @@ fn llvmPaths(
     const raw_triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
     if (!supported_deps_triples.has(raw_triple)) {
         std.log.err("Target triple({s}) not supported by roc-bootstrap.\n", .{raw_triple});
-        std.log.err("Please specify the either `-Dsystem-llvm` or `-Dllvm-path`.\n", .{});
+        std.log.err("Please specify `-Dllvm-path` to provide a custom LLVM installation.\n", .{});
         std.process.exit(1);
     }
     const triple = supported_deps_triples.get(raw_triple).?;
