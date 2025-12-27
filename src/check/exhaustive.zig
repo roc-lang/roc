@@ -185,24 +185,8 @@ pub const Pattern = union(enum) {
             .literal => true,
 
             .ctor => |c| {
-                // An empty union is uninhabited - no constructors exist
+                // An empty closed union is uninhabited
                 if (c.union_info.alternatives.len == 0 and !c.union_info.has_flex_extension) {
-                    return false;
-                }
-
-                // Check if this constructor exists in the union.
-                // With uninhabited constructor filtering, constructors like Err on Try(A, [])
-                // are removed from the union during construction, so they won't be found here.
-                var found = false;
-                for (c.union_info.alternatives) |alt| {
-                    if (alt.tag_id == c.tag_id) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found and !c.union_info.has_flex_extension) {
-                    // Constructor is not in the union - it was filtered out because
-                    // its arguments are uninhabited, making this pattern unmatchable.
                     return false;
                 }
 
@@ -1189,6 +1173,20 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                                     .empty_tag_union => continue :tag_loop, // Uninhabited arg, try next tag
                                     .empty_record => {},
                                     .tag_union => |inner_union| {
+                                        // TODO: This uses recursion for nested tag unions, which breaks
+                                        // the otherwise stack-based approach of this function. This is
+                                        // because tag unions have OR semantics (if ANY tag is inhabited,
+                                        // the union is inhabited), while our outer stack has AND semantics
+                                        // (ALL types on the stack must be inhabited). To properly handle
+                                        // nested tag unions without recursion, we would need a more
+                                        // sophisticated work-list algorithm that tracks both the current
+                                        // path AND alternative branches to explore. For now, recursion
+                                        // works correctly but may cause stack overflow on deeply nested
+                                        // tag union types. In practice, such deep nesting is rare.
+                                        //
+                                        // The same tradeoff exists in the Rust implementation
+                                        // (crates/compiler/types/src/subs.rs, is_inhabited function).
+
                                         // Nested tag union - check if it's inhabited
                                         const inner_tags = type_store.getTagsSlice(inner_union.tags);
                                         if (inner_tags.len == 0 and !isOpenExtension(type_store, inner_union.ext)) {
@@ -1365,8 +1363,7 @@ fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
         // which includes attributes that may differ between pattern and type
         if (alt_ident.idx == tag_name.idx) {
             // Return the stored tag_id, not the array position.
-            // This is important when uninhabited constructors are filtered out,
-            // as the tag_id preserves the original index for getCtorArgTypes.
+            // The tag_id preserves the original index for getCtorArgTypes.
             return alt.tag_id;
         }
     }
@@ -2256,7 +2253,14 @@ pub fn isUseful(
                     }
 
                     // All constructors covered - check each one
+                    const first_col_type = column_types.types[0];
                     for (ctor_info.union_info.alternatives) |alt| {
+                        // Skip uninhabited constructors
+                        const arg_types = getCtorArgTypes(column_types.type_store, first_col_type, alt.tag_id);
+                        if (!try areAllTypesInhabited(column_types.type_store, column_types.builtin_idents, arg_types)) {
+                            continue;
+                        }
+
                         const specialized = try specializeByConstructor(
                             allocator,
                             existing_matrix,
@@ -3282,6 +3286,12 @@ pub fn isUsefulSketched(
 
                     // All constructors covered - check each one
                     for (ctor_info.union_info.alternatives) |alt| {
+                        // Skip uninhabited constructors
+                        const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
+                        if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
+                            continue;
+                        }
+
                         const specialized = try specializeByConstructorSketched(
                             allocator,
                             existing_matrix,
