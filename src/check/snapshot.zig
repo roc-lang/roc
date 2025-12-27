@@ -580,7 +580,7 @@ pub const Store = struct {
         return self.contents.get(idx).*;
     }
 
-    /// Format a tag as a string, e.g. "TagName payload1 payload2"
+    /// Format a tag as a string, e.g. "TagName(payload1, payload2)"
     /// Requires that all nested types have been pre-formatted via snapshotVarForError
     pub fn formatTagString(self: *const Self, allocator: std.mem.Allocator, tag: SnapshotTag, idents: *const Ident.Store) ![]const u8 {
         var result = std.array_list.Managed(u8).init(allocator);
@@ -592,10 +592,16 @@ pub const Store = struct {
 
         // Write payload arguments using pre-stored formatted strings
         const args = self.content_indexes.sliceRange(tag.args);
-        for (args) |arg_idx| {
-            try result.append(' ');
-            const formatted = self.getFormattedString(arg_idx) orelse "<unknown type>";
-            try result.appendSlice(formatted);
+        if (args.len > 0) {
+            try result.append('(');
+            for (args, 0..) |arg_idx, i| {
+                if (i > 0) {
+                    try result.appendSlice(", ");
+                }
+                const formatted = self.getFormattedString(arg_idx) orelse "<unknown type>";
+                try result.appendSlice(formatted);
+            }
+            try result.append(')');
         }
 
         return result.toOwnedSlice();
@@ -629,7 +635,7 @@ test "formatTagString - gracefully handles missing formatted strings" {
     const result = try store.formatTagString(gpa, tag, &ident_store);
     defer gpa.free(result);
 
-    try std.testing.expectEqualStrings("MyTag <unknown type>", result);
+    try std.testing.expectEqualStrings("MyTag(<unknown type>)", result);
 }
 
 test "formatTagString - uses stored formatted strings when available" {
@@ -659,5 +665,5 @@ test "formatTagString - uses stored formatted strings when available" {
     const result = try store.formatTagString(gpa, tag, &ident_store);
     defer gpa.free(result);
 
-    try std.testing.expectEqualStrings("Some U64", result);
+    try std.testing.expectEqualStrings("Some(U64)", result);
 }
