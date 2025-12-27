@@ -9,6 +9,8 @@ type=repl
 » Bool.not(x)
 ~~~
 # OUTPUT
+assigned `x`
+---
 False
 # PROBLEMS
 NIL

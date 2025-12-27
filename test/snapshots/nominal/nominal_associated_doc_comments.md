@@ -52,12 +52,12 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-# # Top-level type documentation
+## Top-level type documentation
 Foo := [Whatever].{
-	# # Nested type documentation
+	## Nested type documentation
 	Bar := [X, Y, Z]
 
-	# # Associated value documentation
+	## Associated value documentation
 	defaultBar = Foo.Bar.X
 }
 ~~~
