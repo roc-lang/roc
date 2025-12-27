@@ -19,12 +19,19 @@ const builtin = @import("builtin");
 const base = @import("base");
 const types = @import("types");
 const can = @import("can");
+const parse = @import("parse");
+const check = @import("check");
 const layout = @import("layout");
 const builtins = @import("builtins");
+const compiled_builtins = @import("compiled_builtins");
+const eval_mod = @import("mod.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
+const Can = can.Can;
+const Check = check.Check;
+const builtin_loading = eval_mod.builtin_loading;
 
 /// LLVM-based evaluator for Roc expressions
 pub const LlvmEvaluator = struct {
@@ -36,6 +43,12 @@ pub const LlvmEvaluator = struct {
     /// Counter for unique file names
     counter: u64,
 
+    /// Builtin type declaration indices (loaded once at startup)
+    builtin_indices: CIR.BuiltinIndices,
+
+    /// Loaded Builtin module (loaded once at startup)
+    builtin_module: builtin_loading.LoadedModule,
+
     pub const Error = error{
         OutOfMemory,
         CompilationFailed,
@@ -43,14 +56,35 @@ pub const LlvmEvaluator = struct {
         ExecutionFailed,
         UnsupportedType,
         NotImplemented,
+        ParseError,
+        CanonicalizeError,
+        TypeError,
     };
 
     /// Initialize a new LLVM evaluator
     pub fn init(allocator: Allocator) Error!LlvmEvaluator {
+        // Load builtin indices once at startup (generated at build time)
+        const builtin_indices = builtin_loading.deserializeBuiltinIndices(
+            allocator,
+            compiled_builtins.builtin_indices_bin,
+        ) catch return error.OutOfMemory;
+
+        // Load Builtin module once at startup
+        const builtin_source = compiled_builtins.builtin_source;
+        var builtin_module = builtin_loading.loadCompiledModule(
+            allocator,
+            compiled_builtins.builtin_bin,
+            "Builtin",
+            builtin_source,
+        ) catch return error.OutOfMemory;
+        errdefer builtin_module.deinit();
+
         return LlvmEvaluator{
             .allocator = allocator,
             .temp_dir = null,
             .counter = 0,
+            .builtin_indices = builtin_indices,
+            .builtin_module = builtin_module,
         };
     }
 
@@ -59,6 +93,7 @@ pub const LlvmEvaluator = struct {
         if (self.temp_dir) |dir| {
             self.allocator.free(dir);
         }
+        self.builtin_module.deinit();
     }
 
     /// Evaluate a CIR expression and return its string representation
@@ -103,23 +138,155 @@ pub const LlvmEvaluator = struct {
     }
 
     /// Evaluate source code directly (for snapshot testing)
-    /// This does the full pipeline: parse → canonicalize → type check → LLVM compile → execute
+    /// This does the full pipeline: parse → canonicalize → type check → evaluate
     pub fn evalSourceToString(self: *LlvmEvaluator, source: []const u8) Error![]const u8 {
-        _ = source;
+        // Step 1: Create module environment and parse
+        var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
+        defer module_env.deinit();
 
-        // TODO: Implement full source-to-result pipeline:
-        // 1. Parse source to AST
-        // 2. Canonicalize to CIR
-        // 3. Type check
-        // 4. Run monomorphization
-        // 5. Run closure transformation
-        // 6. Translate to LLVM IR
-        // 7. Compile to object code
-        // 8. Link and execute
-        // 9. Format result as Roc value
+        var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch {
+            // Parse failed - return placeholder so comparison is skipped
+            // TODO: Match interpreter's error message format
+            return self.allocator.dupe(u8, "<LLVM backend: parse error>") catch return error.OutOfMemory;
+        };
+        defer parse_ast.deinit(self.allocator);
 
-        // For now, return a placeholder indicating LLVM backend is not yet implemented
-        return try self.allocator.dupe(u8, "<LLVM backend: not yet implemented>");
+        if (parse_ast.hasErrors()) {
+            // Parse had errors - return placeholder so comparison is skipped
+            // TODO: Match interpreter's error message format
+            return self.allocator.dupe(u8, "<LLVM backend: parse error>") catch return error.OutOfMemory;
+        }
+
+        // Step 2: Initialize CIR and canonicalize
+        module_env.initCIRFields("llvm_eval") catch return error.OutOfMemory;
+
+        // Set up module envs map for auto-imported builtins
+        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.allocator);
+        defer module_envs_map.deinit();
+
+        Can.populateModuleEnvs(
+            &module_envs_map,
+            &module_env,
+            self.builtin_module.env,
+            self.builtin_indices,
+        ) catch return error.OutOfMemory;
+
+        var czer = Can.init(&module_env, &parse_ast, &module_envs_map) catch {
+            return error.CanonicalizeError;
+        };
+        defer czer.deinit();
+
+        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+        const canonical_expr = czer.canonicalizeExpr(expr_idx) catch {
+            return error.CanonicalizeError;
+        } orelse {
+            return error.CanonicalizeError;
+        };
+        const final_expr_idx = canonical_expr.get_idx();
+
+        // Step 3: Type check
+        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
+        module_env.imports.resolveImports(&module_env, &imported_modules);
+
+        const builtin_ctx: Check.BuiltinContext = .{
+            .module_name = module_env.insertIdent(base.Ident.for_text("llvm_eval")) catch return error.OutOfMemory,
+            .bool_stmt = self.builtin_indices.bool_type,
+            .try_stmt = self.builtin_indices.try_type,
+            .str_stmt = self.builtin_indices.str_type,
+            .builtin_module = self.builtin_module.env,
+            .builtin_indices = self.builtin_indices,
+        };
+
+        var checker = Check.init(
+            self.allocator,
+            &module_env.types,
+            &module_env,
+            &imported_modules,
+            &module_envs_map,
+            &module_env.store.regions,
+            builtin_ctx,
+        ) catch return error.OutOfMemory;
+        defer checker.deinit();
+
+        _ = checker.checkExprRepl(final_expr_idx) catch {
+            return error.TypeError;
+        };
+
+        // Step 4: Evaluate the expression (constant folding for now)
+        // For simple numeric expressions, we can evaluate at compile time
+        const expr = module_env.store.getExpr(final_expr_idx);
+        return self.evalExprToString(&module_env, expr);
+    }
+
+    /// Evaluate a CIR expression and format as string
+    /// Currently supports numeric literals - will be expanded
+    fn evalExprToString(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error![]const u8 {
+        switch (expr) {
+            .e_num => |num| {
+                // Format integer - match interpreter behavior (no type annotations)
+                const int_value = num.value.toI128();
+                return switch (num.kind) {
+                    .u8, .u16, .u32, .u64, .u128 => blk: {
+                        // For unsigned types, display as unsigned
+                        const unsigned: u128 = @bitCast(int_value);
+                        break :blk std.fmt.allocPrint(self.allocator, "{d}", .{unsigned}) catch return error.OutOfMemory;
+                    },
+                    .i8, .i16, .i32, .i64, .i128, .num_unbound, .int_unbound => blk: {
+                        // For signed types and unbound, display as signed
+                        break :blk std.fmt.allocPrint(self.allocator, "{d}", .{int_value}) catch return error.OutOfMemory;
+                    },
+                    else => return error.UnsupportedType,
+                };
+            },
+            .e_frac_f32 => |frac| {
+                return std.fmt.allocPrint(self.allocator, "{d}", .{frac.value}) catch return error.OutOfMemory;
+            },
+            .e_frac_f64 => |frac| {
+                return std.fmt.allocPrint(self.allocator, "{d}", .{frac.value}) catch return error.OutOfMemory;
+            },
+            .e_dec => |dec| {
+                // Dec values - format without trailing zeros for integers
+                const value = dec.value;
+                // RocDec stores value * 10^18, so divide to get actual value
+                const scaled: f64 = @as(f64, @floatFromInt(value.num)) / 1e18;
+                // Check if it's a whole number
+                if (@floor(scaled) == scaled) {
+                    return std.fmt.allocPrint(self.allocator, "{d}", .{@as(i64, @intFromFloat(scaled))}) catch return error.OutOfMemory;
+                } else {
+                    return std.fmt.allocPrint(self.allocator, "{d}", .{scaled}) catch return error.OutOfMemory;
+                }
+            },
+            .e_dec_small => |dec| {
+                // Small decimal stored as rational number
+                const numerator: f64 = @floatFromInt(dec.value.numerator);
+                const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(dec.value.denominator_power_of_ten));
+                const value = numerator / divisor;
+                // Check if it's a whole number
+                if (@floor(value) == value and value >= -9007199254740992 and value <= 9007199254740992) {
+                    return std.fmt.allocPrint(self.allocator, "{d}", .{@as(i64, @intFromFloat(value))}) catch return error.OutOfMemory;
+                } else {
+                    return std.fmt.allocPrint(self.allocator, "{d}", .{value}) catch return error.OutOfMemory;
+                }
+            },
+            .e_str_segment => |seg| {
+                const literal = module_env.getString(seg.literal);
+                return std.fmt.allocPrint(self.allocator, "\"{s}\"", .{literal}) catch return error.OutOfMemory;
+            },
+            .e_empty_list => {
+                return self.allocator.dupe(u8, "[]") catch return error.OutOfMemory;
+            },
+            .e_empty_record => {
+                return self.allocator.dupe(u8, "{}") catch return error.OutOfMemory;
+            },
+            .e_zero_argument_tag => |tag| {
+                const name = module_env.getIdent(tag.name);
+                return self.allocator.dupe(u8, name) catch return error.OutOfMemory;
+            },
+            else => {
+                // For unsupported expressions, return placeholder
+                return self.allocator.dupe(u8, "<LLVM backend: not yet implemented>") catch return error.OutOfMemory;
+            },
+        }
     }
 
     /// Get the target triple for the current host
@@ -215,6 +382,26 @@ pub fn cirNumKindToLlvmNumKind(cir_kind: CIR.NumKind) ?LlvmNumKind {
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
+    };
+}
+
+/// Convert CIR NumKind to display name matching interpreter output
+fn numKindToTypeName(kind: CIR.NumKind) []const u8 {
+    return switch (kind) {
+        .u8 => "U8",
+        .i8 => "I8",
+        .u16 => "U16",
+        .i16 => "I16",
+        .u32 => "U32",
+        .i32 => "I32",
+        .u64 => "U64",
+        .i64 => "I64",
+        .u128 => "U128",
+        .i128 => "I128",
+        .f32 => "F32",
+        .f64 => "F64",
+        .dec => "Dec",
+        .num_unbound, .int_unbound => "",
     };
 }
 
