@@ -1213,7 +1213,6 @@ pub fn detectRecursionInLambdaSet(
     return false;
 }
 
-
 /// Check if a lambda set is empty (no closures can reach the variable).
 pub fn isLambdaSetEmpty(lambda_set: *const LambdaSet) bool {
     return lambda_set.closures.items.len == 0 and

@@ -320,10 +320,6 @@ const MonoTestEnv = struct {
     }
 };
 
-// =============================================================================
-// Tests for cross-module static dispatch
-// =============================================================================
-
 test "cross-module mono: static dispatch lookup finds method in imported module" {
     // Module A defines a type with a method
     const source_a =
