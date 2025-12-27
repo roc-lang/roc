@@ -352,6 +352,29 @@ Builtin :: [].{
 		is_eq = |_a, _b| Bool.False
 	}
 
+	Decode :: [].{
+		# Decode a List U8 of utf-8 bytes and return a Result with no leftover bytes expected
+		from_bytes : List(U8), fmt -> Try(val, [Leftover(List(U8)), TooShort, ..others])
+			where [val.decoder : fmt -> val, fmt.decode_bytes : fmt, List(U8) -> { result: Try(val, [TooShort, ..others]), rest: List(U8) }]
+		from_bytes = |bytes, fmt| {
+			decoded = fmt.decode_bytes(bytes)
+			match decoded.result {
+				Ok(val) =>
+					if List.is_empty(decoded.rest) {
+						Ok(val)
+					} else {
+						Err(Leftover(decoded.rest))
+					}
+				Err(TooShort) => Err(TooShort)
+			}
+		}
+
+		# Decode a List U8 of utf-8 bytes and return a DecodeResult with leftover bytes
+		from_bytes_partial : List(U8), fmt -> { result: Try(val, [TooShort, ..others]), rest: List(U8) }
+			where [val.decoder : fmt -> val, fmt.decode_bytes : fmt, List(U8) -> { result: Try(val, [TooShort, ..others]), rest: List(U8) }]
+		from_bytes_partial = |bytes, fmt| fmt.decode_bytes(bytes)
+	}
+
 	Num :: {}.{
 		Numeral :: [
 			Self(

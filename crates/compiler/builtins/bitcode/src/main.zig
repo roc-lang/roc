@@ -9,9 +9,13 @@ const dbg_utils = @import("dbg.zig");
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
 const STR = "str";
+const DECODE = "decode";
 
 // Dec Module
 const dec = @import("dec.zig");
+
+// Decode Module
+const decode = @import("decode.zig");
 
 var FLTUSED: i32 = 0;
 comptime {
@@ -233,6 +237,15 @@ comptime {
     }
 }
 
+// Decode Module
+comptime {
+    exportDecodeFn(decode.decodeU8, "u8");
+    exportDecodeFn(decode.decodeU16, "u16");
+    exportDecodeFn(decode.decodeU32, "u32");
+    exportDecodeFn(decode.decodeU64, "u64");
+    exportDecodeFn(decode.decodeBool, "bool");
+}
+
 // Utils
 comptime {
     exportUtilsFn(utils.test_dbg, "test_dbg");
@@ -398,6 +411,9 @@ fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "dec." ++ func_name);
+}
+fn exportDecodeFn(comptime func: anytype, comptime func_name: []const u8) void {
+    exportBuiltinFn(func, "decode." ++ func_name);
 }
 
 fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {

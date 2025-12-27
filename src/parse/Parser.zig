@@ -675,7 +675,15 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         },
     );
 
-    // Get provides
+    // Parse optional targets section (check if it comes before provides)
+    var targets: ?AST.TargetsSection.Idx = null;
+    // Check if next token is targets (before provides)
+    if (self.peek() == .KwTargets) {
+        self.advance(); // Advance past 'targets'
+        targets = try self.parseTargetsSection();
+    }
+
+    // Get provides (required)
     self.expect(.KwProvides) catch {
         return try self.pushMalformed(
             AST.Header.Idx,
@@ -696,7 +704,7 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         AST.RecordField.Idx,
         .CloseCurly,
         NodeStore.addScratchRecordField,
-        Parser.parseRecordField,
+        Parser.parseProvidesField,
     ) catch |err| {
         switch (err) {
             error.ExpectedNotFound => {
@@ -720,11 +728,14 @@ pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
         },
     );
 
-    // Parse optional targets section
-    var targets: ?AST.TargetsSection.Idx = null;
-    if (self.peek() == .KwTargets) {
-        self.advance(); // Advance past 'targets'
-        targets = try self.parseTargetsSection();
+    // Parse optional targets section if it comes after provides (and wasn't parsed before)
+    // Check for targets AFTER provides - this is critical for platforms that put targets after provides
+    if (targets == null) {
+        const next_token = self.peek();
+        if (next_token == .KwTargets) {
+            self.advance(); // Advance past 'targets'  
+            targets = try self.parseTargetsSection();
+        }
     }
 
     return self.store.addHeader(.{ .platform = .{
@@ -2836,6 +2847,54 @@ pub fn parseRecordField(self: *Parser) Error!AST.RecordField.Idx {
     self.expect(.LowerIdent) catch {
         return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
+    const name = start;
+    var value: ?AST.Expr.Idx = null;
+    if (self.peek() == .OpColon) {
+        self.advance();
+        value = try self.parseExpr();
+    }
+
+    return try self.store.addRecordField(.{
+        .name = name,
+        .value = value,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+/// Parse a provides field entry in a platform header.
+/// Supports qualified names like `Stdout.line!: "symbol_name"` as well as simple names.
+/// The name field stores the start token; the full qualified name spans from start to the colon.
+pub fn parseProvidesField(self: *Parser) Error!AST.RecordField.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const start = self.pos;
+
+    // Accept either LowerIdent or UpperIdent as the start of the field name
+    // (UpperIdent for qualified names like Stdout.line!)
+    const first_tok = self.peek();
+    if (first_tok != .LowerIdent and first_tok != .UpperIdent) {
+        return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
+    }
+    self.advance();
+
+    // Consume any qualified name parts: .identifier or .Identifier
+    while (true) {
+        const tok = self.peek();
+        if (tok == .NoSpaceDotLowerIdent or tok == .NoSpaceDotUpperIdent or
+            tok == .DotLowerIdent or tok == .DotUpperIdent)
+        {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+
+    // Consume optional bang (!) for effectful functions
+    if (self.peek() == .OpBang) {
+        self.advance();
+    }
+
     const name = start;
     var value: ?AST.Expr.Idx = null;
     if (self.peek() == .OpColon) {
