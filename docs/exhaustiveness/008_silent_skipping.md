@@ -1,6 +1,21 @@
 # Issue: Silent Skipping of Exhaustiveness Checking
 
-## Problem Statement
+## Status: NOT A PROBLEM (By Design)
+
+**Clarification from design discussion:**
+
+Exhaustiveness checking should only be skipped when one of the types involved is erroneous (e.g., a type mismatch was already reported to the user). In that case:
+
+1. **Silent skip is correct** - the user already got the type mismatch report, which is sufficient
+2. **No additional message needed** - adding warnings would just add noise
+
+If exhaustiveness checking is skipped for **ANY OTHER REASON**, that is a **compiler bug** that needs to be fixed, not a user-facing message.
+
+The `error.TypeError` mechanism in `Check.zig` is the correct behavior for handling type errors during exhaustiveness checking.
+
+---
+
+## Original Problem Statement (Historical)
 
 Multiple error conditions in the exhaustiveness checker cause checking to be **silently skipped**. When this happens, users receive no feedback that exhaustiveness checking was not performed, potentially hiding non-exhaustive matches.
 

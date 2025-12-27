@@ -753,3 +753,70 @@ test "exhaustive - tags at various positions all uninhabited" {
     // Only C is inhabited, so matching just C is exhaustive
     try test_env.assertLastDefType("I64");
 }
+
+// Record field ordering tests
+// These verify that record patterns are matched by field NAME, not position.
+// Without field-name-based matching, patterns with different field orders
+// would be incorrectly compared positionally, causing wrong results.
+
+test "exhaustive - record patterns with fields in different order" {
+    // Two patterns that match the same record fields but list them in different order.
+    // With positional matching this would fail because:
+    // - Row 1: { name: "Alice", age: _ } -> args[0]=name, args[1]=age
+    // - Row 2: { age: 30, name: _ } -> args[0]=age, args[1]=name
+    // Position 0 would incorrectly compare "Alice" (name) with 30 (age).
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: "Alice", age: 30i64 }
+        \\
+        \\result = match x {
+        \\    { name: "Alice", age: _ } => "first"
+        \\    { age: 30, name: _ } => "second"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "redundant - record second pattern unreachable with different field order" {
+    // When two patterns match the same conditions but with fields in different order,
+    // the second should be flagged as redundant. This tests that field-name matching
+    // correctly identifies that { age: _, name: _ } covers the same as { name: _, age: _ }.
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: "Alice", age: 30i64 }
+        \\
+        \\result = match x {
+        \\    { name: _, age: _ } => "first"
+        \\    { age: _, name: _ } => "second"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Second pattern should be redundant - it's the same as the first just reordered
+    try test_env.assertOneTypeError("REDUNDANT PATTERN");
+}
+
+test "exhaustive - record patterns with different field subsets" {
+    // Patterns that destructure different subsets of fields should work correctly.
+    // The exhaustiveness checker should understand that unmentioned fields are wildcards.
+    const source =
+        \\x : { name: Str, age: I64, score: I64 }
+        \\x = { name: "Alice", age: 30i64, score: 100i64 }
+        \\
+        \\result = match x {
+        \\    { name: "Alice" } => "alice"
+        \\    { age: 30 } => "thirty"
+        \\    { score: 100 } => "perfect"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}

@@ -1,6 +1,19 @@
 # Issue: Record Pattern Positional Handling Limitation
 
-## Problem Statement
+## Status: RESOLVED
+
+The sketched path implementation already handles records by field name using `specializeByRecordPattern`. The `render_as` branching in `checkExhaustiveSketched` and `isUsefulSketched` correctly dispatches to field-name-based lookup for records:
+
+```zig
+const specialized_types = switch (ctor_info.union_info.render_as) {
+    .record => |field_names| try column_types.specializeByRecordPattern(allocator, field_names),
+    else => try column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
+};
+```
+
+---
+
+## Original Problem Statement (Historical)
 
 The exhaustiveness algorithm treats record patterns **positionally** in some parts of the code, but records should be matched **by field name**. This causes issues when different patterns destructure different subsets of fields.
 

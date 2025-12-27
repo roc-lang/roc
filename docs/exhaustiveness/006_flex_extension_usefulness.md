@@ -1,6 +1,12 @@
 # Issue: Flex Extension Handling in Usefulness Check
 
-## Problem Statement
+## Status: NEEDS REVIEW
+
+The reified path (which contained `isWildcardUseful` and `PatternMatrix`) has been removed as dead code. The sketched path (`isUsefulSketched`) uses a different approach. This issue should be reviewed to verify whether the sketched path handles flex extensions correctly.
+
+---
+
+## Original Problem Statement (Historical)
 
 When checking if a wildcard pattern is "useful" (can match values not covered by other patterns), the code assumes wildcards are always useful when the union has a flex extension. This is an overly conservative approximation that may miss redundancy detection opportunities.
 

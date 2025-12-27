@@ -1,6 +1,20 @@
 # Issue: Polymorphic Type Handling
 
-## Problem Statement
+## Status: DEFERRED / BY DESIGN
+
+**Current behavior:** When a match expression's condition has a polymorphic type, exhaustiveness checking is skipped via `error.TypeError`.
+
+**Design clarification:** Skipping is correct when:
+1. The type is erroneous (type mismatch already reported)
+2. The type is genuinely polymorphic in valid generic code
+
+The reified path (which used `ReifiedRows.has_unresolved_ctor`) has been removed as dead code. The sketched path handles polymorphic types via `error.TypeError` which triggers silent skip in `Check.zig`.
+
+Future work could add constraint-based checking for polymorphic types, but this is not a high priority since the common case (type error) is already handled correctly.
+
+---
+
+## Original Problem Statement (Historical)
 
 When a match expression's condition has a polymorphic type (a type variable that hasn't been resolved to a concrete type), the exhaustiveness checker currently **skips checking entirely**. This means users get no exhaustiveness errors for these matches, even when they should.
 

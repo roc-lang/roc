@@ -37,10 +37,8 @@ return missing;
         // Check if the type is inhabited using our comprehensive check
         return isTypeInhabited(type_store, builtin_idents, type_var);
     }
-    // Wildcards without type info only occur in error recovery paths
-    // (when reifyPattern returns TypeError and we create a placeholder).
-    // In those cases, we're already skipping exhaustiveness checking
-    // (has_unresolved_ctor is set), so the return value doesn't matter.
+    // Wildcards without type info should only occur in intermediate patterns
+    // during matrix specialization, which should never be checked for inhabitedness.
     return true;
 },
 ```
