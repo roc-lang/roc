@@ -81,10 +81,6 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    /// Set to false during generalization if this type contains unresolved numeric literals.
-    /// When false, the type should not be instantiated at lookup sites, even if
-    /// generalized, to preserve constraint propagation (GitHub #8765).
-    copy_on_instantiate: bool = true,
     mark: Mark,
 };
 
