@@ -102,6 +102,26 @@ pub const LlvmEvaluator = struct {
         return error.NotImplemented;
     }
 
+    /// Evaluate source code directly (for snapshot testing)
+    /// This does the full pipeline: parse → canonicalize → type check → LLVM compile → execute
+    pub fn evalSourceToString(self: *LlvmEvaluator, source: []const u8) Error![]const u8 {
+        _ = source;
+
+        // TODO: Implement full source-to-result pipeline:
+        // 1. Parse source to AST
+        // 2. Canonicalize to CIR
+        // 3. Type check
+        // 4. Run monomorphization
+        // 5. Run closure transformation
+        // 6. Translate to LLVM IR
+        // 7. Compile to object code
+        // 8. Link and execute
+        // 9. Format result as Roc value
+
+        // For now, return a placeholder indicating LLVM backend is not yet implemented
+        return try self.allocator.dupe(u8, "<LLVM backend: not yet implemented>");
+    }
+
     /// Get the target triple for the current host
     fn getHostTriple(self: *LlvmEvaluator) []const u8 {
         _ = self;

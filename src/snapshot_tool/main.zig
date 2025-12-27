@@ -3752,10 +3752,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
 
     // Dual-mode testing: Also run LLVM evaluator and compare outputs
     // This ensures the LLVM backend produces the same results as the interpreter
-    //
-    // TODO: Wire up full dual-mode comparison once the LLVM evaluator has access
-    // to the parsed module_env and expression indices from the REPL.
-    // For now, we just verify the evaluator can be initialized.
     {
         var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
             std.debug.print("LLVM evaluator init failed: {}\n", .{err});
@@ -3764,14 +3760,31 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         };
         defer llvm_evaluator.deinit();
 
-        // TODO: For each input, we need to:
-        // 1. Get the module_env and expr_idx that the REPL used
-        // 2. Pass them to llvm_evaluator.evalToString()
-        // 3. Compare with interp_output
-        // 4. Report any mismatches
-        //
-        // This requires the Repl to expose its internal state or provide
-        // a way to re-evaluate the same expression with a different evaluator.
+        for (inputs.items, actual_outputs.items) |input, interp_output| {
+            const llvm_output = llvm_evaluator.evalSourceToString(input) catch |err| {
+                std.debug.print("LLVM evaluation failed for input '{s}': {}\n", .{ input, err });
+                success = false;
+                continue;
+            };
+            defer output.gpa.free(llvm_output);
+
+            // Skip comparison if LLVM backend returns placeholder (not yet implemented)
+            if (std.mem.startsWith(u8, llvm_output, "<LLVM backend:")) {
+                continue;
+            }
+
+            // Compare outputs - fail the snapshot if they differ
+            if (!std.mem.eql(u8, interp_output, llvm_output)) {
+                std.debug.print(
+                    \\LLVM/Interpreter MISMATCH in {s}:
+                    \\  Input: {s}
+                    \\  Interpreter: {s}
+                    \\  LLVM:        {s}
+                    \\
+                , .{ snapshot_path, input, interp_output, llvm_output });
+                success = false;
+            }
+        }
     }
 
     switch (config.output_section_command) {
