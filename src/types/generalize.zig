@@ -148,13 +148,16 @@ pub const Generalizer = struct {
     ///
     /// 4. **Update var pool:**
     ///    - Move escaped vars to their (now lower) rank pools
-    ///    - Set generalizable vars to rank ∞ (Rank.generalized)
+    ///    - Set generalizable vars to rank ∞ (Rank.generalized) if should_generalize is true
     ///    - Clear the original rank pool
     ///
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
+    /// - `should_generalize`: If true, actually generalize eligible vars. If false, just
+    ///   clean up the rank pool without generalizing. Only lambda expressions should
+    ///   have their types generalized (value restriction).
+    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank, should_generalize: bool) std.mem.Allocator.Error!void {
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
         const rank_to_generalize_int = @intFromEnum(rank_to_generalize);
 
@@ -205,20 +208,18 @@ pub const Generalizer = struct {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
-                } else if (self.hasNumeralConstraint(resolved.desc.content)) {
-                    // Flex var with numeric constraint - don't generalize at ANY rank.
-                    // This ensures numeric literals like `x = 15` stay monomorphic so that
-                    // later usage like `List.get(list, x)` can constrain x to U64.
-                    // Without this, let-generalization would create a fresh copy at each use,
-                    // leaving the original as an unconstrained flex var that defaults to Dec
-                    // at runtime, causing panics when used as integer indices (GitHub #8666).
-                    //
-                    // Note: Polymorphic functions like `|a| a + 1` still work correctly because
-                    // the numeric literal `1` inside the lambda body gets its own type variable
-                    // that will be instantiated fresh for each call to the function.
+                } else if (!should_generalize) {
+                    // Non-lambda (value restriction) - don't generalize, keep at current rank.
+                    // This ensures records/tuples containing numeric literals stay monomorphic
+                    // so type constraints propagate correctly (GitHub #8765).
+                    try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                } else if (self.hasDirectNumeralConstraint(resolved.desc.content)) {
+                    // Direct flex var with numeric constraint - don't generalize.
+                    // This ensures numeric literals like `[0]` inside lambdas stay monomorphic
+                    // so that later usage can constrain them to the correct type (GitHub #8666).
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
-                    // Rank unchanged - safe to generalize
+                    // Rank unchanged, generalizing a lambda, and no numeral constraint - safe to generalize
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
@@ -228,10 +229,9 @@ pub const Generalizer = struct {
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
     }
 
-    /// Check if a type content is a flex var with a from_numeral constraint.
-    /// Numeric flex vars should not be generalized so that later usages can
-    /// constrain them to a specific numeric type (e.g., I64, Dec, etc.).
-    fn hasNumeralConstraint(self: *Self, content: Content) bool {
+    /// Check if a type content is a DIRECT flex var with a from_numeral constraint.
+    /// Used to prevent generalization of numeric literals inside lambda bodies.
+    fn hasDirectNumeralConstraint(self: *Self, content: Content) bool {
         switch (content) {
             .flex => |flex| {
                 const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
