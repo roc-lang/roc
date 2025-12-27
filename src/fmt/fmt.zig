@@ -2165,9 +2165,8 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                // Add space after # unless next char is space or it's a doc comment (## followed by space)
-                const is_doc_comment = comment_text.len >= 2 and comment_text[0] == '#' and comment_text[1] == ' ';
-                if (comment_text.len > 0 and comment_text[0] != ' ' and !is_doc_comment) {
+                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
@@ -2203,9 +2202,8 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                // Add space after # unless next char is space or it's a doc comment (## followed by space)
-                const is_doc_comment = comment_text.len >= 2 and comment_text[0] == '#' and comment_text[1] == ' ';
-                if (comment_text.len > 0 and comment_text[0] != ' ' and !is_doc_comment) {
+                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
