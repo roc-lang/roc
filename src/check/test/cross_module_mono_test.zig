@@ -609,3 +609,22 @@ test "cross-module mono: static dispatch with chained method calls" {
     // The monomorphizer should be ready to process specializations
     try testing.expectEqual(@as(u32, 0), mono.specialization_counter);
 }
+
+// NOTE: This test documents a gap in the current type checker implementation.
+// The Rust compiler catches polymorphic recursion (f = |x| f([x])) as a "CIRCULAR TYPE"
+// error during type checking. However, the Zig type checker currently does NOT catch
+// this case because:
+// 1. The occurs check is only triggered after 8 levels of recursion depth (max_depth_before_occurs)
+// 2. Simple polymorphic recursion like `f = |x| f([x])` doesn't reach that depth
+//
+// Until the type checker is enhanced to catch this earlier (e.g., by running an occurs
+// check after unifying recursive function definitions), the monomorphizer's polymorphic
+// recursion detection serves as a necessary fallback.
+//
+// TODO: Enhance the type checker to detect infinite types in recursive definitions,
+// then remove the polymorphic recursion check from the monomorphizer and uncomment this test.
+//
+// test "cross-module mono: polymorphic recursion is caught by type checker, not monomorphizer" {
+//     const source = "\\\\f = |x| f([x])";
+//     ... (test that verifies checker.problems.len() > 0)
+// }
