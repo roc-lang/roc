@@ -712,6 +712,19 @@ test "e_low_level_lambda - List.concat with Str.to_utf8 inside lambda (issue 861
     try testing.expectEqualStrings("[0, 97, 98, 99]", value);
 }
 
+test "top-level List.concat with Str.to_utf8 (value restriction check)" {
+    // This tests whether value restriction at top-level causes issues
+    // similar to what we saw when applying it to local bindings
+    const src =
+        \\line = "abc"
+        \\result = line.to_utf8().concat([0])
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("[97, 98, 99, 0]", value);
+}
+
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
     const src =
         \\x = List.concat(["hello", "world"], ["foo", "bar"])
