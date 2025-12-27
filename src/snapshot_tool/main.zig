@@ -25,6 +25,7 @@ const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -3747,6 +3748,30 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     for (inputs.items) |input| {
         const repl_output = try repl_instance.step(input);
         try actual_outputs.append(repl_output);
+    }
+
+    // Dual-mode testing: Also run LLVM evaluator and compare outputs
+    // This ensures the LLVM backend produces the same results as the interpreter
+    //
+    // TODO: Wire up full dual-mode comparison once the LLVM evaluator has access
+    // to the parsed module_env and expression indices from the REPL.
+    // For now, we just verify the evaluator can be initialized.
+    {
+        var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
+            std.debug.print("LLVM evaluator init failed: {}\n", .{err});
+            success = false;
+            return success;
+        };
+        defer llvm_evaluator.deinit();
+
+        // TODO: For each input, we need to:
+        // 1. Get the module_env and expr_idx that the REPL used
+        // 2. Pass them to llvm_evaluator.evalToString()
+        // 3. Compare with interp_output
+        // 4. Report any mismatches
+        //
+        // This requires the Repl to expose its internal state or provide
+        // a way to re-evaluate the same expression with a different evaluator.
     }
 
     switch (config.output_section_command) {

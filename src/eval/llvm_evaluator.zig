@@ -93,6 +93,7 @@ pub const LlvmEvaluator = struct {
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
     ) Error!i64 {
+        _ = self;
         _ = module_env;
         _ = expr_idx;
 
