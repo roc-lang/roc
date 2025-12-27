@@ -3207,9 +3207,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Numeric literals with from_numeral constraints should unify directly
             // so that the concrete type propagates back to the definition site.
             // This fixes GitHub issue #8666 where polymorphic numerics defaulted to Dec.
+            // Types with nested numeral constraints (GitHub #8765) also skip instantiation,
+            // controlled by the copy_on_instantiate flag set during generalization.
             const should_instantiate = blk: {
                 if (resolved_pat.desc.rank != Rank.generalized) break :blk false;
-                // Don't instantiate if this has a from_numeral constraint
+                // Check the copy_on_instantiate flag set during generalization
+                if (!resolved_pat.desc.copy_on_instantiate) break :blk false;
+                // Don't instantiate if this has a from_numeral constraint (direct numeral)
                 if (resolved_pat.desc.content == .flex) {
                     const flex = resolved_pat.desc.content.flex;
                     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);

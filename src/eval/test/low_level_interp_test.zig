@@ -3058,3 +3058,22 @@ test "issue 8750: List.fold render value" {
     defer test_allocator.free(rendered);
     try testing.expectEqualStrings("6", rendered);
 }
+
+test "issue 8765: Box.unbox with record containing numeric literal" {
+    // Regression test for issue #8765 - Box.unbox loses type resolution when the
+    // boxed value contains a record with numeric literals. The bug was that numeric
+    // literals in nested structures weren't propagating their constraint information
+    // through Box.unbox, causing type inference to fail.
+    const src =
+        \\update = |boxed| {
+        \\    { count } = Box.unbox(boxed)
+        \\    count + 1
+        \\}
+        \\initial = Box.box({ count: 0 })
+        \\result = update(initial)
+    ;
+
+    const result = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(result);
+    try testing.expectEqualStrings("1", result);
+}

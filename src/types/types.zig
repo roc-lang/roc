@@ -78,7 +78,15 @@ pub const TypeScope = struct {
 };
 
 /// A type descriptor
-pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
+pub const Descriptor = struct {
+    content: Content,
+    rank: Rank,
+    /// Set to false during generalization if this type contains unresolved numeric literals.
+    /// When false, the type should not be instantiated at lookup sites, even if
+    /// generalized, to preserve constraint propagation (GitHub #8765).
+    copy_on_instantiate: bool = true,
+    mark: Mark,
+};
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
 /// Top-level definitions have rank 1. A let inside a top-level definition gets rank 2, and so on.

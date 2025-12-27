@@ -602,6 +602,13 @@ pub const Store = struct {
         self.descs.set(desc_idx, desc);
     }
 
+    /// Set the copy_on_instantiate flag for a descriptor
+    pub fn setDescCopyOnInstantiate(self: *Self, desc_idx: DescStore.Idx, copy_on_instantiate: bool) void {
+        var desc = self.descs.get(desc_idx);
+        desc.copy_on_instantiate = copy_on_instantiate;
+        self.descs.set(desc_idx, desc);
+    }
+
     // resolvers //
 
     /// Given a type var, follow all redirects until finding the root descriptor

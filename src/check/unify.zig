@@ -393,6 +393,10 @@ const Unifier = struct {
         self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            // Preserve copy_on_instantiate if either var has it false - this ensures
+            // types marked as "don't instantiate" during generalization keep that property
+            // through unification (GitHub #8765)
+            .copy_on_instantiate = vars.a.desc.copy_on_instantiate and vars.b.desc.copy_on_instantiate,
             .mark = Mark.none,
         });
     }

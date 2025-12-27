@@ -205,21 +205,21 @@ pub const Generalizer = struct {
                 if (@intFromEnum(resolved.desc.rank) < rank_to_generalize_int) {
                     // Rank was lowered during adjustment - variable escaped
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
-                } else if (self.hasNumeralConstraint(resolved.desc.content)) {
-                    // Flex var with numeric constraint - don't generalize at ANY rank.
+                } else if (self.hasDirectNumeralConstraint(resolved.desc.content)) {
+                    // Direct flex var with numeric constraint - don't generalize.
                     // This ensures numeric literals like `x = 15` stay monomorphic so that
-                    // later usage like `List.get(list, x)` can constrain x to U64.
-                    // Without this, let-generalization would create a fresh copy at each use,
-                    // leaving the original as an unconstrained flex var that defaults to Dec
-                    // at runtime, causing panics when used as integer indices (GitHub #8666).
-                    //
-                    // Note: Polymorphic functions like `|a| a + 1` still work correctly because
-                    // the numeric literal `1` inside the lambda body gets its own type variable
-                    // that will be instantiated fresh for each call to the function.
+                    // later usage like `List.get(list, x)` can constrain x to U64 (GitHub #8666).
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Rank unchanged - safe to generalize
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
+
+                    // Check if this type contains numeric constraints in nested structures.
+                    // If so, mark it as non-copyable to prevent instantiation from breaking
+                    // constraint propagation (GitHub #8765).
+                    if (self.containsNestedNumeralConstraint(resolved.var_)) {
+                        self.store.setDescCopyOnInstantiate(resolved.desc_idx, false);
+                    }
                 }
             }
         }
@@ -228,10 +228,9 @@ pub const Generalizer = struct {
         var_pool.ranks.items[rank_to_generalize_int].clearRetainingCapacity();
     }
 
-    /// Check if a type content is a flex var with a from_numeral constraint.
-    /// Numeric flex vars should not be generalized so that later usages can
-    /// constrain them to a specific numeric type (e.g., I64, Dec, etc.).
-    fn hasNumeralConstraint(self: *Self, content: Content) bool {
+    /// Check if a type content is a DIRECT flex var with a from_numeral constraint.
+    /// Used to prevent generalization of simple numeric literals like `x = 15`.
+    fn hasDirectNumeralConstraint(self: *Self, content: Content) bool {
         switch (content) {
             .flex => |flex| {
                 const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
@@ -244,6 +243,67 @@ pub const Generalizer = struct {
             },
             else => return false,
         }
+    }
+
+    /// Recursively check if a type contains any from_numeral constraint in nested structures.
+    /// This is computed once during generalization and stored in copy_on_instantiate flag,
+    /// avoiding repeated recursive traversals at each lookup site (GitHub #8765).
+    fn containsNestedNumeralConstraint(self: *Self, var_: Var) bool {
+        var visited = std.AutoHashMap(Var, void).init(self.rank_adjusted_vars.allocator);
+        defer visited.deinit();
+        return self.varContainsNumeralConstraint(var_, &visited);
+    }
+
+    fn varContainsNumeralConstraint(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
+        const resolved = self.store.resolveVar(var_);
+
+        if (visited.contains(resolved.var_)) return false;
+        visited.put(resolved.var_, {}) catch return false;
+
+        return switch (resolved.desc.content) {
+            .flex => |flex| blk: {
+                const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
+                for (constraints) |constraint| {
+                    if (constraint.origin == .from_numeral) break :blk true;
+                }
+                break :blk false;
+            },
+            .rigid, .err => false,
+            .alias => |alias| self.varContainsNumeralConstraint(self.store.getAliasBackingVar(alias), visited),
+            .recursion_var => |rec_var| self.varContainsNumeralConstraint(rec_var.structure, visited),
+            .structure => |flat_type| self.flatTypeContainsNumeralConstraint(flat_type, visited),
+        };
+    }
+
+    fn flatTypeContainsNumeralConstraint(self: *Self, flat_type: FlatType, visited: *std.AutoHashMap(Var, void)) bool {
+        return switch (flat_type) {
+            .tuple => |tuple| blk: {
+                for (self.store.sliceVars(tuple.elems)) |elem_var| {
+                    if (self.varContainsNumeralConstraint(elem_var, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .nominal_type => |nominal| blk: {
+                var arg_iter = self.store.iterNominalArgs(nominal);
+                while (arg_iter.next()) |arg_var| {
+                    if (self.varContainsNumeralConstraint(arg_var, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (self.store.getRecordFieldsSlice(record.fields).items(.var_)) |field_var| {
+                    if (self.varContainsNumeralConstraint(field_var, visited)) break :blk true;
+                }
+                break :blk self.varContainsNumeralConstraint(record.ext, visited);
+            },
+            .record_unbound => |fields| blk: {
+                for (self.store.getRecordFieldsSlice(fields).items(.var_)) |field_var| {
+                    if (self.varContainsNumeralConstraint(field_var, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_record, .empty_tag_union => false,
+        };
     }
 
     // adjust rank //
