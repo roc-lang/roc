@@ -610,21 +610,93 @@ test "cross-module mono: static dispatch with chained method calls" {
     try testing.expectEqual(@as(u32, 0), mono.specialization_counter);
 }
 
-// NOTE: This test documents a gap in the current type checker implementation.
-// The Rust compiler catches polymorphic recursion (f = |x| f([x])) as a "CIRCULAR TYPE"
-// error during type checking. However, the Zig type checker currently does NOT catch
-// this case because:
-// 1. The occurs check is only triggered after 8 levels of recursion depth (max_depth_before_occurs)
-// 2. Simple polymorphic recursion like `f = |x| f([x])` doesn't reach that depth
-//
-// Until the type checker is enhanced to catch this earlier (e.g., by running an occurs
-// check after unifying recursive function definitions), the monomorphizer's polymorphic
-// recursion detection serves as a necessary fallback.
-//
-// TODO: Enhance the type checker to detect infinite types in recursive definitions,
-// then remove the polymorphic recursion check from the monomorphizer and uncomment this test.
-//
-// test "cross-module mono: polymorphic recursion is caught by type checker, not monomorphizer" {
-//     const source = "\\\\f = |x| f([x])";
-//     ... (test that verifies checker.problems.len() > 0)
-// }
+test "type checker catches polymorphic recursion (infinite type)" {
+    // This test verifies that polymorphic recursion (f = |x| f([x])) is caught
+    // during type checking as a circular/infinite type.
+    //
+    // The pattern `f = |x| f([x])` would require:
+    //   f : a -> b
+    //   But the recursive call passes [x] (List a), so we'd need:
+    //   f : List a -> b
+    //   This means a = List a, which is an infinite type.
+    //
+    // With the proper occurs check in unification, this is caught during type checking,
+    // not during monomorphization.
+
+    const source =
+        \\f = |x| f([x])
+    ;
+
+    // Initialize test environment
+    const gpa = testing.allocator;
+
+    const module_env = try gpa.create(ModuleEnv);
+    defer gpa.destroy(module_env);
+
+    const parse_ast = try gpa.create(parse.AST);
+    defer gpa.destroy(parse_ast);
+
+    const can_instance = try gpa.create(Can);
+    defer gpa.destroy(can_instance);
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+
+    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
+    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
+    defer builtin_module.deinit();
+
+    module_env.* = try ModuleEnv.init(gpa, source);
+    defer module_env.deinit();
+
+    module_env.common.source = source;
+    module_env.module_name = "Test";
+    module_env.module_name_idx = try module_env.insertIdent(base.Ident.for_text("Test"));
+    try module_env.common.calcLineStarts(gpa);
+
+    try Can.populateModuleEnvs(&module_envs, module_env, builtin_module.env, builtin_indices);
+
+    parse_ast.* = try parse.parse(&module_env.common, gpa);
+    defer parse_ast.deinit(gpa);
+    parse_ast.store.emptyScratch();
+
+    try module_env.initCIRFields("Test");
+
+    can_instance.* = try Can.init(module_env, parse_ast, &module_envs);
+    defer can_instance.deinit();
+
+    try can_instance.canonicalizeFile();
+    try can_instance.validateForChecking();
+
+    const module_builtin_ctx: Check.BuiltinContext = .{
+        .module_name = try module_env.insertIdent(base.Ident.for_text("Test")),
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_module.env,
+        .builtin_indices = builtin_indices,
+    };
+
+    var imported_envs_list = std.ArrayList(*const ModuleEnv).empty;
+    defer imported_envs_list.deinit(gpa);
+    try imported_envs_list.append(gpa, builtin_module.env);
+
+    module_env.imports.resolveImports(module_env, imported_envs_list.items);
+
+    var checker = try Check.init(
+        gpa,
+        &module_env.types,
+        module_env,
+        imported_envs_list.items,
+        &module_envs,
+        &module_env.store.regions,
+        module_builtin_ctx,
+    );
+    defer checker.deinit();
+
+    try checker.checkFile();
+
+    // The key assertion: type checking should catch the infinite type error.
+    // This proves we don't need the polymorphic recursion detection in the monomorphizer.
+    try testing.expect(checker.problems.len() > 0);
+}

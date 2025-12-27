@@ -250,13 +250,6 @@ pub const Diagnostic = union(enum) {
         suggested_name: Ident.Idx,
         region: Region,
     },
-    /// Polymorphic recursion detected during monomorphization.
-    /// This occurs when a function calls itself with a different type at each
-    /// recursive call, which would require infinite specializations.
-    polymorphic_recursion: struct {
-        function_name: Ident.Idx,
-        region: Region,
-    },
     break_outside_loop: struct {
         region: Region,
     },
@@ -326,7 +319,6 @@ pub const Diagnostic = union(enum) {
             .type_var_marked_unused => |d| d.region,
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
-            .polymorphic_recursion => |d| d.region,
             .break_outside_loop => |d| d.region,
         };
     }

@@ -1055,19 +1055,9 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
         return;
     }
 
-    // Check if we've exceeded recursion depth (fuel-based cutoff for polymorphic recursion)
-    if (self.recursion_depth >= self.max_recursion_depth) {
-        // Polymorphic recursion detected - create an error specialization
-        try self.createPolymorphicRecursionError(pending, key);
-        return;
-    }
-
-    // Check for polymorphic recursion: same function with growing type structure
-    if (self.detectPolymorphicRecursion(key)) {
-        // Polymorphic recursion detected - create an error specialization
-        try self.createPolymorphicRecursionError(pending, key);
-        return;
-    }
+    // Polymorphic recursion (infinite types) should be caught by the type checker,
+    // so we should never hit the recursion depth limit here. If we do, it's a bug.
+    std.debug.assert(self.recursion_depth < self.max_recursion_depth);
 
     // Get the partial proc
     const partial = self.partial_procs.get(pending.original_ident) orelse return;
@@ -1131,77 +1121,6 @@ fn makeSpecialization(self: *Self, pending: *PendingSpecialization) !void {
     const specialized = SpecializedProc{
         .specialized_ident = specialized_ident,
         .body_expr = specialized_body,
-        .arg_patterns = specialized_args,
-        .concrete_type = pending.concrete_type,
-        .original_ident = pending.original_ident,
-    };
-
-    try self.specialized.put(key, specialized);
-}
-
-/// Detect polymorphic recursion patterns.
-/// Returns true if we detect the same function being specialized with increasingly
-/// complex types, which would indicate non-terminating monomorphization.
-fn detectPolymorphicRecursion(self: *const Self, new_key: SpecializationKey) bool {
-    // Look through the specialization stack for the same function
-    var same_function_count: u32 = 0;
-    for (self.specialization_stack.items) |stack_key| {
-        if (stack_key.original_ident == new_key.original_ident) {
-            same_function_count += 1;
-            // If we see the same function more than 3 times on the stack,
-            // and with different type hashes, it's likely polymorphic recursion
-            if (same_function_count >= 3 and stack_key.type_hash != new_key.type_hash) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/// Create an error specialization for polymorphic recursion.
-/// This creates a SpecializedProc with a runtime error body instead of the
-/// normal duplicated body, ensuring that any call to this specialization
-/// will produce a clear error message.
-fn createPolymorphicRecursionError(
-    self: *Self,
-    pending: *const PendingSpecialization,
-    key: SpecializationKey,
-) !void {
-    // Get the partial proc for region info
-    const partial = self.partial_procs.get(pending.original_ident) orelse return;
-
-    // Get the region from the call site or the function body
-    const region = if (pending.call_site) |call_site|
-        self.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(call_site)))
-    else
-        self.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(partial.body_expr)));
-
-    // Create a diagnostic for the polymorphic recursion error
-    const diagnostic = try self.module_env.addDiagnostic(CIR.Diagnostic{
-        .polymorphic_recursion = .{
-            .function_name = pending.original_ident,
-            .region = region,
-        },
-    });
-
-    // Create a runtime error expression with the diagnostic
-    const error_body = try self.module_env.store.addExpr(Expr{
-        .e_runtime_error = .{ .diagnostic = diagnostic },
-    }, region);
-
-    // Create the specialized name (may already exist from requestSpecialization)
-    const specialized_ident = try self.createSpecializedName(
-        pending.original_ident,
-        pending.concrete_type,
-    );
-
-    // Duplicate argument patterns (they're still valid)
-    const specialized_args = try self.duplicatePatternSpan(partial.arg_patterns);
-
-    // Create the specialized proc with the error body
-    const specialized = SpecializedProc{
-        .specialized_ident = specialized_ident,
-        .body_expr = error_body,
         .arg_patterns = specialized_args,
         .concrete_type = pending.concrete_type,
         .original_ident = pending.original_ident,
@@ -2452,45 +2371,6 @@ test "monomorphizer: recursion depth tracking" {
 
     // Stack should be empty
     try testing.expectEqual(@as(usize, 0), mono.specialization_stack.items.len);
-}
-
-test "monomorphizer: polymorphic recursion detection" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var mono = Self.init(allocator, module_env, &module_env.types);
-    defer mono.deinit();
-
-    const func_ident = base.Ident.Idx{
-        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
-        .idx = 42,
-    };
-
-    // Empty stack - no recursion
-    const key1 = SpecializationKey{ .original_ident = func_ident, .type_hash = 100 };
-    try testing.expect(!mono.detectPolymorphicRecursion(key1));
-
-    // Add same function with different type hashes to stack
-    try mono.specialization_stack.append(allocator, .{ .original_ident = func_ident, .type_hash = 200 });
-    try mono.specialization_stack.append(allocator, .{ .original_ident = func_ident, .type_hash = 300 });
-    try mono.specialization_stack.append(allocator, .{ .original_ident = func_ident, .type_hash = 400 });
-
-    // Now should detect polymorphic recursion
-    try testing.expect(mono.detectPolymorphicRecursion(key1));
-
-    // Different function should not trigger detection
-    const other_ident = base.Ident.Idx{
-        .attributes = .{ .effectful = false, .ignored = false, .reassignable = false },
-        .idx = 99,
-    };
-    const other_key = SpecializationKey{ .original_ident = other_ident, .type_hash = 100 };
-    try testing.expect(!mono.detectPolymorphicRecursion(other_key));
 }
 
 test "monomorphizer: process empty pending" {
