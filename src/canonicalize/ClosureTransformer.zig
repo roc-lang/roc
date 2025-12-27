@@ -1213,31 +1213,6 @@ pub fn detectRecursionInLambdaSet(
     return false;
 }
 
-/// Handle an empty lambda set at a call site.
-///
-/// This generates a runtime error expression for cases where a closure
-/// is called but the lambda set is empty. This shouldn't happen in valid
-/// programs - it indicates either a compiler bug or a program that's guaranteed
-/// to fail at runtime.
-pub fn handleEmptyLambdaSet(
-    self: *Self,
-    call_site: Expr.Idx,
-) !Expr.Idx {
-    // Get the region for the call site for error reporting
-    const region = self.module_env.store.getRegionAt(@enumFromInt(@intFromEnum(call_site)));
-
-    // Create a diagnostic for the empty lambda set error
-    const diagnostic = try self.module_env.addDiagnostic(CIR.Diagnostic{
-        .empty_lambda_set = .{
-            .region = region,
-        },
-    });
-
-    // Create a runtime error expression with the diagnostic
-    return try self.module_env.store.addExpr(Expr{
-        .e_runtime_error = .{ .diagnostic = diagnostic },
-    }, region);
-}
 
 /// Check if a lambda set is empty (no closures can reach the variable).
 pub fn isLambdaSetEmpty(lambda_set: *const LambdaSet) bool {
@@ -2198,11 +2173,8 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                 .e_lookup_local => |lookup| {
                     // Check if this pattern has a lambda set (one or more closures)
                     if (self.pattern_lambda_sets.getPtr(lookup.pattern_idx)) |lambda_set| {
-                        // Check for empty lambda set - this indicates unreachable code
-                        // or a compiler bug where no closures can flow to this variable
-                        if (isLambdaSetEmpty(lambda_set)) {
-                            return try self.handleEmptyLambdaSet(expr_idx);
-                        }
+                        // Empty lambda set is a compiler bug - no closures can flow to this variable
+                        std.debug.assert(!isLambdaSetEmpty(lambda_set));
                         // Generate a dispatch match expression for all possible closures
                         return try self.generateLambdaSetDispatchMatch(
                             call.func,

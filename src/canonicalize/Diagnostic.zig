@@ -257,11 +257,6 @@ pub const Diagnostic = union(enum) {
         function_name: Ident.Idx,
         region: Region,
     },
-    /// Empty lambda set at call site - no closures can reach this variable.
-    /// This indicates a compiler bug or unreachable code.
-    empty_lambda_set: struct {
-        region: Region,
-    },
     break_outside_loop: struct {
         region: Region,
     },
@@ -332,7 +327,6 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .polymorphic_recursion => |d| d.region,
-            .empty_lambda_set => |d| d.region,
             .break_outside_loop => |d| d.region,
         };
     }
