@@ -25,7 +25,8 @@ It has the type:
 
 But I expected it to be:
 
-    Bool
+    [C(a), ..[False, True, .._others]]
+      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig

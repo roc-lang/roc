@@ -60,6 +60,9 @@ pub fn main() !void {
     if (fileExists("src/cli/cli_error.zig")) {
         try mod_files.append(gpa, try gpa.dupe(u8, "src/cli/cli_error.zig"));
     }
+    if (fileExists("src/snapshot_tool/main.zig")) {
+        try mod_files.append(gpa, try gpa.dupe(u8, "src/snapshot_tool/main.zig"));
+    }
 
     if (test_files.items.len == 0) {
         try stdout.print("{s}[OK]{s} No test files found to check\n", .{ TermColor.green, TermColor.reset });

@@ -341,8 +341,11 @@ pub const ComptimeEvaluator = struct {
     /// This replaces the expression in-place so future references see the constant value
     fn tryFoldConstant(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, stack_value: eval_mod.StackValue) !void {
         const def = self.env.store.getDef(def_idx);
-        const expr_idx = def.expr;
+        try self.tryFoldExpr(def.expr, stack_value);
+    }
 
+    /// Fold an expression to a constant value. Takes expr_idx directly for standalone expressions.
+    fn tryFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // Don't fold if the expression is already a constant
         const old_expr = self.env.store.getExpr(expr_idx);
         if (old_expr == .e_num or old_expr == .e_zero_argument_tag) {
@@ -376,15 +379,19 @@ pub const ComptimeEvaluator = struct {
         if (is_tag_union) {
             // Tag unions can be scalars (no payload) or tuples (with payload)
             switch (layout.tag) {
-                .scalar => try self.foldTagUnionScalar(def_idx, expr_idx, stack_value),
-                .tuple => try self.foldTagUnionTuple(def_idx, expr_idx, stack_value),
-                else => return error.NotImplemented,
+                .scalar => try self.foldTagUnionScalar(expr_idx, stack_value),
+                .tuple => try self.foldTagUnionTuple(expr_idx, stack_value),
+                .tag_union => try self.foldTagUnionWithPayload(expr_idx, stack_value),
+                // Record, list, closure, box layouts for tag unions can't be constant-folded
+                .record, .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => return,
             }
         } else {
-            // Not a tag union - must be a scalar numeric type
+            // Not a tag union - check layout type
             switch (layout.tag) {
                 .scalar => try self.foldScalar(expr_idx, stack_value, layout),
-                else => return error.NotImplemented,
+                .tuple => try self.foldTuple(expr_idx, stack_value),
+                // These remain as-is - no constant folding needed or possible
+                .closure, .record, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => return,
             }
         }
     }
@@ -428,29 +435,53 @@ pub const ComptimeEvaluator = struct {
                 // Handle fractional/decimal types (Dec, F32, F64)
                 const frac_precision = layout.data.scalar.data.frac;
 
-                // For Dec type, extract the i128 value and fold as Dec
-                if (frac_precision == .dec) {
-                    // Dec is stored as RocDec struct with .num field of type i128
-                    // The value is scaled by 10^18, so we need to unscale it to get the literal value
-                    const dec_value = stack_value.asDec(self.get_ops());
-                    const scaled_value = dec_value.num;
+                switch (frac_precision) {
+                    .dec => {
+                        // Dec is stored as RocDec struct with .num field of type i128
+                        // The value is scaled by 10^18, so we need to unscale it to get the literal value
+                        const dec_value = stack_value.asDec(self.get_ops());
+                        const scaled_value = dec_value.num;
 
-                    // Unscale by dividing by 10^18 to get the original literal value
-                    const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+                        // Unscale by dividing by 10^18 to get the original literal value
+                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
 
-                    // Create IntValue and fold as Dec
-                    const int_value = CIR.IntValue{
-                        .bytes = @bitCast(unscaled_value),
-                        .kind = .i128,
-                    };
+                        // Create IntValue and fold as Dec
+                        const int_value = CIR.IntValue{
+                            .bytes = @bitCast(unscaled_value),
+                            .kind = .i128,
+                        };
 
-                    try self.env.store.replaceExprWithNum(expr_idx, int_value, .dec);
-                } else {
-                    // For F32/F64, we don't fold yet
-                    return error.NotImplemented;
+                        try self.env.store.replaceExprWithNum(expr_idx, int_value, .dec);
+                    },
+                    .f32 => {
+                        // Extract f32 value and fold to e_frac_f32
+                        const f32_value = stack_value.asF32();
+                        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                        self.env.store.nodes.set(node_idx, .{
+                            .tag = .expr_frac_f32,
+                            .data_1 = @bitCast(f32_value),
+                            .data_2 = 1, // has_suffix = true (explicitly typed)
+                            .data_3 = 0,
+                        });
+                    },
+                    .f64 => {
+                        // Extract f64 value and fold to e_frac_f64
+                        const f64_value = stack_value.asF64();
+                        const f64_bits: u64 = @bitCast(f64_value);
+                        const low: u32 = @truncate(f64_bits);
+                        const high: u32 = @truncate(f64_bits >> 32);
+                        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                        self.env.store.nodes.set(node_idx, .{
+                            .tag = .expr_frac_f64,
+                            .data_1 = low,
+                            .data_2 = high,
+                            .data_3 = 1, // has_suffix = true (explicitly typed)
+                        });
+                    },
                 }
             },
-            else => return error.NotImplemented,
+            // Str and opaque_ptr scalars can't be meaningfully folded to simpler expressions
+            .str, .opaque_ptr => return,
         }
     }
 
@@ -487,8 +518,7 @@ pub const ComptimeEvaluator = struct {
     }
 
     /// Fold a tag union (represented as scalar, like Bool) to an e_zero_argument_tag expression
-    fn foldTagUnionScalar(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        _ = def_idx; // unused now that we get rt_var from stack_value
+    fn foldTagUnionScalar(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // The value is the tag index directly (scalar integer).
         // The caller already verified layout.tag == .scalar, and scalar tag unions are always ints.
         std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
@@ -533,9 +563,9 @@ pub const ComptimeEvaluator = struct {
         );
     }
 
-    /// Fold a tag union (represented as tuple) to an e_zero_argument_tag expression
-    fn foldTagUnionTuple(self: *ComptimeEvaluator, def_idx: CIR.Def.Idx, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
-        _ = def_idx; // unused now that we get rt_var from stack_value
+    /// Fold a tag union (represented as tuple) to a constant expression
+    /// Handles both zero-argument tags and tags with payloads
+    fn foldTagUnionTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
         // Tag unions are now represented as tuples (payload, tag)
         var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
 
@@ -543,9 +573,9 @@ pub const ComptimeEvaluator = struct {
         const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
         const tag_field = try acc.getElement(1, tag_elem_rt_var);
 
-        // Extract tag index
+        // Extract tag index - if not a scalar int, can't fold
         if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
-            return error.NotImplemented;
+            return;
         }
         const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
         const tag_index: usize = @intCast(tmp_sv.asI128());
@@ -558,22 +588,17 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
+        // If tag index is out of range, can't fold
         if (tag_index >= tag_list.items.len) {
-            return error.NotImplemented;
+            return;
         }
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
 
-        // Only fold zero-argument tags (like True, False, Ok with no payload variant, etc.)
-        if (arg_vars.len != 0) {
-            return error.NotImplemented; // Has payload, can't fold to e_zero_argument_tag
-        }
-
         // Get variant_var and ext_var from type information
         const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
         const variant_var: types_mod.Var = rt_var;
-        // ext_var will be set if this is a tag_union type
         var ext_var: types_mod.Var = undefined;
 
         if (resolved.desc.content == .structure) {
@@ -582,17 +607,629 @@ pub const ComptimeEvaluator = struct {
             }
         }
 
-        // Get closure name - use an empty ident for now (we don't need it for folded constants)
-        const closure_name = tag_info.name; // Reuse tag name as closure name
+        if (arg_vars.len == 0) {
+            // Zero-argument tag (like True, False, Ok with no payload variant, etc.)
+            const closure_name = tag_info.name;
 
-        // Replace the expression with e_zero_argument_tag
-        try self.env.store.replaceExprWithZeroArgumentTag(
-            expr_idx,
-            closure_name,
-            variant_var,
-            ext_var,
-            tag_info.name,
-        );
+            try self.env.store.replaceExprWithZeroArgumentTag(
+                expr_idx,
+                closure_name,
+                variant_var,
+                ext_var,
+                tag_info.name,
+            );
+        } else {
+            // Tag with payload - get the payload value (element 0)
+            const payload_rt_var = try self.interpreter.runtime_types.fresh();
+            const payload_value = try acc.getElement(0, payload_rt_var);
+
+            // Get source expression's region for folded elements
+            const region = self.env.store.getExprRegion(expr_idx);
+
+            // Create expressions for each argument
+            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
+            defer arg_indices.deinit();
+
+            // Check if payload is a tuple (multiple args) or single value
+            if (payload_value.layout.tag == .tuple and arg_vars.len > 1) {
+                // Multiple arguments - payload is a tuple
+                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
+                for (0..arg_vars.len) |i| {
+                    const arg_rt_var = arg_vars[i];
+                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
+                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
+                    try arg_indices.append(arg_expr_idx);
+                }
+            } else {
+                // Single argument
+                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
+                try arg_indices.append(arg_expr_idx);
+            }
+
+            // Replace the original expression with an e_tag
+            try self.env.store.replaceExprWithTag(expr_idx, tag_info.name, arg_indices.items);
+        }
+    }
+
+    /// Fold a tag union with explicit tag_union layout
+    /// Handles both zero-argument tags and tags with payloads
+    fn foldTagUnionWithPayload(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        // Get the tag union data from the layout store
+        const tag_union_layout = stack_value.layout.data.tag_union;
+        const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
+
+        // Read the discriminant
+        const base_ptr = stack_value.ptr orelse return;
+        const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
+        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+
+        // Get the runtime type variable from the StackValue
+        const rt_var = stack_value.rt_var;
+
+        // Get the list of tags for this union type
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        // If tag index is out of range, can't fold
+        if (tag_index >= tag_list.items.len) {
+            return;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        // Get variant_var and ext_var from type information
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = undefined;
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        if (arg_vars.len == 0) {
+            // Zero-argument tag
+            try self.env.store.replaceExprWithZeroArgumentTag(
+                expr_idx,
+                tag_info.name,
+                variant_var,
+                ext_var,
+                tag_info.name,
+            );
+        } else {
+            // Tag with payload - get the payload from the tag union
+            const variants = self.interpreter.runtime_layout_store.getTagUnionVariants(tag_union_data);
+            const variant = variants.get(tag_index);
+            const payload_layout = self.interpreter.runtime_layout_store.getLayout(variant.payload_layout);
+
+            // Payload is at offset 0 in our tag union layout
+            const payload_rt_var = try self.interpreter.runtime_types.fresh();
+            const payload_value = eval_mod.StackValue{
+                .layout = payload_layout,
+                .ptr = base_ptr,
+                .is_initialized = true,
+                .rt_var = payload_rt_var,
+            };
+
+            // Get source expression's region for folded elements
+            const region = self.env.store.getExprRegion(expr_idx);
+
+            // Create expressions for each argument
+            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
+            defer arg_indices.deinit();
+
+            // Check if payload is a tuple (multiple args) or single value
+            if (payload_layout.tag == .tuple and arg_vars.len > 1) {
+                // Multiple arguments - payload is a tuple
+                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
+                for (0..arg_vars.len) |i| {
+                    const arg_rt_var = arg_vars[i];
+                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
+                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
+                    try arg_indices.append(arg_expr_idx);
+                }
+            } else {
+                // Single argument
+                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
+                try arg_indices.append(arg_expr_idx);
+            }
+
+            // Replace the original expression with an e_tag
+            try self.env.store.replaceExprWithTag(expr_idx, tag_info.name, arg_indices.items);
+        }
+    }
+
+    /// Fold a tuple value by recursively folding each element
+    /// Creates constant expressions for each element and replaces the tuple expression
+    fn foldTuple(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx, stack_value: eval_mod.StackValue) !void {
+        // Get the tuple accessor
+        var accessor = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
+        const elem_count = accessor.getElementCount();
+
+        // If empty tuple, nothing to fold
+        if (elem_count == 0) {
+            return;
+        }
+
+        // Get the runtime type for the tuple to extract element types
+        const rt_var = stack_value.rt_var;
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+
+        // Extract element type variables from the tuple type
+        var elem_rt_vars = std.array_list.AlignedManaged(types_mod.Var, null).init(self.allocator);
+        defer elem_rt_vars.deinit();
+
+        if (resolved.desc.content == .structure) {
+            const struct_content = resolved.desc.content.structure;
+            if (struct_content == .tuple) {
+                const elems = self.interpreter.runtime_types.sliceVars(struct_content.tuple.elems);
+                for (elems) |elem_var| {
+                    try elem_rt_vars.append(elem_var);
+                }
+            }
+        }
+
+        // Create constant expressions for each element
+        var elem_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
+        defer elem_indices.deinit();
+
+        // Use source expression's region for folded elements
+        const region = self.env.store.getExprRegion(expr_idx);
+
+        for (0..elem_count) |i| {
+            // Get the runtime type variable for this element
+            const elem_rt_var = if (i < elem_rt_vars.items.len)
+                elem_rt_vars.items[i]
+            else
+                try self.interpreter.runtime_types.fresh();
+
+            // Get the element value
+            const elem_value = try accessor.getElement(i, elem_rt_var);
+
+            // Create a constant expression for this element
+            const elem_expr_idx = try self.createConstantExpr(elem_value, region);
+            try elem_indices.append(elem_expr_idx);
+        }
+
+        // Replace the original expression with a tuple of the constant expressions
+        try self.env.store.replaceExprWithTuple(expr_idx, elem_indices.items);
+    }
+
+    /// Create a new CIR expression representing a constant value from a StackValue.
+    /// This is used when we need to create NEW expressions (e.g., for tuple elements)
+    /// rather than modifying existing ones in-place.
+    fn createConstantExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
+        const layout = stack_value.layout;
+        const rt_var = stack_value.rt_var;
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+
+        // Check if it's a tag union type
+        const is_tag_union = resolved.desc.content == .structure and
+            resolved.desc.content.structure == .tag_union;
+
+        // Handle Bool type specially (u8 scalar with value 0 or 1)
+        if (layout.tag == .scalar and layout.data.scalar.tag == .int and
+            layout.data.scalar.data.int == .u8)
+        {
+            const val = stack_value.asI128();
+            if (val == 0 or val == 1) {
+                // This is likely a Bool value
+                return try self.createBoolExpr(val == 1, region);
+            }
+        }
+
+        if (is_tag_union) {
+            // Handle tag union types
+            switch (layout.tag) {
+                .scalar => return try self.createTagUnionScalarExpr(stack_value, region),
+                .tuple => return try self.createTagUnionTupleExpr(stack_value, region),
+                .tag_union => return try self.createTagUnionWithPayloadExpr(stack_value, region),
+                // These can't be constant-folded to expressions
+                .record, .list, .closure, .box, .box_of_zst, .list_of_zst, .zst => {
+                    return error.NotImplemented;
+                },
+            }
+        } else {
+            // Non-tag union types
+            switch (layout.tag) {
+                .scalar => return try self.createScalarExpr(stack_value, layout, region),
+                .tuple => return try self.createTupleExpr(stack_value, region),
+                // These can't be constant-folded
+                .closure, .record, .list, .tag_union, .box, .box_of_zst, .list_of_zst, .zst => {
+                    return error.NotImplemented;
+                },
+            }
+        }
+    }
+
+    /// Create a constant expression for a scalar value
+    fn createScalarExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, layout: layout_mod.Layout, region: base.Region) EvalError!CIR.Expr.Idx {
+        const scalar_tag = layout.data.scalar.tag;
+        switch (scalar_tag) {
+            .int => {
+                const value = stack_value.asI128();
+                const precision = layout.data.scalar.data.int;
+
+                const num_kind: CIR.NumKind = switch (precision) {
+                    .i8 => .i8,
+                    .i16 => .i16,
+                    .i32 => .i32,
+                    .i64 => .i64,
+                    .i128 => .i128,
+                    .u8 => .u8,
+                    .u16 => .u16,
+                    .u32 => .u32,
+                    .u64 => .u64,
+                    .u128 => .u128,
+                };
+
+                const int_value = CIR.IntValue{
+                    .bytes = @bitCast(value),
+                    .kind = switch (precision) {
+                        .u8, .u16, .u32, .u64, .u128 => .u128,
+                        .i8, .i16, .i32, .i64, .i128 => .i128,
+                    },
+                };
+
+                // Create a new e_num expression
+                const expr = CIR.Expr{
+                    .e_num = .{
+                        .value = int_value,
+                        .kind = num_kind,
+                    },
+                };
+                return try self.env.addExpr(expr, region);
+            },
+            .frac => {
+                const frac_precision = layout.data.scalar.data.frac;
+                switch (frac_precision) {
+                    .dec => {
+                        const dec_value = stack_value.asDec(self.get_ops());
+                        const scaled_value = dec_value.num;
+                        const unscaled_value = @divTrunc(scaled_value, builtins.dec.RocDec.one_point_zero_i128);
+
+                        const int_value = CIR.IntValue{
+                            .bytes = @bitCast(unscaled_value),
+                            .kind = .i128,
+                        };
+
+                        const expr = CIR.Expr{
+                            .e_num = .{
+                                .value = int_value,
+                                .kind = .dec,
+                            },
+                        };
+                        return try self.env.addExpr(expr, region);
+                    },
+                    .f32 => {
+                        const f32_value = stack_value.asF32();
+                        const expr = CIR.Expr{
+                            .e_frac_f32 = .{
+                                .value = f32_value,
+                                .has_suffix = true,
+                            },
+                        };
+                        return try self.env.addExpr(expr, region);
+                    },
+                    .f64 => {
+                        const f64_value = stack_value.asF64();
+                        const expr = CIR.Expr{
+                            .e_frac_f64 = .{
+                                .value = f64_value,
+                                .has_suffix = true,
+                            },
+                        };
+                        return try self.env.addExpr(expr, region);
+                    },
+                }
+            },
+            .str, .opaque_ptr => return error.NotImplemented,
+        }
+    }
+
+    /// Create a Bool expression (True or False tag)
+    fn createBoolExpr(self: *ComptimeEvaluator, is_true: bool, region: base.Region) EvalError!CIR.Expr.Idx {
+        const bool_rt_var = try self.interpreter.getCanonicalBoolRuntimeVar();
+        const resolved = self.interpreter.runtime_types.resolveVar(bool_rt_var);
+
+        const tag_name_str = if (is_true) "True" else "False";
+        const tag_name_ident = try self.env.insertIdent(base.Ident.for_text(tag_name_str));
+
+        const variant_var: types_mod.Var = bool_rt_var;
+        var ext_var: types_mod.Var = undefined;
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        const expr = CIR.Expr{
+            .e_zero_argument_tag = .{
+                .closure_name = tag_name_ident,
+                .variant_var = variant_var,
+                .ext_var = ext_var,
+                .name = tag_name_ident,
+            },
+        };
+        return try self.env.addExpr(expr, region);
+    }
+
+    /// Create a zero-argument tag expression for a scalar tag union
+    fn createTagUnionScalarExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
+        std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .int);
+        const tag_index: usize = @intCast(stack_value.asI128());
+        const rt_var = stack_value.rt_var;
+
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        std.debug.assert(tag_index < tag_list.items.len);
+        const tag_info = tag_list.items[tag_index];
+
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+        const variant_var: types_mod.Var = rt_var;
+        var ext_var: types_mod.Var = undefined;
+
+        if (resolved.desc.content == .structure) {
+            if (resolved.desc.content.structure == .tag_union) {
+                ext_var = resolved.desc.content.structure.tag_union.ext;
+            }
+        }
+
+        const expr = CIR.Expr{
+            .e_zero_argument_tag = .{
+                .closure_name = tag_info.name,
+                .variant_var = variant_var,
+                .ext_var = ext_var,
+                .name = tag_info.name,
+            },
+        };
+        return try self.env.addExpr(expr, region);
+    }
+
+    /// Create an expression for a tag union represented as a tuple
+    fn createTagUnionTupleExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
+        var acc = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
+
+        // Element 1 is the tag discriminant
+        const tag_elem_rt_var = try self.interpreter.runtime_types.fresh();
+        const tag_field = try acc.getElement(1, tag_elem_rt_var);
+
+        if (tag_field.layout.tag != .scalar or tag_field.layout.data.scalar.tag != .int) {
+            return error.NotImplemented;
+        }
+
+        const tmp_sv = eval_mod.StackValue{ .layout = tag_field.layout, .ptr = tag_field.ptr, .is_initialized = true, .rt_var = tag_elem_rt_var };
+        const tag_index: usize = @intCast(tmp_sv.asI128());
+        const rt_var = stack_value.rt_var;
+
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        if (tag_index >= tag_list.items.len) {
+            return error.NotImplemented;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        if (arg_vars.len == 0) {
+            // Zero-argument tag
+            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+            const variant_var: types_mod.Var = rt_var;
+            var ext_var: types_mod.Var = undefined;
+
+            if (resolved.desc.content == .structure) {
+                if (resolved.desc.content.structure == .tag_union) {
+                    ext_var = resolved.desc.content.structure.tag_union.ext;
+                }
+            }
+
+            const expr = CIR.Expr{
+                .e_zero_argument_tag = .{
+                    .closure_name = tag_info.name,
+                    .variant_var = variant_var,
+                    .ext_var = ext_var,
+                    .name = tag_info.name,
+                },
+            };
+            return try self.env.addExpr(expr, region);
+        } else {
+            // Tag with payload - get the payload value (element 0)
+            const payload_rt_var = try self.interpreter.runtime_types.fresh();
+            const payload_value = try acc.getElement(0, payload_rt_var);
+
+            // Create expressions for each argument
+            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
+            defer arg_indices.deinit();
+
+            // Check if payload is a tuple (multiple args) or single value
+            if (payload_value.layout.tag == .tuple and arg_vars.len > 1) {
+                // Multiple arguments - payload is a tuple
+                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
+                for (0..arg_vars.len) |i| {
+                    const arg_rt_var = arg_vars[i];
+                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
+                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
+                    try arg_indices.append(arg_expr_idx);
+                }
+            } else {
+                // Single argument
+                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
+                try arg_indices.append(arg_expr_idx);
+            }
+
+            // Create the span for args in extra_data
+            const extra_data_start = self.env.store.extra_data.len();
+            for (arg_indices.items) |arg_idx| {
+                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+            }
+
+            // Create and return the tag expression
+            const tag_expr = CIR.Expr{
+                .e_tag = .{
+                    .name = tag_info.name,
+                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                },
+            };
+            return try self.env.addExpr(tag_expr, region);
+        }
+    }
+
+    /// Create an expression for a tag union with explicit tag_union layout
+    fn createTagUnionWithPayloadExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
+        const tag_union_layout = stack_value.layout.data.tag_union;
+        const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
+
+        const base_ptr = stack_value.ptr orelse return error.NotImplemented;
+        const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
+        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+
+        const rt_var = stack_value.rt_var;
+
+        var tag_list = std.array_list.AlignedManaged(types_mod.Tag, null).init(self.allocator);
+        defer tag_list.deinit();
+        try self.interpreter.appendUnionTags(rt_var, &tag_list);
+
+        if (tag_index >= tag_list.items.len) {
+            return error.NotImplemented;
+        }
+
+        const tag_info = tag_list.items[tag_index];
+        const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
+
+        if (arg_vars.len == 0) {
+            // Zero-argument tag
+            const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+            const variant_var: types_mod.Var = rt_var;
+            var ext_var: types_mod.Var = undefined;
+
+            if (resolved.desc.content == .structure) {
+                if (resolved.desc.content.structure == .tag_union) {
+                    ext_var = resolved.desc.content.structure.tag_union.ext;
+                }
+            }
+
+            const expr = CIR.Expr{
+                .e_zero_argument_tag = .{
+                    .closure_name = tag_info.name,
+                    .variant_var = variant_var,
+                    .ext_var = ext_var,
+                    .name = tag_info.name,
+                },
+            };
+            return try self.env.addExpr(expr, region);
+        } else {
+            // Tag with payload - get the payload from the tag union
+            const variants = self.interpreter.runtime_layout_store.getTagUnionVariants(tag_union_data);
+            const variant = variants.get(tag_index);
+            const payload_layout = self.interpreter.runtime_layout_store.getLayout(variant.payload_layout);
+
+            // Payload is at the payload offset (which is 0 in our tag union layout)
+            const payload_rt_var = try self.interpreter.runtime_types.fresh();
+            const payload_value = eval_mod.StackValue{
+                .layout = payload_layout,
+                .ptr = base_ptr, // Payload is at offset 0
+                .is_initialized = true,
+                .rt_var = payload_rt_var,
+            };
+
+            // Create expressions for each argument
+            var arg_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
+            defer arg_indices.deinit();
+
+            // Check if payload is a tuple (multiple args) or single value
+            if (payload_layout.tag == .tuple and arg_vars.len > 1) {
+                // Multiple arguments - payload is a tuple
+                var payload_acc = try payload_value.asTuple(&self.interpreter.runtime_layout_store);
+                for (0..arg_vars.len) |i| {
+                    const arg_rt_var = arg_vars[i];
+                    const arg_value = try payload_acc.getElement(i, arg_rt_var);
+                    const arg_expr_idx = try self.createConstantExpr(arg_value, region);
+                    try arg_indices.append(arg_expr_idx);
+                }
+            } else {
+                // Single argument
+                const arg_expr_idx = try self.createConstantExpr(payload_value, region);
+                try arg_indices.append(arg_expr_idx);
+            }
+
+            // Create the tag expression with arguments
+            // First, create the span for args in extra_data
+            const extra_data_start = self.env.store.extra_data.len();
+            for (arg_indices.items) |arg_idx| {
+                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+            }
+
+            const tag_expr = CIR.Expr{
+                .e_tag = .{
+                    .name = tag_info.name,
+                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                },
+            };
+            return try self.env.addExpr(tag_expr, region);
+        }
+    }
+
+    /// Create a tuple expression from a tuple StackValue
+    fn createTupleExpr(self: *ComptimeEvaluator, stack_value: eval_mod.StackValue, region: base.Region) EvalError!CIR.Expr.Idx {
+        var accessor = try stack_value.asTuple(&self.interpreter.runtime_layout_store);
+        const elem_count = accessor.getElementCount();
+
+        if (elem_count == 0) {
+            // Empty tuple
+            const expr = CIR.Expr{ .e_tuple = .{ .elems = .{ .span = .{ .start = 0, .len = 0 } } } };
+            return try self.env.addExpr(expr, region);
+        }
+
+        const rt_var = stack_value.rt_var;
+        const resolved = self.interpreter.runtime_types.resolveVar(rt_var);
+
+        var elem_rt_vars = std.array_list.AlignedManaged(types_mod.Var, null).init(self.allocator);
+        defer elem_rt_vars.deinit();
+
+        if (resolved.desc.content == .structure) {
+            const struct_content = resolved.desc.content.structure;
+            if (struct_content == .tuple) {
+                const elems = self.interpreter.runtime_types.sliceVars(struct_content.tuple.elems);
+                for (elems) |elem_var| {
+                    try elem_rt_vars.append(elem_var);
+                }
+            }
+        }
+
+        var elem_indices = std.array_list.AlignedManaged(CIR.Expr.Idx, null).init(self.allocator);
+        defer elem_indices.deinit();
+
+        for (0..elem_count) |i| {
+            const elem_rt_var = if (i < elem_rt_vars.items.len)
+                elem_rt_vars.items[i]
+            else
+                try self.interpreter.runtime_types.fresh();
+
+            const elem_value = try accessor.getElement(i, elem_rt_var);
+            const elem_expr_idx = try self.createConstantExpr(elem_value, region);
+            try elem_indices.append(elem_expr_idx);
+        }
+
+        // Create span in extra_data for tuple elements
+        const extra_data_start = self.env.store.extra_data.len();
+        for (elem_indices.items) |elem_idx| {
+            _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
+        }
+
+        const tuple_expr = CIR.Expr{
+            .e_tuple = .{
+                .elems = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(elem_indices.items.len) } },
+            },
+        };
+        return try self.env.addExpr(tuple_expr, region);
     }
 
     /// Helper to report a problem and track allocated message
@@ -1534,5 +2171,20 @@ pub const ComptimeEvaluator = struct {
             .evaluated = evaluated,
             .crashed = crashed,
         };
+    }
+
+    /// Evaluate and fold a standalone expression (not part of a def).
+    /// This is used for mono tests where we have a single expression to evaluate.
+    /// Returns true if the expression was successfully evaluated and folded.
+    pub fn evalAndFoldExpr(self: *ComptimeEvaluator, expr_idx: CIR.Expr.Idx) !bool {
+        const ops = self.get_ops();
+
+        // Evaluate the expression
+        const result = try self.interpreter.eval(expr_idx, ops);
+
+        // Fold the result into a constant
+        try self.tryFoldExpr(expr_idx, result);
+
+        return true;
     }
 };

@@ -28,9 +28,9 @@ The tag is:
 
     Yellow
 
-But the nominal type needs it to one of:
+But the nominal type needs it to be:
 
-    [Blue, Green, Red]
+    Yellow
 
 # TOKENS
 ~~~zig
