@@ -468,3 +468,91 @@ test "redundant - Err pattern first on empty error type is unreachable" {
 
     try test_env.assertFirstTypeError("REDUNDANT PATTERN");
 }
+
+// Additional Inhabitedness Edge Cases
+// These tests verify correct handling of various uninhabited type scenarios.
+
+test "exhaustive - triply nested empty errors" {
+    // 3+ levels of nesting with empty types
+    const source =
+        \\x : Try(Try(Try(I64, []), []), [])
+        \\x = Ok(Ok(Ok(42i64)))
+        \\
+        \\result = match x {
+        \\    Ok(Ok(Ok(n))) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // All three Err cases are uninhabited at every level
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - record with uninhabited field means record is uninhabited" {
+    // A record where one field has an uninhabited type is itself uninhabited
+    const source =
+        \\x : [HasEmpty({ value: I64, empty: [] }), Normal(I64)]
+        \\x = Normal(42i64)
+        \\
+        \\result = match x {
+        \\    Normal(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // HasEmpty is uninhabited because its record contains an uninhabited field
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - tuple with uninhabited element means tuple is uninhabited" {
+    // A tuple where one element has an uninhabited type is itself uninhabited
+    const source =
+        \\x : [HasEmpty((I64, [])), Normal(I64)]
+        \\x = Normal(42i64)
+        \\
+        \\result = match x {
+        \\    Normal(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // HasEmpty is uninhabited because its tuple contains an uninhabited element
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - tag with mixed inhabited and uninhabited args" {
+    // A tag with multiple args where one is uninhabited makes the whole tag uninhabited
+    const source =
+        \\x : [Mixed(I64, [], Str), Normal(I64)]
+        \\x = Normal(42i64)
+        \\
+        \\result = match x {
+        \\    Normal(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Mixed is uninhabited because one of its args ([]) is uninhabited
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - deeply nested uninhabited in record field" {
+    // Uninhabited type nested deeply inside record structure
+    const source =
+        \\x : [Wrapper({ inner: { deep: Try(I64, []) } })]
+        \\x = Wrapper({ inner: { deep: Ok(42i64) } })
+        \\
+        \\result = match x {
+        \\    Wrapper({ inner: { deep: Ok(n) } }) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The deeply nested Err case is uninhabited
+    try test_env.assertLastDefType("I64");
+}
