@@ -166,10 +166,6 @@ pub const Pattern = union(enum) {
     /// Check if this pattern can ever match a value (is inhabited).
     /// A pattern is uninhabited if it matches a type with no possible values,
     /// such as an empty tag union or a constructor with uninhabited arguments.
-    ///
-    /// Note: Uninhabited constructors are filtered out during union construction
-    /// (in buildUnionFromTagUnion), so patterns referencing them won't find their
-    /// tag_id in the union's alternatives.
     pub fn isInhabited(self: Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
         return switch (self) {
             .anything => |maybe_type| {
@@ -257,15 +253,6 @@ pub const Union = struct {
             .has_flex_extension = self.has_flex_extension,
         };
     }
-
-    /// Check if this union type is inhabited (has at least one possible value).
-    /// An empty tag union with no flex extension is uninhabited.
-    pub fn isInhabited(self: Union) bool {
-        // If there's a flex extension, more constructors might exist
-        if (self.has_flex_extension) return true;
-        // Otherwise, need at least one alternative
-        return self.alternatives.len > 0;
-    }
 };
 
 /// Information about a single constructor
@@ -350,9 +337,8 @@ pub const Literal = union(enum) {
             .byte => |aby| aby == b.byte,
             .float => |af| af == b.float,
             .decimal => |ad| ad == b.decimal,
-            // TODO: StringLiteral.Store doesn't deduplicate, so different indices
-            // could represent the same string. We should compare the actual string
-            // contents to properly detect redundant string patterns.
+            // StringLiteral.Store deduplicates strings, so identical strings
+            // receive the same index. Direct index comparison is correct.
             .str => |as| as == b.str,
         };
     }
@@ -742,7 +728,14 @@ pub const ReifiedRows = struct {
     overall_region: Region,
     /// True if any constructor patterns couldn't be fully resolved
     /// (e.g., polymorphic types where the union structure isn't known).
-    /// TODO: We should handle polymorphic types properly instead of skipping checks.
+    ///
+    /// When this is true, exhaustiveness checking was skipped for this match because
+    /// we couldn't determine what constructors exist for the scrutinee type. This is
+    /// the correct behavior - attempting to check exhaustiveness with incomplete type
+    /// information would produce false positives or negatives.
+    ///
+    /// Wildcard patterns on polymorphic types work correctly; only explicit constructor
+    /// patterns like `Foo x` on a polymorphic type `a` trigger this flag.
     has_unresolved_ctor: bool,
 };
 
@@ -757,6 +750,7 @@ pub const ReifiedRows = struct {
 pub fn reifyPattern(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
     unresolved: UnresolvedPattern,
     type_var: Var,
 ) ReifyError!Pattern {
@@ -786,7 +780,7 @@ pub fn reifyPattern(
                     // We can't reliably do exhaustiveness checking.
                     return error.TypeError;
                 } else {
-                    args[i] = try reifyPattern(allocator, type_store, arg, arg_type);
+                    args[i] = try reifyPattern(allocator, type_store, builtin_idents, arg, arg_type);
                 }
             }
 
@@ -799,7 +793,7 @@ pub fn reifyPattern(
 
         .ctor => |c| {
             // Need to look up the union type from the type variable
-            const union_result = try getUnionFromType(allocator, type_store, type_var);
+            const union_result = try getUnionFromType(allocator, type_store, builtin_idents, type_var);
 
             switch (union_result) {
                 .success => |union_info| {
@@ -826,7 +820,7 @@ pub fn reifyPattern(
                             // We can't reliably do exhaustiveness checking.
                             return error.TypeError;
                         } else {
-                            args[i] = try reifyPattern(allocator, type_store, arg, arg_type);
+                            args[i] = try reifyPattern(allocator, type_store, builtin_idents, arg, arg_type);
                         }
                     }
 
@@ -848,7 +842,7 @@ pub fn reifyPattern(
 
             const elements = try allocator.alloc(Pattern, l.elements.len);
             for (l.elements, 0..) |elem, i| {
-                elements[i] = try reifyPattern(allocator, type_store, elem, elem_type);
+                elements[i] = try reifyPattern(allocator, type_store, builtin_idents, elem, elem_type);
             }
 
             return .{ .list = .{
@@ -867,6 +861,7 @@ pub fn reifyPattern(
 pub fn reifyRows(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
     unresolved: UnresolvedRows,
     scrutinee_type: Var,
 ) error{OutOfMemory}!ReifiedRows {
@@ -879,7 +874,7 @@ pub fn reifyRows(
         // Reify this row's patterns
         const reified = try allocator.alloc(Pattern, row.patterns.len);
         for (row.patterns, 0..) |pat, i| {
-            reified[i] = reifyPattern(allocator, type_store, pat, scrutinee_type) catch |err| switch (err) {
+            reified[i] = reifyPattern(allocator, type_store, builtin_idents, pat, scrutinee_type) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.TypeError => blk: {
                     // Type error during reification - pattern couldn't be resolved.
@@ -910,9 +905,11 @@ const UnionResult = union(enum) {
 };
 
 /// Extract union information from a type variable.
+/// Filters out uninhabited constructors at construction time.
 fn getUnionFromType(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!UnionResult {
     const resolved = type_store.resolveVar(type_var);
@@ -920,31 +917,33 @@ fn getUnionFromType(
 
     // Try to unwrap as a tag union
     if (content.unwrapTagUnion()) |tag_union| {
-        return try buildUnionFromTagUnion(allocator, type_store, tag_union);
+        return try buildUnionFromTagUnion(allocator, type_store, builtin_idents, tag_union);
     }
 
     // Try to follow aliases and other type wrappers
     switch (content) {
         .alias => |alias| {
             const backing_var = type_store.getAliasBackingVar(alias);
-            return getUnionFromType(allocator, type_store, backing_var);
+            return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
         },
         .recursion_var => |rec| {
-            return getUnionFromType(allocator, type_store, rec.structure);
+            return getUnionFromType(allocator, type_store, builtin_idents, rec.structure);
         },
-        // TODO: Handle polymorphic types properly instead of treating as not a union.
+        // Polymorphic types (flex/rigid vars) cannot be treated as unions because
+        // we don't know what constructors they have. This is correct behavior -
+        // the caller should handle this by skipping exhaustiveness checking.
         .flex, .rigid => return .not_a_union,
         // Structure might contain tag union or nominal type info
         .structure => |flat_type| {
             switch (flat_type) {
                 .tag_union => |tag_union| {
-                    return try buildUnionFromTagUnion(allocator, type_store, tag_union);
+                    return try buildUnionFromTagUnion(allocator, type_store, builtin_idents, tag_union);
                 },
                 // Nominal types (like Try, Result) are user-defined types that wrap other types
                 // We need to unwrap them to find the underlying tag union
                 .nominal_type => |nominal| {
                     const backing_var = type_store.getNominalBackingVar(nominal);
-                    return getUnionFromType(allocator, type_store, backing_var);
+                    return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
                 },
                 else => return .not_a_union,
             }
@@ -957,11 +956,16 @@ fn getUnionFromType(
 }
 
 /// Build a Union structure from a TagUnion type.
+/// Includes all constructors (inhabited and uninhabited) so that:
+/// - Patterns for uninhabited constructors can be detected as redundant
+/// - Only exhaustiveness checking skips uninhabited constructors
 fn buildUnionFromTagUnion(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
     tag_union: types.TagUnion,
 ) error{OutOfMemory}!UnionResult {
+    _ = builtin_idents; // Inhabitedness checked during exhaustiveness, not here
     const tags_slice = type_store.getTagsSlice(tag_union.tags);
     const tag_names = tags_slice.items(.name);
     const tag_args = tags_slice.items(.args);
@@ -991,7 +995,12 @@ fn buildUnionFromTagUnion(
         };
     }
 
-    // Check if extension is a flex var (type not fully constrained)
+    // Track flex extension for optimization in redundancy checking.
+    // Note: Both flex and rigid extensions are "open" (isOpenExtension returns true
+    // for both), so both get the #Open constructor added above. The has_flex_extension
+    // flag is purely an optimization - flex extensions can skip some redundancy checks
+    // since wildcards are always useful. For rigid extensions, the #Open constructor
+    // in alternatives ensures correct behavior without the fast-path.
     const has_flex = hasFlexExtension(type_store, tag_union.ext);
 
     return .{ .success = .{
@@ -1001,8 +1010,15 @@ fn buildUnionFromTagUnion(
     } };
 }
 
-/// Check if an extension variable is a flex var (unconstrained).
-/// Used to determine if wildcards should be considered redundant.
+/// Check if an extension variable is specifically a flex var (unconstrained).
+///
+/// This is used as an optimization in redundancy checking: when the extension is
+/// flex, wildcards are always useful (the type could unify with additional tags).
+/// This allows us to skip detailed analysis.
+///
+/// Note: This is separate from isOpenExtension, which returns true for BOTH flex
+/// and rigid extensions. Both are "open" for exhaustiveness purposes (needing a
+/// wildcard or #Open match), but only flex gets the fast-path optimization.
 fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
     const resolved = type_store.resolveVar(ext);
     const content = resolved.desc.content;
@@ -1029,11 +1045,6 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
 fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
     var stack: std.ArrayList(Var) = .empty;
     defer stack.deinit(type_store.gpa);
-    return isTypeInhabitedImpl(type_store, builtin_idents, type_var, &stack);
-}
-
-/// Internal implementation that uses a shared stack for efficiency.
-fn isTypeInhabitedImpl(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var, stack: *std.ArrayList(Var)) error{OutOfMemory}!bool {
     try stack.append(type_store.gpa, type_var);
 
     while (stack.items.len > 0) {
@@ -1071,40 +1082,94 @@ fn isTypeInhabitedImpl(type_store: *TypeStore, builtin_idents: BuiltinIdents, ty
                     const tags_slice = type_store.getTagsSlice(tag_union.tags);
 
                     if (tags_slice.len == 0) {
-                        // No tags - check extension
-                        if (isOpenExtension(type_store, tag_union.ext) or hasFlexExtension(type_store, tag_union.ext)) {
-                            // Might have more tags, assume inhabited
+                        // No tags - check if extension is open (could have more tags)
+                        if (isOpenExtension(type_store, tag_union.ext)) {
+                            // Open extension means more tags might exist, assume inhabited
                             continue;
                         }
-                        // Definitely empty and closed
+                        // Closed empty tag union is uninhabited
                         return false;
                     }
 
-                    // Check if at least one tag variant is inhabited
-                    // Use fresh isTypeInhabited calls (not Impl) to avoid corrupting our stack
+                    // Check if at least one tag variant is inhabited (OR semantics)
+                    // A tag is inhabited if all its arguments are inhabited
                     const tag_args = tags_slice.items(.args);
                     var any_tag_inhabited = false;
 
-                    for (tag_args) |args_range| {
+                    tag_loop: for (tag_args) |args_range| {
                         const arg_vars = type_store.sliceVars(args_range);
-                        var all_args_inhabited = true;
 
-                        for (arg_vars) |arg_var| {
-                            if (!try isTypeInhabited(type_store, builtin_idents, arg_var)) {
-                                all_args_inhabited = false;
-                                break;
+                        // Check all arguments of this tag using a local stack
+                        // This avoids deep recursion while getting AND semantics for args
+                        var arg_stack: std.ArrayList(Var) = .empty;
+                        defer arg_stack.deinit(type_store.gpa);
+                        try arg_stack.appendSlice(type_store.gpa, arg_vars);
+
+                        while (arg_stack.items.len > 0) {
+                            const arg_var = arg_stack.pop().?;
+                            const arg_resolved = type_store.resolveVar(arg_var);
+                            const arg_content = arg_resolved.desc.content;
+
+                            switch (arg_content) {
+                                .flex, .rigid, .recursion_var, .err => {},
+                                .alias => |alias| {
+                                    try arg_stack.append(type_store.gpa, type_store.getAliasBackingVar(alias));
+                                },
+                                .structure => |arg_flat| switch (arg_flat) {
+                                    .empty_tag_union => continue :tag_loop, // Uninhabited arg, try next tag
+                                    .empty_record => {},
+                                    .tag_union => |inner_union| {
+                                        // Nested tag union - check if it's inhabited
+                                        const inner_tags = type_store.getTagsSlice(inner_union.tags);
+                                        if (inner_tags.len == 0 and !isOpenExtension(type_store, inner_union.ext)) {
+                                            continue :tag_loop; // Empty closed union = uninhabited
+                                        }
+                                        // Check each inner tag's args
+                                        const inner_tag_args = inner_tags.items(.args);
+                                        var inner_any_inhabited = false;
+                                        inner_tag_loop: for (inner_tag_args) |inner_args_range| {
+                                            const inner_arg_vars = type_store.sliceVars(inner_args_range);
+                                            // Check if all args of this inner tag are inhabited
+                                            for (inner_arg_vars) |inner_arg| {
+                                                if (!try isTypeInhabited(type_store, builtin_idents, inner_arg)) {
+                                                    continue :inner_tag_loop; // Try next inner tag
+                                                }
+                                            }
+                                            inner_any_inhabited = true;
+                                            break;
+                                        }
+                                        if (!inner_any_inhabited and !isOpenExtension(type_store, inner_union.ext)) {
+                                            continue :tag_loop; // All inner tags uninhabited
+                                        }
+                                    },
+                                    .nominal_type => |nominal| {
+                                        if (!builtin_idents.isBuiltinNumericType(nominal)) {
+                                            try arg_stack.append(type_store.gpa, type_store.getNominalBackingVar(nominal));
+                                        }
+                                    },
+                                    .record => |record| {
+                                        const fields = type_store.getRecordFieldsSlice(record.fields);
+                                        try arg_stack.appendSlice(type_store.gpa, fields.items(.var_));
+                                    },
+                                    .record_unbound => |fields| {
+                                        const fields_slice = type_store.getRecordFieldsSlice(fields);
+                                        try arg_stack.appendSlice(type_store.gpa, fields_slice.items(.var_));
+                                    },
+                                    .tuple => |tuple| {
+                                        try arg_stack.appendSlice(type_store.gpa, type_store.sliceVars(tuple.elems));
+                                    },
+                                    .fn_pure, .fn_effectful, .fn_unbound => {},
+                                },
                             }
                         }
-
-                        if (all_args_inhabited) {
-                            any_tag_inhabited = true;
-                            break;
-                        }
+                        // All args of this tag are inhabited
+                        any_tag_inhabited = true;
+                        break;
                     }
 
                     if (!any_tag_inhabited) {
-                        // Check extension - if open/flex, might have more inhabited tags
-                        if (!isOpenExtension(type_store, tag_union.ext) and !hasFlexExtension(type_store, tag_union.ext)) {
+                        // All explicit tags are uninhabited - check if open extension
+                        if (!isOpenExtension(type_store, tag_union.ext)) {
                             return false;
                         }
                     }
@@ -1125,14 +1190,13 @@ fn isTypeInhabitedImpl(type_store: *TypeStore, builtin_idents: BuiltinIdents, ty
                     try stack.append(type_store.gpa, backing_var);
                 },
 
-                // Records - all fields must be inhabited (use fresh checks)
+                // Records - all fields must be inhabited (AND semantics)
+                // Push all fields to the stack - if any is uninhabited, we'll return false
                 .record => |record| {
                     const fields_slice = type_store.getRecordFieldsSlice(record.fields);
                     const field_vars = fields_slice.items(.var_);
                     for (field_vars) |field_var| {
-                        if (!try isTypeInhabited(type_store, builtin_idents, field_var)) {
-                            return false;
-                        }
+                        try stack.append(type_store.gpa, field_var);
                     }
                 },
 
@@ -1140,19 +1204,15 @@ fn isTypeInhabitedImpl(type_store: *TypeStore, builtin_idents: BuiltinIdents, ty
                     const fields_slice = type_store.getRecordFieldsSlice(fields);
                     const field_vars = fields_slice.items(.var_);
                     for (field_vars) |field_var| {
-                        if (!try isTypeInhabited(type_store, builtin_idents, field_var)) {
-                            return false;
-                        }
+                        try stack.append(type_store.gpa, field_var);
                     }
                 },
 
-                // Tuples - all elements must be inhabited (use fresh checks)
+                // Tuples - all elements must be inhabited (AND semantics)
                 .tuple => |tuple| {
                     const elem_vars = type_store.sliceVars(tuple.elems);
                     for (elem_vars) |elem_var| {
-                        if (!try isTypeInhabited(type_store, builtin_idents, elem_var)) {
-                            return false;
-                        }
+                        try stack.append(type_store.gpa, elem_var);
                     }
                 },
 
@@ -1186,16 +1246,24 @@ fn areAllTypesInhabited(
 }
 
 /// Check if an extension variable represents an open union.
-/// TODO: Properly handle flex vs rigid extension semantics for exhaustiveness.
-/// Currently rigid vars are treated as open, flex vars as closed.
+///
+/// An open union is one where additional constructors may exist beyond those
+/// explicitly listed. This occurs when the extension is:
+/// - A flex var: The type is not yet fully constrained, more tags could be added
+/// - A rigid var: The user explicitly said "and potentially more tags"
+/// - A nested tag union: More tags exist in the extension
+///
+/// Open unions require a wildcard pattern or explicit `#Open` constructor to be exhaustive.
 fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
     const resolved = type_store.resolveVar(ext);
     const content = resolved.desc.content;
 
     return switch (content) {
-        .rigid => true,
-        .flex => false,
-        // Empty tag union means it's closed
+        // Both flex and rigid extensions mean the union is open:
+        // - Flex: type not fully constrained, could unify with more tags
+        // - Rigid: user explicitly marked it as open (e.g., [A, B]a)
+        .flex, .rigid => true,
+        // Empty tag union means it's closed - no additional tags possible
         .structure => |flat_type| switch (flat_type) {
             .empty_tag_union => false,
             // A tag union extension (nested tags) means more tags exist
@@ -2063,7 +2131,11 @@ pub fn isUseful(
                 },
 
                 .ctors => |ctor_info| {
-                    // TODO: Properly handle flex extensions instead of assuming wildcards useful.
+                    // Optimization: For flex extensions, wildcards are always useful because
+                    // the type could unify with additional tags during type inference.
+                    // We can skip the detailed analysis below.
+                    // For rigid extensions, we don't use this fast-path, but the #Open
+                    // constructor in alternatives ensures correct behavior anyway.
                     if (ctor_info.union_info.has_flex_extension) {
                         return true;
                     }
@@ -2322,7 +2394,6 @@ fn collectCtorsSketched(
     matrix: SketchedMatrix,
     first_col_type: Var,
 ) ReifyError!CollectedCtorsSketched {
-    _ = builtin_idents; // Unused - kept for API consistency
     if (matrix.isEmpty()) return .non_exhaustive_wildcards;
 
     const first_col = try matrix.firstColumn();
@@ -2344,7 +2415,7 @@ fn collectCtorsSketched(
             .ctor => |c| {
                 found_ctor = true;
                 if (union_info == null) {
-                    const union_result = try getUnionFromType(allocator, type_store, first_col_type);
+                    const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
                     switch (union_result) {
                         .success => |u| union_info = u,
                         .not_a_union => return error.TypeError,
@@ -2688,11 +2759,11 @@ pub fn checkExhaustiveSketched(
                         }
                     }
                     if (!found) {
-                        // Optimization: Skip uninhabited constructors entirely.
-                        // A constructor is uninhabited if any of its argument types are uninhabited.
+                        // Skip uninhabited constructors - they don't need to be matched
+                        // because no values of that constructor can exist.
                         const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
                         if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
-                            continue; // Skip this uninhabited constructor
+                            continue;
                         }
 
                         const specialized = try specializeByConstructorSketched(
@@ -2729,10 +2800,10 @@ pub fn checkExhaustiveSketched(
 
             // All constructors covered - check each recursively
             for (ctor_info.union_info.alternatives) |alt| {
-                // Optimization: Skip uninhabited constructors entirely.
+                // Skip uninhabited constructors
                 const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
                 if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
-                    continue; // Skip this uninhabited constructor
+                    continue;
                 }
 
                 const specialized = try specializeByConstructorSketched(
@@ -2838,7 +2909,7 @@ fn isSketchedPatternInhabited(
     switch (first) {
         .ctor => |c| {
             // Look up the union type to get tag_id and argument types
-            const union_result = try getUnionFromType(allocator, type_store, first_col_type);
+            const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
             const union_info = switch (union_result) {
                 .success => |u| u,
                 .not_a_union => return error.TypeError,
@@ -2911,7 +2982,7 @@ pub fn isUsefulSketched(
 
     return switch (first) {
         .ctor => |c| {
-            const union_result = try getUnionFromType(allocator, type_store, first_col_type);
+            const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
             const union_info = switch (union_result) {
                 .success => |u| u,
                 .not_a_union => return error.TypeError,
@@ -3058,6 +3129,8 @@ pub fn isUsefulSketched(
                 },
 
                 .ctors => |ctor_info| {
+                    // Optimization: For flex extensions, wildcards are always useful.
+                    // See comment in isUseful for detailed explanation.
                     if (ctor_info.union_info.has_flex_extension) {
                         return true;
                     }

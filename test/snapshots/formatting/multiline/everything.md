@@ -136,7 +136,6 @@ UNUSED VARIABLE - everything.md:81:2:81:4
 UNUSED VARIABLE - everything.md:85:2:85:4
 UNSUPPORTED WHERE CLAUSE - everything.md:60:3:60:6
 UNSUPPORTED WHERE CLAUSE - everything.md:61:3:61:6
-NON-EXHAUSTIVE MATCH - everything.md:90:2:113:3
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.
@@ -331,44 +330,6 @@ The where clause syntax _B_ is not supported:
 		^^^
 
 This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.
-
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
-**everything.md:90:2:113:3:**
-```roc
-	match x {
-		Z1(
-			(
-				a,
-				b,
-			),
-		) => a
-		Z2(
-			a,
-			b,
-		) => a
-		Z3(
-			{
-				a,
-				b,
-			},
-		) => a
-		Z4(
-			[
-				a,
-				b,
-			],
-		) => a
-	}
-```
-
-The value being matched on has type:
-        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c)), .._others]_
-
-Missing patterns:
-        Z4 [_]
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig

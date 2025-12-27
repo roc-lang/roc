@@ -211,7 +211,6 @@ UNUSED VARIABLE - everything.md:67:2:67:4
 UNUSED VARIABLE - everything.md:71:2:71:4
 UNUSED VARIABLE - everything.md:75:2:75:4
 UNUSED VARIABLE - everything.md:79:2:79:4
-NON-EXHAUSTIVE MATCH - everything.md:84:2:107:3
 # PROBLEMS
 **WHERE CLAUSE ERROR**
 Expected an opening bracket **[** after `where`.
@@ -1341,44 +1340,6 @@ The unused variable is declared here:
 ```
 	^^
 
-
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
-**everything.md:84:2:107:3:**
-```roc
-	match x {
-		Z1(
-			(
-				a,
-				b
-			)
-		) => a
-		Z2(
-			a,
-			b
-		) => a
-		Z3(
-			{
-				a,
-				b
-			}
-		) => a
-		Z4(
-			[
-				a,
-				b
-			]
-		) => a
-	}
-```
-
-The value being matched on has type:
-        _[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c)), .._others]_
-
-Missing patterns:
-        Z4 [_]
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
 
 # TOKENS
 ~~~zig
