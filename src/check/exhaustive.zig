@@ -1399,7 +1399,16 @@ fn isSketchedPatternInhabited(
             return isTypeInhabited(type_store, builtin_idents, first_col_type);
         },
         .literal => return true, // Literals are always inhabited
-        .list => return true, // Lists can be empty, so always inhabited
+        .list => |l| {
+            // Empty list pattern is always inhabited
+            // Non-empty list patterns are uninhabited if the element type is uninhabited
+            const min_len = l.arity.minLen();
+            if (min_len == 0) return true; // Empty list is always inhabited
+
+            // Check if element type is inhabited
+            const elem_type = getListElemType(type_store, first_col_type) orelse return true;
+            return isTypeInhabited(type_store, builtin_idents, elem_type);
+        },
     }
 }
 
@@ -3061,9 +3070,25 @@ pub fn checkExhaustiveSketched(
         .lists => |arities| {
             const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
 
+            // Check if list elements are inhabited. If not, only the empty list exists.
+            const elem_type = if (column_types.types.len > 0)
+                getListElemType(type_store, column_types.types[0])
+            else
+                null;
+            const elem_inhabited = if (elem_type) |et|
+                try isTypeInhabited(type_store, builtin_idents, et)
+            else
+                true; // No type info, assume inhabited
+
             for (ctors_to_check) |list_arity| {
-                const specialized = try specializeByListAritySketched(allocator, matrix, list_arity);
                 const min_len = list_arity.minLen();
+
+                // Skip non-empty list arities if elements are uninhabited
+                if (min_len > 0 and !elem_inhabited) {
+                    continue;
+                }
+
+                const specialized = try specializeByListAritySketched(allocator, matrix, list_arity);
                 const specialized_types = try column_types.specializeForList(allocator, min_len);
                 const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
@@ -3073,8 +3098,8 @@ pub fn checkExhaustiveSketched(
                         if (i < missing.len) {
                             elements[i] = missing[i];
                         } else {
-                            const elem_type = if (i < specialized_types.types.len) specialized_types.types[i] else null;
-                            elements[i] = .{ .anything = elem_type };
+                            const elem_type_for_pat = if (i < specialized_types.types.len) specialized_types.types[i] else null;
+                            elements[i] = .{ .anything = elem_type_for_pat };
                         }
                     }
 
@@ -3361,9 +3386,25 @@ pub fn isUsefulSketched(
                 .lists => |arities| {
                     const ctors_to_check = try buildListCtorsForChecking(allocator, arities);
 
+                    // Check if list elements are inhabited. If not, only the empty list exists.
+                    const elem_type = if (column_types.types.len > 0)
+                        getListElemType(type_store, column_types.types[0])
+                    else
+                        null;
+                    const elem_inhabited = if (elem_type) |et|
+                        try isTypeInhabited(type_store, builtin_idents, et)
+                    else
+                        true; // No type info, assume inhabited
+
                     for (ctors_to_check) |list_arity| {
-                        const specialized = try specializeByListAritySketched(allocator, existing_matrix, list_arity);
                         const min_len = list_arity.minLen();
+
+                        // Skip non-empty list arities if elements are uninhabited
+                        if (min_len > 0 and !elem_inhabited) {
+                            continue;
+                        }
+
+                        const specialized = try specializeByListAritySketched(allocator, existing_matrix, list_arity);
                         const specialized_types = try column_types.specializeForList(allocator, min_len);
 
                         const extended = try allocator.alloc(UnresolvedPattern, min_len + rest.len);
@@ -3409,8 +3450,24 @@ pub fn isUsefulSketched(
         },
 
         .list => |l| {
+            // Check if list elements are inhabited. If not, only the empty list exists.
+            const elem_type = if (column_types.types.len > 0)
+                getListElemType(type_store, column_types.types[0])
+            else
+                null;
+            const elem_inhabited = if (elem_type) |et|
+                try isTypeInhabited(type_store, builtin_idents, et)
+            else
+                true; // No type info, assume inhabited
+
             switch (l.arity) {
                 .exact => {
+                    // If this pattern requires elements but elements are uninhabited,
+                    // this pattern can never match, so it's not useful (redundant).
+                    if (l.elements.len > 0 and !elem_inhabited) {
+                        return false;
+                    }
+
                     const specialized = try specializeByListAritySketched(allocator, existing_matrix, l.arity);
                     const specialized_types = try column_types.specializeForList(allocator, l.elements.len);
 
@@ -3421,6 +3478,12 @@ pub fn isUsefulSketched(
                     return isUsefulSketched(allocator, type_store, builtin_idents, specialized, extended_row, specialized_types);
                 },
                 .slice => |s| {
+                    // Slice patterns always match at least one non-empty list (prefix + suffix elements),
+                    // so if elements are uninhabited, slice patterns are never useful.
+                    if (!elem_inhabited) {
+                        return false;
+                    }
+
                     const first_col = try existing_matrix.firstColumn();
                     var arities_list: std.ArrayList(ListArity) = .empty;
                     for (first_col) |p| {

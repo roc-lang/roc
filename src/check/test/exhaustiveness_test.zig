@@ -591,3 +591,59 @@ test "non-exhaustive - not all inhabited tags covered with empty arg" {
     // B is uninhabited but C is still inhabited and needs a pattern
     try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
+
+// List element inhabitedness tests
+// A List([]) can only be the empty list, since no elements of type [] can exist.
+
+test "exhaustive - List of empty type is still inhabited" {
+    // List([]) is inhabited because the empty list [] exists.
+    // Since no non-empty list of [] can be constructed, only matching [] is exhaustive.
+    const source =
+        \\x : List([])
+        \\x = []
+        \\
+        \\result = match x {
+        \\    [] => 0i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "redundant - second pattern on List of empty type" {
+    // When both [] and [_, ..] are present, the [_, ..] is redundant
+    // because no non-empty list of [] can exist
+    const source =
+        \\x : List([])
+        \\x = []
+        \\
+        \\result = match x {
+        \\    [] => 0i64
+        \\    [_, ..] => 1i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+test "redundant - non-empty list pattern on List of empty type" {
+    // A non-empty list pattern on List([]) is unreachable
+    // because you can't construct a list with elements of type []
+    const source =
+        \\x : List([])
+        \\x = []
+        \\
+        \\result = match x {
+        \\    [_, ..] => 1i64
+        \\    [] => 0i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
