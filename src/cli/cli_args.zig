@@ -15,7 +15,7 @@ pub const CliArgs = union(enum) {
     test_cmd: TestArgs,
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
-    repl,
+    repl: ReplArgs,
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -139,6 +139,11 @@ pub const ExperimentalLspArgs = struct {
     debug_build: bool = false,
     debug_syntax: bool = false,
     debug_server: bool = false,
+};
+
+/// Arguments for `roc repl`
+pub const ReplArgs = struct {
+    optimize: bool = false, // use LLVM backend for optimized evaluation
 };
 
 /// Parse a list of arguments.
@@ -582,22 +587,27 @@ fn parseTest(args: []const []const u8) CliArgs {
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
+    var optimize = false;
+
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
             \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\  -h, --help  Print help
+            \\      --optimize  Use LLVM backend for optimized evaluation (experimental)
+            \\  -h, --help      Print help
             \\
         };
+        } else if (mem.eql(u8, arg, "--optimize")) {
+            optimize = true;
         } else {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs.repl;
+    return CliArgs{ .repl = ReplArgs{ .optimize = optimize } };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {

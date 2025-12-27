@@ -722,7 +722,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args),
-        .repl => rocRepl(&ctx),
+        .repl => |repl_args| rocRepl(&ctx, repl_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
@@ -4773,7 +4773,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(ctx: *CliContext) !void {
+fn rocRepl(ctx: *CliContext, args: cli_args.ReplArgs) !void {
+    _ = args; // TODO: Use args.optimize to select LLVM backend vs interpreter
     ctx.io.stderr().print("repl not implemented\n", .{}) catch {};
     return error.NotImplemented;
 }
