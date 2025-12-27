@@ -7103,9 +7103,13 @@ pub const Interpreter = struct {
             }
         }
 
-        // Note: Tags are already sorted alphabetically in runtime_types.
-        // translateTypeVar flattens tag union extensions and sorts tags before storing,
-        // so no sorting is needed here. See the translateTypeVar function.
+        // Sort tags alphabetically to ensure consistent discriminant indices.
+        // While translateTypeVar sorts tags before storing, different translations
+        // of the same source type may produce different runtime type vars, and
+        // rendering may use a different type var than was used during value creation.
+        // Sorting here ensures both paths see tags in the same alphabetical order.
+        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
@@ -11849,9 +11853,9 @@ pub const Interpreter = struct {
                     const content_tag = @tagName(resolved.desc.content);
                     const struct_tag = if (resolved.desc.content == .structure) @tagName(resolved.desc.content.structure) else "n/a";
                     const tag_name_str = self.env.getIdent(tag.name);
-                    // Also show what the ct_var resolves to for debugging
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_resolved = self.env.types.resolveVar(ct_var);
+                    // Also show what the compile-time type resolves to for debugging
+                    const ct_var_for_debug = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_resolved = self.env.types.resolveVar(ct_var_for_debug);
                     const ct_content_tag = @tagName(ct_resolved.desc.content);
                     const has_expected = expected_rt_var != null;
                     const msg = std.fmt.allocPrint(self.allocator, "e_tag: expected tag_union but got rt={s}:{s} ct={s} has_expected={} for tag `{s}`", .{ content_tag, struct_tag, ct_content_tag, has_expected, tag_name_str }) catch "e_tag: expected tag_union structure type";
@@ -11870,8 +11874,8 @@ pub const Interpreter = struct {
                 // This handles open unions where the expected type doesn't include all tags.
                 if (tag_index_opt == null and expected_rt_var != null) {
                     // Fall back to compile-time type
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const ct_var_fallback = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var_fallback);
 
                     // Clear and rebuild tag list from compile-time type
                     tag_list.clearRetainingCapacity();
@@ -14808,18 +14812,12 @@ pub const Interpreter = struct {
 
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
 
-                        // Write discriminant
                         const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                        switch (tu_data.discriminant_size) {
-                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
-                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => {},
-                        }
 
-                        // Write payload at offset 0
+                        // Write payload at offset 0 FIRST, before writing the discriminant.
+                        // This is crucial because the payload may be larger than the discriminant
+                        // offset (e.g., when wrapping an opaque type in a Result), and copying
+                        // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
                             try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
@@ -14844,6 +14842,17 @@ pub const Interpreter = struct {
                             for (values, 0..) |val, idx| {
                                 try tup_acc.setElement(idx, val, roc_ops);
                             }
+                        }
+
+                        // Write discriminant AFTER the payload, so it doesn't get overwritten
+                        // by a payload that extends past the discriminant offset.
+                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                        switch (tu_data.discriminant_size) {
+                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
+                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            else => {},
                         }
 
                         for (values) |val| {
@@ -15455,6 +15464,7 @@ pub const Interpreter = struct {
                     // Push cleanup continuation, then evaluate body
                     const cleanup_saved_rigid_subst = saved_rigid_subst;
                     saved_rigid_subst = null;
+
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
                         .saved_bindings_len = saved_bindings_len,
