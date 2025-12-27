@@ -956,16 +956,15 @@ fn getUnionFromType(
 }
 
 /// Build a Union structure from a TagUnion type.
-/// Includes all constructors (inhabited and uninhabited) so that:
-/// - Patterns for uninhabited constructors can be detected as redundant
-/// - Only exhaustiveness checking skips uninhabited constructors
+/// Includes all constructors so patterns can be matched.
+/// Inhabitedness checking is done separately via isSketchedPatternInhabited.
 fn buildUnionFromTagUnion(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
     tag_union: types.TagUnion,
 ) error{OutOfMemory}!UnionResult {
-    _ = builtin_idents; // Inhabitedness checked during exhaustiveness, not here
+    _ = builtin_idents; // Inhabitedness checked elsewhere
     const tags_slice = type_store.getTagsSlice(tag_union.tags);
     const tag_names = tags_slice.items(.name);
     const tag_args = tags_slice.items(.args);
@@ -1109,7 +1108,6 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                             const arg_var = arg_stack.pop().?;
                             const arg_resolved = type_store.resolveVar(arg_var);
                             const arg_content = arg_resolved.desc.content;
-
                             switch (arg_content) {
                                 .flex, .rigid, .recursion_var, .err => {},
                                 .alias => |alias| {

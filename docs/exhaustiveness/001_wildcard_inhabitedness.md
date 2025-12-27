@@ -16,7 +16,7 @@ The exhaustiveness checker correctly handles wildcards on uninhabited types thro
 
 Missing patterns are always constructed with type information from `ColumnTypes`:
 
-**File:** `src/check/exhaustive.zig` (line ~1757)
+**File:** `src/check/exhaustive.zig` (line ~1842)
 ```zig
 // Empty matrix but columns remain - return typed wildcards as missing pattern
 const missing = try allocator.alloc(Pattern, n);
@@ -45,19 +45,25 @@ return missing;
 },
 ```
 
-### 3. Uninhabited Constructor Filtering Optimization
+### 3. Uninhabited Constructor Filtering
 
-As an optimization, uninhabited constructor paths are skipped entirely during exhaustiveness checking:
+During exhaustiveness checking, uninhabited constructor paths are skipped. This happens
+in `checkExhaustiveSketched` when iterating over union alternatives:
 
-**File:** `src/check/exhaustive.zig` (line ~2691)
+**File:** `src/check/exhaustive.zig` (line ~2782)
 ```zig
-// Optimization: Skip uninhabited constructors entirely.
-// A constructor is uninhabited if any of its argument types are uninhabited.
+// Skip uninhabited constructors - they don't need to be matched
+// because no values of that constructor can exist.
 const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
 if (!try areAllTypesInhabited(type_store, builtin_idents, arg_types)) {
-    continue; // Skip this uninhabited constructor
+    continue;
 }
 ```
+
+Note: Uninhabited constructors are NOT filtered at union construction time. This allows
+the redundancy checker to detect patterns like `Err(_)` on `Try(I64, [])` as unreachable.
+Filtering only occurs during exhaustiveness checking to avoid requiring matches for
+constructors that can never have values.
 
 ## How It Works
 
@@ -77,10 +83,81 @@ The following tests verify correct behavior:
 - `"redundant - wildcard after complete coverage on type with empty variant"` - Wildcard after `Ok` on `Try(I64, [])` is redundant
 - `"redundant - Err pattern first on empty error type is unreachable"` - `Err(_)` pattern is redundant
 
+### 4. Open Union Semantics
+
+Open unions (with flex or rigid extension variables) are correctly handled:
+
+**File:** `src/check/exhaustive.zig` (line ~1277)
+```zig
+/// An open union is one where additional constructors may exist beyond those
+/// explicitly listed. This occurs when the extension is:
+/// - A flex var: The type is not yet fully constrained, more tags could be added
+/// - A rigid var: The user explicitly said "and potentially more tags"
+fn isOpenExtension(type_store: *TypeStore, ext: Var) bool {
+    return switch (content) {
+        .flex, .rigid => true,  // Both are open
+        .structure => |flat_type| switch (flat_type) {
+            .empty_tag_union => false,  // Closed
+            .tag_union => true,         // Nested tags = open
+            else => false,
+        },
+        // ...
+    };
+}
+```
+
+## Design Decision: Where to Filter Uninhabited Constructors
+
+**Important:** Uninhabited constructors must NOT be filtered at union construction time
+(in `buildUnionFromTagUnion`). They must be filtered during exhaustiveness checking
+(in `checkExhaustiveSketched`).
+
+### Why This Matters
+
+If we filter uninhabited constructors when building the `Union` structure:
+
+1. **Exhaustiveness works correctly** - we don't require patterns for constructors
+   that can't have values.
+
+2. **BUT redundancy checking breaks** - when a user writes an explicit pattern like
+   `Err(_)` for an uninhabited type, we can't find the `Err` constructor in the
+   filtered union, so we can't detect the pattern as unreachable.
+
+### Example
+
+```roc
+x : Try(I64, [])  // Error type is empty, so Err is uninhabited
+
+match x {
+    Err(_) => 0   // This should be flagged as REDUNDANT/UNREACHABLE
+    Ok(n) => n
+}
+```
+
+- If we filter `Err` at union construction: `findTagId("Err")` returns `null`,
+  causing a type error instead of a redundancy warning.
+- If we keep `Err` in the union but skip it during exhaustiveness checking:
+  the pattern is correctly identified as unreachable.
+
+### The `isTypeInhabited` Implementation
+
+The inhabitedness check uses a mostly stack-based approach for efficiency:
+
+- **Records/Tuples:** All fields are pushed onto a work stack (AND semantics - if
+  any field is uninhabited, the whole thing is uninhabited).
+- **Tag Unions:** Checked with a local stack per tag (OR semantics - if any tag
+  is fully inhabited, the union is inhabited). For deeply nested tag unions,
+  recursive calls are used.
+- **Aliases/Nominals:** Backing types are followed via the stack.
+
+The implementation correctly handles builtin numeric types (I64, U8, etc.) which
+have `[]` as their backing type but are actually inhabited primitives.
+
 ## Acceptance Criteria (All Met)
 
 - [x] All wildcards have their type information tracked (via `ColumnTypes`)
 - [x] `isInhabited()` correctly returns `false` for wildcards on empty types
 - [x] No hardcoded `return true` for wildcards without type info in normal paths
 - [x] Comprehensive tests for empty type wildcards
-- [x] No TODOs, hacks, or workarounds in the solution
+- [x] Open union semantics correctly handle both flex and rigid extensions
+- [x] No TODOs or workarounds in the implementation

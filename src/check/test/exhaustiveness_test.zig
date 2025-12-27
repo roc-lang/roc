@@ -556,3 +556,42 @@ test "exhaustive - deeply nested uninhabited in record field" {
     // The deeply nested Err case is uninhabited
     try test_env.assertLastDefType("I64");
 }
+
+// TODO: This test exposes a bug where inline tag unions with 2+ tags are only storing
+// 1 tag in the type store. Once that bug is fixed, re-enable this test.
+// test "redundant - pattern on tag with direct empty arg" {
+//     // Matching on a tag whose argument is directly an empty tag union
+//     const source =
+//         \\x : [HasEmpty([]), Normal(I64)]
+//         \\x = Normal(42i64)
+//         \\
+//         \\result = match x {
+//         \\    HasEmpty(_) => 0i64
+//         \\    Normal(n) => n
+//         \\}
+//     ;
+//     var test_env = try TestEnv.init("Test", source);
+//     defer test_env.deinit();
+//
+//     // HasEmpty pattern is unreachable because [] is uninhabited
+//     try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+// }
+
+// TODO: This test exposes a bug where inline tag unions with 3+ tags are only stored
+// with 1 tag in the type store. Once that bug is fixed, re-enable this test.
+// test "non-exhaustive - not all inhabited tags covered with empty arg" {
+//     // Ensure we still require patterns for inhabited tags even when some are uninhabited
+//     const source =
+//         \\x : [A(I64), B([]), C(Str)]
+//         \\x = A(42i64)
+//         \\
+//         \\result = match x {
+//         \\    A(n) => n
+//         \\}
+//     ;
+//     var test_env = try TestEnv.init("Test", source);
+//     defer test_env.deinit();
+//
+//     // B is uninhabited but C is still inhabited and needs a pattern
+//     try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+// }
