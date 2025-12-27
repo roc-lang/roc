@@ -35,6 +35,29 @@ pub const NumKind = enum {
     numeral,
 };
 
+/// Represents Roc's Str type in LLVM
+/// Str is a pointer-and-length pair (no capacity, since strings are immutable)
+pub const StrLayout = struct {
+    ptr: Builder.Type = .ptr,
+    len: Builder.Type = .i64,
+
+    pub fn toFieldTypes(self: StrLayout) [2]Builder.Type {
+        return .{ self.ptr, self.len };
+    }
+};
+
+/// Represents Roc's List type in LLVM
+/// List is a pointer, length, and capacity triple
+pub const ListLayout = struct {
+    ptr: Builder.Type = .ptr,
+    len: Builder.Type = .i64,
+    capacity: Builder.Type = .i64,
+
+    pub fn toFieldTypes(self: ListLayout) [3]Builder.Type {
+        return .{ self.ptr, self.len, self.capacity };
+    }
+};
+
 /// LLVM IR Emitter for Roc programs
 pub const LlvmEmitter = struct {
     /// The LLVM IR builder
@@ -103,6 +126,69 @@ pub const LlvmEmitter = struct {
             .dec => .i128, // Dec is stored as i128
             .numeral => .i64, // Default unspecialized numeric type
         };
+    }
+
+    // ==================== Type Creation Methods ====================
+
+    /// Get the LLVM type for Roc's Bool
+    pub fn boolType(_: *LlvmEmitter) Builder.Type {
+        return .i1;
+    }
+
+    /// Get the LLVM pointer type (opaque pointer in LLVM 15+)
+    pub fn ptrType(_: *LlvmEmitter) Builder.Type {
+        return .ptr;
+    }
+
+    /// Create an LLVM struct type from field types
+    /// This is used for Roc Records
+    pub fn createRecordType(
+        self: *LlvmEmitter,
+        field_types: []const Builder.Type,
+    ) Error!Builder.Type {
+        return self.builder.structType(.normal, field_types) catch return error.OutOfMemory;
+    }
+
+    /// Create an LLVM struct type for Roc's Str
+    /// Layout: { ptr: *u8, len: u64 }
+    pub fn createStrType(self: *LlvmEmitter) Error!Builder.Type {
+        const layout = StrLayout{};
+        const fields = layout.toFieldTypes();
+        return self.builder.structType(.normal, &fields) catch return error.OutOfMemory;
+    }
+
+    /// Create an LLVM struct type for Roc's List
+    /// Layout: { ptr: *T, len: u64, capacity: u64 }
+    pub fn createListType(self: *LlvmEmitter) Error!Builder.Type {
+        const layout = ListLayout{};
+        const fields = layout.toFieldTypes();
+        return self.builder.structType(.normal, &fields) catch return error.OutOfMemory;
+    }
+
+    /// Create a tagged union type for Roc tag unions
+    /// Layout: { tag: iN, payload: largest_payload_type }
+    /// The tag size depends on the number of variants
+    pub fn createTagUnionType(
+        self: *LlvmEmitter,
+        tag_type: Builder.Type,
+        payload_type: Builder.Type,
+    ) Error!Builder.Type {
+        const fields = [_]Builder.Type{ tag_type, payload_type };
+        return self.builder.structType(.normal, &fields) catch return error.OutOfMemory;
+    }
+
+    /// Get the appropriate integer type for a tag discriminant
+    /// Based on the number of variants
+    pub fn tagDiscriminantType(_: *LlvmEmitter, num_variants: u64) Builder.Type {
+        if (num_variants <= 256) {
+            return .i8;
+        } else if (num_variants <= 65536) {
+            return .i16;
+        } else if (num_variants <= 4294967296) {
+            return .i32;
+        } else {
+            return .i64;
+        }
     }
 
     /// Emit an integer constant
@@ -264,6 +350,186 @@ pub const LlvmEmitter = struct {
         const wip = self.wip_function orelse return error.NoActiveFunction;
         wip.cursor = .{ .block = block };
     }
+
+    // ==================== Struct Operations ====================
+
+    /// Extract a value from a struct/record by field index
+    pub fn emitExtractValue(
+        self: *LlvmEmitter,
+        aggregate: Builder.Value,
+        index: u32,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.extractValue(aggregate, &.{index}, "") catch return error.OutOfMemory;
+    }
+
+    /// Insert a value into a struct/record at field index
+    pub fn emitInsertValue(
+        self: *LlvmEmitter,
+        aggregate: Builder.Value,
+        element: Builder.Value,
+        index: u32,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.insertValue(aggregate, element, &.{index}, "") catch return error.OutOfMemory;
+    }
+
+    /// Get element pointer for struct field access
+    pub fn emitStructGep(
+        self: *LlvmEmitter,
+        struct_type: Builder.Type,
+        ptr: Builder.Value,
+        field_index: u32,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.gepStruct(struct_type, ptr, field_index, "") catch return error.OutOfMemory;
+    }
+
+    // ==================== Comparison Operations ====================
+
+    /// Integer comparison conditions
+    pub const IntCond = enum {
+        eq, // equal
+        ne, // not equal
+        ugt, // unsigned greater than
+        uge, // unsigned greater or equal
+        ult, // unsigned less than
+        ule, // unsigned less or equal
+        sgt, // signed greater than
+        sge, // signed greater or equal
+        slt, // signed less than
+        sle, // signed less or equal
+    };
+
+    /// Emit an integer comparison
+    pub fn emitICmp(
+        self: *LlvmEmitter,
+        cond: IntCond,
+        lhs: Builder.Value,
+        rhs: Builder.Value,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        const llvm_cond: Builder.IntegerCondition = switch (cond) {
+            .eq => .eq,
+            .ne => .ne,
+            .ugt => .ugt,
+            .uge => .uge,
+            .ult => .ult,
+            .ule => .ule,
+            .sgt => .sgt,
+            .sge => .sge,
+            .slt => .slt,
+            .sle => .sle,
+        };
+        return wip.icmp(llvm_cond, lhs, rhs, "") catch return error.OutOfMemory;
+    }
+
+    /// Float comparison conditions
+    pub const FloatCond = enum {
+        oeq, // ordered equal
+        one, // ordered not equal
+        ogt, // ordered greater than
+        oge, // ordered greater or equal
+        olt, // ordered less than
+        ole, // ordered less or equal
+    };
+
+    /// Emit a floating point comparison
+    pub fn emitFCmp(
+        self: *LlvmEmitter,
+        cond: FloatCond,
+        lhs: Builder.Value,
+        rhs: Builder.Value,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        const llvm_cond: Builder.FloatCondition = switch (cond) {
+            .oeq => .oeq,
+            .one => .one,
+            .ogt => .ogt,
+            .oge => .oge,
+            .olt => .olt,
+            .ole => .ole,
+        };
+        return wip.fcmp(.normal, llvm_cond, lhs, rhs, "") catch return error.OutOfMemory;
+    }
+
+    // ==================== Memory Operations ====================
+
+    /// Emit an alloca instruction (allocate on stack)
+    pub fn emitAlloca(self: *LlvmEmitter, ty: Builder.Type) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.alloca(.normal, ty, .none, "") catch return error.OutOfMemory;
+    }
+
+    /// Emit a load instruction
+    pub fn emitLoad(self: *LlvmEmitter, ty: Builder.Type, ptr: Builder.Value) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.load(.normal, ty, ptr, "") catch return error.OutOfMemory;
+    }
+
+    /// Emit a store instruction
+    pub fn emitStore(self: *LlvmEmitter, val: Builder.Value, ptr: Builder.Value) Error!void {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        _ = wip.store(.normal, val, ptr, "") catch return error.OutOfMemory;
+    }
+
+    // ==================== Call Operations ====================
+
+    /// Emit a function call
+    pub fn emitCall(
+        self: *LlvmEmitter,
+        fn_type: Builder.Type,
+        callee: Builder.Value,
+        args: []const Builder.Value,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.call(.normal, fn_type, callee, args, "") catch return error.OutOfMemory;
+    }
+
+    // ==================== PHI Node Operations ====================
+
+    /// Emit a phi node for merging values from different branches
+    pub fn emitPhi(
+        self: *LlvmEmitter,
+        ty: Builder.Type,
+    ) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.phi(ty, "") catch return error.OutOfMemory;
+    }
+
+    // ==================== Boolean Operations ====================
+
+    /// Emit a boolean constant
+    pub fn emitBoolConst(self: *LlvmEmitter, value: bool) Error!Builder.Value {
+        const constant = self.builder.intConst(.i1, if (value) 1 else 0) catch return error.OutOfMemory;
+        return constant.toValue();
+    }
+
+    /// Emit boolean AND
+    pub fn emitAnd(self: *LlvmEmitter, lhs: Builder.Value, rhs: Builder.Value) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.bin(.@"and", lhs, rhs, "") catch return error.OutOfMemory;
+    }
+
+    /// Emit boolean OR
+    pub fn emitOr(self: *LlvmEmitter, lhs: Builder.Value, rhs: Builder.Value) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.bin(.@"or", lhs, rhs, "") catch return error.OutOfMemory;
+    }
+
+    /// Emit boolean XOR (also used for NOT when xor with true)
+    pub fn emitXor(self: *LlvmEmitter, lhs: Builder.Value, rhs: Builder.Value) Error!Builder.Value {
+        const wip = self.wip_function orelse return error.NoActiveFunction;
+        return wip.bin(.xor, lhs, rhs, "") catch return error.OutOfMemory;
+    }
+
+    /// Emit boolean NOT (xor with 1)
+    pub fn emitNot(self: *LlvmEmitter, val: Builder.Value) Error!Builder.Value {
+        const true_val = try self.emitBoolConst(true);
+        return self.emitXor(val, true_val);
+    }
+
+    // ==================== Builder Access ====================
 
     /// Get the underlying LLVM Builder for direct access
     pub fn getBuilder(self: *LlvmEmitter) *Builder {
