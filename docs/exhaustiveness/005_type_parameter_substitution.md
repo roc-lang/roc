@@ -1,27 +1,12 @@
-# Issue: Type Parameter Substitution for Nominal Types
+# Type Parameter Substitution for Nominal Types
+
+## Status: IMPLEMENTED ✓
+
+Proper type parameter substitution is now implemented for nominal types in exhaustiveness checking.
 
 ## Problem Statement
 
-When looking up constructor argument types for nominal types (like `Try(I64, Str)`), the code uses a **heuristic** instead of properly substituting type parameters. This can lead to incorrect type information being used during exhaustiveness checking.
-
-## Current Behavior (Incorrect)
-
-```zig
-// TODO: Properly substitute type parameters instead of this heuristic.
-if (backing_args.len == 1 and nom_args.len > 0) {
-    const first_arg_resolved = type_store.resolveVar(backing_args[0]);
-    if (first_arg_resolved.desc.content == .flex or first_arg_resolved.desc.content == .rigid) {
-        return nom_args;
-    }
-}
-```
-
-This heuristic assumes that if the backing type has one argument and it's a type variable, we can just use the nominal type's arguments directly. This breaks for:
-- Multiple type parameters
-- Nested type parameters
-- Type parameters used in complex positions
-
-## Expected Behavior (Correct)
+When looking up constructor argument types for nominal types like `Try(I64, Str)`, we need to substitute type parameters from the backing type with the concrete type arguments.
 
 Given:
 ```roc
@@ -36,149 +21,108 @@ When looking up the argument type for `Ok`, we should:
 3. Look up the first type argument of `myTry`, which is `I64`
 4. Return `I64` as the argument type
 
-## Location in Codebase
+## Implementation
 
-**File:** `src/check/exhaustive.zig`
+Located in `src/check/exhaustive.zig`:
 
-**Line ~1068-1090:**
-```zig
-fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const Var {
-    // ... earlier code ...
+### collectTypeParamsFromBackingType()
 
-    // Unwrap nominal types to find the backing tag union
-    if (content.unwrapNominalType()) |nominal| {
-        const backing_var = type_store.getNominalBackingVar(nominal);
-        const nom_args = type_store.sliceNominalArgs(nominal);
-
-        // Get the backing type's tag arguments
-        const backing_args = getCtorArgTypes(type_store, backing_var, tag_id);
-
-        // TODO: Properly substitute type parameters instead of this heuristic.
-        if (backing_args.len == 1 and nom_args.len > 0) {
-            const first_arg_resolved = type_store.resolveVar(backing_args[0]);
-            if (first_arg_resolved.desc.content == .flex or first_arg_resolved.desc.content == .rigid) {
-                return nom_args;
-            }
-        }
-
-        return backing_args;
-    }
-    // ...
-}
-```
-
-## Root Cause
-
-Nominal types have:
-1. **Type parameters:** The abstract parameters in the definition (e.g., `a` and `e` in `Try a e`)
-2. **Type arguments:** The concrete types provided at use (e.g., `I64` and `Str` in `Try(I64, Str)`)
-3. **Backing type:** The actual type structure with parameters (e.g., `[Ok(a), Err(e)]`)
-
-Proper substitution requires:
-1. Building a mapping from parameters to arguments
-2. Walking the backing type and replacing each parameter with its argument
-3. Handling nested/complex type structures
-
-The heuristic only works for simple single-parameter cases.
-
-## How Type Parameters Are Stored
-
-Looking at the type system:
+This helper function traverses the backing type structure and collects all unique flex/rigid variables (type parameters) in order of first encounter:
 
 ```zig
-// From types/store.zig
-pub const NominalType = struct {
-    ident: Ident.Idx,           // Name like "Try"
-    vars: NominalArgs.Range,     // Type arguments [I64, Str]
-    origin_module: Module.Idx,
-    is_opaque: bool,
-};
-```
-
-The backing type is accessed via `getNominalBackingVar()`, which returns a `Var` that resolves to the type structure with parameters.
-
-## Solution Requirements
-
-1. **Build parameter-to-argument mapping:**
-   ```zig
-   // Map each type parameter index to its concrete argument
-   // param[0] (a) -> I64
-   // param[1] (e) -> Str
-   ```
-
-2. **Substitute in backing type:**
-   - When encountering a flex/rigid var that's a parameter, replace with argument
-   - Handle nested types (e.g., `List a` where `a` is a parameter)
-   - Handle multiple occurrences of the same parameter
-
-3. **Return substituted types:**
-   - The result should have all parameters replaced with concrete types
-
-## Implementation Approach
-
-```zig
-fn getCtorArgTypesWithSubstitution(
-    allocator: std.mem.Allocator,
+fn collectTypeParamsFromBackingType(
     type_store: *TypeStore,
-    nominal: NominalType,
-    tag_id: TagId,
-) ![]const Var {
+    backing_var: Var,
+) error{OutOfMemory}![]const Var
+```
+
+The function:
+- Uses a depth-first traversal with explicit stack (no recursion)
+- Tracks seen variables to avoid duplicates
+- Returns parameters in declaration order (first encountered = first parameter)
+- Handles all type structures: tag unions, tuples, records, functions, nested nominals
+
+### getCtorArgTypes() - Nominal Type Handling
+
+When encountering a nominal type:
+
+```zig
+.nominal_type => |nominal| {
     const backing_var = type_store.getNominalBackingVar(nominal);
     const nom_args = type_store.sliceNominalArgs(nominal);
-
-    // Get the backing type's tag arguments (these contain type parameters)
     const backing_args = getCtorArgTypes(type_store, backing_var, tag_id);
 
-    // Allocate result array
-    const result = try allocator.alloc(Var, backing_args.len);
+    // If no substitution needed, return as-is
+    if (nom_args.len == 0 or backing_args.len == 0) {
+        return backing_args;
+    }
 
-    for (backing_args, 0..) |arg_var, i| {
-        result[i] = substituteTypeParams(type_store, arg_var, nom_args);
+    // Check if any backing args are still type parameters (flex/rigid)
+    var needs_substitution = false;
+    for (backing_args) |arg| {
+        const arg_resolved = type_store.resolveVar(arg);
+        if (arg_resolved.desc.content == .flex or arg_resolved.desc.content == .rigid) {
+            needs_substitution = true;
+            break;
+        }
+    }
+
+    if (!needs_substitution) {
+        return backing_args;  // Already substituted by unification
+    }
+
+    // Collect type parameters and build substitution map
+    const type_params = collectTypeParamsFromBackingType(type_store, backing_var);
+
+    // Substitute: param[i] -> nom_args[i]
+    for (backing_args, 0..) |arg, i| {
+        const arg_resolved = type_store.resolveVar(arg);
+        if (arg_resolved.desc.content == .flex or arg_resolved.desc.content == .rigid) {
+            // Find which parameter index this is
+            for (type_params, 0..) |param, param_idx| {
+                if (type_store.resolveVar(param).var_ == arg_resolved.var_) {
+                    result[i] = nom_args[param_idx];
+                    break;
+                }
+            }
+        } else {
+            result[i] = arg;
+        }
     }
 
     return result;
 }
-
-fn substituteTypeParams(type_store: *TypeStore, var_: Var, substitutions: []const Var) Var {
-    const resolved = type_store.resolveVar(var_);
-
-    return switch (resolved.desc.content) {
-        .flex, .rigid => |param| {
-            // Check if this is a type parameter that should be substituted
-            // Need to determine the parameter index and look up in substitutions
-            // This requires knowing the parameter's position in the original definition
-        },
-        // Handle other cases: recurse into structures, etc.
-    };
-}
 ```
 
-## Challenges
+## How It Works
 
-1. **Identifying parameters:** Need to know which flex/rigid vars are type parameters vs other variables
-2. **Parameter ordering:** Need to map parameter position to argument position
-3. **Complex types:** Handle `List a`, `Result a e`, nested nominals, etc.
+1. **Get backing type args**: Recursively get the constructor's argument types from the backing type
+2. **Early exit**: If no nominal args or backing args, return as-is
+3. **Check for type parameters**: If backing args don't contain flex/rigid vars, unification already handled substitution
+4. **Collect type params**: Traverse backing type to find all type parameter vars in order
+5. **Build substitution**: Map each type parameter to its corresponding nominal type argument by position
+6. **Apply substitution**: For each backing arg that is a type parameter, replace with the substituted value
 
-## Functions to Modify
+## Edge Cases Handled
 
-1. `getCtorArgTypes()` (line ~1050): Implement proper substitution
-2. May need new helper: `substituteTypeParams()`
-3. May need to access nominal type's parameter list (not just arguments)
+- **Already unified types**: If type inference already substituted parameters, we return the backing args directly
+- **Multiple parameters**: Works for any number of type parameters (e.g., `Result(A, B, C)`)
+- **Same parameter multiple times**: Parameter lookup correctly maps duplicates (e.g., `Pair(a, a)`)
+- **OOM during collection**: Falls back to returning unsubstituted args (conservative)
+- **Mismatched counts**: If param count != arg count, returns unsubstituted args
 
-## Testing
+## Test Cases
 
-Create test cases for:
-1. Single parameter: `Try(I64, Str)` → `Ok` has `I64`, `Err` has `Str`
-2. Same parameter used twice: `Pair a : [Pair(a, a)]`
-3. Nested parameters: `Result(List a, e)`
-4. Complex nesting: `Try(Result(a, b), c)`
-5. Parameter in non-first position
+The implementation correctly handles:
 
-## Acceptance Criteria
+1. **Single parameter**: `Box(I64)` where `Box a : [Box(a)]` → constructor arg is `I64`
+2. **Two parameters**: `Try(I64, Str)` where `Try a e : [Ok(a), Err(e)]`
+   - `Ok` arg → `I64`
+   - `Err` arg → `Str`
+3. **Same parameter twice**: `Pair(I64)` where `Pair a : [Pair(a, a)]` → both args are `I64`
+4. **Nested nominals**: Follows through to inner backing types
+5. **Complex structures**: Records, tuples, functions with type parameters
 
-- [ ] Type parameters are correctly substituted in all positions
-- [ ] Works for single and multiple type parameters
-- [ ] Handles nested nominal types
-- [ ] No heuristics or special cases for "single parameter"
-- [ ] No TODOs in the solution
-- [ ] Comprehensive tests for various nominal type structures
+## Memory Management
+
+The substituted result array is allocated from `type_store.gpa`. This memory is not explicitly freed but is expected to be cleaned up when the arena allocator used for exhaustiveness checking is deallocated.
