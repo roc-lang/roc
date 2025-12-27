@@ -3203,22 +3203,24 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var);
 
-            // Check if this is a generalized var that should NOT be instantiated.
-            // Numeric literals with from_numeral constraints should unify directly
-            // so that the concrete type propagates back to the definition site.
-            // This fixes GitHub issue #8666 where polymorphic numerics defaulted to Dec.
+            // Instantiate generalized types to get fresh type variables at each use site.
+            //
+            // However, types containing unresolved numeric literals should NOT be instantiated,
+            // even if they are generalized. This is a two-part fix:
+            //
+            // 1. Direct numeric flex vars (like `x = 15`) are not generalized at all
+            //    (handled in generalize.zig) - GitHub #8666
+            //
+            // 2. Types CONTAINING numeric literals (like `Box({ count: 0 })`) ARE generalized
+            //    (to avoid rank mismatch panics), but we skip instantiation here so that
+            //    unification propagates back to the original type variable - GitHub #8765
+            //
+            // This split is necessary because:
+            // - Not generalizing causes rank issues when the type is used from different scopes
+            // - But instantiating creates fresh copies that break constraint propagation
             const should_instantiate = blk: {
                 if (resolved_pat.desc.rank != Rank.generalized) break :blk false;
-                // Don't instantiate if this has a from_numeral constraint
-                if (resolved_pat.desc.content == .flex) {
-                    const flex = resolved_pat.desc.content.flex;
-                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-                    for (constraints) |constraint| {
-                        if (constraint.origin == .from_numeral) {
-                            break :blk false;
-                        }
-                    }
-                }
+                if (self.containsFromNumeralConstraint(pat_var)) break :blk false;
                 break :blk true;
             };
 
@@ -5790,6 +5792,72 @@ fn flatTypeContainsError(self: *Self, flat_type: FlatType, visited: *std.AutoHas
 fn varsContainError(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) bool {
     for (vars) |v| {
         if (self.varContainsError(v, visited)) return true;
+    }
+    return false;
+}
+
+/// Check if a type variable contains any from_numeral constraint, either directly
+/// or nested within structures like records, tuples, and Box types.
+///
+/// This is used to prevent instantiation of types that contain unresolved numeric
+/// literals. Even though these types may be generalized (to avoid rank issues),
+/// we skip instantiation so that later usages can constrain the numeric type.
+///
+/// See the comment in e_lookup_local for the full explanation of why this split
+/// between generalization and instantiation is necessary (GitHub #8765).
+fn containsFromNumeralConstraint(self: *Self, var_: Var) bool {
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    return self.varContainsFromNumeral(var_, &visited);
+}
+
+fn varContainsFromNumeral(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)) bool {
+    const resolved = self.types.resolveVar(var_);
+
+    if (visited.contains(resolved.var_)) return false;
+    visited.put(resolved.var_, {}) catch return false;
+
+    return switch (resolved.desc.content) {
+        .flex => |flex| blk: {
+            const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+            for (constraints) |constraint| {
+                if (constraint.origin == .from_numeral) break :blk true;
+            }
+            break :blk false;
+        },
+        .rigid, .err => false,
+        .alias => |alias| self.varContainsFromNumeral(self.types.getAliasBackingVar(alias), visited),
+        .recursion_var => |rec_var| self.varContainsFromNumeral(rec_var.structure, visited),
+        .structure => |flat_type| self.flatTypeContainsFromNumeral(flat_type, visited),
+    };
+}
+
+fn flatTypeContainsFromNumeral(self: *Self, flat_type: FlatType, visited: *std.AutoHashMap(Var, void)) bool {
+    return switch (flat_type) {
+        .tuple => |tuple| self.varsContainFromNumeral(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| blk: {
+            var arg_iter = self.types.iterNominalArgs(nominal);
+            while (arg_iter.next()) |arg_var| {
+                if (self.varContainsFromNumeral(arg_var, visited)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (self.varsContainFromNumeral(fields.items(.var_), visited)) break :blk true;
+            break :blk self.varContainsFromNumeral(record.ext, visited);
+        },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            break :blk self.varsContainFromNumeral(fields_slice.items(.var_), visited);
+        },
+        .fn_pure, .fn_effectful, .fn_unbound, .tag_union, .empty_record, .empty_tag_union => false,
+    };
+}
+
+fn varsContainFromNumeral(self: *Self, vars: []const Var, visited: *std.AutoHashMap(Var, void)) bool {
+    for (vars) |v| {
+        if (self.varContainsFromNumeral(v, visited)) return true;
     }
     return false;
 }
