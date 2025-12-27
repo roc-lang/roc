@@ -40,11 +40,12 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
+const can = @import("can");
 
-const ModuleEnv = @import("ModuleEnv.zig");
-const CIR = @import("CIR.zig");
+const ModuleEnv = can.ModuleEnv;
+const CIR = can.CIR;
 const Expr = CIR.Expr;
-const Pattern = @import("Pattern.zig").Pattern;
+const Pattern = can.CIR.Pattern;
 
 const Self = @This();
 
@@ -172,7 +173,7 @@ pub fn liftClosure(
 }
 
 /// Import ClosureInfo from ClosureTransformer
-const ClosureTransformer = @import("ClosureTransformer.zig");
+const ClosureTransformer = can.ClosureTransformer;
 const ClosureInfo = ClosureTransformer.ClosureInfo;
 
 /// Lift a closure from ClosureInfo directly.

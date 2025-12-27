@@ -37,6 +37,7 @@ const RocAlloc = builtins.host_abi.RocAlloc;
 const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
+const LambdaLifter = @import("LambdaLifter.zig");
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
@@ -1396,7 +1397,6 @@ fn processSnapshotContent(
     var has_closure_transforms = false;
 
     // Lambda lifting storage - will be populated if we have closures
-    const LambdaLifter = can.LambdaLifter;
     var lifter: ?LambdaLifter = null;
     defer {
         if (lifter) |*l| l.deinit();
@@ -3198,7 +3198,7 @@ fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
 }
 
 /// Generate MONO section for mono tests - emits monomorphized type module
-fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const can.LambdaLifter.LiftedFunction) !void {
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const LambdaLifter.LiftedFunction) !void {
     // First, build the mono source in a buffer for validation
     var mono_buffer = std.ArrayList(u8).empty;
     defer mono_buffer.deinit(output.gpa);
@@ -3982,6 +3982,10 @@ test "TODO: cross-module function calls - string_interpolation_comparison" {}
 test "TODO: cross-module function calls - string_multiline_comparison" {}
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {}
+
+test "LambdaLifter" {
+    std.testing.refAllDecls(LambdaLifter);
+}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {
