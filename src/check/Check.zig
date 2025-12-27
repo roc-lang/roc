@@ -1055,8 +1055,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
                 // Unify statement var with body var
                 _ = try self.unify(stmt_var, body_var, &env);
 
-                // Generalize and check deferred constraints
-                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                // Clean up rank pool without generalizing (expect is not a lambda definition)
+                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), false);
                 try self.checkDeferredStaticDispatchConstraints(&env);
             },
             else => {
@@ -1432,8 +1432,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
         // Check the expr
         _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-        // Now that we are existing the scope, we must generalize then pop this rank
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        // Only generalize if this is a lambda expression (value restriction)
+        const should_generalize = self.isLambdaExpr(expr_idx);
+        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
 
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(&env);
@@ -1522,8 +1523,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Infer types for the body, checking against the instantaited annotation
         _ = try self.checkExpr(def.expr, env, expectation);
 
-        // Now that we are exiting the scope, we must generalize then pop this rank
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        // Only generalize if this is a lambda expression (value restriction)
+        const should_generalize = self.isLambdaExpr(def.expr);
+        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
 
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(env);
@@ -1683,6 +1685,10 @@ fn generateStandaloneTypeAnno(
     // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
 
+    // Push a new rank for generalization
+    try env.var_pool.pushRank();
+    defer env.var_pool.popRank();
+
     // Save top of scratch static dispatch constraints
     const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
     defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
@@ -1701,6 +1707,11 @@ fn generateStandaloneTypeAnno(
 
     // Unify the statement variable with the generated annotation type
     _ = try self.unify(stmt_var, anno_var, env);
+
+    // Generalize the type variables in the annotation.
+    // Standalone type annotations represent polymorphic function declarations,
+    // so they should always be generalized to allow proper instantiation at use sites.
+    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 }
 
 /// Generate types for type anno args
@@ -3203,33 +3214,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
             const resolved_pat = self.types.resolveVar(pat_var);
 
-            // Check if this is a generalized var that should NOT be instantiated.
-            // Numeric literals with from_numeral constraints should unify directly
-            // so that the concrete type propagates back to the definition site.
-            // This fixes GitHub issue #8666 where polymorphic numerics defaulted to Dec.
-            const should_instantiate = blk: {
-                if (resolved_pat.desc.rank != Rank.generalized) break :blk false;
-                // Don't instantiate if this has a from_numeral constraint
-                if (resolved_pat.desc.content == .flex) {
-                    const flex = resolved_pat.desc.content.flex;
-                    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-                    for (constraints) |constraint| {
-                        if (constraint.origin == .from_numeral) {
-                            break :blk false;
-                        }
-                    }
-                }
-                break :blk true;
-            };
-
-            if (should_instantiate) {
+            // Only lambdas get generalized (value restriction), so we instantiate
+            // if and only if the variable has been generalized. Non-lambda definitions
+            // (like numeric literals, records, etc.) are NOT generalized and are
+            // unified directly, allowing type constraints to propagate back.
+            // This fixes GitHub issues #8666 and #8765.
+            if (resolved_pat.desc.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
                 _ = try self.unify(expr_var, pat_var, env);
             }
-
-            // Unify this expression with the referenced pattern
         },
         .e_lookup_external => |ext| {
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
@@ -3442,8 +3437,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     _ = try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
                 }
 
-                // Now that we are existing the scope, we must generalize then pop this rank
-                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                // This is a lambda, so we can generalize it
+                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 
                 // Check any accumulated static dispatch constraints
                 try self.checkDeferredStaticDispatchConstraints(env);
@@ -4041,8 +4036,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
-                    // Now that we are existing the scope, we must generalize then pop this rank
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    // Local declarations inside functions use standard let-polymorphism
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
@@ -4104,8 +4099,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
-                    // Now that we are existing the scope, we must generalize then pop this rank
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    // Local declarations inside functions use standard let-polymorphism
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
@@ -5613,6 +5608,24 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         .recursion_var => true,
         // Error types: allow them to proceed
         .err => true,
+    };
+}
+
+/// Check if an expression represents a function definition that should be generalized.
+/// This includes lambdas and function declarations (even those without bodies).
+/// Value restriction: only function definitions should have their types generalized,
+/// not arbitrary value definitions like records, tuples, or numerals.
+fn isLambdaExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    return switch (expr) {
+        // Actual lambda expressions
+        .e_closure, .e_lambda => true,
+        // Annotation-only function declarations (e.g., `is_empty : List(a) -> Bool`)
+        // These represent polymorphic function signatures and should be generalized
+        .e_anno_only => true,
+        // Hosted/low-level lambdas also represent function declarations
+        .e_hosted_lambda, .e_low_level_lambda => true,
+        else => false,
     };
 }
 
