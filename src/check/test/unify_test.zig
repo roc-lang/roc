@@ -1301,8 +1301,7 @@ test "unify - closed tag union extends open" {
 // unification - recursion //
 
 test "unify - infinite type detected by occurs check" {
-    // Unification succeeds but creates an infinite type.
-    // The occurs check (run after definition solving) detects it.
+    // Unification succeeds, but the post-unification occurs check detects the infinite type.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -1319,24 +1318,20 @@ test "unify - infinite type detected by occurs check" {
     const b_tuple = types_mod.Tuple{ .elems = b_elems_range };
     try env.module_env.types.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
-    // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(a, b);
     try std.testing.expectEqual(.ok, result);
 
-    // But the occurs check (run after definition solving) detects the infinite type
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
     try std.testing.expectEqual(.infinite, occurs_result);
 }
 
 test "unify - anonymous recursion detected by occurs check" {
-    // Unification succeeds but creates an anonymous recursive type.
-    // The occurs check (run after definition solving) detects it.
+    // Unification succeeds, but the post-unification occurs check detects the anonymous recursion.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a tag union that recursively contains itself (anonymous recursion)
-    // This is like: a = [A a] unifying with b = [A b]
+    // Create self-referential tag unions: a = [A a], b = [A b]
     const tag_var_a = try env.module_env.types.fresh();
     const tag_a = try env.mkTag("A", &[_]Var{tag_var_a});
     const tag_union_a = try env.mkTagUnionClosed(&[_]Tag{tag_a});
@@ -1347,11 +1342,9 @@ test "unify - anonymous recursion detected by occurs check" {
     const tag_union_b = try env.mkTagUnionClosed(&[_]Tag{tag_b});
     try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
 
-    // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(tag_var_a, tag_var_b);
     try std.testing.expectEqual(.ok, result);
 
-    // But the occurs check (run after definition solving) detects the anonymous recursion
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, tag_var_a);
     try std.testing.expectEqual(.recursive_anonymous, occurs_result);
 }

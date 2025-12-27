@@ -1053,9 +1053,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Merge BEFORE recursing into children to enable cycle detection.
-        // If we encounter these same vars again during recursion, checkVarsEquiv
-        // will see they're now equivalent and skip, preventing infinite recursion.
+        // Early merge so self-referential types don't infinitely recurse
         self.merge(vars, vars.b.desc.content);
 
         const a_elems = self.types_store.sliceVars(a_tuple.elems);
@@ -1754,15 +1752,10 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Merge BEFORE recursing into tag arguments to enable cycle detection.
-        // If we encounter these same vars again during recursion (e.g., in a
-        // self-referential tag union like [A a] where a is the tag union),
-        // checkVarsEquiv will see they're now equivalent and skip.
-        // We'll update the merged content at the end with the final tag union.
+        // Early merge so self-referential types don't infinitely recurse
         self.merge(vars, vars.b.desc.content);
 
-        // First, unwrap all fields for tag unions, erroring if we encounter an
-        // invalid record ext var
+        // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
