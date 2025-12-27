@@ -13,6 +13,8 @@ match nestedList {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - nested_list_scoping.md:1:7:1:17
+MISSING METHOD - nested_list_scoping.md:4:17:4:22
+ - :0:0:0:0
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `nestedList` in this scope.
@@ -24,6 +26,20 @@ match nestedList {
 ```
       ^^^^^^^^^^
 
+
+**MISSING METHOD**
+The value before this ***** operator has a type that doesn't have a **times** method:
+**nested_list_scoping.md:4:17:4:22:**
+```roc
+    [x, [y]] => x * y
+```
+                ^^^^^
+
+The value's type, which does not have a method named **times**, is:
+
+    List(...)
+
+**Hint:**The ***** operator calls a method named **times** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -130,5 +146,5 @@ match nestedList {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(...)"))
+(expr (type "Error"))
 ~~~

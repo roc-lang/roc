@@ -8,9 +8,33 @@ type=expr
 (True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - tuple_bool.md:1:38:1:43
+MISSING METHOD - tuple_bool.md:1:45:1:51
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
+**tuple_bool.md:1:38:1:43:**
+```roc
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+```
+                                     ^^^^^
+
+The value's type, which does not have a method named **not**, is:
+
+    [True, .._others]
+
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
+**tuple_bool.md:1:45:1:51:**
+```roc
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+```
+                                            ^^^^^^
+
+The value's type, which does not have a method named **not**, is:
+
+    [False, .._others]
+
 # TOKENS
 ~~~zig
 OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,OpBang,UpperIdent,Comma,OpBang,UpperIdent,Comma,UpperIdent,OpAnd,UpperIdent,Comma,OpBang,UpperIdent,OpOr,OpBang,UpperIdent,CloseRound,
@@ -67,5 +91,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "([True, .._others], [False, .._others2], Bool, Bool, Bool, Bool, Bool, Bool)"))
+(expr (type "([True, .._others], [False, .._others2], Bool, Bool, Error, Error, Bool, Bool)"))
 ~~~

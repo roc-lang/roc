@@ -8,9 +8,20 @@ type=expr
 (|x| !x)(True)
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 # PROBLEMS
-NIL
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
+**bool_closure_type_check.md:1:6:1:8:**
+```roc
+(|x| !x)(True)
+```
+     ^^
+
+The value's type, which does not have a method named **not**, is:
+
+    [True, .._others]
+
 # TOKENS
 ~~~zig
 OpenRound,OpBar,LowerIdent,OpBar,OpBang,LowerIdent,CloseRound,NoSpaceOpenRound,UpperIdent,CloseRound,
@@ -44,5 +55,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Bool"))
+(expr (type "Error"))
 ~~~

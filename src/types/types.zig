@@ -884,8 +884,9 @@ pub const StaticDispatchConstraint = struct {
     num_literal: ?NumeralInfo = null,
 
     /// Tracks where a static dispatch constraint originated from
-    pub const Origin = enum(u2) {
+    pub const Origin = enum(u4) {
         desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
+        desugared_unaryop, // From uniary operator desugaring (e.g., !)
         method_call, // From .method() syntax
         where_clause, // From where clause in type annotation
         from_numeral, // From numeric literal conversion

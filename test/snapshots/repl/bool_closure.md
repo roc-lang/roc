@@ -5,7 +5,7 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» (|x| !x)(True)
+» (|x| !x)(Bool.True)
 ~~~
 # OUTPUT
 False

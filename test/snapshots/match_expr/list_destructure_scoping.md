@@ -88,5 +88,5 @@ match list {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "a where [a.plus : a, a -> a]"))
 ~~~

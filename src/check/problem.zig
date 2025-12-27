@@ -252,7 +252,10 @@ pub const IncompatibleMatchBranches = struct {
 pub const InvalidBoolBinop = struct {
     binop_expr: CIR.Expr.Idx,
     problem_side: enum { lhs, rhs },
-    binop: enum { @"and", @"or" },
+    binop: BoolBinop,
+
+    /// Bool binop
+    pub const BoolBinop = enum { @"and", @"or" };
 };
 
 // static dispatch //

@@ -257,12 +257,12 @@ main! = |_| {
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e -> e"))
 		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]")))
+		(patt (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
+		(patt (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]")))
 	(expressions
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e -> e"))
 		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))))
+		(expr (type "e -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))
+		(expr (type "_arg -> e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]"))))
 ~~~

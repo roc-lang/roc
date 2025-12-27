@@ -44,5 +44,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a, a -> a"))
+(expr (type "a, a -> a where [a.plus : a, a -> a]"))
 ~~~

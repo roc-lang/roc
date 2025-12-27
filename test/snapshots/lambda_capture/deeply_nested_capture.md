@@ -128,5 +128,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d, d.times : d, d -> d]"))
 ~~~

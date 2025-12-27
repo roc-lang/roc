@@ -186,5 +186,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(a, b, c, d, e, Bool, Bool, Bool, Bool, _field, _field2, f, Bool, Bool, Error) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
+(expr (type "(a, b, c, d, e, Bool, Bool, Bool, Bool, Bool, Bool, f, Bool, Bool, Error) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.minus : b, b -> b, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.times : c, c -> c, d.div_by : d, d -> d, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.rem_by : e, e -> e, f.div_trunc_by : f, f -> f, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 ~~~
