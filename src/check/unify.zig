@@ -194,6 +194,11 @@ pub fn unifyWithConf(
     // First reset the scratch store
     unify_scratch.reset();
 
+    // Snapshot types BEFORE unification - this preserves type information
+    // for error messages even if early merging corrupts the types during unification
+    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
@@ -203,9 +208,6 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-
                     break :blk .{ .type_mismatch = .{
                         .types = .{
                             .expected_var = a,
@@ -233,12 +235,12 @@ pub fn unifyWithConf(
                     };
 
                     const literal_var = if (literal_is_a) a else b;
-                    const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
+                    const num_expected_var = if (literal_is_a) b else a;
+                    const num_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, num_expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
-                        .expected_type = expected_snapshot,
+                        .expected_type = num_expected_snapshot,
                     } };
                 },
                 error.NegativeUnsignedInt => {
@@ -256,12 +258,12 @@ pub fn unifyWithConf(
                     };
 
                     const literal_var = if (literal_is_a) a else b;
-                    const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
+                    const neg_expected_var = if (literal_is_a) b else a;
+                    const neg_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, neg_expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
-                        .expected_type = expected_snapshot,
+                        .expected_type = neg_expected_snapshot,
                     } };
                 },
                 error.UnifyErr => {
@@ -316,13 +318,13 @@ pub fn unifyWithConf(
                             },
                         }
                     } else {
-                        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+                        const bug_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                        const bug_actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = expected_snapshot,
+                            .expected = bug_expected_snapshot,
                             .actual_var = b,
-                            .actual = actual_snapshot,
+                            .actual = bug_actual_snapshot,
                         } };
                     }
                 },
@@ -1160,11 +1162,36 @@ const Unifier = struct {
 
         const nominal_backing_tag_union = nominal_backing_flat.tag_union;
 
-        // Unify the two tag unions directly (without modifying the nominal's backing)
-        // This checks that:
-        // - All tags in the anonymous union exist in the nominal union
-        // - Payload types match
-        // - Extension variables are compatible
+        // Check if all tags in the anon union exist in the nominal union BEFORE
+        // doing any modifications. This prevents corrupting type information when
+        // unification fails (which would cause bad error messages).
+        // Check that nominal has an open extension or all anon tags are in nominal
+        const nominal_ext_resolved = self.types_store.resolveVar(nominal_backing_tag_union.ext);
+        const nominal_is_closed = nominal_ext_resolved.desc.content == .structure and
+            nominal_ext_resolved.desc.content.structure == .empty_tag_union;
+
+        if (nominal_is_closed) {
+            // For closed nominals, every tag in anon must exist in nominal
+            const anon_tag_slice = self.types_store.tags.sliceRange(anon_tag_union.tags);
+            const nominal_tag_slice = self.types_store.tags.sliceRange(nominal_backing_tag_union.tags);
+            const anon_names = anon_tag_slice.items(.name);
+            const nominal_names = nominal_tag_slice.items(.name);
+
+            for (anon_names) |anon_name| {
+                var found = false;
+                for (nominal_names) |nominal_name| {
+                    if (anon_name == nominal_name) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return error.TypeMismatch;
+                }
+            }
+        }
+
+        // Now safe to proceed with full unification
         try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
 
         // If we get here, unification succeeded!
@@ -1752,9 +1779,6 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Early merge so self-referential types don't infinitely recurse
-        self.merge(vars, vars.b.desc.content);
-
         // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
@@ -1779,6 +1803,33 @@ const Unifier = struct {
         } else if (b_has_uniq_tags) {
             tags_ext = .b_extends_a;
         }
+
+        // Check if extensions are closed (empty_tag_union)
+        const a_ext_resolved = self.types_store.resolveVar(a_gathered_tags.ext);
+        const b_ext_resolved = self.types_store.resolveVar(b_gathered_tags.ext);
+        const a_ext_is_closed = a_ext_resolved.desc.content == .structure and
+            a_ext_resolved.desc.content.structure == .empty_tag_union;
+        const b_ext_is_closed = b_ext_resolved.desc.content == .structure and
+            b_ext_resolved.desc.content.structure == .empty_tag_union;
+
+        // Fast-fail cases where unification will definitely fail (before any merging)
+        // This prevents corrupting type information for better error messages
+        if (tags_ext == .both_extend and (a_ext_is_closed or b_ext_is_closed)) {
+            // If we have unique tags on both sides AND either side is closed,
+            // unification cannot succeed - fail immediately
+            return error.TypeMismatch;
+        }
+        if (tags_ext == .a_extends_b and b_ext_is_closed) {
+            // a has unique tags but b is closed - can't extend
+            return error.TypeMismatch;
+        }
+        if (tags_ext == .b_extends_a and a_ext_is_closed) {
+            // b has unique tags but a is closed - can't extend
+            return error.TypeMismatch;
+        }
+
+        // Early merge so self-referential types don't infinitely recurse
+        self.merge(vars, vars.b.desc.content);
 
         // Unify tags
         switch (tags_ext) {

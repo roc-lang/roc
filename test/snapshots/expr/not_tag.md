@@ -20,13 +20,12 @@ This expression is used in an unexpected way:
 
 It has the type:
 
-    [C(a), ..[False, True, .._others]]
+    [C(a), .._others]
       where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 But I expected it to be:
 
-    [C(a), ..[False, True, .._others]]
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    Bool
 
 # TOKENS
 ~~~zig
