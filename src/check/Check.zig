@@ -4681,6 +4681,15 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .problem_branch_index = idx,
             } });
         }
+
+        // Report unmatchable patterns (patterns on uninhabited types)
+        for (result.unmatchable_indices) |idx| {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .unmatchable_pattern = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = idx,
+            } });
+        }
     }
 
     return does_fx;

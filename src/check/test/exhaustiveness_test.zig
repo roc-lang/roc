@@ -451,9 +451,9 @@ test "redundant - wildcard after complete coverage on type with empty variant" {
     try test_env.assertFirstTypeError("REDUNDANT PATTERN");
 }
 
-test "redundant - Err pattern first on empty error type is unreachable" {
+test "unmatchable - Err pattern first on empty error type is unreachable" {
     // When the error type is empty [], an Err(_) pattern can never match
-    // because no Err values can exist. This should be flagged as redundant.
+    // because no Err values can exist. This should be flagged as unmatchable.
     const source =
         \\x : Try(I64, [])
         \\x = Ok(42i64)
@@ -466,7 +466,7 @@ test "redundant - Err pattern first on empty error type is unreachable" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
 }
 
 // Additional Inhabitedness Edge Cases
@@ -557,7 +557,7 @@ test "exhaustive - deeply nested uninhabited in record field" {
     try test_env.assertLastDefType("I64");
 }
 
-test "redundant - pattern on tag with direct empty arg" {
+test "unmatchable - pattern on tag with direct empty arg" {
     // Matching on a tag whose argument is directly an empty tag union
     const source =
         \\x : [HasEmpty([]), Normal(I64)]
@@ -572,7 +572,7 @@ test "redundant - pattern on tag with direct empty arg" {
     defer test_env.deinit();
 
     // HasEmpty pattern is unreachable because [] is uninhabited
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
 }
 
 test "non-exhaustive - not all inhabited tags covered with empty arg" {
@@ -612,8 +612,8 @@ test "exhaustive - List of empty type is still inhabited" {
     try test_env.assertLastDefType("I64");
 }
 
-test "redundant - second pattern on List of empty type" {
-    // When both [] and [_, ..] are present, the [_, ..] is redundant
+test "unmatchable - second pattern on List of empty type" {
+    // When both [] and [_, ..] are present, the [_, ..] is unmatchable
     // because no non-empty list of [] can exist
     const source =
         \\x : List([])
@@ -627,10 +627,10 @@ test "redundant - second pattern on List of empty type" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
 }
 
-test "redundant - non-empty list pattern on List of empty type" {
+test "unmatchable - non-empty list pattern on List of empty type" {
     // A non-empty list pattern on List([]) is unreachable
     // because you can't construct a list with elements of type []
     const source =
@@ -645,5 +645,111 @@ test "redundant - non-empty list pattern on List of empty type" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+}
+
+// Extension Chain Tests
+//
+// These tests verify that the exhaustiveness checker correctly handles tag unions
+// whose tags may be split across extension chains during type unification.
+// Extension chains are an internal representation detail where unifying
+// [A, B] with [B, C] might produce [B, ..ext] where ext = [A, ..] or similar.
+//
+// The implementation follows extension chains in:
+// - buildUnionFromTagUnion: collects all tags for exhaustiveness checking
+// - getCtorArgTypes: finds argument types for a tag at any position
+// - isTagUnionInhabited: checks if any tag is inhabited across the chain
+//
+// These tests exercise the code paths that would be affected by extension chains,
+// even though the specific internal representation may vary.
+
+test "exhaustive - union with many tags requires all inhabited to be matched" {
+    // This tests that all tags are found even if they might be split across extensions
+    const source =
+        \\x : [A(I64), B(Str), C(U64), D(F64)]
+        \\x = A(1i64)
+        \\
+        \\result = match x {
+        \\    A(_) => 1i64
+        \\    B(_) => 2i64
+        \\    C(_) => 3i64
+        \\    D(_) => 4i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "non-exhaustive - missing tag from union with many tags" {
+    // Verifies we detect missing tags even if they're at different positions
+    const source =
+        \\x : [A(I64), B(Str), C(U64), D(F64)]
+        \\x = A(1i64)
+        \\
+        \\result = match x {
+        \\    A(n) => 1i64
+        \\    B(_) => 2i64
+        \\    D(_) => 4i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - union with mix of inhabited and uninhabited tags" {
+    // Tests that uninhabited tags are properly skipped across the whole union
+    const source =
+        \\x : [A(I64), B([]), C(Str), D([]), E(U64)]
+        \\x = A(1i64)
+        \\
+        \\result = match x {
+        \\    A(_) => 1i64
+        \\    C(_) => 3i64
+        \\    E(_) => 5i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // B and D are uninhabited (argument is []), so only A, C, E need patterns
+    try test_env.assertLastDefType("I64");
+}
+
+test "non-exhaustive - missing inhabited tag when uninhabited are present" {
+    // Verifies we still require inhabited tags even when uninhabited exist
+    const source =
+        \\x : [A(I64), B([]), C(Str), D([]), E(U64)]
+        \\x = A(1i64)
+        \\
+        \\result = match x {
+        \\    A(n) => 1i64
+        \\    C(_) => 3i64
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // E is inhabited but not matched
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - tags at various positions all uninhabited" {
+    // Tests that a union is exhausted when all remaining tags are uninhabited
+    const source =
+        \\x : [A([]), B([]), C(I64), D([]), E([])]
+        \\x = C(42i64)
+        \\
+        \\result = match x {
+        \\    C(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Only C is inhabited, so matching just C is exhaustive
+    try test_env.assertLastDefType("I64");
 }

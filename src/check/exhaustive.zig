@@ -1127,6 +1127,19 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
 /// - It's a function type
 /// - It has at least one constructor with all inhabited arguments
 fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
+    // Use a seen set to detect cycles in recursive types
+    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer seen.deinit(type_store.gpa);
+    return isTypeInhabitedWithSeen(type_store, builtin_idents, type_var, &seen);
+}
+
+/// Internal helper that tracks seen variables to detect cycles.
+fn isTypeInhabitedWithSeen(
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    type_var: Var,
+    seen: *std.AutoHashMapUnmanaged(Var, void),
+) error{OutOfMemory}!bool {
     var stack: std.ArrayList(Var) = .empty;
     defer stack.deinit(type_store.gpa);
     try stack.append(type_store.gpa, type_var);
@@ -1134,7 +1147,14 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
     while (stack.items.len > 0) {
         const var_to_check = stack.pop().?;
         const resolved = type_store.resolveVar(var_to_check);
+        const resolved_var = resolved.var_;
         const content = resolved.desc.content;
+
+        // Cycle detection: if we've seen this resolved variable before, skip it.
+        // Cycles in recursive types are considered inhabited (if we got here,
+        // there must be a non-recursive path that's inhabited).
+        const gop = try seen.getOrPut(type_store.gpa, resolved_var);
+        if (gop.found_existing) continue;
 
         switch (content) {
             // Flex and rigid variables are unconstrained - assume inhabited
@@ -1163,112 +1183,18 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 
                 // Tag unions: uninhabited only if ALL variants have at least one uninhabited arg
                 .tag_union => |tag_union| {
-                    const tags_slice = type_store.getTagsSlice(tag_union.tags);
-
-                    if (tags_slice.len == 0) {
-                        // No tags - check if extension is open (could have more tags)
-                        if (isOpenExtension(type_store, tag_union.ext)) {
-                            // Open extension means more tags might exist, assume inhabited
-                            continue;
-                        }
-                        // Closed empty tag union is uninhabited
-                        return false;
-                    }
-
                     // Check if at least one tag variant is inhabited (OR semantics)
                     // A tag is inhabited if all its arguments are inhabited
-                    const tag_args = tags_slice.items(.args);
-                    var any_tag_inhabited = false;
-
-                    tag_loop: for (tag_args) |args_range| {
-                        const arg_vars = type_store.sliceVars(args_range);
-
-                        // Check all arguments of this tag using a local stack
-                        // This avoids deep recursion while getting AND semantics for args
-                        var arg_stack: std.ArrayList(Var) = .empty;
-                        defer arg_stack.deinit(type_store.gpa);
-                        try arg_stack.appendSlice(type_store.gpa, arg_vars);
-
-                        while (arg_stack.items.len > 0) {
-                            const arg_var = arg_stack.pop().?;
-                            const arg_resolved = type_store.resolveVar(arg_var);
-                            const arg_content = arg_resolved.desc.content;
-                            switch (arg_content) {
-                                .flex, .rigid, .recursion_var, .err => {},
-                                .alias => |alias| {
-                                    try arg_stack.append(type_store.gpa, type_store.getAliasBackingVar(alias));
-                                },
-                                .structure => |arg_flat| switch (arg_flat) {
-                                    .empty_tag_union => continue :tag_loop, // Uninhabited arg, try next tag
-                                    .empty_record => {},
-                                    .tag_union => |inner_union| {
-                                        // TODO: This uses recursion for nested tag unions, which breaks
-                                        // the otherwise stack-based approach of this function. This is
-                                        // because tag unions have OR semantics (if ANY tag is inhabited,
-                                        // the union is inhabited), while our outer stack has AND semantics
-                                        // (ALL types on the stack must be inhabited). To properly handle
-                                        // nested tag unions without recursion, we would need a more
-                                        // sophisticated work-list algorithm that tracks both the current
-                                        // path AND alternative branches to explore. For now, recursion
-                                        // works correctly but may cause stack overflow on deeply nested
-                                        // tag union types. In practice, such deep nesting is rare.
-                                        //
-                                        // The same tradeoff exists in the Rust implementation
-                                        // (crates/compiler/types/src/subs.rs, is_inhabited function).
-
-                                        // Nested tag union - check if it's inhabited
-                                        const inner_tags = type_store.getTagsSlice(inner_union.tags);
-                                        if (inner_tags.len == 0 and !isOpenExtension(type_store, inner_union.ext)) {
-                                            continue :tag_loop; // Empty closed union = uninhabited
-                                        }
-                                        // Check each inner tag's args
-                                        const inner_tag_args = inner_tags.items(.args);
-                                        var inner_any_inhabited = false;
-                                        inner_tag_loop: for (inner_tag_args) |inner_args_range| {
-                                            const inner_arg_vars = type_store.sliceVars(inner_args_range);
-                                            // Check if all args of this inner tag are inhabited
-                                            for (inner_arg_vars) |inner_arg| {
-                                                if (!try isTypeInhabited(type_store, builtin_idents, inner_arg)) {
-                                                    continue :inner_tag_loop; // Try next inner tag
-                                                }
-                                            }
-                                            inner_any_inhabited = true;
-                                            break;
-                                        }
-                                        if (!inner_any_inhabited and !isOpenExtension(type_store, inner_union.ext)) {
-                                            continue :tag_loop; // All inner tags uninhabited
-                                        }
-                                    },
-                                    .nominal_type => |nominal| {
-                                        if (!builtin_idents.isBuiltinNumericType(nominal)) {
-                                            try arg_stack.append(type_store.gpa, type_store.getNominalBackingVar(nominal));
-                                        }
-                                    },
-                                    .record => |record| {
-                                        const fields = type_store.getRecordFieldsSlice(record.fields);
-                                        try arg_stack.appendSlice(type_store.gpa, fields.items(.var_));
-                                    },
-                                    .record_unbound => |fields| {
-                                        const fields_slice = type_store.getRecordFieldsSlice(fields);
-                                        try arg_stack.appendSlice(type_store.gpa, fields_slice.items(.var_));
-                                    },
-                                    .tuple => |tuple| {
-                                        try arg_stack.appendSlice(type_store.gpa, type_store.sliceVars(tuple.elems));
-                                    },
-                                    .fn_pure, .fn_effectful, .fn_unbound => {},
-                                },
-                            }
-                        }
-                        // All args of this tag are inhabited
-                        any_tag_inhabited = true;
-                        break;
-                    }
+                    // We follow extension chains to gather all tags.
+                    const any_tag_inhabited = try isTagUnionInhabited(
+                        type_store,
+                        builtin_idents,
+                        tag_union,
+                        seen,
+                    );
 
                     if (!any_tag_inhabited) {
-                        // All explicit tags are uninhabited - check if open extension
-                        if (!isOpenExtension(type_store, tag_union.ext)) {
-                            return false;
-                        }
+                        return false;
                     }
                 },
 
@@ -1320,6 +1246,82 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
     }
 
     return true;
+}
+
+/// Check if a tag union is inhabited by following extension chains and checking
+/// if at least one tag has all inhabited arguments.
+fn isTagUnionInhabited(
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    initial_tag_union: types.TagUnion,
+    seen: *std.AutoHashMapUnmanaged(Var, void),
+) error{OutOfMemory}!bool {
+    // Track seen extension variables to detect cycles in extension chains
+    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer seen_exts.deinit(type_store.gpa);
+
+    var current_tags = initial_tag_union.tags;
+    var current_ext = initial_tag_union.ext;
+
+    // Follow extension chain to check all tags
+    while (true) {
+        const tags_slice = type_store.getTagsSlice(current_tags);
+        const tag_args = tags_slice.items(.args);
+
+        // Check each tag at this level
+        tag_loop: for (tag_args) |args_range| {
+            const arg_vars = type_store.sliceVars(args_range);
+
+            // Check all arguments of this tag - all must be inhabited
+            for (arg_vars) |arg_var| {
+                if (!try isTypeInhabitedWithSeen(type_store, builtin_idents, arg_var, seen)) {
+                    continue :tag_loop; // Uninhabited arg, try next tag
+                }
+            }
+            // All args of this tag are inhabited - the union is inhabited!
+            return true;
+        }
+
+        // No inhabited tag at this level - check the extension
+        const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_var = ext_resolved.var_;
+
+        // Cycle detection for extension chain
+        const gop = try seen_exts.getOrPut(type_store.gpa, ext_var);
+        if (gop.found_existing) {
+            // Cycle detected - no more tags to check
+            break;
+        }
+
+        const ext_content = ext_resolved.desc.content;
+
+        switch (ext_content) {
+            .flex, .rigid => {
+                // Open extension - could have more tags, assume inhabited
+                return true;
+            },
+            .structure => |flat_type| switch (flat_type) {
+                .tag_union => |ext_tu| {
+                    // Continue following extension chain
+                    current_tags = ext_tu.tags;
+                    current_ext = ext_tu.ext;
+                },
+                .empty_tag_union => {
+                    // Closed union - no more tags
+                    break;
+                },
+                else => break,
+            },
+            .alias => |alias| {
+                // Follow alias - treat as continuing the chain
+                current_ext = type_store.getAliasBackingVar(alias);
+            },
+            else => break,
+        }
+    }
+
+    // No inhabited tag found
+    return false;
 }
 
 /// Check if all types in a slice are inhabited.
@@ -3529,14 +3531,21 @@ pub fn isUsefulSketched(
 pub const RedundancyResultSketched = struct {
     /// Non-redundant rows (useful patterns)
     non_redundant_rows: []const []const UnresolvedPattern,
-    /// Indices of redundant branches
+    /// Indices of redundant branches (covered by previous patterns)
     redundant_indices: []const u32,
     /// Regions of redundant branches
     redundant_regions: []const Region,
+    /// Indices of unmatchable branches (patterns on uninhabited types)
+    unmatchable_indices: []const u32,
+    /// Regions of unmatchable branches
+    unmatchable_regions: []const Region,
 };
 
-/// Process sketched pattern rows and identify redundant patterns.
+/// Process sketched pattern rows and identify redundant and unmatchable patterns.
 /// Uses on-demand reification for type checking.
+///
+/// A pattern is **unmatchable** if it's on an uninhabited type (e.g., `Err(_)` on `Try(I64, [])`).
+/// A pattern is **redundant** if it's covered by previous patterns (e.g., `_` after `Ok(_)` and `Err(_)`).
 pub fn checkRedundancySketched(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
@@ -3547,8 +3556,27 @@ pub fn checkRedundancySketched(
     var non_redundant: std.ArrayList([]const UnresolvedPattern) = .empty;
     var redundant_indices: std.ArrayList(u32) = .empty;
     var redundant_regions: std.ArrayList(Region) = .empty;
+    var unmatchable_indices: std.ArrayList(u32) = .empty;
+    var unmatchable_regions: std.ArrayList(Region) = .empty;
 
     for (rows) |row| {
+        // First check if the pattern is on an uninhabited type (unmatchable)
+        const is_inhabited = try isSketchedPatternInhabited(
+            allocator,
+            type_store,
+            builtin_idents,
+            row.patterns,
+            column_types,
+        );
+
+        if (!is_inhabited) {
+            // Pattern matches an uninhabited type - it's unmatchable
+            try unmatchable_indices.append(allocator, row.branch_index);
+            try unmatchable_regions.append(allocator, row.region);
+            continue;
+        }
+
+        // Pattern is on an inhabited type - check if it's useful (not redundant)
         // Rows with guards are always considered useful (guard might fail at runtime)
         const matrix = SketchedMatrix.init(allocator, non_redundant.items);
         const is_useful = row.guard == .has_guard or
@@ -3566,6 +3594,8 @@ pub fn checkRedundancySketched(
         .non_redundant_rows = try non_redundant.toOwnedSlice(allocator),
         .redundant_indices = try redundant_indices.toOwnedSlice(allocator),
         .redundant_regions = try redundant_regions.toOwnedSlice(allocator),
+        .unmatchable_indices = try unmatchable_indices.toOwnedSlice(allocator),
+        .unmatchable_regions = try unmatchable_regions.toOwnedSlice(allocator),
     };
 }
 
@@ -3579,10 +3609,14 @@ pub const CheckResult = struct {
     is_exhaustive: bool,
     /// Missing patterns if not exhaustive (for error messages)
     missing_patterns: []const Pattern,
-    /// Indices of redundant branches
+    /// Indices of redundant branches (covered by previous patterns)
     redundant_indices: []const u32,
     /// Regions of redundant branches
     redundant_regions: []const Region,
+    /// Indices of unmatchable branches (patterns on uninhabited types)
+    unmatchable_indices: []const u32,
+    /// Regions of unmatchable branches
+    unmatchable_regions: []const Region,
 
     /// Free all allocated memory in the result
     pub fn deinit(self: CheckResult, allocator: std.mem.Allocator) void {
@@ -3592,6 +3626,8 @@ pub const CheckResult = struct {
         allocator.free(self.missing_patterns);
         allocator.free(self.redundant_indices);
         allocator.free(self.redundant_regions);
+        allocator.free(self.unmatchable_indices);
+        allocator.free(self.unmatchable_regions);
     }
 
     fn freePattern(allocator: std.mem.Allocator, pattern: Pattern) void {
@@ -3693,6 +3729,8 @@ pub fn checkMatch(
         .missing_patterns = result_patterns,
         .redundant_indices = try allocator.dupe(u32, redundancy.redundant_indices),
         .redundant_regions = try allocator.dupe(Region, redundancy.redundant_regions),
+        .unmatchable_indices = try allocator.dupe(u32, redundancy.unmatchable_indices),
+        .unmatchable_regions = try allocator.dupe(Region, redundancy.unmatchable_regions),
     };
 }
 

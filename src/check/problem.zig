@@ -65,6 +65,7 @@ pub const Problem = union(enum) {
     comptime_eval_error: ComptimeEvalError,
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
+    unmatchable_pattern: UnmatchablePattern,
     bug: Bug,
 
     pub const Idx = enum(u32) { _ };
@@ -262,6 +263,13 @@ pub const NonExhaustiveMatch = struct {
 
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: u32,
+    problem_branch_index: u32,
+};
+
+/// Problem data for an unmatchable pattern (pattern on uninhabited type)
+pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
@@ -550,6 +558,7 @@ pub const ReportBuilder = struct {
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
@@ -2953,6 +2962,39 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("This pattern can never match because earlier patterns already ");
         try report.document.addText("cover all the values it would match.");
+
+        return report;
+    }
+
+    fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) !Report {
+        var report = Report.init(self.gpa, "UNMATCHABLE PATTERN", .warning);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const ordinal_str = try report.addOwnedString(self.bytes_buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(ordinal_str);
+        try report.document.addText(" branch of this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" can never match:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("This pattern matches a type that has no possible values (an uninhabited type), ");
+        try report.document.addText("so no value can ever match it.");
 
         return report;
     }
