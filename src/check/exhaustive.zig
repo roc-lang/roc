@@ -173,11 +173,18 @@ pub const Pattern = union(enum) {
                     // Check if the type is inhabited using our comprehensive check
                     return isTypeInhabited(type_store, builtin_idents, type_var);
                 }
-                // Wildcards without type info only occur in error recovery paths
-                // (when reifyPattern returns TypeError and we create a placeholder).
-                // In those cases, we're already skipping exhaustiveness checking
-                // (has_unresolved_ctor is set), so the return value doesn't matter.
-                // We return true to avoid cascading errors.
+                // Wildcards without type info should only occur in intermediate patterns
+                // during matrix specialization, which should never be checked for inhabitedness.
+                // If we reach here, it indicates a bug in the exhaustiveness checker.
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "Pattern.isInhabited called on wildcard with null type. " ++
+                            "This indicates intermediate patterns are being checked for inhabitedness, " ++
+                            "which should not happen. Missing patterns should always have type info from ColumnTypes.",
+                        .{},
+                    );
+                }
+                // In release mode, assume inhabited to avoid cascading errors
                 return true;
             },
 
@@ -901,7 +908,7 @@ fn getUnionFromType(
 
     // Try to unwrap as a tag union
     if (content.unwrapTagUnion()) |tag_union| {
-        return try buildUnionFromTagUnion(allocator, type_store, builtin_idents, tag_union);
+        return try buildUnionFromTagUnion(allocator, type_store, tag_union);
     }
 
     // Try to follow aliases and other type wrappers
@@ -921,7 +928,7 @@ fn getUnionFromType(
         .structure => |flat_type| {
             switch (flat_type) {
                 .tag_union => |tag_union| {
-                    return try buildUnionFromTagUnion(allocator, type_store, builtin_idents, tag_union);
+                    return try buildUnionFromTagUnion(allocator, type_store, tag_union);
                 },
                 // Nominal types (like Try, Result) are user-defined types that wrap other types
                 // We need to unwrap them to find the underlying tag union
@@ -949,11 +956,8 @@ fn getUnionFromType(
 fn buildUnionFromTagUnion(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
     tag_union: types.TagUnion,
 ) error{OutOfMemory}!UnionResult {
-    _ = builtin_idents; // Inhabitedness checked elsewhere
-
     // Gather all tags by following the extension chain
     var all_tags: std.ArrayList(GatheredTag) = .empty;
     defer all_tags.deinit(allocator);
@@ -1093,10 +1097,22 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
     return content == .flex;
 }
 
+// Inhabitedness Checking
+//
+// A type is "inhabited" if it has at least one possible value.
+// This is critical for exhaustiveness checking: patterns on uninhabited types
+// should not contribute to coverage, and uninhabited constructors should not
+// require matching.
+//
+// Core API:
+// - `isTypeInhabited`: Check if a single type is inhabited (THE primary entry point)
+// - `areAllTypesInhabited`: Check if all types in a slice are inhabited (AND semantics)
+//
+// Pattern.isInhabited() delegates to isTypeInhabited for wildcard patterns.
+//
+// Based on the algorithm from the Rust implementation in crates/compiler/types/src/subs.rs.
+
 /// Check if a type is inhabited (has at least one possible value).
-/// This is a comprehensive check that handles all type structures.
-///
-/// Based on the algorithm from the Rust implementation in crates/compiler/types/src/subs.rs.
 ///
 /// A type is uninhabited if:
 /// - It's an empty tag union with no flex extension
@@ -1306,13 +1322,8 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
     return true;
 }
 
-/// Check if a type is empty (uninhabited). Convenience wrapper around isTypeInhabited.
-fn isTypeEmpty(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
-    return !try isTypeInhabited(type_store, builtin_idents, type_var);
-}
-
 /// Check if all types in a slice are inhabited.
-/// Returns false if any type is uninhabited.
+/// Returns false if ANY type is uninhabited (AND semantics).
 fn areAllTypesInhabited(
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
@@ -1324,6 +1335,72 @@ fn areAllTypesInhabited(
         }
     }
     return true;
+}
+
+/// Check if an UnresolvedPattern (sketched pattern) is inhabited.
+/// This requires type information to resolve the pattern's constructor types.
+///
+/// A sketched pattern is uninhabited if:
+/// - It's a constructor whose argument types are uninhabited
+/// - It's a wildcard matching an uninhabited type
+fn isSketchedPatternInhabited(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    patterns: []const UnresolvedPattern,
+    column_types: ColumnTypes,
+) ReifyError!bool {
+    if (patterns.len == 0) return true;
+    if (column_types.types.len == 0) return true;
+
+    const first = patterns[0];
+    const first_col_type = column_types.types[0];
+
+    switch (first) {
+        .ctor => |c| {
+            // Look up the union type to get tag_id and argument types
+            const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
+            const union_info = switch (union_result) {
+                .success => |u| u,
+                .not_a_union => return error.TypeError,
+            };
+            const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
+
+            // Get the constructor's argument types
+            const arg_types = getCtorArgTypes(type_store, first_col_type, tag_id);
+
+            // Check if any argument type is uninhabited
+            for (arg_types, 0..) |arg_type, i| {
+                if (!try isTypeInhabited(type_store, builtin_idents, arg_type)) {
+                    return false; // Uninhabited argument = uninhabited pattern
+                }
+                // Also recursively check nested patterns
+                if (i < c.args.len) {
+                    const arg_col_types = try allocator.alloc(Var, 1);
+                    arg_col_types[0] = arg_type;
+                    const nested_patterns = try allocator.alloc(UnresolvedPattern, 1);
+                    nested_patterns[0] = c.args[i];
+                    if (!try isSketchedPatternInhabited(allocator, type_store, builtin_idents, nested_patterns, .{
+                        .types = arg_col_types,
+                        .type_store = type_store,
+                        .builtin_idents = builtin_idents,
+                    })) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        },
+        // known_ctor is for records - records are always inhabited (unless they have uninhabited fields,
+        // but that's checked via their field types, not the pattern structure)
+        .known_ctor => return true,
+        .anything => {
+            // Wildcard - check if the type itself is uninhabited
+            return isTypeInhabited(type_store, builtin_idents, first_col_type);
+        },
+        .literal => return true, // Literals are always inhabited
+        .list => return true, // Lists can be empty, so always inhabited
+    }
 }
 
 /// Check if an extension variable represents an open union.
@@ -3022,68 +3099,6 @@ pub fn checkExhaustiveSketched(
     };
 }
 
-/// Check if a sketched pattern row is on inhabited types.
-/// A pattern is uninhabited if it matches a constructor whose argument types are uninhabited.
-/// For example, Err(_) on Try(I64, []) is uninhabited because [] has no values.
-fn isSketchedPatternInhabited(
-    allocator: std.mem.Allocator,
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    patterns: []const UnresolvedPattern,
-    column_types: ColumnTypes,
-) ReifyError!bool {
-    if (patterns.len == 0) return true;
-    if (column_types.types.len == 0) return true;
-
-    const first = patterns[0];
-    const first_col_type = column_types.types[0];
-
-    switch (first) {
-        .ctor => |c| {
-            // Look up the union type to get tag_id and argument types
-            const union_result = try getUnionFromType(allocator, type_store, builtin_idents, first_col_type);
-            const union_info = switch (union_result) {
-                .success => |u| u,
-                .not_a_union => return error.TypeError,
-            };
-            const tag_id = findTagId(union_info, c.tag_name) orelse return error.TypeError;
-
-            // Get the constructor's argument types
-            const arg_types = getCtorArgTypes(type_store, first_col_type, tag_id);
-
-            // Check if any argument type is uninhabited
-            for (arg_types, 0..) |arg_type, i| {
-                if (try isTypeEmpty(type_store, builtin_idents, arg_type)) {
-                    return false; // Uninhabited argument = uninhabited pattern
-                }
-                // Also recursively check nested patterns
-                if (i < c.args.len) {
-                    const arg_col_types = try allocator.alloc(Var, 1);
-                    arg_col_types[0] = arg_type;
-                    const nested_patterns = try allocator.alloc(UnresolvedPattern, 1);
-                    nested_patterns[0] = c.args[i];
-                    if (!try isSketchedPatternInhabited(allocator, type_store, builtin_idents, nested_patterns, .{
-                        .types = arg_col_types,
-                        .type_store = type_store,
-                        .builtin_idents = builtin_idents,
-                    })) {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        },
-        // known_ctor is for records - records are always inhabited
-        .known_ctor => return true,
-        .anything => {
-            // Wildcard - check if the type itself is uninhabited
-            return !try isTypeEmpty(type_store, builtin_idents, first_col_type);
-        },
-        .literal => return true, // Literals are always inhabited
-        .list => return true, // Lists can be empty, so always inhabited
-    }
-}
-
 /// Check if a new sketched pattern row is "useful" given existing sketched rows.
 /// Reifies patterns on-demand when type information is needed.
 pub fn isUsefulSketched(
@@ -3286,7 +3301,7 @@ pub fn isUsefulSketched(
                                 const arg_types = getCtorArgTypes(type_store, first_col_type, alt.tag_id);
                                 var ctor_uninhabited = false;
                                 for (arg_types) |arg_type| {
-                                    if (try isTypeEmpty(type_store, builtin_idents, arg_type)) {
+                                    if (!try isTypeInhabited(type_store, builtin_idents, arg_type)) {
                                         ctor_uninhabited = true;
                                         break;
                                     }

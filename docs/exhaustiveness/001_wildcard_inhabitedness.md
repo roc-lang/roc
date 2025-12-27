@@ -82,6 +82,8 @@ The following tests verify correct behavior:
 - `"exhaustive - doubly nested empty errors"` - Deep nesting works
 - `"redundant - wildcard after complete coverage on type with empty variant"` - Wildcard after `Ok` on `Try(I64, [])` is redundant
 - `"redundant - Err pattern first on empty error type is unreachable"` - `Err(_)` pattern is redundant
+- `"redundant - pattern on tag with direct empty arg"` - `HasEmpty(_)` on `[HasEmpty([]), Normal(I64)]` is redundant
+- `"non-exhaustive - not all inhabited tags covered with empty arg"` - Match missing `C` on `[A(I64), B([]), C(Str)]` is non-exhaustive
 
 ### 4. Open Union Semantics
 
@@ -153,6 +155,45 @@ The inhabitedness check uses a mostly stack-based approach for efficiency:
 The implementation correctly handles builtin numeric types (I64, U8, etc.) which
 have `[]` as their backing type but are actually inhabited primitives.
 
+### 5. Extension Chain Following
+
+Tag unions from unification may have their tags split across extension chains. For example,
+when unifying `[HasEmpty([]), Normal(I64)]` with `[Normal(I64)]`, the result might be:
+
+```
+[Normal(I64), ..ext] where ext = [HasEmpty([]), ..]
+```
+
+The exhaustiveness checker follows these extension chains in two key functions:
+
+**File:** `src/check/exhaustive.zig` - `buildUnionFromTagUnion`
+```zig
+// Follow extension chain to collect all tags
+while (iteration_guard < max_iterations) : (iteration_guard += 1) {
+    // Add tags from current level
+    const tags_slice = type_store.getTagsSlice(current_tags);
+    // ... add to all_tags ...
+
+    // Check what the extension is
+    switch (ext_content) {
+        .structure => |flat_type| switch (flat_type) {
+            .tag_union => |ext_tu| {
+                // Extension is another tag union - continue following
+                current_tags = ext_tu.tags;
+                current_ext = ext_tu.ext;
+            },
+            // ...
+        },
+        // ...
+    }
+}
+```
+
+**File:** `src/check/exhaustive.zig` - `getCtorArgTypes`
+
+Similarly follows extension chains to find the argument types for a tag at any position
+in the gathered tags list.
+
 ## Acceptance Criteria (All Met)
 
 - [x] All wildcards have their type information tracked (via `ColumnTypes`)
@@ -160,4 +201,5 @@ have `[]` as their backing type but are actually inhabited primitives.
 - [x] No hardcoded `return true` for wildcards without type info in normal paths
 - [x] Comprehensive tests for empty type wildcards
 - [x] Open union semantics correctly handle both flex and rigid extensions
+- [x] Extension chains are followed to gather all tags from unified types
 - [x] No TODOs or workarounds in the implementation
