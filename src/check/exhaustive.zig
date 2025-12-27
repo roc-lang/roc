@@ -965,10 +965,12 @@ fn buildUnionFromTagUnion(
     var current_tags = tag_union.tags;
     var current_ext = tag_union.ext;
 
+    // Track seen extension variables to detect cycles
+    var seen_exts = std.AutoHashMap(Var, void).init(allocator);
+    defer seen_exts.deinit();
+
     // Follow extension chain to collect all tags
-    var iteration_guard: u32 = 0;
-    const max_iterations: u32 = 1000; // Prevent infinite loops
-    while (iteration_guard < max_iterations) : (iteration_guard += 1) {
+    while (true) {
         // Add tags from current level
         const tags_slice = type_store.getTagsSlice(current_tags);
         const tag_names = tags_slice.items(.name);
@@ -978,8 +980,19 @@ fn buildUnionFromTagUnion(
             try all_tags.append(allocator, .{ .name = name, .args = args_range });
         }
 
-        // Check what the extension is
+        // Resolve the extension variable
         const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_var = ext_resolved.var_;
+
+        // Cycle detection: have we seen this variable before?
+        const gop = try seen_exts.getOrPut(ext_var);
+        if (gop.found_existing) {
+            // Cycle detected - treat as closed union and stop
+            // This shouldn't happen in well-formed types, but prevents infinite loops
+            break;
+        }
+
+        // Check what the extension is
         const ext_content = ext_resolved.desc.content;
 
         switch (ext_content) {
@@ -1388,9 +1401,11 @@ fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const
         var current_offset: usize = 0;
         const target_idx = @intFromEnum(tag_id);
 
-        var iteration_guard: u32 = 0;
-        const max_iterations: u32 = 1000;
-        while (iteration_guard < max_iterations) : (iteration_guard += 1) {
+        // Track seen extension variables to detect cycles
+        var seen_exts = std.AutoHashMap(Var, void).init(type_store.gpa);
+        defer seen_exts.deinit();
+
+        while (true) {
             const tags_slice = type_store.getTagsSlice(current_tags);
             const tag_args = tags_slice.items(.args);
 
@@ -1403,6 +1418,15 @@ fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const
             // Move to the extension
             current_offset += tag_args.len;
             const ext_resolved = type_store.resolveVar(current_ext);
+            const ext_var = ext_resolved.var_;
+
+            // Cycle detection: have we seen this variable before?
+            const gop = seen_exts.getOrPut(ext_var) catch return &[_]Var{};
+            if (gop.found_existing) {
+                // Cycle detected - tag not found
+                break;
+            }
+
             const ext_content = ext_resolved.desc.content;
 
             switch (ext_content) {
