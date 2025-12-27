@@ -3458,13 +3458,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
         },
         .e_closure => |closure| {
-            // Check the inner lambda and unify the closure's type with it
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
-
-            // Lambda sets are inferred in a separate phase after type checking,
-            // not during type checking. The closure's tag_name is used later
-            // during lambda set solving and dispatch generation.
         },
         // function calling //
         .e_call => |call| {
