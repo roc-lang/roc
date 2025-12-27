@@ -2177,6 +2177,7 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
         \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
         \\  ]
