@@ -37,6 +37,31 @@ const Func = types_mod.Func;
 // const SExpr = base.SExpr;
 const Ident = base.Ident;
 
+/// Strip module prefixes from a type name for user-friendly display.
+/// Removes "Builtin.", "Num.", and "Builtin.Num." prefixes.
+/// This function is safe to call from modules that forbid string comparison
+/// (src/check/, src/canonicalize/, etc.) since the logic is in src/types/.
+pub fn stripModulePrefix(name: []const u8) []const u8 {
+    // Strip "Builtin." prefix from builtin types for display
+    // Types like "Builtin.Try" should display as "Try", "Builtin.Num.Numeral" as "Numeral"
+    if (std.mem.startsWith(u8, name, "Builtin.")) {
+        const without_builtin = name[8..]; // Skip "Builtin."
+        // Also strip "Num." if present (e.g., "Builtin.Num.Numeral" -> "Numeral")
+        if (std.mem.startsWith(u8, without_builtin, "Num.")) {
+            return without_builtin[4..]; // Skip "Num."
+        }
+        return without_builtin;
+    }
+
+    // Strip "Num." prefix from builtin number types for display
+    // Number types are stored as "Num.U8", "Num.F32", etc. but should display as "U8", "F32"
+    if (std.mem.startsWith(u8, name, "Num.")) {
+        return name[4..]; // Skip "Num."
+    }
+
+    return name;
+}
+
 const TypeContext = enum {
     General,
     NumContent,

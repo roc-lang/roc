@@ -226,9 +226,23 @@ pub const Store = struct {
         return self.formatted_strings.get(idx);
     }
 
+    /// Format a snapshot and store the formatted string.
+    /// Call this AFTER unification fails to format the types for error messages.
+    /// We must NOT call TypeWriter.write() before unification as it causes runtime bugs.
+    pub fn formatSnapshot(self: *Self, type_writer: *TypeWriter, idx: SnapshotContentIdx, var_: Var) std.mem.Allocator.Error!void {
+        // Skip if already formatted
+        if (self.formatted_strings.contains(idx)) return;
+
+        // Format the type and store
+        type_writer.reset();
+        try type_writer.write(var_, .wrap);
+        const formatted = try self.gpa.dupe(u8, type_writer.get());
+        try self.formatted_strings.put(self.gpa, idx, formatted);
+    }
+
     /// Deep copy a type variable for error reporting. This snapshots the type structure
-    /// AND formats each nested type using TypeWriter before the types get overwritten with .err.
-    /// ONLY use this in error paths - it allocates formatted strings for all nested types.
+    /// but does NOT format it. Call formatSnapshot after unification fails to format
+    /// the types for error messages.
     pub fn snapshotVarForError(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
         const snapshot_idx = try self.deepCopyVarInternal(store, type_writer, var_);
         return snapshot_idx;
@@ -274,11 +288,9 @@ pub const Store = struct {
 
         const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content);
 
-        // Format this type and store the formatted string
-        type_writer.reset();
-        try type_writer.write(var_, .wrap);
-        const formatted = try self.gpa.dupe(u8, type_writer.get());
-        try self.formatted_strings.put(self.gpa, snapshot_idx, formatted);
+        // NOTE: We intentionally do NOT call TypeWriter.write() here.
+        // Calling TypeWriter.write() before unification causes runtime bugs in code generation.
+        // Instead, call formatSnapshot() after unification fails to format the types.
 
         return snapshot_idx;
     }
