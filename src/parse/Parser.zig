@@ -1555,6 +1555,15 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
             } });
             return statement_idx;
         },
+        .KwBreak => {
+            const start = self.pos;
+            self.advance();
+            const statement_idx = try self.store.addStatement(.{ .@"break" = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+
+            return statement_idx;
+        },
         .LowerIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {

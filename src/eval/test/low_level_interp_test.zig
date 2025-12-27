@@ -176,6 +176,46 @@ fn evalModuleAndGetInt(src: []const u8, decl_index: usize) !i128 {
     unreachable;
 }
 
+/// Helper to evaluate multi-declaration modules and get the Dec value of a specific declaration
+fn evalModuleAndGetDec(src: []const u8, decl_index: usize) !i128 {
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // Get all declarations
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    if (decl_index >= defs.len) {
+        return error.DeclarationIndexOutOfBounds;
+    }
+
+    const ops = result.evaluator.get_ops();
+
+    // Evaluate all declarations up to and including the one we want, in order
+    var i: usize = 0;
+    while (i <= decl_index) : (i += 1) {
+        const def = result.module_env.store.getDef(defs[i]);
+        const stack_value = try result.evaluator.interpreter.eval(def.expr, ops);
+
+        // Store the value in bindings so later declarations can reference it
+        try result.evaluator.interpreter.bindings.append(.{
+            .pattern_idx = def.pattern,
+            .value = stack_value,
+            .expr_idx = def.expr,
+            .source_env = result.module_env,
+        });
+
+        // Return the value if this is the declaration we want
+        if (i == decl_index) {
+            defer stack_value.decref(&result.evaluator.interpreter.runtime_layout_store, ops);
+            // Dec values are stored as i128 internally
+            std.debug.assert(stack_value.layout.tag == .scalar and stack_value.layout.data.scalar.tag == .frac);
+            const ptr = @as(*const i128, @ptrCast(@alignCast(stack_value.ptr.?)));
+            return ptr.*;
+        }
+    }
+
+    unreachable;
+}
+
 /// Helper to evaluate multi-declaration modules and get the string representation of a specific declaration
 fn evalModuleAndGetString(src: []const u8, decl_index: usize, _: std.mem.Allocator) ![]u8 {
     var result = try parseCheckAndEvalModule(src);
@@ -887,6 +927,20 @@ test "e_low_level_lambda - List.append for list of tuples with strings (issue 86
 
     const len_value = try evalModuleAndGetInt(src, 1);
     try testing.expectEqual(@as(i128, 2), len_value);
+}
+
+test "e_low_level_lambda - List.append tuple to empty list (issue 8758)" {
+    // This test reproduces issue #8758 - integer overflow when appending tuples containing
+    // strings to an empty list. The bug was that isRefcounted() returns false for tuples,
+    // causing allocation to use one memory layout but deallocation to use another, leading
+    // to integer overflow when reading from the wrong offset during cleanup.
+    const src =
+        \\x = List.append([], ("hello", "world"))
+        \\len = List.len(x)
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 1), len_value);
 }
 
 test "e_low_level_lambda - List.drop_at on an empty list at index 0" {
@@ -2835,4 +2889,172 @@ test "e_low_level_lambda - I64.mod_by with zero result" {
     ;
     const value = try evalModuleAndGetInt(src, 2);
     try testing.expectEqual(@as(i128, 0), value);
+}
+
+// Regression test for issue #8750: dbg in polymorphic function causes TypeMismatch
+// Ian McLerran reported that using dbg inside a polymorphic debug function
+// and then method-chaining on the result causes crashes and wrong values.
+// The bug is in dbg_print continuation which incorrectly translates the type
+// variable in polymorphic contexts, leading to the wrong layout being used
+// for the return value (should be empty record {}).
+test "issue 8750: dbg in polymorphic debug function with List.len" {
+    const src =
+        \\debug = |v| {
+        \\    dbg v
+        \\    v
+        \\}
+        \\xs = [1, 2, 3]
+        \\len = xs->debug()->List.len()
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 3), len_value);
+}
+
+test "issue 8750: dbg in polymorphic debug function with List.first" {
+    const src =
+        \\debug = |v| {
+        \\    dbg v
+        \\    v
+        \\}
+        \\xs = [10, 20, 30]
+        \\first = xs->debug()->List.first()
+    ;
+
+    const first_value = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(first_value);
+    try testing.expectEqualStrings("Ok(10)", first_value);
+}
+
+test "issue 8750: dbg in polymorphic debug function chained multiple times" {
+    const src =
+        \\debug = |v| {
+        \\    dbg v
+        \\    v
+        \\}
+        \\xs = [1, 2, 3, 4, 5]
+        \\result = xs->debug()->debug()->List.len()
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 5), len_value);
+}
+
+test "issue 8750: dbg in polymorphic function with List.fold" {
+    const src =
+        \\debug = |v| {
+        \\    dbg v
+        \\    v
+        \\}
+        \\xs = [1, 2, 3]
+        \\sum = xs->debug()->List.fold(0, |acc, x| acc + x)
+    ;
+
+    // List.fold returns Dec because numeric literals default to Dec.
+    // Dec value 6 is stored as 6 * 10^18 in fixed-point representation.
+    const sum_value = try evalModuleAndGetDec(src, 2);
+    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+}
+
+// Test without dbg to isolate whether the bug is specific to dbg or more general
+test "issue 8750: identity function (no dbg) with List.fold" {
+    const src =
+        \\identity = |v| v
+        \\xs = [1, 2, 3]
+        \\sum = xs->identity()->List.fold(0, |acc, x| acc + x)
+    ;
+
+    // List.fold returns Dec because numeric literals default to Dec.
+    const sum_value = try evalModuleAndGetDec(src, 2);
+    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+}
+
+// Test direct List.fold without any wrapping function
+test "issue 8750: direct List.fold without wrapper" {
+    const src =
+        \\xs = [1, 2, 3]
+        \\sum = xs->List.fold(0, |acc, x| acc + x)
+    ;
+
+    // List.fold returns Dec because numeric literals default to Dec.
+    const sum_value = try evalModuleAndGetDec(src, 1);
+    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+}
+
+// Test dbg with simpler function (no List.fold)
+test "issue 8750: dbg in polymorphic function with List.len" {
+    const src =
+        \\debug = |v| {
+        \\    dbg v
+        \\    v
+        \\}
+        \\xs = [1, 2, 3]
+        \\len = xs->debug()->List.len()
+    ;
+
+    const len_value = try evalModuleAndGetInt(src, 2);
+    try testing.expectEqual(@as(i128, 3), len_value);
+}
+
+// Test with only a block (no dbg) before List.fold
+test "issue 8750: block without dbg before List.fold" {
+    const src =
+        \\wrap = |v| { v }
+        \\xs = [1, 2, 3]
+        \\sum = xs->wrap()->List.fold(0, |acc, x| acc + x)
+    ;
+
+    // List.fold returns Dec because numeric literals default to Dec.
+    const sum_value = try evalModuleAndGetDec(src, 2);
+    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+}
+
+// Test with dbg of a constant (not the polymorphic parameter)
+test "issue 8750: dbg of constant before returning v with List.fold" {
+    const src =
+        \\debug = |v| {
+        \\    dbg 42
+        \\    v
+        \\}
+        \\xs = [1, 2, 3]
+        \\sum = xs->debug()->List.fold(0, |acc, x| acc + x)
+    ;
+
+    // List.fold returns Dec because numeric literals default to Dec.
+    const sum_value = try evalModuleAndGetDec(src, 2);
+    try testing.expectEqual(@as(i128, 6_000_000_000_000_000_000), sum_value);
+}
+
+// Test that List.fold renders the correct value
+test "issue 8750: List.fold render value" {
+    const src =
+        \\xs = [1, 2, 3]
+        \\sum = xs->List.fold(0, |acc, x| acc + x)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+    const ops = result.evaluator.get_ops();
+
+    // Evaluate first declaration (xs)
+    var def = result.module_env.store.getDef(defs[0]);
+    var stack_value = try result.evaluator.interpreter.eval(def.expr, ops);
+    try result.evaluator.interpreter.bindings.append(.{
+        .pattern_idx = def.pattern,
+        .value = stack_value,
+        .expr_idx = def.expr,
+        .source_env = result.module_env,
+    });
+
+    // Evaluate second declaration (sum)
+    def = result.module_env.store.getDef(defs[1]);
+    const ct_var = can.ModuleEnv.varFrom(def.expr);
+    stack_value = try result.evaluator.interpreter.eval(def.expr, ops);
+
+    const rt_var = try result.evaluator.interpreter.translateTypeVar(result.module_env, ct_var);
+    const rendered = try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var, ops);
+    defer test_allocator.free(rendered);
+    try testing.expectEqualStrings("6", rendered);
 }

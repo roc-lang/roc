@@ -154,7 +154,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const elem_layout = layout_cache.getLayout(layout.data.list);
         const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
         const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
         // Decref elements when unique
         if (list_value.isUnique(ops)) {
@@ -199,7 +199,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const refcount_ptr: *isize = @as(*isize, @ptrFromInt(refcount_addr));
 
         if (builtins.utils.rcUnique(refcount_ptr.*)) {
-            if (elem_layout.isRefcounted()) {
+            if (layout_cache.layoutContainsRefcounted(elem_layout)) {
                 decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops);
             }
         }
@@ -434,7 +434,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         dest_list.* = src_list.*;
 
         const elem_layout = layout_cache.getLayout(self.layout.data.list);
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
         // Incref the list allocation. For seamless slices, this is the parent allocation,
         // not the bytes pointer (which points within the parent allocation).
@@ -1197,7 +1197,7 @@ fn copyListValueToPtr(
             dest_list.* = src_list;
 
             const elem_layout = layout_cache.getLayout(dest_layout.data.list);
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
             dest_list.incref(1, elements_refcounted);
             storeListElementCount(dest_list, elements_refcounted, roc_ops);
             return;
@@ -1416,7 +1416,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
 
         if (self.layout.tag == .list) {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
             dest_list.incref(1, elements_refcounted, roc_ops);
             storeListElementCount(dest_list, elements_refcounted, roc_ops);
         } else {
@@ -1664,7 +1664,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
             const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
             const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
@@ -1727,12 +1727,12 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 traceRefcount("DECREF box ptr=0x{x} rc={} elem_rc={}", .{
                     unmasked_ptr,
                     refcount_ptr.*,
-                    @intFromBool(elem_layout.isRefcounted()),
+                    @intFromBool(layout_cache.layoutContainsRefcounted(elem_layout)),
                 });
             }
 
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
-                if (elem_layout.isRefcounted()) {
+                if (layout_cache.layoutContainsRefcounted(elem_layout)) {
                     decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops);
                 }
             }

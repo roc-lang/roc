@@ -86,61 +86,6 @@ const RefcountContext = struct {
     roc_ops: *RocOps,
 };
 
-/// Check if a layout contains any refcounted data (directly or transitively).
-/// This is more comprehensive than Layout.isRefcounted() which only checks if
-/// the layout itself is heap-allocated. This function also returns true for
-/// tuples/records that contain strings, lists, or boxes.
-fn layoutContainsRefcounted(l: Layout, layout_store: *layout.Store) bool {
-    return switch (l.tag) {
-        .scalar => switch (l.data.scalar.tag) {
-            .str => true,
-            else => false,
-        },
-        .list, .list_of_zst => true,
-        .box, .box_of_zst => true,
-        .tuple => {
-            const tuple_data = layout_store.getTupleData(l.data.tuple.idx);
-            const fields = layout_store.tuple_fields.sliceRange(tuple_data.getFields());
-            for (0..fields.len) |i| {
-                const field_layout = layout_store.getLayout(fields.get(i).layout);
-                if (layoutContainsRefcounted(field_layout, layout_store)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .record => {
-            const record_data = layout_store.getRecordData(l.data.record.idx);
-            const fields = layout_store.record_fields.sliceRange(record_data.getFields());
-            for (0..fields.len) |i| {
-                const field_layout = layout_store.getLayout(fields.get(i).layout);
-                if (layoutContainsRefcounted(field_layout, layout_store)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .tag_union => {
-            const tu_data = layout_store.getTagUnionData(l.data.tag_union.idx);
-            const variants = layout_store.getTagUnionVariants(tu_data);
-            for (0..variants.len) |i| {
-                const variant_layout = layout_store.getLayout(variants.get(i).payload_layout);
-                if (layoutContainsRefcounted(variant_layout, layout_store)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .closure => {
-            // Closures capture variables which may be refcounted
-            // TODO: Check the captures layout for refcounted data
-            // For now, assume closures may contain refcounted data
-            return true;
-        },
-        .zst => false,
-    };
-}
-
 /// Increment callback for list operations - increments refcount of element via StackValue
 fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
     const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
@@ -1094,7 +1039,7 @@ pub const Interpreter = struct {
         const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
         // Make a unique copy of the list for sorting
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
         const elem_rt_var = try self.runtime_types.fresh();
         var refcount_context = RefcountContext{
             .layout_store = &self.runtime_layout_store,
@@ -2531,7 +2476,7 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -2769,7 +2714,7 @@ pub const Interpreter = struct {
                 }
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Create a fresh list by allocating and copying elements.
                 // We can't use the builtin listConcat here because it consumes its input lists
@@ -2887,7 +2832,7 @@ pub const Interpreter = struct {
                     const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                     // Determine if elements contain refcounted data
-                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                    const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                     // Set up context for refcount callbacks
                     const elem_rt_var = try self.runtime_types.fresh();
@@ -2988,7 +2933,7 @@ pub const Interpreter = struct {
                 // Determine if elements contain refcounted data (directly or transitively).
                 // This is more comprehensive than isRefcounted() - it also catches tuples/records
                 // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
@@ -3106,7 +3051,7 @@ pub const Interpreter = struct {
                     const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                     // Determine if elements contain refcounted data
-                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                    const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                     // Set up context for refcount callbacks
                     const elem_rt_var = try self.runtime_types.fresh();
@@ -3207,7 +3152,7 @@ pub const Interpreter = struct {
                 // Determine if elements contain refcounted data (directly or transitively).
                 // This is more comprehensive than isRefcounted() - it also catches tuples/records
                 // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
@@ -3296,7 +3241,7 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -3360,7 +3305,7 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -7605,7 +7550,7 @@ pub const Interpreter = struct {
 
             // If the element is refcounted, increment its refcount since we're
             // creating a new reference (the box still holds its own reference)
-            if (elem_layout.isRefcounted()) {
+            if (self.runtime_layout_store.layoutContainsRefcounted(elem_layout)) {
                 result.incref(&self.runtime_layout_store, roc_ops);
             }
 
@@ -7775,7 +7720,7 @@ pub const Interpreter = struct {
         }
 
         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
         if (elements_refcounted and source.isUnique(roc_ops)) {
             var source_copy = source;
@@ -7867,6 +7812,26 @@ pub const Interpreter = struct {
             traceDbg(roc_ops, "trimBindingList: decref complete", .{});
         }
         list.items.len = new_len;
+    }
+
+    /// Pop and decref values from the value stack during early return cleanup.
+    /// Used when draining collect-style continuations (tag_collect, list_collect, etc.).
+    ///
+    /// The `collected_count` in these continuations is incremented BEFORE pushing
+    /// eval_expr for the next item, so when we're early-returning, the current
+    /// item being evaluated isn't done yet. Thus we pop `collected_count - 1` values.
+    fn popCollectedValues(
+        self: *Interpreter,
+        value_stack: *ValueStack,
+        collected_count: usize,
+        roc_ops: *RocOps,
+    ) void {
+        const actual_collected = if (collected_count > 0) collected_count - 1 else 0;
+        for (0..actual_collected) |_| {
+            if (value_stack.pop()) |val| {
+                val.decref(&self.runtime_layout_store, roc_ops);
+            }
+        }
     }
 
     fn patternMatchesBind(
@@ -9215,7 +9180,6 @@ pub const Interpreter = struct {
         defer trace.end();
 
         const resolved = module.types.resolveVar(compile_var);
-
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
         // Check flex_type_context BEFORE translate_cache for flex and rigid types.
@@ -9248,7 +9212,6 @@ pub const Interpreter = struct {
             if (entry.generation == self.poly_context_generation) {
                 return entry.var_;
             }
-            // Entry is from a different generation - treat as cache miss
         }
 
         // Mark this type as in-progress to detect cycles
@@ -9590,7 +9553,8 @@ pub const Interpreter = struct {
                     };
 
                     const content: types.Content = .{ .flex = rt_flex };
-                    break :blk try self.runtime_types.freshFromContent(content);
+                    const fresh_flex = try self.runtime_types.freshFromContent(content);
+                    break :blk fresh_flex;
                 },
                 .rigid => |rigid| {
                     // Check if this rigid should be substituted (during nominal type backing translation)
@@ -10115,6 +10079,9 @@ pub const Interpreter = struct {
         /// Negate boolean result on value stack (for != operator).
         negate_bool: void,
 
+        // Break from loop - handle break statement inside loops.
+        break_from_loop: void,
+
         /// Wrap backing expression result with nominal type's rt_var.
         /// This ensures method dispatch finds the nominal type info.
         nominal_wrap: NominalWrap,
@@ -10592,14 +10559,14 @@ pub const Interpreter = struct {
 
         /// Dbg statement - print value
         pub const DbgPrintStmt = struct {
-            /// Runtime type for rendering
-            rt_var: types.Var,
             /// Remaining statements after dbg
             remaining_stmts: []const can.CIR.Statement.Idx,
             /// Final expression to evaluate after all statements
             final_expr: can.CIR.Expr.Idx,
             /// Bindings length at block start (for cleanup)
             bindings_start: usize,
+            /// Expected runtime type for the final expression (from block's expected type)
+            expected_rt_var: ?types.Var,
         };
     };
 
@@ -11125,6 +11092,37 @@ pub const Interpreter = struct {
                             .ident = nom.ident.ident_idx,
                         },
                         else => null,
+                    },
+                    .flex => |flex| blk: {
+                        // Check if this flex var has a from_numeral constraint,
+                        // indicating it's an unresolved numeric type that should default to Dec.
+                        if (!flex.constraints.isEmpty()) {
+                            for (self.runtime_types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    // Default to Dec
+                                    break :blk .{
+                                        .origin = self.root_env.idents.builtin_module,
+                                        .ident = self.root_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :blk null;
+                    },
+                    .rigid => |rigid| blk: {
+                        // Same handling for rigid vars
+                        if (!rigid.constraints.isEmpty()) {
+                            for (self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) {
+                                    // Default to Dec
+                                    break :blk .{
+                                        .origin = self.root_env.idents.builtin_module,
+                                        .ident = self.root_env.idents.dec_type,
+                                    };
+                                }
+                            }
+                        }
+                        break :blk null;
                     },
                     else => null,
                 };
@@ -13766,21 +13764,28 @@ pub const Interpreter = struct {
             },
             .s_dbg => |dbg_stmt| {
                 // Evaluate expression, then print
-                const inner_ct_var = can.ModuleEnv.varFrom(dbg_stmt.expr);
-                const inner_rt_var = try self.translateTypeVar(self.env, inner_ct_var);
+                // NOTE: We intentionally do NOT call translateTypeVar here.
+                // Doing so would create a cache entry for a fresh flex var, which
+                // can corrupt type resolution for subsequent method calls on the
+                // returned value (see issue #8750). Instead, we get the runtime
+                // type from the evaluated value in dbg_print_stmt.
 
                 // Push dbg_print_stmt continuation
+                // CRITICAL: Pass expected_rt_var through to the continuation so it can
+                // be used when evaluating the final expression. Without this, polymorphic
+                // blocks like `{ dbg v; v }` would lose the expected type information,
+                // causing downstream method calls (like List.fold) to infer wrong types.
                 try work_stack.push(.{ .apply_continuation = .{ .dbg_print_stmt = .{
-                    .rt_var = inner_rt_var,
                     .remaining_stmts = remaining_stmts,
                     .final_expr = final_expr,
                     .bindings_start = bindings_start,
+                    .expected_rt_var = expected_rt_var,
                 } } });
 
-                // Evaluate the expression
+                // Evaluate the expression without an expected type
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = dbg_stmt.expr,
-                    .expected_rt_var = inner_rt_var,
+                    .expected_rt_var = null,
                 } });
             },
             .s_return => |ret| {
@@ -13851,6 +13856,9 @@ pub const Interpreter = struct {
                     .expr_idx = while_stmt.cond,
                     .expected_rt_var = cond_rt_var,
                 } });
+            },
+            .s_break => {
+                try work_stack.push(.{ .apply_continuation = .{ .break_from_loop = {} } });
             },
             .s_type_var_alias => {
                 // Type var alias is a compile-time construct, no runtime effect
@@ -14252,7 +14260,7 @@ pub const Interpreter = struct {
                         const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
                         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
-                        const elements_refcounted = actual_elem_layout.isRefcounted();
+                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(actual_elem_layout);
 
                         var runtime_list = RocList.allocateExact(
                             elem_alignment_u32,
@@ -14495,7 +14503,11 @@ pub const Interpreter = struct {
                                     return error.Crash;
                                 },
                                 .call_invoke_closure => |ci| {
-                                    // Free resources if we're skipping a pending call invocation
+                                    // Free resources if we're skipping a pending call invocation.
+                                    // Note: We don't pop values from value_stack here because
+                                    // call_invoke_closure is scheduled BEFORE call_collect_args
+                                    // finishes, so the function and args aren't on the stack yet.
+                                    // The call_collect_args cleanup handles the partial values.
                                     if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                                     if (ci.saved_rigid_subst) |saved| {
                                         var saved_copy = saved;
@@ -14512,37 +14524,17 @@ pub const Interpreter = struct {
                                     fl.list_value.decref(&self.runtime_layout_store, roc_ops);
                                 },
                                 .str_collect => |sc| {
-                                    // Clean up any already-collected string segments on the value stack
-                                    for (0..sc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, sc.collected_count, roc_ops);
                                 },
                                 .tuple_collect => |tc| {
-                                    // Clean up any already-collected tuple elements on the value stack
-                                    for (0..tc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, tc.collected_count, roc_ops);
                                 },
                                 .list_collect => |lc| {
-                                    // Clean up any already-collected list elements on the value stack
-                                    for (0..lc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, lc.collected_count, roc_ops);
                                 },
                                 .record_collect => |rc| {
-                                    // Clean up any already-collected record fields on the value stack
+                                    self.popCollectedValues(value_stack, rc.collected_count, roc_ops);
                                     // Also clean up base record value if present (from record extension)
-                                    for (0..rc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
                                     if (rc.has_extension) {
                                         if (value_stack.pop()) |val| {
                                             val.decref(&self.runtime_layout_store, roc_ops);
@@ -14550,21 +14542,10 @@ pub const Interpreter = struct {
                                     }
                                 },
                                 .tag_collect => |tc| {
-                                    // Clean up any already-collected tag arguments on the value stack
-                                    for (0..tc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, tc.collected_count, roc_ops);
                                 },
                                 .call_collect_args => |cc| {
-                                    // Clean up any already-collected arguments on the value stack
-                                    // Also clean up function value
-                                    for (0..cc.collected_count) |_| {
-                                        if (value_stack.pop()) |val| {
-                                            val.decref(&self.runtime_layout_store, roc_ops);
-                                        }
-                                    }
+                                    self.popCollectedValues(value_stack, cc.collected_count, roc_ops);
                                     // Function value is also on the stack
                                     if (value_stack.pop()) |val| {
                                         val.decref(&self.runtime_layout_store, roc_ops);
@@ -16713,14 +16694,9 @@ pub const Interpreter = struct {
                 } } });
 
                 // Start evaluating first arg
-                // For static dispatch methods like I64.to_str(x), use the receiver type
-                // as the expected type for the first argument. This enables proper type
-                // inference for polymorphic numeric literals.
-                // Note: This assumes methods take their receiver type as first arg, which
-                // is true for common patterns like I64.to_str. For multi-arg methods,
-                // only the first arg gets this treatment.
                 const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
                 const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
                     .expected_rt_var = first_arg_rt_var,
@@ -17474,6 +17450,38 @@ pub const Interpreter = struct {
                 } });
                 return true;
             },
+            .break_from_loop => {
+                const cont_trace = tracy.traceNamed(@src(), "cont.break_from_loop");
+                defer cont_trace.end();
+
+                // Pop work stack until we find while_loop_body_done or for_body_done
+                var work = work_stack.pop() orelse return error.Crash;
+                while (work != .apply_continuation or (work.apply_continuation != .while_loop_body_done and work.apply_continuation != .for_body_done)) {
+                    const foo = work_stack.pop();
+                    std.debug.assert(foo != null);
+                    work = foo orelse return error.Crash;
+                }
+                if (work.apply_continuation == .for_body_done) {
+                    const fl = work.apply_continuation.for_body_done;
+                    // For loop aborted, handle completion
+                    fl.list_value.decref(&self.runtime_layout_store, roc_ops);
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
+                    return true;
+                } else {
+                    // While loop aborted, continue with remaining statements
+                    const wl = work.apply_continuation.while_loop_body_done;
+                    if (wl.remaining_stmts.len == 0) {
+                        try work_stack.push(.{ .eval_expr = .{
+                            .expr_idx = wl.final_expr,
+                            .expected_rt_var = null,
+                        } });
+                    } else {
+                        const next_stmt = self.env.store.getStatement(wl.remaining_stmts[0]);
+                        try self.scheduleNextStatement(work_stack, next_stmt, wl.remaining_stmts[1..], wl.final_expr, wl.bindings_start, null, roc_ops);
+                    }
+                }
+                return true;
+            },
             .expect_check_stmt => |ec| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.expect_check_stmt");
                 defer cont_trace.end();
@@ -17532,18 +17540,22 @@ pub const Interpreter = struct {
                 // Dbg statement: print value
                 const value = value_stack.pop() orelse return error.Crash;
                 defer value.decref(&self.runtime_layout_store, roc_ops);
-                const rendered = try self.renderValueRocWithType(value, dp.rt_var, roc_ops);
+                const rendered = try self.renderValueRocWithType(value, value.rt_var, roc_ops);
                 defer self.allocator.free(rendered);
                 roc_ops.dbg(rendered);
                 // Continue with remaining statements
+                // CRITICAL: Pass expected_rt_var through to ensure polymorphic type information
+                // is preserved. This is the fix for issue #8750 - without this, blocks
+                // containing dbg lose their expected type, causing downstream method calls
+                // to infer wrong types (e.g., numeric literals defaulting to Dec).
                 if (dp.remaining_stmts.len == 0) {
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = dp.final_expr,
-                        .expected_rt_var = null,
+                        .expected_rt_var = dp.expected_rt_var,
                     } });
                 } else {
                     const next_stmt = self.env.store.getStatement(dp.remaining_stmts[0]);
-                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, null, roc_ops);
+                    try self.scheduleNextStatement(work_stack, next_stmt, dp.remaining_stmts[1..], dp.final_expr, dp.bindings_start, dp.expected_rt_var, roc_ops);
                 }
                 return true;
             },
