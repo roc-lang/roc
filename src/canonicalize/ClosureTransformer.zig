@@ -170,51 +170,8 @@ pub const UnspecializedClosure = struct {
     region: u8,
 };
 
-/// Information about a concrete type for cross-module requests.
-/// This allows external modules to know what concrete type to use when
-/// resolving a static dispatch implementation.
-pub const ConcreteTypeInfo = struct {
-    /// The type identifier (e.g., "List", "Dict")
-    type_ident: ?base.Ident.Idx,
-    /// Type arguments if applicable (for generic types like List U64)
-    type_args_hash: u64,
-};
-
-/// External Lambda Set Request - for cross-module lambda set resolution.
-///
-/// When a call crosses module boundaries and involves a static-dispatch-dependent
-/// closure, we need to request the method implementation from the external
-/// module. This struct captures that request.
-pub const ExternalLambdaSetRequest = struct {
-    /// The module containing the method implementation
-    source_module: CIR.Import.Idx,
-
-    /// The dispatch method being requested (e.g., `hash`, `eq`)
-    dispatch_method: base.Ident.Idx,
-
-    /// The concrete type for which we need the implementation
-    concrete_type_info: ConcreteTypeInfo,
-
-    /// The original unspecialized closure this request came from
-    original_unspec: UnspecializedClosure,
-
-    pub fn eql(a: ExternalLambdaSetRequest, b: ExternalLambdaSetRequest) bool {
-        return a.source_module == b.source_module and
-            a.dispatch_method == b.dispatch_method and
-            a.concrete_type_info.type_args_hash == b.concrete_type_info.type_args_hash;
-    }
-};
-
-/// Result of an external lambda set resolution.
-/// Returned when the external module provides the closure info.
-pub const ExternalLambdaSetResult = struct {
-    /// The closure info for the resolved static dispatch implementation
-    closure_info: ClosureInfo,
-    /// Whether this is a new resolution or was already cached
-    is_new: bool,
-};
-
-/// Error types for lambda set resolution failures.
+/// Internal validation error for lambda set resolution failures.
+/// These indicate compiler bugs, not user errors.
 pub const ResolutionError = struct {
     /// The kind of resolution error
     kind: Kind,
@@ -228,53 +185,14 @@ pub const ResolutionError = struct {
     pub const Kind = enum {
         /// No implementation found for the static dispatch method on this type
         missing_static_dispatch,
-        /// External module doesn't export the required closure
-        external_closure_not_found,
-        /// Type variable couldn't be resolved to a concrete type
-        unresolved_type_variable,
-        /// Recursive lambda set couldn't be resolved
-        recursive_lambda_set_unresolved,
-        /// Lambda set is empty but a closure was expected
-        empty_lambda_set,
     };
 
-    /// Create a missing static dispatch implementation error.
     pub fn missingImpl(expr: Expr.Idx, method_name: base.Ident.Idx, type_name: ?base.Ident.Idx) ResolutionError {
         return .{
             .kind = .missing_static_dispatch,
             .expr = expr,
             .method_name = method_name,
             .context = type_name,
-        };
-    }
-
-    /// Create an external closure not found error.
-    pub fn externalNotFound(method_name: base.Ident.Idx) ResolutionError {
-        return .{
-            .kind = .external_closure_not_found,
-            .expr = null,
-            .method_name = method_name,
-            .context = null,
-        };
-    }
-
-    /// Create an unresolved type variable error.
-    pub fn unresolvedTypeVar(expr: ?Expr.Idx) ResolutionError {
-        return .{
-            .kind = .unresolved_type_variable,
-            .expr = expr,
-            .method_name = null,
-            .context = null,
-        };
-    }
-
-    /// Create an empty lambda set error.
-    pub fn emptyLambdaSet(expr: ?Expr.Idx) ResolutionError {
-        return .{
-            .kind = .empty_lambda_set,
-            .expr = expr,
-            .method_name = null,
-            .context = null,
         };
     }
 };
@@ -287,31 +205,6 @@ pub const ValidationResult = struct {
     unresolved_count: usize,
     /// First error encountered (if any)
     first_error: ?ResolutionError,
-};
-
-/// Exported closure information for module interfaces.
-///
-/// This struct contains information about closures that external modules
-/// might need when resolving their own lambda sets. It's part of the
-/// module's exported interface.
-pub const ExportedClosureInfo = struct {
-    /// The closure's tag name (e.g., "#1_hash")
-    closure_name: base.Ident.Idx,
-
-    /// The lifted function pattern for dispatch
-    lifted_fn_pattern: ?CIR.Pattern.Idx,
-
-    /// Static dispatch implementation info (if any)
-    static_dispatch_impl: ?StaticDispatchImpl,
-
-    pub const StaticDispatchImpl = struct {
-        /// The type this method belongs to (e.g., "List", "Dict")
-        type_name: base.Ident.Idx,
-        /// The method name (e.g., "hash", "eq", "map")
-        method: base.Ident.Idx,
-        /// The type this implementation is for (e.g., "List", "Dict")
-        for_type: base.Ident.Idx,
-    };
 };
 
 /// Reference to an unspecialized entry in a lambda set.
@@ -824,14 +717,6 @@ top_level_patterns: std.AutoHashMap(CIR.Pattern.Idx, void),
 /// Higher region = more deeply nested = should be resolved first.
 current_region: u8,
 
-/// External lambda set requests - for cross-module resolution.
-/// These are requests for static dispatch implementations from other modules.
-external_lambda_set_requests: std.ArrayList(ExternalLambdaSetRequest),
-
-/// Exported closure information for module interface.
-/// These are closures that can be used by other modules.
-exported_closures: std.ArrayList(ExportedClosureInfo),
-
 /// Tracks unspecialized entries by the type variable they depend on.
 /// This enables efficient lookup during monomorphization when a type variable
 /// becomes concrete - we can quickly find all entries that need resolution.
@@ -849,8 +734,6 @@ pub fn init(allocator: std.mem.Allocator, module_env: *ModuleEnv) Self {
         .pattern_lambda_return_sets = std.AutoHashMap(CIR.Pattern.Idx, LambdaSet).init(allocator),
         .top_level_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator),
         .current_region = 0,
-        .external_lambda_set_requests = std.ArrayList(ExternalLambdaSetRequest).empty,
-        .exported_closures = std.ArrayList(ExportedClosureInfo).empty,
         .unspec_by_type_var = UnspecializedByTypeVar.init(allocator),
     };
 }
@@ -981,208 +864,6 @@ pub fn isTopLevel(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     return self.top_level_patterns.contains(pattern_idx);
 }
 
-/// Request a static dispatch implementation from an external module.
-///
-/// Called when transforming code that references a static dispatch method where
-/// the implementation is defined in another module.
-///
-/// Returns true if this is a new request, false if already requested.
-pub fn requestExternalLambdaSet(
-    self: *Self,
-    source_module: CIR.Import.Idx,
-    dispatch_method: base.Ident.Idx,
-    concrete_type_info: ConcreteTypeInfo,
-    original_unspec: UnspecializedClosure,
-) !bool {
-    // Check if we already have this request
-    for (self.external_lambda_set_requests.items) |existing| {
-        if (existing.eql(.{
-            .source_module = source_module,
-            .dispatch_method = dispatch_method,
-            .concrete_type_info = concrete_type_info,
-            .original_unspec = original_unspec,
-        })) {
-            return false; // Already requested
-        }
-    }
-
-    // Add new request
-    try self.external_lambda_set_requests.append(self.allocator, .{
-        .source_module = source_module,
-        .dispatch_method = dispatch_method,
-        .concrete_type_info = concrete_type_info,
-        .original_unspec = original_unspec,
-    });
-
-    return true;
-}
-
-/// Get all pending external lambda set requests.
-///
-/// These should be processed after the transformation pass to resolve
-/// cross-module static dispatch implementations.
-pub fn getExternalLambdaSetRequests(self: *const Self) []const ExternalLambdaSetRequest {
-    return self.external_lambda_set_requests.items;
-}
-
-/// Resolve an external lambda set request with the closure info from the external module.
-///
-/// Called when the external module provides the static dispatch implementation closure.
-/// Returns the resolved result which includes the closure info.
-pub fn resolveExternalLambdaSet(
-    self: *Self,
-    request: ExternalLambdaSetRequest,
-    closure_info: ClosureInfo,
-) ExternalLambdaSetResult {
-    // Find and remove the request from our pending list
-    var found = false;
-    var i: usize = 0;
-    while (i < self.external_lambda_set_requests.items.len) {
-        if (self.external_lambda_set_requests.items[i].eql(request)) {
-            _ = self.external_lambda_set_requests.swapRemove(i);
-            found = true;
-            break;
-        }
-        i += 1;
-    }
-
-    return .{
-        .closure_info = closure_info,
-        .is_new = found,
-    };
-}
-
-/// Export a closure for the module interface.
-///
-/// Called for closures that should be accessible from other modules
-/// for static dispatch resolution.
-pub fn exportClosure(
-    self: *Self,
-    closure_name: base.Ident.Idx,
-    lifted_fn_pattern: ?CIR.Pattern.Idx,
-    static_dispatch_impl: ?ExportedClosureInfo.StaticDispatchImpl,
-) !void {
-    try self.exported_closures.append(self.allocator, .{
-        .closure_name = closure_name,
-        .lifted_fn_pattern = lifted_fn_pattern,
-        .static_dispatch_impl = static_dispatch_impl,
-    });
-}
-
-/// Get all exported closures for the module interface.
-///
-/// These are closures that other modules can reference when resolving
-/// their static dispatch lambda sets.
-pub fn getExportedClosures(self: *const Self) []const ExportedClosureInfo {
-    return self.exported_closures.items;
-}
-
-/// Find an exported closure by static dispatch implementation.
-///
-/// Used when an external module requests a specific method implementation
-/// for a concrete type.
-pub fn findExportedClosureByStaticDispatch(
-    self: *const Self,
-    type_name: base.Ident.Idx,
-    method: base.Ident.Idx,
-    for_type: base.Ident.Idx,
-) ?ExportedClosureInfo {
-    for (self.exported_closures.items) |exported| {
-        if (exported.static_dispatch_impl) |impl| {
-            if (impl.type_name == type_name and
-                impl.method == method and
-                impl.for_type == for_type)
-            {
-                return exported;
-            }
-        }
-    }
-    return null;
-}
-
-/// Result of processing external lambda set requests.
-pub const ExternalResolutionResult = struct {
-    /// Number of requests that were successfully resolved
-    resolved_count: usize,
-    /// Number of requests that failed to resolve (module not found, closure not found, etc.)
-    failed_count: usize,
-    /// Number of requests still pending (deferred for later resolution)
-    pending_count: usize,
-};
-
-/// Function signature for looking up a closure from an external module.
-/// Returns the ClosureInfo if found, null otherwise.
-pub const ExternalClosureLookupFn = *const fn (
-    /// The module to look in
-    source_module: CIR.Import.Idx,
-    /// The dispatch method to find
-    dispatch_method: base.Ident.Idx,
-    /// Type information for the concrete type
-    concrete_type_info: ConcreteTypeInfo,
-    /// User context passed through
-    context: *anyopaque,
-) ?ClosureInfo;
-
-/// Process all pending external lambda set requests.
-///
-/// This is called after the transformation pass to resolve static dispatch implementations
-/// from external modules. For each pending request:
-/// 1. Look up the closure from the external module using the provided callback
-/// 2. If found, resolve the request and add the closure to the lambda set
-/// 3. If not found, track as failed (for error reporting)
-///
-/// The `lookup_fn` callback should use the module's exported closures to find
-/// the matching static dispatch implementation.
-///
-/// Returns statistics about the resolution process.
-pub fn processExternalLambdaSetRequests(
-    self: *Self,
-    lookup_fn: ExternalClosureLookupFn,
-    context: *anyopaque,
-) ExternalResolutionResult {
-    var result = ExternalResolutionResult{
-        .resolved_count = 0,
-        .failed_count = 0,
-        .pending_count = 0,
-    };
-
-    // Process requests in reverse order so we can remove while iterating
-    var i: usize = self.external_lambda_set_requests.items.len;
-    while (i > 0) {
-        i -= 1;
-        const request = self.external_lambda_set_requests.items[i];
-
-        // Try to look up the closure from the external module
-        if (lookup_fn(
-            request.source_module,
-            request.dispatch_method,
-            request.concrete_type_info,
-            context,
-        )) |closure_info| {
-            // Successfully found the closure - resolve the request
-            _ = self.resolveExternalLambdaSet(request, closure_info);
-            result.resolved_count += 1;
-        } else {
-            // Closure not found - track as failed
-            // The request remains in the list for error reporting
-            result.failed_count += 1;
-        }
-    }
-
-    result.pending_count = self.external_lambda_set_requests.items.len;
-    return result;
-}
-
-/// Check if there are any pending external lambda set requests.
-pub fn hasPendingExternalRequests(self: *const Self) bool {
-    return self.external_lambda_set_requests.items.len > 0;
-}
-
-/// Get the count of pending external lambda set requests.
-pub fn pendingExternalRequestCount(self: *const Self) usize {
-    return self.external_lambda_set_requests.items.len;
-}
-
 /// Validate that all lambda sets have been fully resolved.
 ///
 /// This should be called after monomorphization to ensure no unspecialized
@@ -1244,62 +925,10 @@ pub fn validateAllResolved(self: *const Self) ValidationResult {
     }
 
     return .{
-        .is_valid = total_unresolved == 0 and self.external_lambda_set_requests.items.len == 0,
-        .unresolved_count = total_unresolved + self.external_lambda_set_requests.items.len,
+        .is_valid = total_unresolved == 0,
+        .unresolved_count = total_unresolved,
         .first_error = first_error,
     };
-}
-
-/// Get all unresolved lambda set entries for error reporting.
-///
-/// This returns a list of unresolved entries that can be used to generate
-/// detailed error messages for the user.
-pub fn getUnresolvedEntries(self: *const Self, allocator: std.mem.Allocator) !std.ArrayList(ResolutionError) {
-    var errors = std.ArrayList(ResolutionError).empty;
-    errdefer errors.deinit(allocator);
-
-    // Collect from pattern lambda sets
-    var pattern_iter = self.pattern_lambda_sets.valueIterator();
-    while (pattern_iter.next()) |lambda_set| {
-        for (lambda_set.unspecialized.items) |unspec| {
-            try errors.append(allocator, ResolutionError.missingImpl(
-                unspec.member_expr,
-                unspec.member,
-                null,
-            ));
-        }
-    }
-
-    // Collect from lambda return sets
-    var return_iter = self.lambda_return_sets.valueIterator();
-    while (return_iter.next()) |lambda_set| {
-        for (lambda_set.unspecialized.items) |unspec| {
-            try errors.append(allocator, ResolutionError.missingImpl(
-                unspec.member_expr,
-                unspec.member,
-                null,
-            ));
-        }
-    }
-
-    // Collect from pattern lambda return sets
-    var pattern_return_iter = self.pattern_lambda_return_sets.valueIterator();
-    while (pattern_return_iter.next()) |lambda_set| {
-        for (lambda_set.unspecialized.items) |unspec| {
-            try errors.append(allocator, ResolutionError.missingImpl(
-                unspec.member_expr,
-                unspec.member,
-                null,
-            ));
-        }
-    }
-
-    // Collect from external requests
-    for (self.external_lambda_set_requests.items) |request| {
-        try errors.append(allocator, ResolutionError.externalNotFound(request.dispatch_method));
-    }
-
-    return errors;
 }
 
 /// Detect if a closure body contains a reference to the closure itself.
@@ -1650,12 +1279,6 @@ pub fn deinit(self: *Self) void {
 
     // Free top-level patterns set
     self.top_level_patterns.deinit();
-
-    // Free external lambda set requests
-    self.external_lambda_set_requests.deinit(self.allocator);
-
-    // Free exported closures
-    self.exported_closures.deinit(self.allocator);
 
     // Free unspecialized entry tracking
     self.unspec_by_type_var.deinit();
@@ -3070,102 +2693,6 @@ test "LambdaSet: merge with unspecialized" {
     try testing.expect(set1.hasUnspecialized());
 }
 
-test "ClosureTransformer: external lambda set requests" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = Self.init(allocator, module_env);
-    defer transformer.deinit();
-
-    // Create test identifiers
-    const dispatch_method = try module_env.insertIdent(base.Ident.for_text("hash"));
-
-    // Create a dummy unspecialized closure
-    const unspec = UnspecializedClosure{
-        .type_var = @enumFromInt(100), // Dummy type var for test
-        .member = dispatch_method,
-        .member_expr = @enumFromInt(1),
-        .region = 0,
-    };
-
-    // Request an external lambda set
-    // source_module is only used for equality comparison in tests, never dereferenced
-    const source_module: CIR.Import.Idx = .first;
-    const concrete_type_info = ConcreteTypeInfo{
-        .type_ident = null,
-        .type_args_hash = 12345,
-    };
-
-    const is_new = try transformer.requestExternalLambdaSet(
-        source_module,
-        dispatch_method,
-        concrete_type_info,
-        unspec,
-    );
-    try testing.expect(is_new);
-
-    // Get the pending requests
-    const requests = transformer.getExternalLambdaSetRequests();
-    try testing.expectEqual(@as(usize, 1), requests.len);
-    try testing.expect(requests[0].dispatch_method == dispatch_method);
-
-    // Duplicate request should return false
-    const is_new2 = try transformer.requestExternalLambdaSet(
-        source_module,
-        dispatch_method,
-        concrete_type_info,
-        unspec,
-    );
-    try testing.expect(!is_new2);
-}
-
-test "ClosureTransformer: export closure" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = Self.init(allocator, module_env);
-    defer transformer.deinit();
-
-    // Create test identifiers
-    const closure_name = try module_env.insertIdent(base.Ident.for_text("#1_hash"));
-    const type_name = try module_env.insertIdent(base.Ident.for_text("List"));
-    const method = try module_env.insertIdent(base.Ident.for_text("hash"));
-    const for_type = try module_env.insertIdent(base.Ident.for_text("List"));
-
-    // Export a closure
-    try transformer.exportClosure(
-        closure_name,
-        null,
-        ExportedClosureInfo.StaticDispatchImpl{
-            .type_name = type_name,
-            .method = method,
-            .for_type = for_type,
-        },
-    );
-
-    // Check exported closures
-    const exported = transformer.getExportedClosures();
-    try testing.expectEqual(@as(usize, 1), exported.len);
-    try testing.expect(exported[0].closure_name == closure_name);
-
-    // Find by static dispatch
-    const found = transformer.findExportedClosureByStaticDispatch(type_name, method, for_type);
-    try testing.expect(found != null);
-    try testing.expect(found.?.closure_name == closure_name);
-}
-
 test "LambdaSet: isEmpty" {
     const allocator = testing.allocator;
 
@@ -3413,183 +2940,4 @@ test "ClosureTransformer: validateAllResolved detects unresolved" {
     try testing.expectEqual(@as(usize, 1), result.unresolved_count);
     try testing.expect(result.first_error != null);
     try testing.expectEqual(ResolutionError.Kind.missing_static_dispatch, result.first_error.?.kind);
-}
-
-test "ClosureTransformer: processExternalLambdaSetRequests resolves matching requests" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = Self.init(allocator, module_env);
-    defer transformer.deinit();
-
-    // Create test identifiers
-    const hash_member = try module_env.insertIdent(base.Ident.for_text("hash"));
-    const eq_member = try module_env.insertIdent(base.Ident.for_text("eq"));
-
-    // Create unspecialized closures for the requests
-    const unspec1 = UnspecializedClosure{
-        .type_var = @enumFromInt(100),
-        .member = hash_member,
-        .member_expr = @enumFromInt(1),
-        .region = 0,
-    };
-    const unspec2 = UnspecializedClosure{
-        .type_var = @enumFromInt(101),
-        .member = eq_member,
-        .member_expr = @enumFromInt(2),
-        .region = 0,
-    };
-
-    // Add external lambda set requests
-    // source_module is only used for equality comparison in tests, never dereferenced
-    const source_module: CIR.Import.Idx = undefined;
-    const concrete_type_info1 = ConcreteTypeInfo{ .type_ident = null, .type_args_hash = 111 };
-    const concrete_type_info2 = ConcreteTypeInfo{ .type_ident = null, .type_args_hash = 222 };
-
-    _ = try transformer.requestExternalLambdaSet(source_module, hash_member, concrete_type_info1, unspec1);
-    _ = try transformer.requestExternalLambdaSet(source_module, eq_member, concrete_type_info2, unspec2);
-
-    // Verify we have 2 pending requests
-    try testing.expectEqual(@as(usize, 2), transformer.pendingExternalRequestCount());
-
-    // Context for our mock lookup - tracks which member was requested
-    const MockContext = struct {
-        hash_member: base.Ident.Idx,
-        calls: usize = 0,
-    };
-    var mock_ctx = MockContext{ .hash_member = hash_member };
-
-    // Mock lookup function - only resolves "hash", not "eq"
-    const mockLookup = struct {
-        fn lookup(
-            _: CIR.Import.Idx,
-            dispatch_method: base.Ident.Idx,
-            _: ConcreteTypeInfo,
-            context: *anyopaque,
-        ) ?ClosureInfo {
-            const ctx: *MockContext = @ptrCast(@alignCast(context));
-            ctx.calls += 1;
-
-            // Only resolve hash, not eq
-            if (dispatch_method.idx == ctx.hash_member.idx) {
-                return ClosureInfo{
-                    .tag_name = dispatch_method, // Use method as tag name for test
-                    .lambda_body = @enumFromInt(99),
-                    .lambda_args = .{ .span = .{ .start = 0, .len = 0 } },
-                    .capture_names = std.ArrayList(base.Ident.Idx).empty,
-                    .lifted_fn_pattern = null,
-                    .lifted_captures_pattern = null,
-                };
-            }
-            return null;
-        }
-    }.lookup;
-
-    // Process the requests
-    const result = transformer.processExternalLambdaSetRequests(mockLookup, @ptrCast(&mock_ctx));
-
-    // Verify results
-    try testing.expectEqual(@as(usize, 2), mock_ctx.calls); // Both requests were attempted
-    try testing.expectEqual(@as(usize, 1), result.resolved_count); // hash was resolved
-    try testing.expectEqual(@as(usize, 1), result.failed_count); // eq failed
-    try testing.expectEqual(@as(usize, 1), result.pending_count); // eq still pending
-
-    // Verify only eq request remains
-    try testing.expectEqual(@as(usize, 1), transformer.pendingExternalRequestCount());
-    const remaining = transformer.getExternalLambdaSetRequests();
-    try testing.expectEqual(eq_member.idx, remaining[0].dispatch_method.idx);
-}
-
-test "ClosureTransformer: processExternalLambdaSetRequests with no requests" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = Self.init(allocator, module_env);
-    defer transformer.deinit();
-
-    // No requests added
-
-    const MockContext = struct { calls: usize = 0 };
-    var mock_ctx = MockContext{};
-
-    const mockLookup = struct {
-        fn lookup(_: CIR.Import.Idx, _: base.Ident.Idx, _: ConcreteTypeInfo, context: *anyopaque) ?ClosureInfo {
-            const ctx: *MockContext = @ptrCast(@alignCast(context));
-            ctx.calls += 1;
-            return null;
-        }
-    }.lookup;
-
-    const result = transformer.processExternalLambdaSetRequests(mockLookup, @ptrCast(&mock_ctx));
-
-    // No calls should be made, all counts should be zero
-    try testing.expectEqual(@as(usize, 0), mock_ctx.calls);
-    try testing.expectEqual(@as(usize, 0), result.resolved_count);
-    try testing.expectEqual(@as(usize, 0), result.failed_count);
-    try testing.expectEqual(@as(usize, 0), result.pending_count);
-}
-
-test "ClosureTransformer: processExternalLambdaSetRequests resolves all" {
-    const allocator = testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "test");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var transformer = Self.init(allocator, module_env);
-    defer transformer.deinit();
-
-    const hash_member = try module_env.insertIdent(base.Ident.for_text("hash"));
-
-    const unspec = UnspecializedClosure{
-        .type_var = @enumFromInt(100),
-        .member = hash_member,
-        .member_expr = @enumFromInt(1),
-        .region = 0,
-    };
-
-    // source_module is only used for equality comparison in tests, never dereferenced
-    const source_module: CIR.Import.Idx = undefined;
-    const concrete_type_info = ConcreteTypeInfo{ .type_ident = null, .type_args_hash = 111 };
-
-    _ = try transformer.requestExternalLambdaSet(source_module, hash_member, concrete_type_info, unspec);
-
-    try testing.expectEqual(@as(usize, 1), transformer.pendingExternalRequestCount());
-
-    // Mock that resolves everything
-    const mockLookupAll = struct {
-        fn lookup(_: CIR.Import.Idx, dispatch_method: base.Ident.Idx, _: ConcreteTypeInfo, _: *anyopaque) ?ClosureInfo {
-            return ClosureInfo{
-                .tag_name = dispatch_method,
-                .lambda_body = @enumFromInt(99),
-                .lambda_args = .{ .span = .{ .start = 0, .len = 0 } },
-                .capture_names = std.ArrayList(base.Ident.Idx).empty,
-                .lifted_fn_pattern = null,
-                .lifted_captures_pattern = null,
-            };
-        }
-    }.lookup;
-
-    var dummy: usize = 0;
-    const result = transformer.processExternalLambdaSetRequests(mockLookupAll, @ptrCast(&dummy));
-
-    try testing.expectEqual(@as(usize, 1), result.resolved_count);
-    try testing.expectEqual(@as(usize, 0), result.failed_count);
-    try testing.expectEqual(@as(usize, 0), result.pending_count);
-    try testing.expectEqual(@as(usize, 0), transformer.pendingExternalRequestCount());
 }
