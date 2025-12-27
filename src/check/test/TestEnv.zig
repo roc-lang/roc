@@ -67,30 +67,30 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     const base_ptr = @intFromPtr(buffer.ptr);
 
     // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), source).*;
+    const common = serialized_ptr.common.deserialize(base_ptr, source).*;
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*, // Pass gpa to types deserialize
+        .types = serialized_ptr.types.deserialize(base_ptr, gpa).*, // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
+        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
         .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-        .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
+        .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
+        .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+        .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
+        .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
@@ -438,7 +438,19 @@ pub fn deinit(self: *TestEnv) void {
 ///
 /// Also assert that there were no problems processing the source code.
 pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []const u8) !void {
-    try self.assertNoErrors();
+    return self.assertDefTypeOptions(target_def_name, expected, .{ .allow_type_errors = false });
+}
+
+/// Get the inferred type of the last declaration and compare it to the provided
+/// expected type string.
+///
+/// Also assert that there were no problems processing the source code.
+pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expected: []const u8, comptime options: struct { allow_type_errors: bool }) !void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    if (!options.allow_type_errors) {
+        try self.assertNoTypeProblems();
+    }
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
 
@@ -452,7 +464,7 @@ pub fn assertDefType(self: *TestEnv, target_def_name: []const u8, expected: []co
             .assign => |assign| {
                 const def_name = idents.getText(assign.ident);
                 if (std.mem.eql(u8, target_def_name, def_name)) {
-                    try self.type_writer.write(ModuleEnv.varFrom(def_idx));
+                    try self.type_writer.write(ModuleEnv.varFrom(def_idx), .wrap);
                     try testing.expectEqualStrings(expected, self.type_writer.get());
                     return;
                 }
@@ -477,7 +489,7 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) !void {
     const last_def_idx = defs_slice[defs_slice.len - 1];
     const last_def_var = ModuleEnv.varFrom(last_def_idx);
 
-    try self.type_writer.write(last_def_var);
+    try self.type_writer.write(last_def_var, .wrap);
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
@@ -490,7 +502,7 @@ pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8)
     const last_def_idx = defs_slice[defs_slice.len - 1];
     const last_def_var = ModuleEnv.varFrom(last_def_idx);
 
-    try self.type_writer.write(last_def_var);
+    try self.type_writer.write(last_def_var, .wrap);
     const type_str = self.type_writer.get();
     if (std.mem.indexOf(u8, type_str, expected_substring) == null) {
         std.debug.print("Expected type to contain '{s}', but got: {s}\n", .{ expected_substring, type_str });

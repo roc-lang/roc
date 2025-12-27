@@ -250,6 +250,9 @@ pub const Diagnostic = union(enum) {
         suggested_name: Ident.Idx,
         region: Region,
     },
+    break_outside_loop: struct {
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -316,6 +319,7 @@ pub const Diagnostic = union(enum) {
             .type_var_marked_unused => |d| d.region,
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
+            .break_outside_loop => |d| d.region,
         };
     }
 

@@ -86,36 +86,36 @@ test "ModuleEnv.Serialized roundtrip" {
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
 
     // Deserialize common env first so we can look up identifiers
-    const common = deserialized_ptr.common.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), source).*;
+    const common = deserialized_ptr.common.deserialize(@intFromPtr(buffer.ptr), source).*;
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
+        .types = deserialized_ptr.types.deserialize(@intFromPtr(buffer.ptr), gpa).*,
         .module_kind = deserialized_ptr.module_kind.decode(),
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,
-        .requires_types = deserialized_ptr.requires_types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
-        .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .requires_types = deserialized_ptr.requires_types.deserialize(@intFromPtr(buffer.ptr)).*,
+        .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserialize(@intFromPtr(buffer.ptr)).*,
         .builtin_statements = deserialized_ptr.builtin_statements,
-        .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
-        .imports = (try deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc)).*,
+        .external_decls = deserialized_ptr.external_decls.deserialize(@intFromPtr(buffer.ptr)).*,
+        .imports = (try deserialized_ptr.imports.deserialize(@intFromPtr(buffer.ptr), deser_alloc)).*,
         .module_name = "TestModule",
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = deserialized_ptr.diagnostics,
-        .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), deser_alloc).*,
+        .store = deserialized_ptr.store.deserialize(@intFromPtr(buffer.ptr), deser_alloc).*,
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
-        .method_idents = deserialized_ptr.method_idents.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+        .method_idents = deserialized_ptr.method_idents.deserialize(@intFromPtr(buffer.ptr)).*,
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
-    // ModuleEnv.init() also interns 18 well-known identifiers: from_int_digits, from_dec_digits, Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq
+    // ModuleEnv.init() also interns 16 well-known identifiers: Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq
     // Plus 19 type identifiers: Str, Builtin.Try, Builtin.Num.Numeral, Builtin.Str, List, Box, Builtin.Num.{U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec}
     // Plus 3 field/tag identifiers: before_dot, after_dot, ProvidedByCompiler
     // Plus 7 more identifiers: tag, payload, is_negative, digits_before_pt, digits_after_pt, box, unbox
@@ -128,7 +128,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 1 inspect method identifier: to_inspect
     // Plus 14 unqualified builtin type names: Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
-    try testing.expectEqual(@as(u32, 81), original.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 79), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -137,9 +137,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same 81 identifiers as original: hello, world, TestModule + 18 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 14 unqualified builtin type names from ModuleEnv.init() + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox)
+    // Should have same 79 identifiers as original: hello, world, TestModule + 16 well-known identifiers + 19 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 14 unqualified builtin type names from ModuleEnv.init() + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 81), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 79), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u16, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
@@ -243,7 +243,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
 //     // The CommonEnv.Serialized is at the beginning of the buffer
 //     const common_serialized_ptr = @as(*base.CommonEnv.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-//     const deserialized_common = common_serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), "");
+//     const deserialized_common = common_serialized_ptr.deserialize(@intFromPtr(buffer.ptr), "");
 
 //     // The ModuleEnv.Serialized follows after the CommonEnv.Serialized
 //     const module_env_offset = @sizeOf(base.CommonEnv.Serialized);
@@ -254,14 +254,14 @@ test "ModuleEnv.Serialized roundtrip" {
 //     deserialized.* = ModuleEnv{
 //         .gpa = gpa,
 //         .common = deserialized_common,
-//         .types = deserialized_ptr.types.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
+//         .types = deserialized_ptr.types.deserialize(@intFromPtr(buffer.ptr)).*,
 //         .all_defs = deserialized_ptr.all_defs,
 //         .all_statements = deserialized_ptr.all_statements,
-//         .external_decls = deserialized_ptr.external_decls.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr)))).*,
-//         .imports = (try deserialized_ptr.imports.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa)).*,
+//         .external_decls = deserialized_ptr.external_decls.deserialize(@intFromPtr(buffer.ptr)).*,
+//         .imports = (try deserialized_ptr.imports.deserialize(@intFromPtr(buffer.ptr), gpa)).*,
 //         .module_name = "test.Types",
 //         .diagnostics = deserialized_ptr.diagnostics,
-//         .store = deserialized_ptr.store.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa).*,
+//         .store = deserialized_ptr.store.deserialize(@intFromPtr(buffer.ptr), gpa).*,
 //     };
 
 //     // Verify module name
@@ -326,7 +326,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
 //     // Find the ModuleEnv at the tracked offset
 //     const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-//     const deserialized = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, "", "test.Empty");
+//     const deserialized = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, "", "test.Empty");
 
 //     // Verify module name
 //     try testing.expectEqualStrings("test.Empty", deserialized.module_name);
@@ -396,7 +396,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
 //     // Find the ModuleEnv at the tracked offset
 //     const deserialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr + env_start_offset));
-//     const deserialized = deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "test.Hello");
+//     const deserialized = deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, source, "test.Hello");
 
 //     // Verify source and module name
 //     try testing.expectEqualStrings(source, deserialized.source);

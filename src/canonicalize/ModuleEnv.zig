@@ -98,8 +98,6 @@ pub const ModuleKind = union(enum) {
 /// This is an extern struct so it can be embedded in serialized ModuleEnv.
 pub const CommonIdents = extern struct {
     // Method names for operator desugaring
-    from_int_digits: Ident.Idx,
-    from_dec_digits: Ident.Idx,
     plus: Ident.Idx,
     minus: Ident.Idx,
     times: Ident.Idx,
@@ -194,8 +192,6 @@ pub const CommonIdents = extern struct {
     /// Use this when creating a fresh ModuleEnv from scratch.
     pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
         return .{
-            .from_int_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_INT_DIGITS_METHOD_NAME)),
-            .from_dec_digits = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_DEC_DIGITS_METHOD_NAME)),
             .plus = try common.insertIdent(gpa, Ident.for_text(Ident.PLUS_METHOD_NAME)),
             .minus = try common.insertIdent(gpa, Ident.for_text("minus")),
             .times = try common.insertIdent(gpa, Ident.for_text("times")),
@@ -286,8 +282,6 @@ pub const CommonIdents = extern struct {
     /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
     pub fn find(common: *const CommonEnv) CommonIdents {
         return .{
-            .from_int_digits = common.findIdent(Ident.FROM_INT_DIGITS_METHOD_NAME) orelse unreachable,
-            .from_dec_digits = common.findIdent(Ident.FROM_DEC_DIGITS_METHOD_NAME) orelse unreachable,
             .plus = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
             .minus = common.findIdent("minus") orelse unreachable,
             .times = common.findIdent("times") orelse unreachable,
@@ -542,17 +536,15 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const idents = try CommonIdents.insert(gpa, &common);
 
     // Use source-based heuristics for initial capacities
-    // Typical Roc code generates ~1 node per 20 bytes, ~1 type per 50 bytes
+    // Typical Roc code generates ~1 node per 20 bytes
     // Use generous minimums to avoid too many reallocations for small files
     const source_len = source.len;
     const node_capacity = @max(1024, @min(100_000, source_len / 20));
-    const type_capacity = @max(2048, @min(50_000, source_len / 50));
-    const var_capacity = @max(512, @min(10_000, source_len / 100));
 
     return Self{
         .gpa = gpa,
         .common = common,
-        .types = try TypeStore.initCapacity(gpa, type_capacity, var_capacity),
+        .types = try TypeStore.initFromSourceLen(gpa, source_len),
         .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1955,6 +1947,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .break_outside_loop => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "BREAK OUTSIDE LOOP", .runtime_error);
+            try report.document.addReflowingText("The ");
+            try report.document.addAnnotated("break", .inline_code);
+            try report.document.addReflowingText(" statement can only be used inside loops like ");
+            try report.document.addAnnotated("while", .inline_code);
+            try report.document.addReflowingText(" or ");
+            try report.document.addAnnotated("for", .inline_code);
+            try report.document.addReflowingText(" to exit the loop early.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => unreachable, // All diagnostics must have explicit handlers
     };
 }
@@ -2057,9 +2073,10 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    /// The base_addr parameter is the base address of the serialized buffer in memory.
     pub fn deserialize(
         self: *Serialized,
-        offset: i64,
+        base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
@@ -2078,30 +2095,30 @@ pub const Serialized = extern struct {
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
         // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(offset, source).*;
+        const common = self.common.deserialize(base_addr, source).*;
 
         env.* = Self{
             .gpa = gpa,
             .common = common,
-            .types = self.types.deserialize(offset, gpa).*,
+            .types = self.types.deserialize(base_addr, gpa).*,
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(offset).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(offset).*,
+            .requires_types = self.requires_types.deserialize(base_addr).*,
+            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = (try self.imports.deserialize(offset, gpa)).*,
+            .external_decls = self.external_decls.deserialize(base_addr).*,
+            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
             .module_name = module_name,
             .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .store = self.store.deserialize(base_addr, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(offset).*,
+            .method_idents = self.method_idents.deserialize(base_addr).*,
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -2454,6 +2471,10 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
     if (maybe_expr_idx) |expr_idx| {
         try self.pushExprTypesToSExprTree(expr_idx, tree);
     } else {
+        // Create a TypeWriter to format the type
+        var type_writer = try self.initTypeWriter();
+        defer type_writer.deinit();
+
         // Generate full type information for all definitions and expressions
         const root_begin = tree.beginNode();
         try tree.pushStaticAtom("inferred-types");
@@ -2483,12 +2504,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
-            // Create a TypeWriter to format the type
-            var type_writer = self.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
             // Write the type to the buffer
-            type_writer.write(pattern_var) catch continue;
+            try type_writer.write(pattern_var, .one_line);
 
             // Add the pattern type entry
             const patt_begin = tree.beginNode();
@@ -2537,12 +2554,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         // Get the type variable for this statement
                         const stmt_var = varFrom(stmt_idx);
 
-                        // Create a TypeWriter to format the type
-                        var type_writer = self.initTypeWriter() catch continue;
-                        defer type_writer.deinit();
-
                         // Write the type to the buffer
-                        type_writer.write(stmt_var) catch continue;
+                        try type_writer.write(stmt_var, .one_line);
 
                         const type_str = type_writer.get();
                         try tree.pushStringPair("type", type_str);
@@ -2566,12 +2579,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         // Get the type variable for this statement
                         const stmt_var = varFrom(stmt_idx);
 
-                        // Create a TypeWriter to format the type
-                        var type_writer = self.initTypeWriter() catch continue;
-                        defer type_writer.deinit();
-
                         // Write the type to the buffer
-                        type_writer.write(stmt_var) catch continue;
+                        try type_writer.write(stmt_var, .one_line);
 
                         const type_str = type_writer.get();
                         try tree.pushStringPair("type", type_str);
@@ -2606,11 +2615,8 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const expr_region = self.store.getRegionAt(expr_node_idx);
 
             // Create a TypeWriter to format the type
-            var type_writer = self.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
             // Write the type to the buffer
-            type_writer.write(expr_var) catch continue;
+            try type_writer.write(expr_var, .one_line);
 
             // Add the expression type entry
             const expr_begin = tree.beginNode();
@@ -2643,7 +2649,7 @@ fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTre
     defer type_writer.deinit();
 
     // Write the type to the buffer
-    try type_writer.write(expr_var);
+    try type_writer.write(expr_var, .one_line);
 
     // Add the formatted type to the S-expression tree
     const type_str = type_writer.get();

@@ -126,6 +126,7 @@ pub const Expr = union(enum) {
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
         target_node_idx: u16,
+        ident_idx: Ident.Idx,
         region: Region,
     },
     /// Lookup of a required identifier from the platform's `requires` clause.
@@ -397,13 +398,13 @@ pub const Expr = union(enum) {
     /// This is created when the user writes `Thing.method(args)` inside a function body
     /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
     ///
-    /// The actual function to call is resolved during type-checking once the type variable
+    /// The actual function to call is resolved during monomorphization once the type variable
     /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
     /// then `Thing.len(x)` becomes `List.len(x)`.
     ///
     /// ```roc
-    /// default_value : |thing| thing where thing implements Default
-    /// default_value = |thing|
+    /// # Static dispatch: method is resolved based on concrete type at monomorphization time
+    /// call_default = |thing|
     ///     Thing : thing
     ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
     /// ```
@@ -509,6 +510,7 @@ pub const Expr = union(enum) {
         list_len,
         list_is_empty,
         list_get_unsafe,
+        list_append_unsafe,
         list_concat,
         list_with_capacity,
         list_sort_with,
@@ -552,8 +554,6 @@ pub const Expr = union(enum) {
         num_shift_right_zf_by, // Int a, U8 -> Int a (zero-fill/logical shift)
 
         // Numeric parsing operations
-        num_from_int_digits, // Parse List(U8) -> Try(num, [OutOfRange])
-        num_from_dec_digits, // Parse (List(U8), List(U8)) -> Try(num, [OutOfRange])
         num_from_numeral, // Parse Numeral -> Try(num, [InvalidNumeral(Str)])
         num_from_str, // Parse Str -> Try(num, [BadNumStr])
 
@@ -882,6 +882,7 @@ pub const Expr = union(enum) {
                 .list_concat => &.{ .consume, .consume },
                 .list_with_capacity => &.{.borrow}, // capacity is value type
                 .list_sort_with => &.{.consume},
+                .list_append_unsafe => &.{.consume},
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
                 .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
@@ -893,9 +894,7 @@ pub const Expr = union(enum) {
                 .num_is_zero, .num_is_negative, .num_is_positive, .num_negate, .num_abs => &.{.borrow},
                 .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_abs_diff, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by => &.{ .borrow, .borrow },
 
-                // Numeric parsing - list borrowed for digits, string borrowed
-                .num_from_int_digits => &.{.borrow},
-                .num_from_dec_digits => &.{ .borrow, .borrow },
+                // Numeric parsing - string borrowed
                 .num_from_numeral => &.{.borrow},
                 .num_from_str => &.{.borrow},
 
@@ -1178,6 +1177,9 @@ pub const Expr = union(enum) {
     pub const Closure = struct {
         lambda_idx: Expr.Idx, // An index pointing to an `e_lambda` expression
         captures: Expr.Capture.Span,
+        /// The unique tag name for this closure (e.g., "#1_addX").
+        /// Used for lambda set tracking in the type system.
+        tag_name: Ident.Idx,
     };
 
     /// A pure lambda expression, with no captures. This represents the

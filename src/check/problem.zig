@@ -43,7 +43,7 @@ pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
     fn_call_arity_mismatch: FnCallArityMismatch,
     type_apply_mismatch_arities: TypeApplyArityMismatch,
-    static_dispach: StaticDispatch,
+    static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     number_does_not_fit: NumberDoesNotFit,
@@ -66,6 +66,11 @@ pub const Problem = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
+};
+
+/// Error for when a break statement appears outside of a loop
+pub const BreakOutsideLoop = struct {
+    region: base.Region,
 };
 
 /// Error for when a platform expects an alias to be defined, but it's not there
@@ -485,7 +490,7 @@ pub const ReportBuilder = struct {
             .nominal_type_resolution_failed => |data| {
                 return self.buildNominalTypeResolutionFailed(data);
             },
-            .static_dispach => |detail| {
+            .static_dispatch => |detail| {
                 switch (detail) {
                     .dispatcher_not_nominal => |data| return self.buildStaticDispatchDispatcherNotNominal(data),
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
@@ -588,8 +593,8 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("It has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_actual, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_actual);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -599,8 +604,8 @@ pub const ReportBuilder = struct {
             try report.document.addText("But I expected it to be:");
         }
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_expected, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
 
         return report;
     }
@@ -707,8 +712,8 @@ pub const ReportBuilder = struct {
         try report.document.addText(expected_type_ordinal);
         try report.document.addText(" element has this type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -717,8 +722,8 @@ pub const ReportBuilder = struct {
         try report.document.addText(actual_type_ordinal);
         try report.document.addText(" element has this type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -791,8 +796,8 @@ pub const ReportBuilder = struct {
         // Add description
         try report.document.addText("Right now, it has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
 
         // Add explanation
@@ -914,8 +919,8 @@ pub const ReportBuilder = struct {
             try report.document.addText(" branch has this type:");
         }
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -930,8 +935,8 @@ pub const ReportBuilder = struct {
             try report.document.addText("But all the previous branches have this type:");
         }
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1015,8 +1020,8 @@ pub const ReportBuilder = struct {
         // Show the type of the invalid branch
         try report.document.addText("The first pattern has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1025,14 +1030,12 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("match", .keyword);
         try report.document.addText(" parenthesis has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         try report.document.addText("These two types can never match!");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         return report;
     }
@@ -1124,8 +1127,8 @@ pub const ReportBuilder = struct {
         try report.document.addText(branch_ord);
         try report.document.addText(" pattern has this type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1136,8 +1139,8 @@ pub const ReportBuilder = struct {
             try report.document.addText("But the other pattern has this type:");
         }
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1145,8 +1148,6 @@ pub const ReportBuilder = struct {
         try report.document.addText("All patterns in an ");
         try report.document.addAnnotated("match", .keyword);
         try report.document.addText(" must have compatible types.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
 
         return report;
     }
@@ -1235,8 +1236,8 @@ pub const ReportBuilder = struct {
         try report.document.addText(branch_ord);
         try report.document.addText(" branch has this type;");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1249,8 +1250,8 @@ pub const ReportBuilder = struct {
             try report.document.addText("But the previous branch has this type:");
         }
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1345,8 +1346,8 @@ pub const ReportBuilder = struct {
         }
         try report.document.addText(" side is:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1400,8 +1401,8 @@ pub const ReportBuilder = struct {
         // Show the invalid tag
         try report.document.addText("The tag is:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_tag_str, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_tag_str);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1414,15 +1415,15 @@ pub const ReportBuilder = struct {
 
             try report.document.addText("But the nominal type needs it to be:");
             try report.document.addLineBreak();
-            try report.document.addText("    ");
-            try report.document.addAnnotated(expected_tag_str, .type_variable);
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(expected_tag_str);
         } else {
             const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
             try report.document.addLineBreak();
-            try report.document.addText("    ");
-            try report.document.addAnnotated(expected_type, .type_variable);
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(expected_type);
 
             // Check if there's a tag with the same name in the list of possible tags
 
@@ -1440,9 +1441,7 @@ pub const ReportBuilder = struct {
                     try report.document.addAnnotated("Hint:", .emphasized);
                     try report.document.addReflowingText(" The nominal type has a tag with the same name, but different args:");
                     try report.document.addLineBreak();
-                    try report.document.addLineBreak();
-                    try report.document.addText("    ");
-                    try report.document.addAnnotated(cur_expected_tag_str, .type_variable);
+                    try report.document.addCodeBlock(cur_expected_tag_str);
 
                     break;
                 }
@@ -1479,15 +1478,15 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("The record I found is:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         try report.document.addText("But the nominal type expects:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }
@@ -1519,15 +1518,15 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("The tuple I found is:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         try report.document.addText("But the nominal type expects:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }
@@ -1559,15 +1558,15 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("The value I found has type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
         try report.document.addText("But the nominal type expects:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }
@@ -1610,8 +1609,8 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("This argument has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1626,8 +1625,8 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(arg_index);
         try report.document.addReflowingText(" argument to be:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }
@@ -1723,8 +1722,8 @@ pub const ReportBuilder = struct {
         try report.document.addText(first_arg_index);
         try report.document.addReflowingText(" argument has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(first_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(first_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1732,8 +1731,8 @@ pub const ReportBuilder = struct {
         try report.document.addText(second_arg_index);
         try report.document.addReflowingText(" argument has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(second_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(second_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -1803,7 +1802,6 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
-        try report.document.addLineBreak();
 
         return report;
     }
@@ -1865,8 +1863,8 @@ pub const ReportBuilder = struct {
         // Show the function signature
         try report.document.addReflowingText("The function has the signature:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(fn_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(fn_type);
 
         return report;
     }
@@ -1904,7 +1902,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addReflowingText("Type aliases cannot be recursive. If you need a recursive type, use a nominal type (:=) instead of an alias (:).");
-        try report.document.addLineBreak();
 
         return report;
     }
@@ -1938,7 +1935,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addReflowingText("This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.");
-        try report.document.addLineBreak();
 
         return report;
     }
@@ -1982,9 +1978,7 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(", is:");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(snapshot_str, .type_variable);
-        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
 
         return report;
     }
@@ -2045,8 +2039,7 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText(", is:");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(snapshot_str, .type_variable);
+        try report.document.addCodeBlock(snapshot_str);
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
@@ -2126,8 +2119,8 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("The type is:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(snapshot_str, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -2469,8 +2462,8 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("Its inferred type is:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_expected, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
 
         return report;
     }
@@ -2511,8 +2504,8 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("unsigned", .emphasized);
         try report.document.addReflowingText(":");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_expected, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
 
         return report;
     }
@@ -2549,8 +2542,7 @@ pub const ReportBuilder = struct {
 
             try report.document.addText("Its inferred type is:");
             try report.document.addLineBreak();
-            try report.document.addText("    ");
-            try report.document.addAnnotated(owned_expected, .type_variable);
+            try report.document.addCodeBlock(owned_expected);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Hint: Use a decimal type like ");
@@ -2576,8 +2568,7 @@ pub const ReportBuilder = struct {
 
             try report.document.addText("Its inferred type is:");
             try report.document.addLineBreak();
-            try report.document.addText("    ");
-            try report.document.addAnnotated(owned_expected, .type_variable);
+            try report.document.addCodeBlock(owned_expected);
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addReflowingText("Hint: Use a larger integer type or ");
@@ -2612,8 +2603,8 @@ pub const ReportBuilder = struct {
 
         try report.document.addReflowingText("It has the type:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_expected, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
 
         return report;
     }
@@ -2683,8 +2674,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-        try report.document.addText("    ");
-        try report.document.addAnnotated(expected_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -2699,9 +2690,8 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        try report.document.addText("    ");
-        try report.document.addAnnotated(actual_type, .type_variable);
         try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
 
         return report;
     }
@@ -2715,31 +2705,35 @@ pub const ReportBuilder = struct {
     }
 
     fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) !Report {
-        var report = Report.init(self.gpa, "PLATFORM EXPECTED ALIAS: ", .runtime_error);
+        var report = Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", .runtime_error);
         errdefer report.deinit();
 
         const owned_name = try report.addOwnedString(self.can_ir.getIdentText(data.expected_alias_ident));
 
-        try report.document.addReflowingText("The platform expected your ");
+        try report.document.addReflowingText("The platform expects your ");
         try report.document.addAnnotated("app", .inline_code);
-        try report.document.addReflowingText(" module to have a type alias named:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
+        try report.document.addReflowingText(" module to define a type alias named ");
         try report.document.addAnnotated(owned_name, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("But I could not find it.");
+        try report.document.addReflowingText(", but I couldn't find one.");
 
         switch (data.ctx) {
-            .not_found => {},
+            .not_found => {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addAnnotated("Hint:", .emphasized);
+                try report.document.addReflowingText(" Add a type alias definition for ");
+                try report.document.addAnnotated(owned_name, .type_variable);
+                try report.document.addReflowingText(" to your app module. Check your platform's documentation for the expected type.");
+            },
             .found_but_not_alias => {
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
                 try report.document.addAnnotated("Hint:", .emphasized);
-                try report.document.addReflowingText(" You have a type with the name ");
+                try report.document.addReflowingText(" You have a definition named ");
                 try report.document.addAnnotated(owned_name, .type_variable);
-                try report.document.addReflowingText(", but it's not an alias.");
+                try report.document.addReflowingText(", but it's not a type alias. The platform requires a type alias (defined with ");
+                try report.document.addAnnotated(":", .inline_code);
+                try report.document.addReflowingText("), not a value definition.");
             },
         }
 
@@ -2747,30 +2741,35 @@ pub const ReportBuilder = struct {
     }
 
     fn buildPlatformDefNotFound(self: *Self, data: PlatformDefNotFound) !Report {
-        var report = Report.init(self.gpa, "PLATFORM EXPECTED DEFINITION: ", .runtime_error);
+        var report = Report.init(self.gpa, "MISSING PLATFORM REQUIRED DEFINITION", .runtime_error);
         errdefer report.deinit();
 
         const owned_name = try report.addOwnedString(self.can_ir.getIdentText(data.expected_def_ident));
 
-        try report.document.addReflowingText("The platform expected your ");
+        try report.document.addReflowingText("The platform expects your ");
         try report.document.addAnnotated("app", .inline_code);
-        try report.document.addReflowingText(" module to have a exported definition named:");
-        try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_name, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("But I could not find it.");
+        try report.document.addReflowingText(" module to export a definition named ");
+        try report.document.addAnnotated(owned_name, .inline_code);
+        try report.document.addReflowingText(", but I couldn't find one.");
 
         switch (data.ctx) {
-            .not_found => {},
+            .not_found => {
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addAnnotated("Hint:", .emphasized);
+                try report.document.addReflowingText(" Define and export ");
+                try report.document.addAnnotated(owned_name, .inline_code);
+                try report.document.addReflowingText(" in your app module. Check your platform's documentation for the expected type signature.");
+            },
             .found_but_not_exported => {
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
                 try report.document.addAnnotated("Hint:", .emphasized);
-                try report.document.addReflowingText(" You have a definition with the name ");
-                try report.document.addAnnotated(owned_name, .type_variable);
-                try report.document.addReflowingText(", but it's not exported. Maybe add it to the export list?");
+                try report.document.addReflowingText(" You have a definition named ");
+                try report.document.addAnnotated(owned_name, .inline_code);
+                try report.document.addReflowingText(", but it's not exported. Add it to your module's ");
+                try report.document.addAnnotated("exposes", .inline_code);
+                try report.document.addReflowingText(" list in the module header.");
             },
         }
 
@@ -2802,8 +2801,8 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("crash", .keyword);
         try report.document.addText(" happened with this message:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_message, .emphasized);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_message);
 
         return report;
     }
@@ -2856,8 +2855,8 @@ pub const ReportBuilder = struct {
 
         try report.document.addText("The evaluation failed with error:");
         try report.document.addLineBreak();
-        try report.document.addText("    ");
-        try report.document.addAnnotated(owned_error_name, .emphasized);
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_error_name);
 
         return report;
     }

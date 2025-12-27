@@ -476,3 +476,88 @@ test "addTypeVar - flex var with method constraint returning open tag union" {
     // Try should be a tag_union
     try testing.expect(try_result_layout.tag == .tag_union);
 }
+
+test "addTypeVar - type alias inside Try nominal (issue #8708)" {
+    // Regression test for issue #8708:
+    // Using a type alias as a type argument to Try caused TypeContainedMismatch error.
+    //
+    // The bug was that aliases were added to in_progress_vars during layout computation
+    // but never removed (because alias handling just continues to the backing type).
+    // This caused spurious cycle detection when the alias was encountered again.
+    //
+    // Example Roc code that triggered the bug:
+    //   TokenContents : [EndOfFileToken]
+    //   get_val : {} -> Try(TokenContents, Str)
+
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers
+    const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
+    const token_contents_ident_idx = try lt.module_env.insertIdent(Ident.for_text("TokenContents"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create the underlying tag union: [EndOfFileToken]
+    const end_of_file_token_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("EndOfFileToken")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}),
+    };
+    const token_tags_range = try lt.type_store.appendTags(&[_]types.Tag{end_of_file_token_tag});
+    const token_tag_union = types.TagUnion{
+        .tags = token_tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const token_tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = token_tag_union } });
+
+    // Create the alias: TokenContents : [EndOfFileToken]
+    const alias_content = try lt.type_store.mkAlias(
+        .{ .ident_idx = token_contents_ident_idx },
+        token_tag_union_var,
+        &[_]types.Var{},
+    );
+    const token_contents_alias_var = try lt.type_store.freshFromContent(alias_content);
+
+    // Create an error type (Str is common for errors)
+    const str_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record }); // simplified
+
+    // Create Try backing: [Ok(TokenContents), Err(Str)]
+    const ok_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Ok")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{token_contents_alias_var}),
+    };
+    const err_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Err")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{str_var}),
+    };
+    const try_tags_range = try lt.type_store.appendTags(&[_]types.Tag{ ok_tag, err_tag });
+    const try_backing_tag_union = types.TagUnion{
+        .tags = try_tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const try_backing_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = try_backing_tag_union } });
+
+    // Create the Try nominal type: Try(TokenContents, Str)
+    const try_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = try_ident_idx },
+        try_backing_var,
+        &[_]types.Var{ token_contents_alias_var, str_var },
+        builtin_module_idx,
+        false,
+    );
+    const try_var = try lt.type_store.freshFromContent(try_content);
+
+    // This should succeed without TypeContainedMismatch error.
+    // Before the fix, this would fail because the alias was incorrectly detected as a cycle.
+    const result_idx = try lt.layout_store.addTypeVar(try_var, &lt.type_scope);
+    const result_layout = lt.layout_store.getLayout(result_idx);
+
+    // Try should have a tag_union layout
+    try testing.expect(result_layout.tag == .tag_union);
+}

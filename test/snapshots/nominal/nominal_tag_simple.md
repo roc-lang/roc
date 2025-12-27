@@ -25,10 +25,12 @@ yellow = Color.Yellow
          ^^^^^^^^^^^^
 
 The tag is:
-    _Yellow_
 
-But the nominal type needs it to one of:
-    _[Blue, Green, Red]_
+    Yellow
+
+But the nominal type needs it to be:
+
+    Yellow
 
 # TOKENS
 ~~~zig
@@ -94,7 +96,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Color"))
-		(patt (type "Error")))
+		(patt (type "Color")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))

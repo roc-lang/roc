@@ -53,6 +53,18 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
     unreachable;
 }
 
+/// Read the discriminant for a tag union, handling single-tag unions which don't store one.
+fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache: *LayoutStore) usize {
+    std.debug.assert(layout.tag == .tag_union);
+    const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
+    const variants = layout_cache.getTagUnionVariants(tu_data);
+    // Single-tag unions don't have discriminants, so don't try to read one.
+    if (variants.len == 1) return 0;
+    const discriminant = tu_data.readDiscriminant(base_ptr);
+    std.debug.assert(discriminant < variants.len);
+    return discriminant;
+}
+
 /// Increment reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.
 fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
@@ -115,8 +127,12 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tag_union) {
         if (ptr == null) return;
-        // For unions, we need to read the tag and incref the appropriate payload
-        // This is complex - for now just skip (caller should handle specific union types)
+        const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
+        const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
+        const variants = layout_cache.getTagUnionVariants(tu_data);
+        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
     }
     // Other layout types (scalar ints/floats, zst, etc.) don't need refcounting
@@ -138,7 +154,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const elem_layout = layout_cache.getLayout(layout.data.list);
         const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
         const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
         // Decref elements when unique
         if (list_value.isUnique(ops)) {
@@ -183,7 +199,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const refcount_ptr: *isize = @as(*isize, @ptrFromInt(refcount_addr));
 
         if (builtins.utils.rcUnique(refcount_ptr.*)) {
-            if (elem_layout.isRefcounted()) {
+            if (layout_cache.layoutContainsRefcounted(elem_layout)) {
                 decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops);
             }
         }
@@ -273,6 +289,16 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
                 decrefLayoutPtr(captures_layout, rec_ptr, layout_cache, ops);
             }
         }
+        return;
+    }
+    if (layout.tag == .tag_union) {
+        if (ptr == null) return;
+        const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
+        const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
+        const variants = layout_cache.getTagUnionVariants(tu_data);
+        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+        decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
         return;
     }
     // Other layout types (scalar ints/floats, zst, etc.) don't need refcounting
@@ -408,7 +434,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         dest_list.* = src_list.*;
 
         const elem_layout = layout_cache.getLayout(self.layout.data.list);
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
         // Incref the list allocation. For seamless slices, this is the parent allocation,
         // not the bytes pointer (which points within the parent allocation).
@@ -550,22 +576,10 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
         @memcpy(dst, src);
 
+        const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
+        const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
-        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-        // Read discriminant to determine active variant
-        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-        const discriminant: u32 = switch (tu_data.discriminant_size) {
-            1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => builtins.utils.alignedPtrCast(*const u16, disc_ptr, @src()).*,
-            4 => builtins.utils.alignedPtrCast(*const u32, disc_ptr, @src()).*,
-            else => debugUnreachable(roc_ops, "invalid discriminant size in tag_union copyToPtr", @src()),
-        };
-
-        // Get the active variant's payload layout
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        if (discriminant >= variants.len) return; // Invalid discriminant, skip
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
         if (comptime trace_refcount) {
@@ -575,8 +589,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             });
         }
 
-        // Incref only the active variant's payload (at offset 0)
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache, roc_ops);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
     }
 
@@ -1013,54 +1026,15 @@ pub const TagUnionAccessor = struct {
     tu_data: layout_mod.TagUnionData,
 
     /// Read the discriminant (tag index) from the tag union
-    pub fn getDiscriminant(self: TagUnionAccessor, roc_ops: *RocOps) usize {
-        const base_ptr: [*]u8 = @ptrCast(self.base_value.ptr.?);
-        const disc_ptr = base_ptr + self.tu_data.discriminant_offset;
-        return switch (self.tu_data.discriminant_size) {
-            1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => blk: {
-                if (comptime builtin.mode == .Debug) {
-                    const disc_ptr_val = @intFromPtr(disc_ptr);
-                    if (disc_ptr_val % @alignOf(u16) != 0) {
-                        var buf: [64]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[getDiscriminant] u16 alignment error: 0x{x}", .{disc_ptr_val}) catch "[getDiscriminant] alignment error";
-                        roc_ops.crash(msg);
-                    }
-                }
-                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
-            },
-            4 => blk: {
-                if (comptime builtin.mode == .Debug) {
-                    const disc_ptr_val = @intFromPtr(disc_ptr);
-                    if (disc_ptr_val % @alignOf(u32) != 0) {
-                        var buf: [64]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[getDiscriminant] u32 alignment error: 0x{x}", .{disc_ptr_val}) catch "[getDiscriminant] alignment error";
-                        roc_ops.crash(msg);
-                    }
-                }
-                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
-            },
-            8 => blk: {
-                if (comptime builtin.mode == .Debug) {
-                    const disc_ptr_val = @intFromPtr(disc_ptr);
-                    if (disc_ptr_val % @alignOf(u64) != 0) {
-                        var buf: [64]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[getDiscriminant] u64 alignment error: 0x{x}", .{disc_ptr_val}) catch "[getDiscriminant] alignment error";
-                        roc_ops.crash(msg);
-                    }
-                }
-                break :blk @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*);
-            },
-            else => 0,
-        };
+    pub fn getDiscriminant(self: TagUnionAccessor) usize {
+        const base_ptr: [*]const u8 = @ptrCast(self.base_value.ptr.?);
+        return self.tu_data.readDiscriminant(base_ptr);
     }
 
     /// Get the layout for a specific variant by discriminant
     pub fn getVariantLayout(self: *const TagUnionAccessor, discriminant: usize) Layout {
         const variants = self.layout_cache.getTagUnionVariants(&self.tu_data);
-        if (discriminant >= variants.len) {
-            return Layout.zst();
-        }
+        std.debug.assert(discriminant < variants.len);
         const variant = variants.get(discriminant);
         return self.layout_cache.getLayout(variant.payload_layout);
     }
@@ -1076,8 +1050,8 @@ pub const TagUnionAccessor = struct {
     }
 
     /// Get discriminant and payload layout together
-    pub fn getVariant(self: *const TagUnionAccessor, roc_ops: *RocOps) struct { discriminant: usize, payload_layout: Layout } {
-        const discriminant = self.getDiscriminant(roc_ops);
+    pub fn getVariant(self: *const TagUnionAccessor) struct { discriminant: usize, payload_layout: Layout } {
+        const discriminant = self.getDiscriminant();
         const payload_layout = self.getVariantLayout(discriminant);
         return .{ .discriminant = discriminant, .payload_layout = payload_layout };
     }
@@ -1223,7 +1197,7 @@ fn copyListValueToPtr(
             dest_list.* = src_list;
 
             const elem_layout = layout_cache.getLayout(dest_layout.data.list);
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
             dest_list.incref(1, elements_refcounted);
             storeListElementCount(dest_list, elements_refcounted, roc_ops);
             return;
@@ -1442,7 +1416,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
 
         if (self.layout.tag == .list) {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
             dest_list.incref(1, elements_refcounted, roc_ops);
             storeListElementCount(dest_list, elements_refcounted, roc_ops);
         } else {
@@ -1580,48 +1554,18 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
     if (self.layout.tag == .tag_union) {
         if (self.ptr == null) return;
         const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
-        const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+        const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
+        const discriminant = tu_data.readDiscriminant(base_ptr);
 
-        // Read discriminant to determine active variant
-        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-        const discriminant: u32 = switch (tu_data.discriminant_size) {
-            1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-            2 => blk: {
-                if (comptime builtin.mode == .Debug) {
-                    const disc_ptr_val = @intFromPtr(disc_ptr);
-                    if (disc_ptr_val % @alignOf(u16) != 0) {
-                        var buf: [64]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[incref tag_union] u16 alignment error: 0x{x}", .{disc_ptr_val}) catch "[incref] alignment error";
-                        roc_ops.crash(msg);
-                    }
-                }
-                break :blk @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*;
-            },
-            4 => blk: {
-                if (comptime builtin.mode == .Debug) {
-                    const disc_ptr_val = @intFromPtr(disc_ptr);
-                    if (disc_ptr_val % @alignOf(u32) != 0) {
-                        var buf: [64]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "[incref tag_union] u32 alignment error: 0x{x}", .{disc_ptr_val}) catch "[incref] alignment error";
-                        roc_ops.crash(msg);
-                    }
-                }
-                break :blk @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*;
-            },
-            else => debugUnreachable(roc_ops, "invalid discriminant size in tag_union incref", @src()),
-        };
-
-        // Get the active variant's payload layout
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        if (discriminant >= variants.len) return; // Invalid discriminant, skip
+        std.debug.assert(discriminant < variants.len);
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
-        // Incref only the active variant's payload (at offset 0)
         if (comptime trace_refcount) {
             traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
         }
 
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache, roc_ops);
+        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
     }
     // Handle closures by incref'ing their captures (symmetric with decref)
@@ -1720,7 +1664,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
             const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
             const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
@@ -1783,12 +1727,12 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 traceRefcount("DECREF box ptr=0x{x} rc={} elem_rc={}", .{
                     unmasked_ptr,
                     refcount_ptr.*,
-                    @intFromBool(elem_layout.isRefcounted()),
+                    @intFromBool(layout_cache.layoutContainsRefcounted(elem_layout)),
                 });
             }
 
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
-                if (elem_layout.isRefcounted()) {
+                if (layout_cache.layoutContainsRefcounted(elem_layout)) {
                     decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops);
                 }
             }
@@ -1842,22 +1786,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .tag_union => {
             if (self.ptr == null) return;
+            const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
+            const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
             const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
-            const base_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-            // Read discriminant to determine active variant
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            const discriminant: u32 = switch (tu_data.discriminant_size) {
-                1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                else => debugUnreachable(ops, "invalid discriminant size in tag_union decref", @src()),
-            };
-
-            // Get the active variant's payload layout
             const variants = layout_cache.getTagUnionVariants(tu_data);
-            if (discriminant >= variants.len) return; // Invalid discriminant, skip
-
             const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
             if (comptime trace_refcount) {
@@ -1868,8 +1800,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 });
             }
 
-            // Decref only the active variant's payload (at offset 0)
-            decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(base_ptr)), layout_cache, ops);
+            decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
             return;
         },
         else => {},

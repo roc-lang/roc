@@ -192,7 +192,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
 
 test "interpreter: 6 / 3 yields 2" {
     const roc_src = "6 / 3";
-    try helpers.runExpectInt(roc_src, 2, .no_trace);
+    try helpers.runExpectI64(roc_src, 2, .no_trace);
 
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -212,7 +212,7 @@ test "interpreter: 6 / 3 yields 2" {
 
 test "interpreter: 7 % 3 yields 1" {
     const roc_src = "7 % 3";
-    try helpers.runExpectInt(roc_src, 1, .no_trace);
+    try helpers.runExpectI64(roc_src, 1, .no_trace);
 
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
@@ -1782,6 +1782,74 @@ test "interpreter: crash at end of block in if branch" {
     try std.testing.expectEqualStrings("21", rendered);
 }
 
+test "interpreter: simple break inside for loop" {
+    // Test that break works in a simple for loop
+    const roc_src =
+        \\{
+        \\    var $sum = 0
+        \\    for i in [1, 2, 3, 4, 5] {
+        \\        if i == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + i
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // sum of 1 + 2 + 3 = 6 (loop breaks before adding 4)
+    try std.testing.expectEqualStrings("6", rendered);
+}
+
+test "interpreter: simple break inside while loop" {
+    // Test that break works in a simple while loop
+    const roc_src =
+        \\{
+        \\    var $i = 1
+        \\    var $sum = 0
+        \\    while $i <= 5 {
+        \\        if $i == 4 {
+        \\            break
+        \\        }
+        \\        $sum = $sum + $i
+        \\        $i = $i + 1
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    // sum of 1 + 2 + 3 = 6 (loop breaks before adding 4)
+    try std.testing.expectEqualStrings("6", rendered);
+}
+
 // Boolean/if support intentionally omitted for now
 
 // Comprehensive dbg tests
@@ -2562,4 +2630,41 @@ test "dbg: list of strings" {
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     try std.testing.expectEqualStrings("[\"a\", \"b\", \"c\"]", host.dbg_messages.items[0]);
+}
+
+// Regression test for issue #8729: var reassignment in tuple pattern in while loop
+test "issue 8729: var reassignment in tuple pattern in while loop" {
+    const roc_src =
+        \\{
+        \\    get_pair = |n| ("word", n + 1)
+        \\    var $index = 0
+        \\    while $index < 3 {
+        \\        (word, $index) = get_pair($index)
+        \\        dbg word
+        \\    }
+        \\    $index
+        \\}
+    ;
+    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+
+    var interp = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    defer interp.deinit();
+
+    var host = TestHost.init(std.testing.allocator);
+    defer host.deinit();
+    var ops = host.makeOps();
+
+    const result = try interp.eval(resources.expr_idx, &ops);
+    defer result.decref(&interp.runtime_layout_store, &ops);
+
+    const rendered = try interp.renderValueRoc(result);
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("3", rendered);
+
+    // The loop should have run 3 times, outputting "word" each time
+    try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
+    try std.testing.expectEqualStrings("\"word\"", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("\"word\"", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("\"word\"", host.dbg_messages.items[2]);
 }

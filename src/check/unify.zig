@@ -365,8 +365,6 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    depth: u8,
-    skip_depth_check: bool,
 
     /// Init unifier
     pub fn init(
@@ -380,8 +378,6 @@ const Unifier = struct {
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
-            .depth = 0,
-            .skip_depth_check = false,
         };
     }
 
@@ -423,8 +419,6 @@ const Unifier = struct {
         b_is_nominal,
     };
 
-    const max_depth_before_occurs = 8;
-
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -436,25 +430,13 @@ const Unifier = struct {
                 return;
             },
             .not_equiv => |vars| {
-                if (self.skip_depth_check or self.depth < max_depth_before_occurs) {
-                    self.depth += 1;
-                    const result = self.unifyVars(&vars);
-                    self.depth -= 1;
-                    _ = try result;
-                } else {
-                    try self.checkRecursive(&vars);
-
-                    self.skip_depth_check = true;
-                    try self.unifyVars(&vars);
-                    self.skip_depth_check = false;
-                }
+                try self.unifyVars(&vars);
             },
         }
     }
 
     /// Unify two vars
-    /// Internal entry point for unification logic. Use `unifyGuarded` to ensure
-    /// proper depth tracking and occurs checking.
+    /// Internal entry point for unification logic.
     fn unifyVars(self: *Self, vars: *const ResolvedVarDescs) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -476,37 +458,6 @@ const Unifier = struct {
                 try self.unifyRecursionVar(vars, a_rec_var, vars.b.desc.content);
             },
             .err => self.merge(vars, .err),
-        }
-    }
-
-    /// Run a full occurs check on each variable, erroring if it is infinite
-    /// or anonymous recursion
-    ///
-    /// This function is called when unify has recursed a sufficient depth that
-    /// a recursive type seems likely.
-    fn checkRecursive(self: *Self, vars: *const ResolvedVarDescs) Error!void {
-        const a_occurs = occurs.occurs(self.types_store, self.occurs_scratch, vars.a.var_) catch return Error.AllocatorError;
-        switch (a_occurs) {
-            .not_recursive => {},
-            .recursive_nominal => {},
-            .recursive_anonymous => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_anonymous = vars.a.var_ });
-            },
-            .infinite => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_infinite = vars.a.var_ });
-            },
-        }
-
-        const b_occurs = occurs.occurs(self.types_store, self.occurs_scratch, vars.b.var_) catch return Error.AllocatorError;
-        switch (b_occurs) {
-            .not_recursive => {},
-            .recursive_nominal => {},
-            .recursive_anonymous => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_anonymous = vars.b.var_ });
-            },
-            .infinite => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_infinite = vars.b.var_ });
-            },
         }
     }
 
@@ -650,7 +601,9 @@ const Unifier = struct {
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
 
-                // TODO: Is it possible to loose rank information here? I suspect so...
+                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
+                // Because of this, we do not loose any rank information.
+                // This is essentially a custom `self.merge` strategy
                 self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
                 self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
@@ -739,7 +692,9 @@ const Unifier = struct {
                 // then we redirect both a & b to the new alias.
                 const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
 
-                // TODO: Is it possible to loose rank information here? I suspect so...
+                // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
+                // Because of this, we do not loose any rank information.
+                // This is essentially a custom `self.merge` strategy
                 self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
                 self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
@@ -1098,13 +1053,16 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
+        // Merge BEFORE recursing into children to enable cycle detection.
+        // If we encounter these same vars again during recursion, checkVarsEquiv
+        // will see they're now equivalent and skip, preventing infinite recursion.
+        self.merge(vars, vars.b.desc.content);
+
         const a_elems = self.types_store.sliceVars(a_tuple.elems);
         const b_elems = self.types_store.sliceVars(b_tuple.elems);
         for (a_elems, b_elems) |a_elem, b_elem| {
             try self.unifyGuarded(a_elem, b_elem);
         }
-
-        self.merge(vars, vars.b.desc.content);
     }
 
     // Unify nominal type //
@@ -1795,6 +1753,13 @@ const Unifier = struct {
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        // Merge BEFORE recursing into tag arguments to enable cycle detection.
+        // If we encounter these same vars again during recursion (e.g., in a
+        // self-referential tag union like [A a] where a is the tag union),
+        // checkVarsEquiv will see they're now equivalent and skip.
+        // We'll update the merged content at the end with the final tag union.
+        self.merge(vars, vars.b.desc.content);
 
         // First, unwrap all fields for tag unions, erroring if we encounter an
         // invalid record ext var

@@ -311,18 +311,18 @@ pub const Store = struct {
             _ = try self.record_fields.append(self.env.gpa, sorted_field);
         }
 
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         for (temp_fields.items) |field| {
             const field_layout = self.getLayout(field.layout);
-            const field_alignment = field_layout.alignment(self.targetUsize());
-            const field_size = self.layoutSize(field_layout);
-            max_alignment = max_alignment.max(field_alignment);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
-            current_offset += field_size;
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
         }
 
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
         _ = try self.record_data.append(self.env.gpa, .{
@@ -330,7 +330,7 @@ pub const Store = struct {
             .fields = fields_range,
         });
 
-        const record_layout = Layout.record(max_alignment, record_idx);
+        const record_layout = Layout.record(std.mem.Alignment.fromByteUnits(max_alignment), record_idx);
         return try self.insertLayout(record_layout);
     }
 
@@ -384,22 +384,22 @@ pub const Store = struct {
         }
 
         // Compute size and alignment
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         for (temp_fields.items) |tf| {
             const field_layout = self.getLayout(tf.layout);
-            const field_alignment = field_layout.alignment(self.targetUsize());
-            const field_size = self.layoutSize(field_layout);
-            max_alignment = max_alignment.max(field_alignment);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
-            current_offset += field_size;
+            const field_size_align = self.layoutSizeAlign(field_layout);
+            const field_alignment = field_size_align.alignment.toByteUnits();
+            max_alignment = @max(max_alignment, field_alignment);
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment))));
+            current_offset += field_size_align.size;
         }
 
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(temp_fields.items.len) };
         const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
         _ = try self.tuple_data.append(self.env.gpa, TupleData{ .size = total_size, .fields = fields_range });
-        const tuple_layout = Layout.tuple(max_alignment, tuple_idx);
+        const tuple_layout = Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
         return try self.insertLayout(tuple_layout);
     }
 
@@ -424,7 +424,6 @@ pub const Store = struct {
     }
 
     pub fn getRecordFieldOffset(self: *const Self, record_idx: RecordIdx, field_index_in_sorted_fields: u32) u32 {
-        const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
 
@@ -434,25 +433,23 @@ pub const Store = struct {
         while (field_idx < field_index_in_sorted_fields) : (field_idx += 1) {
             const field = sorted_fields.get(field_idx);
             const field_layout = self.getLayout(field.layout);
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
             // Align current offset to field's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             // Add field size
-            current_offset += field_size;
+            current_offset += field_size_align.size;
         }
 
         // Now, align the offset for the requested field
         const requested_field = sorted_fields.get(field_index_in_sorted_fields);
         const requested_field_layout = self.getLayout(requested_field.layout);
-        const requested_field_alignment = requested_field_layout.alignment(target_usize);
-        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_alignment.toByteUnits()))));
+        const requested_field_size_align = self.layoutSizeAlign(requested_field_layout);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_field_size_align.alignment.toByteUnits()))));
     }
 
     pub fn getRecordFieldOffsetByName(self: *const Self, record_idx: RecordIdx, field_name_idx: Ident.Idx) ?u32 {
-        const target_usize = self.targetUsize();
         const record_data = self.getRecordData(record_idx);
         const sorted_fields = self.record_fields.sliceRange(record_data.getFields());
 
@@ -461,23 +458,21 @@ pub const Store = struct {
         while (i < sorted_fields.len) : (i += 1) {
             const field = sorted_fields.get(i);
             const field_layout = self.getLayout(field.layout);
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             if (field.name == field_name_idx) {
                 return current_offset;
             }
 
-            current_offset += field_size;
+            current_offset += field_size_align.size;
         }
 
         return null;
     }
 
     pub fn getTupleElementOffset(self: *const Self, tuple_idx: TupleIdx, element_index_in_sorted_elements: u32) u32 {
-        const target_usize = self.targetUsize();
         const tuple_data = self.getTupleData(tuple_idx);
         const sorted_elements = self.tuple_fields.sliceRange(tuple_data.getFields());
 
@@ -487,21 +482,20 @@ pub const Store = struct {
         while (element_idx < element_index_in_sorted_elements) : (element_idx += 1) {
             const element = sorted_elements.get(element_idx);
             const element_layout = self.getLayout(element.layout);
-            const element_alignment = element_layout.alignment(target_usize);
-            const element_size = self.layoutSize(element_layout);
+            const element_size_align = self.layoutSizeAlign(element_layout);
 
             // Align current offset to element's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(element_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(element_size_align.alignment.toByteUnits()))));
 
             // Add element size
-            current_offset += element_size;
+            current_offset += element_size_align.size;
         }
 
         // Now, align the offset for the requested element
         const requested_element = sorted_elements.get(element_index_in_sorted_elements);
         const requested_element_layout = self.getLayout(requested_element.layout);
-        const requested_element_alignment = requested_element_layout.alignment(target_usize);
-        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_alignment.toByteUnits()))));
+        const requested_element_size_align = self.layoutSizeAlign(requested_element_layout);
+        return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_size_align.alignment.toByteUnits()))));
     }
 
     pub fn targetUsize(_: *const Self) target.TargetUsize {
@@ -550,42 +544,131 @@ pub const Store = struct {
         return try self.insertLayout(zst_layout);
     }
 
-    /// Get the size in bytes of a layout, given the store's target usize.
-    pub fn layoutSize(self: *const Self, layout: Layout) u32 {
-        // TODO change this to SizeAlign (just return both since they're packed into 4B anyway)
-        // and also change it to just return that one field instead of doing any conditionals.
-        // also have it take an Idx. if you already have a Layout you can just get that.
+    /// Get both the size and alignment of a layout in a single call.
+    /// This is more efficient than calling layoutSize and alignment separately
+    /// since both values often share computation paths.
+    pub fn layoutSizeAlign(self: *const Self, layout: Layout) SizeAlign {
         const target_usize = self.targetUsize();
         return switch (layout.tag) {
             .scalar => switch (layout.data.scalar.tag) {
-                .int => layout.data.scalar.data.int.size(),
-                .frac => layout.data.scalar.data.frac.size(),
-                .str => 3 * target_usize.size(), // ptr, byte length, capacity
-                .opaque_ptr => target_usize.size(), // opaque_ptr is pointer-sized
+                .int => .{
+                    .size = @intCast(layout.data.scalar.data.int.size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.int.alignment().toByteUnits())),
+                },
+                .frac => .{
+                    .size = @intCast(layout.data.scalar.data.frac.size()),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.scalar.data.frac.alignment().toByteUnits())),
+                },
+                .str => .{
+                    .size = @intCast(3 * target_usize.size()), // ptr, byte length, capacity
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                },
+                .opaque_ptr => .{
+                    .size = @intCast(target_usize.size()), // opaque_ptr is pointer-sized
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                },
             },
-            .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list => 3 * target_usize.size(), // ptr, length, capacity
-            .list_of_zst => 3 * target_usize.size(), // list_of_zst has same header structure as list
-            .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
-            .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
-            .closure => {
+            .box, .box_of_zst => .{
+                .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+            },
+            .list, .list_of_zst => .{
+                .size = @intCast(3 * target_usize.size()), // ptr, length, capacity
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+            },
+            .record => .{
+                .size = @intCast(self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.record.alignment.toByteUnits())),
+            },
+            .tuple => .{
+                .size = @intCast(self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tuple.alignment.toByteUnits())),
+            },
+            .closure => blk: {
                 // Closure layout: header + aligned capture data
                 const header_size = @sizeOf(layout_mod.Closure);
                 const captures_layout = self.getLayout(layout.data.closure.captures_layout_idx);
-                const captures_alignment = captures_layout.alignment(self.targetUsize());
-                const aligned_captures_offset = std.mem.alignForward(u32, header_size, @intCast(captures_alignment.toByteUnits()));
-                const captures_size = self.layoutSize(captures_layout);
-                return aligned_captures_offset + captures_size;
+                const captures_size_align = self.layoutSizeAlign(captures_layout);
+                const aligned_captures_offset = std.mem.alignForward(u32, header_size, @as(u32, @intCast(captures_size_align.alignment.toByteUnits())));
+                break :blk .{
+                    .size = @intCast(aligned_captures_offset + captures_size_align.size),
+                    .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
+                };
             },
-            .tag_union => self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size,
-            .zst => 0, // Zero-sized types have size 0
+            .tag_union => .{
+                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size),
+                .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tag_union.alignment.toByteUnits())),
+            },
+            .zst => .{
+                .size = 0, // Zero-sized types have size 0
+                .alignment = .@"1",
+            },
         };
+    }
+
+    /// Get the size in bytes of a layout, given the store's target usize.
+    pub fn layoutSize(self: *const Self, layout: Layout) u32 {
+        return self.layoutSizeAlign(layout).size;
     }
 
     /// Check if a layout is zero-sized
     /// This simply checks if the layout has size 0
-    pub fn isZeroSized(self: *const Self, layout: Layout) bool {
-        return self.layoutSize(layout) == 0;
+    pub fn isZeroSized(self: *const Self, l: Layout) bool {
+        return self.layoutSize(l) == 0;
+    }
+
+    /// Check if a layout contains any refcounted data (directly or transitively).
+    /// This is more comprehensive than Layout.isRefcounted() which only checks if
+    /// the layout itself is heap-allocated. This function also returns true for
+    /// tuples/records that contain strings, lists, or boxes.
+    pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
+        return switch (l.tag) {
+            .scalar => switch (l.data.scalar.tag) {
+                .str => true,
+                else => false,
+            },
+            .list, .list_of_zst => true,
+            .box, .box_of_zst => true,
+            .tuple => {
+                const tuple_data = self.getTupleData(l.data.tuple.idx);
+                const fields = self.tuple_fields.sliceRange(tuple_data.getFields());
+                for (0..fields.len) |i| {
+                    const field_layout = self.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsRefcounted(field_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .record => {
+                const record_data = self.getRecordData(l.data.record.idx);
+                const fields = self.record_fields.sliceRange(record_data.getFields());
+                for (0..fields.len) |i| {
+                    const field_layout = self.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsRefcounted(field_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .tag_union => {
+                const tu_data = self.getTagUnionData(l.data.tag_union.idx);
+                const variants = self.getTagUnionVariants(tu_data);
+                for (0..variants.len) |i| {
+                    const variant_layout = self.getLayout(variants.get(i).payload_layout);
+                    if (self.layoutContainsRefcounted(variant_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .closure => {
+                // Check if the captured variables contain refcounted data
+                const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
+                return self.layoutContainsRefcounted(captures_layout);
+            },
+            .zst => false,
+        };
     }
 
     /// Add the tag union's tags to self.pending_tags,
@@ -728,7 +811,6 @@ pub const Store = struct {
         self: *Store,
         updated_record: work.Work.PendingRecord,
     ) (LayoutError || std.mem.Allocator.Error)!Layout {
-        const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_record_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
         const fields_start = self.record_fields.items.len;
@@ -785,29 +867,27 @@ pub const Store = struct {
         }
 
         // Calculate max alignment and total size of all fields
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         var field_idx: u32 = 0;
 
         while (field_idx < temp_fields.items.len) : (field_idx += 1) {
             const temp_field = temp_fields.items[field_idx];
             const field_layout = self.getLayout(temp_field.layout);
-
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
             // Update max alignment
-            max_alignment = max_alignment.max(field_alignment);
+            max_alignment = @max(max_alignment, field_size_align.alignment.toByteUnits());
 
             // Align current offset to field's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             // Add field size
-            current_offset = current_offset + field_size;
+            current_offset = current_offset + field_size_align.size;
         }
 
         // Final size must be aligned to the record's alignment
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         // Create the record layout with the fields range
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
@@ -822,14 +902,13 @@ pub const Store = struct {
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return Layout.record(max_alignment, record_idx);
+        return Layout.record(std.mem.Alignment.fromByteUnits(max_alignment), record_idx);
     }
 
     fn finishTuple(
         self: *Store,
         updated_tuple: work.Work.PendingTuple,
     ) (LayoutError || std.mem.Allocator.Error)!Layout {
-        const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_tuple_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_tuple.resolved_fields_start;
         const fields_start = self.tuple_fields.items.len;
@@ -883,29 +962,27 @@ pub const Store = struct {
         }
 
         // Calculate max alignment and total size of all fields
-        var max_alignment = std.mem.Alignment.@"1";
+        var max_alignment: usize = 1;
         var current_offset: u32 = 0;
         var field_idx: u32 = 0;
 
         while (field_idx < temp_fields.items.len) : (field_idx += 1) {
             const temp_field = temp_fields.items[field_idx];
             const field_layout = self.getLayout(temp_field.layout);
-
-            const field_alignment = field_layout.alignment(target_usize);
-            const field_size = self.layoutSize(field_layout);
+            const field_size_align = self.layoutSizeAlign(field_layout);
 
             // Update max alignment
-            max_alignment = max_alignment.max(field_alignment);
+            max_alignment = @max(max_alignment, field_size_align.alignment.toByteUnits());
 
             // Align current offset to field's alignment
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_size_align.alignment.toByteUnits()))));
 
             // Add field size
-            current_offset = current_offset + field_size;
+            current_offset = current_offset + field_size_align.size;
         }
 
         // Final size must be aligned to the tuple's alignment
-        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment)))));
 
         // Create the tuple layout with the fields range
         const fields_range = collections.NonEmptyRange{ .start = @intCast(fields_start), .count = @intCast(num_resolved_fields) };
@@ -920,7 +997,98 @@ pub const Store = struct {
         // Remove only this tuple's resolved fields
         self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
 
-        return Layout.tuple(max_alignment, tuple_idx);
+        return Layout.tuple(std.mem.Alignment.fromByteUnits(max_alignment), tuple_idx);
+    }
+
+    /// Finalizes a tag union layout after all variant payload layouts have been computed.
+    ///
+    /// This is called once all variants in `pending_tag_union_variants` have been processed
+    /// and their layouts stored in `resolved_tag_union_variants`. It:
+    /// 1. Collects all resolved variant layouts
+    /// 2. Calculates the max payload size and alignment across all variants
+    /// 3. Computes the discriminant offset (where the tag ID is stored in memory)
+    /// 4. Stores the final TagUnionData with size, discriminant info, and variant layouts
+    /// 5. Returns the complete tag union layout
+    fn finishTagUnion(
+        self: *Self,
+        pending: work.Work.PendingTagUnion,
+    ) (LayoutError || std.mem.Allocator.Error)!Layout {
+        const resolved_end = self.work.resolved_tag_union_variants.len;
+
+        // Collect resolved variants and sort by index
+        var variant_layouts = try self.env.gpa.alloc(Idx, pending.num_variants);
+        defer self.env.gpa.free(variant_layouts);
+
+        // Initialize all to ZST (for variants that were never processed because they have no payload)
+        const zst_idx = try self.ensureZstLayout();
+        for (variant_layouts) |*slot| {
+            slot.* = zst_idx;
+        }
+
+        // Fill in resolved variants
+        const indices = self.work.resolved_tag_union_variants.items(.index);
+        const layout_idxs = self.work.resolved_tag_union_variants.items(.layout_idx);
+        for (pending.resolved_variants_start..resolved_end) |i| {
+            variant_layouts[indices[i]] = layout_idxs[i];
+        }
+
+        // Calculate max payload size and alignment
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
+
+        // Record variants_start BEFORE appending (this was the issue before - recursive calls would interleave)
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+        for (variant_layouts) |variant_layout_idx| {
+            const variant_layout = self.getLayout(variant_layout_idx);
+            const variant_size = self.layoutSize(variant_layout);
+            const variant_alignment = variant_layout.alignment(self.targetUsize());
+            if (variant_size > max_payload_size) {
+                max_payload_size = variant_size;
+            }
+            max_payload_alignment = max_payload_alignment.max(variant_alignment);
+
+            // Store variant layout for runtime refcounting
+            _ = try self.tag_union_variants.append(self.env.gpa, .{
+                .payload_layout = variant_layout_idx,
+            });
+        }
+
+        // Calculate discriminant info from the stored discriminant layout
+        const discriminant_layout = self.getLayout(pending.discriminant_layout);
+        const discriminant_size: u8 = @intCast(self.layoutSize(discriminant_layout));
+        const discriminant_alignment: std.mem.Alignment = switch (discriminant_size) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            else => .@"1",
+        };
+
+        // Calculate total size: payload at offset 0, discriminant at aligned offset after payload
+        const payload_end = max_payload_size;
+        const discriminant_offset: u16 = @intCast(std.mem.alignForward(u32, payload_end, @intCast(discriminant_alignment.toByteUnits())));
+        const total_size_unaligned = discriminant_offset + discriminant_size;
+
+        // Align total size to the tag union's alignment
+        const tag_union_alignment = max_payload_alignment.max(discriminant_alignment);
+        const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
+
+        // Store TagUnionData
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.env.gpa, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(pending.num_variants),
+            },
+        });
+
+        // Clear resolved variants for this tag union
+        self.work.resolved_tag_union_variants.shrinkRetainingCapacity(pending.resolved_variants_start);
+
+        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
@@ -1036,8 +1204,15 @@ pub const Store = struct {
             var layout: Layout = undefined;
 
             if (!skip_layout_computation) {
-                // Mark this var as in-progress before processing
-                try self.work.in_progress_vars.put(current.var_, {});
+                // Mark this var as in-progress before processing.
+                // Note: We don't add aliases to in_progress_vars because aliases are transparent
+                // wrappers that just continue to their backing type. The alias handling code
+                // does `current = backing; continue;` without ever completing the alias entry,
+                // which would cause spurious cycle detection when the alias var is encountered
+                // again. See issue #8708.
+                if (current.desc.content != .alias) {
+                    try self.work.in_progress_vars.put(current.var_, {});
+                }
 
                 layout = switch (current.desc.content) {
                     .structure => |flat_type| flat_type: switch (flat_type) {
@@ -1261,54 +1436,44 @@ pub const Store = struct {
                             continue;
                         },
                         .tag_union => |tag_union| {
-                            // Handle tag unions by computing the layout based on:
-                            // 1. Discriminant size (based on number of tags)
-                            // 2. Maximum payload size and alignment
+                            // Tag Union Layout Computation (Iterative)
+                            //
+                            // We compute tag union layouts ITERATIVELY using a work queue to avoid
+                            // stack overflow on deeply nested types like `Ok((Name("str"), 5))`.
+                            //
+                            // The approach:
+                            // 1. Push all variants with payloads to `pending_tag_union_variants`
+                            // 2. Push a `PendingTagUnion` container to track progress
+                            // 3. Process each variant's payload type iteratively (not recursively)
+                            // 4. When a payload layout completes, move it to `resolved_tag_union_variants`
+                            // 5. When all variants are resolved, call `finishTagUnion` to assemble
+                            //    the final layout with discriminant, max payload size, etc.
+                            //
+                            // For multi-arg variants like `Point(1, 2)`, we push a `PendingTuple`
+                            // container on top of the tag union. The tuple processes its fields
+                            // iteratively, and its resulting layout becomes the variant's payload.
 
                             const pending_tags_top = self.work.pending_tags.len;
                             defer self.work.pending_tags.shrinkRetainingCapacity(pending_tags_top);
 
-                            // Recursively get all tags by checking the tag extension
+                            // Get all tags by checking the tag extension
                             const num_tags = try self.gatherTags(tag_union);
                             const tags_slice = self.work.pending_tags.slice();
-
-                            // Get the slices of tags
                             const tags_args = tags_slice.items(.args)[pending_tags_top..];
-
-                            // Check if this is a Bool (2 tags with no payload) as a special case
-                            // This is a legitimate layout optimization for boolean tag unions
-                            // TODO: Is this necessary?
-                            if (num_tags == 2) {
-                                var is_bool = true;
-                                for (tags_args) |tag_args| {
-                                    const args_slice = self.types_store.sliceVars(tag_args);
-                                    if (args_slice.len != 0) {
-                                        is_bool = false;
-                                        break;
-                                    }
-                                }
-
-                                if (is_bool) {
-                                    // Bool layout: use predefined bool layout
-                                    // Break to fall through to pending container processing
-                                    break :flat_type Layout.boolType();
-                                }
-                            }
 
                             // For general tag unions, we need to compute the layout
                             // First, determine discriminant size based on number of tags
                             if (num_tags == 0) {
                                 // Empty tag union - represents a zero-sized type
-                                // Break to fall through to pending container processing
                                 break :flat_type Layout.zst();
                             }
 
-                            const discriminant_layout = if (num_tags <= 256)
-                                Layout.int(.u8)
+                            const discriminant_layout_idx: Idx = if (num_tags <= 256)
+                                Idx.u8
                             else if (num_tags <= 65536)
-                                Layout.int(.u16)
+                                Idx.u16
                             else
-                                Layout.int(.u32);
+                                Idx.u32;
 
                             // If all tags have no payload, we just need the discriminant
                             var has_payload = false;
@@ -1322,20 +1487,10 @@ pub const Store = struct {
 
                             if (!has_payload) {
                                 // Simple tag union with no payloads - just use discriminant
-                                // Break to fall through to pending container processing
-                                break :flat_type discriminant_layout;
+                                break :flat_type self.getLayout(discriminant_layout_idx);
                             }
 
-                            // Complex tag union with payloads
-                            // Create a proper tag_union layout that preserves all variant layouts
-                            // for correct reference counting at runtime.
-                            var max_payload_size: u32 = 0;
-                            var max_payload_alignment: std.mem.Alignment = std.mem.Alignment.@"1";
-
-                            // Sort tags alphabetically by name to match interpreter's appendUnionTags ordering.
-                            // This ensures discriminant values are consistent between evaluation and layout.
-                            // TODO: Consider sorting tags in the type store instead for better performance,
-                            // which would eliminate the need for sorting here and in appendUnionTags.
+                            // Complex tag union with payloads - process iteratively
                             const tags_names = tags_slice.items(.name)[pending_tags_top..];
                             const tags_args_slice = tags_slice.items(.args)[pending_tags_top..];
 
@@ -1349,90 +1504,88 @@ pub const Store = struct {
                             // Sort alphabetically by tag name
                             std.mem.sort(types.Tag, sorted_tags, self.env.getIdentStore(), types.Tag.sortByNameAsc);
 
-                            // Phase 1: Compute all variant layouts first.
-                            // This must happen BEFORE we record variants_start, because computing layouts
-                            // for nested tag unions will recursively append to tag_union_variants.
-                            var variant_layout_indices = try self.env.gpa.alloc(Idx, num_tags);
-                            defer self.env.gpa.free(variant_layout_indices);
+                            // Push variants onto pending_tag_union_variants (in reverse order for pop)
+                            // For multi-arg variants, we create a synthetic tuple type var.
+                            var variants_with_payloads: u32 = 0;
 
-                            for (sorted_tags, 0..) |tag, variant_i| {
-                                const tag_args = tag.args;
-                                const args_slice = self.types_store.sliceVars(tag_args);
-                                variant_layout_indices[variant_i] = if (args_slice.len == 0)
-                                    // No payload - use ZST
-                                    try self.ensureZstLayout()
-                                else if (args_slice.len == 1)
-                                    // Single arg - use its layout
-                                    // Use type_scope to look up rigid var mappings
-                                    try self.addTypeVar(args_slice[0], type_scope)
-                                else blk: {
-                                    // Multiple args - build tuple layout
-                                    var elem_layouts = try self.env.gpa.alloc(Layout, args_slice.len);
-                                    defer self.env.gpa.free(elem_layouts);
-                                    for (args_slice, 0..) |v, i| {
-                                        // Use type_scope to look up rigid var mappings
-                                        const elem_idx = try self.addTypeVar(v, type_scope);
-                                        elem_layouts[i] = self.getLayout(elem_idx);
-                                    }
-                                    break :blk try self.putTuple(elem_layouts);
-                                };
-                            }
+                            // First pass: record where resolved variants will start
+                            const resolved_variants_start = self.work.resolved_tag_union_variants.len;
 
-                            // Phase 2: Now that all nested layouts are created, record variants_start
-                            // and append our variant layouts. This ensures our variants are contiguous.
-                            const variants_start: u32 = @intCast(self.tag_union_variants.len());
+                            for (0..num_tags) |i| {
+                                const variant_i = num_tags - 1 - i; // Reverse order for pop
+                                const tag = sorted_tags[variant_i];
+                                const args_slice = self.types_store.sliceVars(tag.args);
 
-                            for (variant_layout_indices) |variant_layout_idx| {
-                                const variant_layout = self.getLayout(variant_layout_idx);
-                                const variant_size = self.layoutSize(variant_layout);
-                                const variant_alignment = variant_layout.alignment(self.targetUsize());
-                                if (variant_size > max_payload_size) {
-                                    max_payload_size = variant_size;
+                                if (args_slice.len == 0) {
+                                    // No payload - resolve immediately as ZST
+                                    try self.work.resolved_tag_union_variants.append(self.env.gpa, .{
+                                        .index = @intCast(variant_i),
+                                        .layout_idx = try self.ensureZstLayout(),
+                                    });
+                                } else {
+                                    // One or more args - push to pending variants for processing
+                                    try self.work.pending_tag_union_variants.append(self.env.gpa, .{
+                                        .index = @intCast(variant_i),
+                                        .args = tag.args,
+                                    });
+                                    variants_with_payloads += 1;
                                 }
-                                max_payload_alignment = max_payload_alignment.max(variant_alignment);
-
-                                // Store variant layout for runtime refcounting
-                                _ = try self.tag_union_variants.append(self.env.gpa, .{
-                                    .payload_layout = variant_layout_idx,
-                                });
                             }
 
-                            // Calculate discriminant info
-                            const discriminant_size: u8 = if (num_tags <= 256) 1 else if (num_tags <= 65536) 2 else 4;
-                            const discriminant_alignment: std.mem.Alignment = switch (discriminant_size) {
-                                1 => .@"1",
-                                2 => .@"2",
-                                4 => .@"4",
-                                else => unreachable,
-                            };
-
-                            // Calculate total size: payload at offset 0, discriminant at aligned offset after payload
-                            const payload_end = max_payload_size;
-                            const discriminant_offset: u16 = @intCast(std.mem.alignForward(u32, payload_end, @intCast(discriminant_alignment.toByteUnits())));
-                            const total_size_unaligned = discriminant_offset + discriminant_size;
-
-                            // Align total size to the tag union's alignment
-                            const tag_union_alignment = max_payload_alignment.max(discriminant_alignment);
-                            const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
-
-                            // Store TagUnionData
-                            const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
-                            _ = try self.tag_union_data.append(self.env.gpa, .{
-                                .size = total_size,
-                                .discriminant_offset = discriminant_offset,
-                                .discriminant_size = discriminant_size,
-                                .variants = .{
-                                    .start = variants_start,
-                                    .count = @intCast(num_tags),
+                            // Push the tag union container
+                            try self.work.pending_containers.append(self.env.gpa, .{
+                                .var_ = current.var_,
+                                .container = .{
+                                    .tag_union = .{
+                                        .num_variants = @intCast(num_tags),
+                                        .pending_variants = variants_with_payloads,
+                                        .resolved_variants_start = @intCast(resolved_variants_start),
+                                        .discriminant_layout = discriminant_layout_idx,
+                                    },
                                 },
                             });
 
-                            // Create and store tag_union layout
-                            const tag_union_layout = Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
-                            const tag_union_idx = try self.insertLayout(tag_union_layout);
+                            if (variants_with_payloads == 0) {
+                                // All variants have no payload - finalize immediately
+                                // This shouldn't happen because we already handled has_payload == false above
+                                break :flat_type self.getLayout(discriminant_layout_idx);
+                            }
 
-                            // Break to fall through to pending container processing instead of returning directly
-                            break :flat_type self.getLayout(tag_union_idx);
+                            // Start processing the first variant with a payload
+                            // Find the last pending variant (we process in reverse)
+                            const last_variant = self.work.pending_tag_union_variants.get(
+                                self.work.pending_tag_union_variants.len - 1,
+                            );
+                            const args_slice = self.types_store.sliceVars(last_variant.args);
+                            if (args_slice.len == 1) {
+                                // Single arg variant - process directly
+                                current = self.types_store.resolveVar(args_slice[0]);
+                                continue :outer;
+                            } else {
+                                // Multi-arg variant - set up tuple processing
+                                for (args_slice, 0..) |var_, index| {
+                                    try self.work.pending_tuple_fields.append(self.env.gpa, .{
+                                        .index = @intCast(index),
+                                        .var_ = var_,
+                                    });
+                                }
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = current.var_, // This var will be overwritten anyway
+                                    .container = .{
+                                        .tuple = .{
+                                            .num_fields = @intCast(args_slice.len),
+                                            .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
+                                            .pending_fields = @intCast(args_slice.len),
+                                        },
+                                    },
+                                });
+                                // Process first tuple field
+                                const first_field = self.work.pending_tuple_fields.get(
+                                    self.work.pending_tuple_fields.len - 1,
+                                );
+                                current = self.types_store.resolveVar(first_field.var_);
+                                continue :outer;
+                            }
                         },
                         .record_unbound => |fields| {
                             // For record_unbound, we need to gather fields directly since it has no Record struct
@@ -1727,6 +1880,62 @@ pub const Store = struct {
                             continue :outer;
                         }
                     },
+                    .tag_union => |*pending_tag_union| {
+                        // Pop the variant we just processed
+                        const pending_variant = self.work.pending_tag_union_variants.pop() orelse unreachable;
+
+                        // Add to resolved variants
+                        try self.work.resolved_tag_union_variants.append(self.env.gpa, .{
+                            .index = pending_variant.index,
+                            .layout_idx = layout_idx,
+                        });
+
+                        // Check if there are more variants with payloads to process
+                        if (pending_tag_union.pending_variants > 0) {
+                            pending_tag_union.pending_variants -= 1;
+                        }
+
+                        if (pending_tag_union.pending_variants == 0) {
+                            // All variants processed - finalize
+                            layout = try self.finishTagUnion(pending_tag_union.*);
+                        } else {
+                            // More variants to process - continue with the next one
+                            const next_variant = self.work.pending_tag_union_variants.get(
+                                self.work.pending_tag_union_variants.len - 1,
+                            );
+                            const next_args_slice = self.types_store.sliceVars(next_variant.args);
+                            if (next_args_slice.len == 1) {
+                                // Single arg variant - process directly
+                                current = self.types_store.resolveVar(next_args_slice[0]);
+                                continue :outer;
+                            } else {
+                                // Multi-arg variant - set up tuple processing
+                                for (next_args_slice, 0..) |var_, index| {
+                                    try self.work.pending_tuple_fields.append(self.env.gpa, .{
+                                        .index = @intCast(index),
+                                        .var_ = var_,
+                                    });
+                                }
+                                // Push tuple container on top of the tag union
+                                try self.work.pending_containers.append(self.env.gpa, .{
+                                    .var_ = undefined, // synthetic tuple, var not meaningful
+                                    .container = .{
+                                        .tuple = .{
+                                            .num_fields = @intCast(next_args_slice.len),
+                                            .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
+                                            .pending_fields = @intCast(next_args_slice.len),
+                                        },
+                                    },
+                                });
+                                // Process first tuple field
+                                const first_field = self.work.pending_tuple_fields.get(
+                                    self.work.pending_tuple_fields.len - 1,
+                                );
+                                current = self.types_store.resolveVar(first_field.var_);
+                                continue :outer;
+                            }
+                        }
+                    },
                 }
 
                 // We're done with this container, so remove it from pending_containers
@@ -1763,12 +1972,12 @@ pub const Store = struct {
             // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.
             std.debug.assert(self.work.pending_record_fields.len == 0);
             std.debug.assert(self.work.pending_tuple_fields.len == 0);
+            std.debug.assert(self.work.pending_tag_union_variants.len == 0);
 
             // No more pending containers; we're done!
-            // Note: Work fields (in_progress_vars, in_progress_nominals, pending_record_fields, etc.)
-            // are not cleared here because addTypeVar may be called recursively (e.g., from tag union
-            // variant processing). Individual entries are removed via swapRemove/pop when types
-            // finish processing, so these should be empty when the top-level call returns.
+            // Note: Work fields (in_progress_vars, in_progress_nominals, etc.) are not cleared
+            // here because individual entries are removed via swapRemove/pop when types finish
+            // processing, so these should be empty when the top-level call returns.
             return layout_idx;
         }
     }

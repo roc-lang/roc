@@ -94,20 +94,51 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Get the cache entries directory.
-    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
+    /// Get the module cache directory (for cached ModuleEnvs).
+    pub fn getModuleCacheDir(self: Self, allocator: Allocator) ![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "entries" });
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
-    /// Get the temporary directory for cache operations.
-    pub fn getTempDir(self: Self, allocator: Allocator) ![]u8 {
+    /// Get the executable cache directory (for cached linked executables).
+    pub fn getExeCacheDir(self: Self, allocator: Allocator) ![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "temp" });
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
+    }
+
+    /// Alias for getModuleCacheDir for backwards compatibility.
+    pub fn getCacheEntriesDir(self: Self, allocator: Allocator) ![]u8 {
+        return self.getModuleCacheDir(allocator);
+    }
+
+    /// Get the temporary directory for runtime executables.
+    /// This is in the system temp dir, not the persistent cache.
+    pub fn getTempDir(allocator: Allocator) ![]u8 {
+        const temp_base = switch (builtin.target.os.tag) {
+            .windows => std.process.getEnvVarOwned(allocator, "TEMP") catch
+                std.process.getEnvVarOwned(allocator, "TMP") catch
+                try allocator.dupe(u8, "C:\\Windows\\Temp"),
+            else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch
+                try allocator.dupe(u8, "/tmp"),
+        };
+        defer allocator.free(temp_base);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ temp_base, "roc" });
+    }
+
+    /// Get the version-specific temporary directory for runtime executables.
+    pub fn getVersionTempDir(allocator: Allocator) ![]u8 {
+        const temp_base = try getTempDir(allocator);
+        defer allocator.free(temp_base);
+
+        const version_dir = try getCompilerVersionDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ temp_base, version_dir });
     }
 
     /// Get maximum cache size in bytes.
@@ -187,25 +218,10 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get a compiler version-specific directory name.
 ///
-/// This creates a hash-based directory name that includes compiler version
-/// and build information to isolate cache entries between different builds.
+/// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
+/// to isolate cache entries between different compiler builds.
 pub fn getCompilerVersionDir(allocator: Allocator) ![]u8 {
     // Use build-time compiler version that includes git commit SHA
     const version_info = build_options.compiler_version;
-
-    // Use BLAKE3 hash instead of SHA-256 for consistency
-    const hash = blake3Hash(version_info);
-
-    // Use first 16 bytes (32 hex chars) for directory name
-    const hex_chars = try allocator.alloc(u8, 32);
-    _ = std.fmt.bufPrint(hex_chars, "{x}", .{hash[0..16]}) catch unreachable;
-
-    return hex_chars;
-}
-
-/// Hashes the given data using the BLAKE3 algorithm.
-pub fn blake3Hash(data: []const u8) [32]u8 {
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.Blake3.hash(data, &digest, .{});
-    return digest;
+    return allocator.dupe(u8, version_info);
 }

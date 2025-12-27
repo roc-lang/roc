@@ -139,11 +139,11 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 59;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 60;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 18;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -258,10 +258,21 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 },
             } };
         },
-        .statement_var => return CIR.Statement{ .s_var = .{
-            .pattern_idx = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
+        .statement_var => {
+            return CIR.Statement{ .s_var = .{
+                .pattern_idx = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(node.data_2),
+                .anno = blk: {
+                    const extra_start = node.data_3;
+                    const extra_data = store.extra_data.items.items[extra_start..];
+                    if (extra_data[0] != 0) {
+                        break :blk @enumFromInt(extra_data[1]);
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_reassign => return CIR.Statement{ .s_reassign = .{
             .pattern_idx = @enumFromInt(node.data_1),
             .expr = @enumFromInt(node.data_2),
@@ -287,6 +298,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             .cond = @enumFromInt(node.data_1),
             .body = @enumFromInt(node.data_2),
         } },
+        .statement_break => return CIR.Statement{ .s_break = .{} },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
             .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
@@ -393,6 +405,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_lookup_external = .{
                 .module_idx = @enumFromInt(node.data_1),
                 .target_node_idx = @intCast(node.data_2),
+                .ident_idx = @bitCast(node.data_3),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -556,11 +569,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const lambda_idx = extra_data[0];
             const capture_start = extra_data[1];
             const capture_len = extra_data[2];
+            const tag_name: base.Ident.Idx = @bitCast(extra_data[3]);
 
             return CIR.Expr{
                 .e_closure = .{
                     .lambda_idx = @enumFromInt(lambda_idx),
                     .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
+                    .tag_name = tag_name,
                 },
             };
         },
@@ -853,6 +868,59 @@ pub fn replaceExprWithZeroArgumentTag(
         .data_1 = @intCast(extra_data_start),
         .data_2 = 0,
         .data_3 = 0,
+    });
+}
+
+/// Replaces an existing expression with an e_tuple expression in-place.
+/// This is used for constant folding tuples during compile-time evaluation.
+/// The elem_indices slice contains the indices of the tuple element expressions.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithTuple(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    elem_indices: []const CIR.Expr.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store element indices in extra_data
+    const extra_data_start = store.extra_data.len();
+    for (elem_indices) |elem_idx| {
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(elem_idx));
+    }
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_tuple,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = @intCast(elem_indices.len),
+        .data_3 = 0,
+    });
+}
+
+/// Replaces an existing expression with an e_tag expression in-place.
+/// This is used for constant folding tag unions with payloads during compile-time evaluation.
+/// The arg_indices slice contains the indices of the tag argument expressions.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    name: Ident.Idx,
+    arg_indices: []const CIR.Expr.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store argument indices in extra_data
+    const extra_data_start = store.extra_data.len();
+    for (arg_indices) |arg_idx| {
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
+    }
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_tag,
+        .data_1 = @bitCast(name),
+        .data_2 = @intCast(extra_data_start),
+        .data_3 = @intCast(arg_indices.len),
     });
 }
 
@@ -1389,9 +1457,18 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.data_3 = extra_data_start;
         },
         .s_var => |s| {
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
+            if (s.anno) |anno| {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
+                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
+            } else {
+                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
+            }
+
             node.tag = .statement_var;
             node.data_1 = @intFromEnum(s.pattern_idx);
             node.data_2 = @intFromEnum(s.expr);
+            node.data_3 = extra_data_start;
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
@@ -1424,6 +1501,9 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_while;
             node.data_1 = @intFromEnum(s.cond);
             node.data_2 = @intFromEnum(s.body);
+        },
+        .s_break => |_| {
+            node.tag = .statement_break;
         },
         .s_return => |s| {
             node.tag = .statement_return;
@@ -1534,10 +1614,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @intFromEnum(local.pattern_idx);
         },
         .e_lookup_external => |e| {
-            // For external lookups, store the module index and target node index
+            // For external lookups, store the module index, target node index, and ident
             node.tag = .expr_external_lookup;
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = e.target_node_idx;
+            node.data_3 = @bitCast(e.ident_idx);
         },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
@@ -1807,6 +1888,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
             _ = try store.extra_data.append(store.gpa, e.captures.span.start);
             _ = try store.extra_data.append(store.gpa, e.captures.span.len);
+            _ = try store.extra_data.append(store.gpa, @bitCast(e.tag_name));
 
             node.data_1 = @intCast(extra_data_start);
         },
@@ -3195,6 +3277,10 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.data_1 = if (r.is_alias) 1 else 0;
         },
+        .break_outside_loop => |r| {
+            node.tag = .diag_break_outside_loop;
+            region = r.region;
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -3518,6 +3604,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .is_alias = node.data_1 != 0,
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         else => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },
@@ -3626,16 +3715,17 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize this Serialized struct into a NodeStore
-    pub fn deserialize(self: *Serialized, offset: i64, gpa: Allocator) *NodeStore {
+    /// The base_addr parameter is the base address of the serialized buffer in memory.
+    pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *NodeStore {
         // Note: Serialized may be smaller than the runtime struct.
         // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order: extra_data, regions, then nodes
-        const deserialized_extra_data = self.extra_data.deserialize(offset).*;
-        const deserialized_regions = self.regions.deserialize(offset).*;
-        const deserialized_nodes = self.nodes.deserialize(offset).*;
+        const deserialized_extra_data = self.extra_data.deserialize(base_addr).*;
+        const deserialized_regions = self.regions.deserialize(base_addr).*;
+        const deserialized_nodes = self.nodes.deserialize(base_addr).*;
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
@@ -3687,7 +3777,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
@@ -3754,7 +3844,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
@@ -3854,7 +3944,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa);
+    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());

@@ -919,15 +919,16 @@ pub const Import = struct {
             }
 
             /// Deserialize this Serialized struct into a Store
-            pub fn deserialize(self: *Serialized, offset: i64, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
+            /// The base parameter is the base address of the serialized buffer in memory.
+            pub fn deserialize(self: *Serialized, base_addr: usize, allocator: std.mem.Allocator) std.mem.Allocator.Error!*Store {
                 // Overwrite ourself with the deserialized version, and return our pointer after casting it to Store.
                 const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
 
                 store.* = .{
                     .map = .{}, // Will be repopulated below
-                    .imports = self.imports.deserialize(offset).*,
-                    .import_idents = self.import_idents.deserialize(offset).*,
-                    .resolved_modules = self.resolved_modules.deserialize(offset).*,
+                    .imports = self.imports.deserialize(base_addr).*,
+                    .import_idents = self.import_idents.deserialize(base_addr).*,
+                    .resolved_modules = self.resolved_modules.deserialize(base_addr).*,
                 };
 
                 // Pre-allocate the exact capacity needed for the map

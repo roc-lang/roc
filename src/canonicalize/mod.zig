@@ -14,6 +14,12 @@ pub const Scope = @import("Scope.zig");
 pub const DependencyGraph = @import("DependencyGraph.zig");
 /// Hosted function compiler - replaces annotation-only with hosted lambdas
 pub const HostedCompiler = @import("HostedCompiler.zig");
+/// Roc code emitter - converts CIR to valid Roc source code
+pub const RocEmitter = @import("RocEmitter.zig");
+/// Monomorphizer - specializes polymorphic functions to concrete types
+pub const Monomorphizer = @import("Monomorphizer.zig");
+/// Closure Transformer - transforms closures with captures into tagged values
+pub const ClosureTransformer = @import("ClosureTransformer.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
@@ -43,4 +49,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/scope_test.zig"));
     std.testing.refAllDecls(@import("test/record_test.zig"));
     std.testing.refAllDecls(@import("test/type_decl_stmt_test.zig"));
+
+    // Backend tests (Roc emitter)
+    std.testing.refAllDecls(@import("RocEmitter.zig"));
+    std.testing.refAllDecls(@import("test/roc_emitter_test.zig"));
+
+    // Monomorphization
+    std.testing.refAllDecls(@import("Monomorphizer.zig"));
+    std.testing.refAllDecls(@import("ClosureTransformer.zig"));
 }

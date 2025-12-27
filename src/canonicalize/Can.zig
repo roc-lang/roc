@@ -100,6 +100,10 @@ scratch_captures: base.Scratch(Pattern.Idx),
 scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
+/// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
+closure_counter: u32 = 0,
+/// Current loop depth for validating break statements
+loop_depth: u32 = 0,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -128,7 +132,6 @@ const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
 const Closure = CIR.Closure;
-const Ability = CIR.Ability;
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
@@ -1364,92 +1367,6 @@ fn registerUserFacingName(
     try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, pattern_idx);
 }
 
-/// Register an identifier hierarchically into all active scopes using scope hierarchy information.
-/// Given parent_qualified_idx (e.g., "Module.Foo.Bar") and item_name_idx (e.g., "baz"):
-/// - Walks up the scope stack, collecting associated_type_name from each scope
-/// - Builds qualified names by combining type hierarchy components with the item name
-/// - Registers appropriate partially-qualified names in each scope
-///
-/// For example, with "Module.Foo.Bar" and "baz":
-/// - Module scope: "Module.Foo.Bar.baz"
-/// - Foo scope: "Foo.Bar.baz", "Bar.baz"
-/// - Bar scope: "baz"
-fn registerIdentifierHierarchically(
-    self: *Self,
-    _: Ident.Idx, // parent_qualified_idx - unused (TODO: remove this function entirely)
-    item_name_idx: Ident.Idx,
-    pattern_idx: CIR.Pattern.Idx,
-) std.mem.Allocator.Error!void {
-    // Build list of type name components from the scope hierarchy
-    // Walk backwards through scopes, collecting associated_type_name values
-    var type_components = std.ArrayList(Ident.Idx).init(self.env.gpa);
-    defer type_components.deinit();
-
-    // Collect type components from scope hierarchy (in reverse order, from innermost to outermost)
-    var scope_idx: usize = self.scopes.items.len;
-    while (scope_idx > 0) {
-        scope_idx -= 1;
-        const scope = &self.scopes.items[scope_idx];
-        if (scope.associated_type_name) |type_name| {
-            try type_components.append(type_name);
-        }
-    }
-
-    // Reverse to get outermost-to-innermost order
-    std.mem.reverse(Ident.Idx, type_components.items);
-
-    // Now register into each scope
-    // The pattern: scope at depth D (from root) gets names starting from component D
-    const num_scopes = self.scopes.items.len;
-    const num_type_components = type_components.items.len;
-
-    var current_scope_idx: usize = 0;
-    while (current_scope_idx < num_scopes) : (current_scope_idx += 1) {
-        const scope = &self.scopes.items[current_scope_idx];
-
-        // How many type scopes deep are we from the end?
-        const depth_from_end = num_type_components - @as(usize, if (current_scope_idx < num_scopes - num_type_components) 0 else (current_scope_idx - (num_scopes - num_type_components - 1)));
-
-        // In the innermost type scope, register only unqualified name
-        // In outer scopes, register progressively more qualified names
-        if (depth_from_end == 0 and scope.associated_type_name != null) {
-            // Innermost scope - just the item name
-            try scope.idents.put(self.env.gpa, item_name_idx, pattern_idx);
-        } else if (scope.associated_type_name != null or current_scope_idx == 0) {
-            // Register partially qualified names
-            // Start from the current scope's position in the type hierarchy
-            const start_component = if (scope.associated_type_name != null) blk: {
-                // Find which component this scope corresponds to
-                var comp_idx: usize = 0;
-                while (comp_idx < type_components.items.len) : (comp_idx += 1) {
-                    if (type_components.items[comp_idx].eql(scope.associated_type_name.?)) {
-                        break :blk comp_idx;
-                    }
-                }
-                break :blk 0;
-            } else 0;
-
-            // Register all suffixes from this scope's level down to item level
-            var comp_skip: usize = start_component;
-            while (comp_skip < type_components.items.len) : (comp_skip += 1) {
-                // Build qualified name from component[comp_skip..] + item_name
-                var current_qualified = type_components.items[comp_skip];
-                var comp_build = comp_skip + 1;
-                while (comp_build < type_components.items.len) : (comp_build += 1) {
-                    const comp_text = self.env.getIdent(current_qualified);
-                    const next_comp_text = self.env.getIdent(type_components.items[comp_build]);
-                    current_qualified = try self.env.insertQualifiedIdent(comp_text, next_comp_text);
-                }
-                // Add item name
-                const final_text = self.env.getIdent(current_qualified);
-                const item_text = self.env.getIdent(item_name_idx);
-                const final_qualified = try self.env.insertQualifiedIdent(final_text, item_text);
-                try scope.idents.put(self.env.gpa, final_qualified, pattern_idx);
-            }
-        }
-    }
-}
-
 /// Update a hierarchically-registered placeholder in all scopes.
 /// Updates all suffixes that were registered hierarchically.
 fn updatePlaceholderHierarchically(
@@ -1854,12 +1771,8 @@ pub fn canonicalizeFile(
                                     .original_region = original_region,
                                 } });
                             },
-                            .top_level_var_error => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
-                            .var_across_function_boundary => {
-                                // This shouldn't happen for declarations in associated blocks
-                            },
+                            // is_var=false, so var-related errors can't occur
+                            .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => unreachable,
                         }
                     }
                 }
@@ -2109,6 +2022,15 @@ pub fn canonicalizeFile(
                 // Not valid at top-level
                 const string_idx = try self.env.insertString("return");
                 const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
+                try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
+                    .stmt = string_idx,
+                    .region = region,
+                } });
+            },
+            .@"break" => |break_stmt| {
+                // Not valid at top-level
+                const string_idx = try self.env.insertString("break");
+                const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
                     .region = region,
@@ -4025,6 +3947,7 @@ pub fn canonicalizeExpr(
                                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                                     .module_idx = import_idx,
                                                     .target_node_idx = target_node_idx,
+                                                    .ident_idx = type_qualified_idx,
                                                     .region = region,
                                                 } }, region);
 
@@ -4193,6 +4116,7 @@ pub fn canonicalizeExpr(
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
+                                .ident_idx = ident,
                                 .region = region,
                             } }, region);
                             return CanonicalizedExpr{
@@ -4229,16 +4153,8 @@ pub fn canonicalizeExpr(
 
                             // Get the Import.Idx for the module this item comes from
                             const module_text = self.env.getIdent(exposed_info.module_name);
-                            const import_idx = self.scopeLookupImportedModule(module_text) orelse {
-                                // This shouldn't happen if imports are properly tracked, but handle it gracefully
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
-                                        .module_name = exposed_info.module_name,
-                                        .region = region,
-                                    } }),
-                                    .free_vars = DataSpan.empty(),
-                                };
-                            };
+                            // scopeLookupExposedItem found it, so the import must exist
+                            const import_idx = self.scopeLookupImportedModule(module_text) orelse unreachable;
 
                             // Look up the target node index in the module's exposed_items
                             // Need to convert identifier from current module to target module
@@ -4262,6 +4178,7 @@ pub fn canonicalizeExpr(
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                     .module_idx = import_idx,
                                     .target_node_idx = target_node_idx,
+                                    .ident_idx = exposed_info.original_name,
                                     .region = region,
                                 } }, region);
                                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
@@ -4935,11 +4852,17 @@ pub fn canonicalizeExpr(
                 break :blk try self.env.store.capturesSpanFrom(scratch_start);
             };
 
+            // Generate a unique tag name for this closure
+            // Note: We don't have context about what variable this is assigned to,
+            // so we use null for the hint. The tag name will be "Closure_N".
+            const tag_name = try self.generateClosureTagName(null);
+
             // Now, create the closure that captures the environment
             const closure_expr = Expr{
                 .e_closure = .{
                     .lambda_idx = lambda_idx,
                     .captures = capture_info,
+                    .tag_name = tag_name,
                 },
             };
             // The type of the closure is the same as the type of the pure lambda
@@ -5817,7 +5740,6 @@ fn canonicalizeForLoop(
     ast_list_expr: AST.Expr.Idx,
     ast_body: AST.Expr.Idx,
 ) std.mem.Allocator.Error!CanonicalizedForLoop {
-
     // Use scratch_captures to collect free vars from both expr & body
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
@@ -5850,6 +5772,8 @@ fn canonicalizeForLoop(
 
     // Canonicalize the body
     const body = blk: {
+        self.loop_depth += 1;
+        defer self.loop_depth -= 1;
         const body_free_vars_start = self.scratch_free_vars.top();
         defer self.scratch_free_vars.clearFrom(body_free_vars_start);
 
@@ -6458,22 +6382,23 @@ pub fn canonicalizePattern(
         .ident => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
             if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
-                // Create a Pattern node for our identifier
-                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
-                    .ident = ident_idx,
-                } }, region);
-
                 // Check if a placeholder exists for this identifier in the current scope
                 // Placeholders are tracked in the placeholder_idents hash map
                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
                 const placeholder_exists = self.isPlaceholder(ident_idx);
+
+                // Create a Pattern node for our identifier
+                const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
+                    .ident = ident_idx,
+                } }, region);
 
                 if (placeholder_exists) {
                     // Replace the placeholder in the current scope
                     try self.updatePlaceholder(current_scope, ident_idx, pattern_idx);
                 } else {
                     // Introduce the identifier into scope mapping to this pattern node
-                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
+                    // Use is_declaration=false so scopeIntroduceInternal can detect var reassignments
+                    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, false)) {
                         .success => {},
                         .shadowing_warning => |shadowed_pattern_idx| {
                             const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
@@ -6492,10 +6417,14 @@ pub fn canonicalizePattern(
                             });
                         },
                         .var_across_function_boundary => {
-                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .ident_already_in_scope = .{
-                                .ident = ident_idx,
+                            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
                                 .region = region,
                             } });
+                        },
+                        .var_reassignment_ok => |existing_pattern_idx| {
+                            // This is a var reassignment - return the existing pattern
+                            // so the interpreter's upsertBinding will update the existing binding
+                            return existing_pattern_idx;
                         },
                     }
                 }
@@ -6519,10 +6448,10 @@ pub fn canonicalizePattern(
                     .ident = ident_idx,
                 } }, region);
 
-                // Introduce the var with function boundary tracking (using scopeIntroduceVar)
-                _ = try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
-
-                return pattern_idx;
+                // Introduce the var with function boundary tracking
+                // scopeIntroduceVar will detect if this is a reassignment of an existing var
+                // and return the existing pattern in that case
+                return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
             } else {
                 const feature = try self.env.insertString("report an error when unable to resolve identifier");
                 const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
@@ -7070,6 +6999,7 @@ pub fn canonicalizePattern(
                                 } });
                                 return pattern_idx;
                             },
+                            .var_reassignment_ok => unreachable, // is_declaration=true
                         }
                     }
                 } else {
@@ -7177,6 +7107,8 @@ pub fn canonicalizePattern(
                                         .region = list_rest_region,
                                     } });
                                 },
+                                // List rest patterns are always declarations, never reassignments
+                                .var_reassignment_ok => unreachable,
                             }
 
                             current_rest_pattern = assign_idx;
@@ -7307,6 +7239,8 @@ pub fn canonicalizePattern(
                             .region = region,
                         } });
                     },
+                    // As patterns are always declarations, never reassignments
+                    .var_reassignment_ok => unreachable,
                 }
 
                 return pattern_idx;
@@ -7603,13 +7537,8 @@ fn scopeIntroduceIdent(
                 },
             });
         },
-        .var_across_function_boundary => |_| {
-            // This shouldn't happen for regular identifiers
-            return self.env.pushMalformed(T, Diagnostic{ .not_implemented = .{
-                .feature = try self.env.insertString("var across function boundary for non-var identifier"),
-                .region = region,
-            } });
-        },
+        // These only occur for reassignments (is_declaration=false), not declarations
+        .var_across_function_boundary, .var_reassignment_ok => unreachable,
     }
 }
 
@@ -7626,10 +7555,7 @@ fn scopeIntroduceVar(
 
     switch (result) {
         .success => {
-            // If this is a var declaration, record which function it belongs to
-            if (is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
+            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .shadowing_warning => |shadowed_pattern_idx| {
@@ -7639,9 +7565,7 @@ fn scopeIntroduceVar(
                 .region = region,
                 .original_region = original_region,
             } });
-            if (is_declaration) {
-                try self.recordVarFunction(pattern_idx);
-            }
+            // recordVarFunction is called inside scopeIntroduceInternal
             return pattern_idx;
         },
         .top_level_var_error => {
@@ -7657,6 +7581,10 @@ fn scopeIntroduceVar(
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
             } });
+        },
+        .var_reassignment_ok => |existing_pattern_idx| {
+            // Var reassignment - return the existing pattern
+            return existing_pattern_idx;
         },
     }
 }
@@ -8978,6 +8906,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
                 .pattern_idx = pattern_idx,
                 .expr = expr.idx,
+                .anno = null,
             } }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
@@ -9302,15 +9231,8 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check: {
                                 // Reuse the existing placeholder pattern
                                 const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-                                const existing_pattern = current_scope.idents.get(name_ident) orelse {
-                                    // This shouldn't happen, but handle it gracefully
-                                    const pattern = Pattern{
-                                        .assign = .{
-                                            .ident = name_ident,
-                                        },
-                                    };
-                                    break :placeholder_check try self.env.addPattern(pattern, region);
-                                };
+                                // Placeholders are always added to both placeholder_idents and scope
+                                const existing_pattern = current_scope.idents.get(name_ident) orelse unreachable;
                                 // Remove from placeholder tracking since we're making it real
                                 _ = self.placeholder_idents.remove(name_ident);
                                 break :placeholder_check existing_pattern;
@@ -9337,6 +9259,115 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                     else => {},
                                 }
                                 break :create_new new_pattern_idx;
+                            };
+
+                            // Create the e_anno_only expression
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+
+                            // Create the annotation structure
+                            const annotation = CIR.Annotation{
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Add the decl as a def so it gets included in all_defs
+                            const def_idx = try self.env.addDef(.{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .annotation = annotation_idx,
+                                .kind = .let,
+                            }, region);
+                            try self.env.store.addScratchDef(def_idx);
+
+                            // Create the statement
+                            const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                                .pattern = pattern_idx,
+                                .expr = anno_only_expr,
+                                .anno = annotation_idx,
+                            } }, region);
+                            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+                            stmts_processed = .one;
+                        }
+                    },
+                    .@"var" => |var_stmt| {
+                        // Check if the var name matches the anno name
+                        const names_match = if (self.parse_ir.tokens.resolveIdentifier(var_stmt.name)) |var_ident|
+                            name_ident.idx == var_ident.idx
+                        else
+                            false;
+
+                        if (names_match) {
+                            // Names match - process the var with the annotation attached
+                            const var_region = self.parse_ir.tokenizedRegionToRegion(var_stmt.region);
+
+                            // Canonicalize the initial value
+                            const expr = try self.canonicalizeExprOrMalformed(var_stmt.body);
+
+                            // Create pattern for the var
+                            const pattern_idx = try self.env.addPattern(
+                                Pattern{ .assign = .{ .ident = name_ident } },
+                                var_region,
+                            );
+
+                            // Introduce the var with function boundary tracking
+                            _ = try self.scopeIntroduceVar(name_ident, pattern_idx, var_region, true, Pattern.Idx);
+
+                            // Create the annotation structure
+                            const annotation = CIR.Annotation{
+                                .anno = type_anno_idx,
+                                .where = where_clauses,
+                            };
+                            const annotation_idx = try self.env.addAnnotation(annotation, region);
+
+                            // Create var statement with annotation
+                            const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
+                                .pattern_idx = pattern_idx,
+                                .expr = expr.idx,
+                                .anno = annotation_idx,
+                            } }, var_region);
+
+                            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+                            stmts_processed = .two;
+                        } else {
+                            // Names don't match - create anno-only def for this anno
+                            // and let the var be processed separately in the next iteration
+
+                            // Check if a placeholder already exists (from Phase 1.5.5)
+                            const pattern_idx = if (self.isPlaceholder(name_ident)) placeholder_check_var: {
+                                // Reuse the existing placeholder pattern
+                                const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+                                const existing_pattern = current_scope.idents.get(name_ident) orelse {
+                                    const pattern = Pattern{
+                                        .assign = .{
+                                            .ident = name_ident,
+                                        },
+                                    };
+                                    break :placeholder_check_var try self.env.addPattern(pattern, region);
+                                };
+                                _ = self.placeholder_idents.remove(name_ident);
+                                break :placeholder_check_var existing_pattern;
+                            } else create_new_var: {
+                                const pattern = Pattern{
+                                    .assign = .{
+                                        .ident = name_ident,
+                                    },
+                                };
+                                const new_pattern_idx = try self.env.addPattern(pattern, region);
+
+                                switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, name_ident, new_pattern_idx, false, true)) {
+                                    .success => {},
+                                    .shadowing_warning => |shadowed_pattern_idx| {
+                                        const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
+                                        try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
+                                            .ident = name_ident,
+                                            .region = region,
+                                            .original_region = original_region,
+                                        } });
+                                    },
+                                    else => {},
+                                }
+                                break :create_new_var new_pattern_idx;
                             };
 
                             // Create the e_anno_only expression
@@ -9558,6 +9589,8 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             //     $count = $count + 1
             // }
             const body = blk: {
+                self.loop_depth += 1;
+                defer self.loop_depth -= 1;
                 const body_free_vars_start = self.scratch_free_vars.top();
                 defer self.scratch_free_vars.clearFrom(body_free_vars_start);
 
@@ -9592,6 +9625,21 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             }, region);
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+        },
+        .@"break" => |break_stmt| {
+            const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
+            if (self.loop_depth == 0) {
+                const malformed_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
+                    .region = region,
+                } });
+                mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+            }
+
+            const stmt_idx = try self.env.addStatement(Statement{
+                .s_break = .{},
+            }, region);
+
+            mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
         },
         .malformed => |_| {
             // Stmt was malformed, parse reports this error, so do nothing here
@@ -10081,8 +10129,9 @@ pub fn scopeIntroduceInternal(
 
     // Check for existing identifier in any scope level for shadowing detection
     if (self.scopeContains(item_kind, ident_idx)) |existing| {
-        // If it's a var reassignment (not declaration), check function boundaries
-        if (is_var and !is_declaration) {
+        // Check if this is a var reassignment: the existing pattern must have been
+        // declared with `var` (source of truth), and we're not declaring a new var
+        if (!is_declaration and self.isVarPattern(existing)) {
             // Find the scope where the var was declared and check for function boundaries
             var declaration_scope_idx: ?usize = null;
             var scope_idx = self.scopes.items.len;
@@ -10117,20 +10166,25 @@ pub fn scopeIntroduceInternal(
                     // Different function, return error
                     return Scope.IntroduceResult{ .var_across_function_boundary = existing };
                 } else {
-                    // Same function, allow reassignment without warning
-                    try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
-                    return Scope.IntroduceResult{ .success = {} };
+                    // Same function, allow reassignment - return the existing pattern
+                    // so all references use the same pattern_idx for upsertBinding to work
+                    return Scope.IntroduceResult{ .var_reassignment_ok = existing };
                 }
+            } else {
+                // scopeContains found the identifier, so it must be in some scope
+                unreachable;
             }
-
-            // If we get here, the declaration scope was not found
-            // This shouldn't happen in practice, but we need to handle it
-            return Scope.IntroduceResult{ .success = {} };
         }
 
         // For non-var declarations, we should still report shadowing
         // Regular shadowing case - produce warning but still introduce
         try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+        // If this is a var declaration, record it in var_patterns
+        if (is_var and is_declaration) {
+            try self.recordVarFunction(pattern_idx);
+        }
+
         return Scope.IntroduceResult{ .shadowing_warning = existing };
     }
 
@@ -10143,12 +10197,24 @@ pub fn scopeIntroduceInternal(
         if (ident_idx.idx == entry.key_ptr.idx) {
             // Duplicate in same scope - still introduce but return shadowing warning
             try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+            // If this is a var declaration, record it in var_patterns
+            if (is_var and is_declaration) {
+                try self.recordVarFunction(pattern_idx);
+            }
+
             return Scope.IntroduceResult{ .shadowing_warning = entry.value_ptr.* };
         }
     }
 
     // No conflicts, introduce successfully
     try self.scopes.items[self.scopes.items.len - 1].put(gpa, item_kind, ident_idx, pattern_idx);
+
+    // If this is a var declaration, record it in var_patterns
+    if (is_var and is_declaration) {
+        try self.recordVarFunction(pattern_idx);
+    }
+
     return Scope.IntroduceResult{ .success = {} };
 }
 
@@ -10334,18 +10400,8 @@ pub fn introduceType(
                 });
             }
         },
-        .shadowing_warning => |shadowed_stmt| {
-            // This shouldn't happen since we're not passing a parent lookup function
-            // but handle it just in case the Scope implementation changes
-            const original_region = self.env.store.getStatementRegion(shadowed_stmt);
-            try self.env.pushDiagnostic(Diagnostic{
-                .shadowing_warning = .{
-                    .ident = name_ident,
-                    .region = region,
-                    .original_region = original_region,
-                },
-            });
-        },
+        // No parent lookup function is passed, so shadowing can't be detected
+        .shadowing_warning => unreachable,
         .redeclared_error => |original_stmt| {
             // Extract region information from the original statement
             const original_region = self.env.store.getStatementRegion(original_stmt);
@@ -11216,6 +11272,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                             const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = auto_import_idx,
                                 .target_node_idx = method_node_idx,
+                                .ident_idx = qualified_method_name,
                                 .region = region,
                             } }, region);
 
@@ -11272,6 +11329,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                 .module_idx = import_idx,
                 .target_node_idx = target_node_idx,
+                .ident_idx = method_name,
                 .region = region,
             } }, region);
 
@@ -11390,6 +11448,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
+        .ident_idx = field_name,
         .region = region,
     } }, region);
     return expr_idx;
@@ -11533,6 +11592,40 @@ fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error
 /// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
 fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
     return try self.env.insertIdent(base.Ident.for_text("unknown"));
+}
+
+/// Generate a unique tag name for a closure.
+///
+/// This generates names like "#1_addX", "#2_addX" when a hint is provided,
+/// or "#1", "#2" when no hint is available. The `#` prefix is used because
+/// it's reserved for comments in Roc source code, so these names cannot
+/// collide with user-defined tags. RocEmitter transforms `#` to `C` when
+/// printing, so `#1_foo` becomes `C1_foo` in emitted code.
+fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
+    self.closure_counter += 1;
+
+    // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
+    if (hint) |h| {
+        const hint_name = self.env.getIdent(h);
+        // Use # prefix which can't appear in user code (reserved for comments)
+        // Format: #N_hint where N is the counter
+        const tag_name = try std.fmt.allocPrint(
+            self.env.gpa,
+            "#{d}_{s}",
+            .{ self.closure_counter, hint_name },
+        );
+        defer self.env.gpa.free(tag_name);
+        return try self.env.insertIdent(base.Ident.for_text(tag_name));
+    }
+
+    // Otherwise generate a numeric name
+    const tag_name = try std.fmt.allocPrint(
+        self.env.gpa,
+        "#{d}",
+        .{self.closure_counter},
+    );
+    defer self.env.gpa.free(tag_name);
+    return try self.env.insertIdent(base.Ident.for_text(tag_name));
 }
 
 const MainFunctionStatus = enum { valid, invalid, not_found };

@@ -105,10 +105,12 @@ starting_dollar = |list| "default"
                          ^^^^^^^^^
 
 It has the type:
-    _Str_
+
+    Str
 
 But the type annotation says it should have the type:
-    _$elem_
+
+    $elem
 
 # TOKENS
 ~~~zig
@@ -296,7 +298,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "List(elem) -> Str"))
-		(patt (type "List($elem) -> Error"))
+		(patt (type "List($elem) -> $elem"))
 		(patt (type "List($bad) -> Str"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))

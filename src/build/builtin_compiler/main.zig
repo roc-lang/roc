@@ -172,6 +172,9 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
     }
+    if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
+        try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
+    }
     if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
         try low_level_map.put(list_drop_at_ident, .list_drop_at);
     }
@@ -290,29 +293,6 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
         const is_lte = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.is_lte", .{num_type});
         if (env.common.findIdent(is_lte)) |ident| {
             try low_level_map.put(ident, .num_is_lte);
-        }
-    }
-
-    // Numeric parsing operations (all numeric types have from_int_digits)
-    for (numeric_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // from_int_digits
-        const from_int_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_int_digits", .{num_type});
-        if (env.common.findIdent(from_int_digits)) |ident| {
-            try low_level_map.put(ident, .num_from_int_digits);
-        }
-    }
-
-    // from_dec_digits (Dec, F32, F64 only)
-    const dec_types = [_][]const u8{ "Dec", "F32", "F64" };
-    for (dec_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // from_dec_digits
-        const from_dec_digits = try std.fmt.bufPrint(&buf, "Builtin.Num.{s}.from_dec_digits", .{num_type});
-        if (env.common.findIdent(from_dec_digits)) |ident| {
-            try low_level_map.put(ident, .num_from_dec_digits);
         }
     }
 

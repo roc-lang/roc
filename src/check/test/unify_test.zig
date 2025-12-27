@@ -1300,7 +1300,9 @@ test "unify - closed tag union extends open" {
 
 // unification - recursion //
 
-test "unify - fails on infinite type" {
+test "unify - infinite type detected by occurs check" {
+    // Unification succeeds but creates an infinite type.
+    // The occurs check (run after definition solving, like Rust does) detects it.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -1317,28 +1319,18 @@ test "unify - fails on infinite type" {
     const b_tuple = types_mod.Tuple{ .elems = b_elems_range };
     try env.module_env.types.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
+    // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(a, b);
+    try std.testing.expectEqual(.ok, result);
 
-    switch (result) {
-        .ok => try std.testing.expect(false),
-        .problem => |problem_idx| {
-            const problem = env.problems.get(problem_idx);
-            try std.testing.expectEqual(.infinite_recursion, @as(Problem.Tag, problem));
-
-            // Verify that a snapshot was created for the recursion error
-            const snapshot_idx = problem.infinite_recursion.snapshot;
-            const snapshot_content = env.snapshots.getContent(snapshot_idx);
-            // The snapshot should be some valid content (not just err)
-            try std.testing.expect(snapshot_content != .err);
-
-            // Verify a formatted string was created
-            const formatted = env.snapshots.getFormattedString(snapshot_idx);
-            try std.testing.expect(formatted != null);
-        },
-    }
+    // But the occurs check (run after definition solving) detects the infinite type
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
+    try std.testing.expectEqual(.infinite, occurs_result);
 }
 
-test "unify - fails on anonymous recursion" {
+test "unify - anonymous recursion detected by occurs check" {
+    // Unification succeeds but creates an anonymous recursive type.
+    // The occurs check (run after definition solving, like Rust does) detects it.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -1355,25 +1347,13 @@ test "unify - fails on anonymous recursion" {
     const tag_union_b = try env.mkTagUnionClosed(&[_]Tag{tag_b});
     try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
 
+    // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(tag_var_a, tag_var_b);
+    try std.testing.expectEqual(.ok, result);
 
-    switch (result) {
-        .ok => try std.testing.expect(false),
-        .problem => |problem_idx| {
-            const problem = env.problems.get(problem_idx);
-            try std.testing.expectEqual(.anonymous_recursion, @as(Problem.Tag, problem));
-
-            // Verify that a snapshot was created for the recursion error
-            const snapshot_idx = problem.anonymous_recursion.snapshot;
-            const snapshot_content = env.snapshots.getContent(snapshot_idx);
-            // The snapshot should be some valid content (not just err)
-            try std.testing.expect(snapshot_content != .err);
-
-            // Verify a formatted string was created
-            const formatted = env.snapshots.getFormattedString(snapshot_idx);
-            try std.testing.expect(formatted != null);
-        },
-    }
+    // But the occurs check (run after definition solving) detects the anonymous recursion
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, tag_var_a);
+    try std.testing.expectEqual(.recursive_anonymous, occurs_result);
 }
 
 test "unify - succeeds on nominal, tag union recursion" {
@@ -1884,7 +1864,7 @@ test "type_writer - recursion_var displays structure" {
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const result = try writer.writeGet(rec_var);
+    const result = try writer.writeGet(rec_var, .wrap);
 
     // Should display as "{}" (the structure it points to)
     try std.testing.expectEqualStrings("{}", result);
@@ -1919,7 +1899,7 @@ test "type_writer - recursion_var with cycle displays correctly" {
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const result = try writer.writeGet(rec_var);
+    const result = try writer.writeGet(rec_var, .wrap);
 
     // Should display as "List(...)" - the cycle is detected and shown as "..."
     try std.testing.expectEqualStrings("List(...)", result);
@@ -1956,7 +1936,7 @@ test "type_writer - nested recursion_var displays correctly" {
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const result = try writer.writeGet(outer_rec_var);
+    const result = try writer.writeGet(outer_rec_var, .wrap);
 
     // Should display as "List({})" - following through the RecursionVars
     try std.testing.expectEqualStrings("List({})", result);
@@ -2031,7 +2011,7 @@ test "recursion_var - integration: deep recursion with RecursionVar prevents inf
     var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
     defer writer.deinit();
 
-    const display = try writer.writeGet(var1);
+    const display = try writer.writeGet(var1, .wrap);
 
     // Should display "..." indicating cycle detection
     try std.testing.expect(std.mem.indexOf(u8, display, "...") != null);
