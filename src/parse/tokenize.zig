@@ -162,6 +162,7 @@ pub const Token = struct {
         KwWhere,
         KwWhile,
         KwWith,
+        KwBreak,
 
         MalformedUnknownToken,
 
@@ -199,6 +200,7 @@ pub const Token = struct {
                 .KwWhere,
                 .KwWhile,
                 .KwWith,
+                .KwBreak,
                 => true,
                 else => false,
             };
@@ -303,6 +305,7 @@ pub const Token = struct {
                 .KwWhere,
                 .KwWhile,
                 .KwWith,
+                .KwBreak,
                 => false,
 
                 .MalformedDotUnicodeIdent,
@@ -398,6 +401,7 @@ pub const Token = struct {
         .{ "where", .KwWhere },
         .{ "while", .KwWhile },
         .{ "with", .KwWith },
+        .{ "break", .KwBreak },
     });
 
     pub const valid_number_suffixes = std.StaticStringMap(void).initComptime(.{
@@ -2304,6 +2308,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwWith => {
                 try buf2.appendSlice("with");
+            },
+            .KwBreak => {
+                try buf2.appendSlice("break");
             },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)

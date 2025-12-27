@@ -306,9 +306,21 @@ Builtin :: [].{
 			Ok(a) => Ok(transform(a))
 		}
 
+		map_ok! : Try(a, err), (a => b) => Try(b, err)
+		map_ok! = |try, transform!| match try {
+			Err(err) => Err(err)
+			Ok(a) => Ok(transform!(a))
+		}
+
 		map_err : Try(ok, a), (a -> b) -> Try(ok, b)
 		map_err = |try, transform| match try {
 			Err(a) => Err(transform(a))
+			Ok(ok) => Ok(ok)
+		}
+
+		map_err! : Try(ok, a), (a => b) => Try(ok, b)
+		map_err! = |try, transform!| match try {
+			Err(a) => Err(transform!(a))
 			Ok(ok) => Ok(ok)
 		}
 

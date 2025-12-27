@@ -68,6 +68,11 @@ pub const Problem = union(enum) {
     pub const Tag = std.meta.Tag(@This());
 };
 
+/// Error for when a break statement appears outside of a loop
+pub const BreakOutsideLoop = struct {
+    region: base.Region,
+};
+
 /// Error for when a platform expects an alias to be defined, but it's not there
 pub const PlatformAliasNotFound = struct {
     expected_alias_ident: Ident.Idx,
@@ -1368,9 +1373,7 @@ pub const ReportBuilder = struct {
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
-        const actual_tag_formatted = try self.snapshots.formatTagString(self.gpa, actual_tag, self.module_env.getIdentStore());
-        defer self.gpa.free(actual_tag_formatted);
-        const actual_tag_str = try report.addOwnedString(actual_tag_formatted);
+        const actual_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(actual_tag));
 
         // Create expected tag str
         const expected_content = self.snapshots.getContent(types.expected_snapshot);
@@ -1404,9 +1407,7 @@ pub const ReportBuilder = struct {
         // Show the expected tags
         if (expected_num_tags_str == 1) {
             const expected_tag = self.snapshots.tags.get(expected_content.structure.tag_union.tags.start);
-            const expected_tag_formatted = try self.snapshots.formatTagString(self.gpa, expected_tag, self.module_env.getIdentStore());
-            defer self.gpa.free(expected_tag_formatted);
-            const expected_tag_str = try report.addOwnedString(expected_tag_formatted);
+            const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
             try report.document.addText("But the nominal type needs it to be:");
             try report.document.addLineBreak();
@@ -1427,9 +1428,7 @@ pub const ReportBuilder = struct {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
                 if (actual_tag.name == cur_expected_tag.name) {
-                    const cur_expected_tag_formatted = try self.snapshots.formatTagString(self.gpa, cur_expected_tag, self.module_env.getIdentStore());
-                    defer self.gpa.free(cur_expected_tag_formatted);
-                    const cur_expected_tag_str = try report.addOwnedString(cur_expected_tag_formatted);
+                    const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
 
                     try report.document.addLineBreak();
                     try report.document.addLineBreak();
