@@ -958,6 +958,10 @@ fn getUnionFromType(
 /// Build a Union structure from a TagUnion type.
 /// Includes all constructors so patterns can be matched.
 /// Inhabitedness checking is done separately via isSketchedPatternInhabited.
+///
+/// IMPORTANT: This function follows extension chains to gather ALL tags.
+/// Tag unions from unification may have tags split across the main union
+/// and its extension chain (e.g., [Normal, ..ext] where ext = [HasEmpty, ..]).
 fn buildUnionFromTagUnion(
     allocator: std.mem.Allocator,
     type_store: *TypeStore,
@@ -965,21 +969,91 @@ fn buildUnionFromTagUnion(
     tag_union: types.TagUnion,
 ) error{OutOfMemory}!UnionResult {
     _ = builtin_idents; // Inhabitedness checked elsewhere
-    const tags_slice = type_store.getTagsSlice(tag_union.tags);
-    const tag_names = tags_slice.items(.name);
-    const tag_args = tags_slice.items(.args);
 
-    // Check if it's an open union (has extension variable)
-    const is_open = isOpenExtension(type_store, tag_union.ext);
+    // Gather all tags by following the extension chain
+    var all_tags: std.ArrayList(GatheredTag) = .empty;
+    defer all_tags.deinit(allocator);
+
+    var is_open = false;
+    var has_flex = false;
+
+    // Start with the initial tag union
+    var current_tags = tag_union.tags;
+    var current_ext = tag_union.ext;
+
+    // Follow extension chain to collect all tags
+    var iteration_guard: u32 = 0;
+    const max_iterations: u32 = 1000; // Prevent infinite loops
+    while (iteration_guard < max_iterations) : (iteration_guard += 1) {
+        // Add tags from current level
+        const tags_slice = type_store.getTagsSlice(current_tags);
+        const tag_names = tags_slice.items(.name);
+        const tag_args = tags_slice.items(.args);
+
+        for (tag_names, tag_args) |name, args_range| {
+            try all_tags.append(allocator, .{ .name = name, .args = args_range });
+        }
+
+        // Check what the extension is
+        const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_content = ext_resolved.desc.content;
+
+        switch (ext_content) {
+            .flex => {
+                // Flex extension = open union, stop here
+                is_open = true;
+                has_flex = true;
+                break;
+            },
+            .rigid => {
+                // Rigid extension = open union (for exhaustiveness), stop here
+                is_open = true;
+                has_flex = false;
+                break;
+            },
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .tag_union => |ext_tu| {
+                        // Extension is another tag union - continue following
+                        current_tags = ext_tu.tags;
+                        current_ext = ext_tu.ext;
+                    },
+                    .empty_tag_union => {
+                        // Closed union - stop here
+                        is_open = false;
+                        has_flex = false;
+                        break;
+                    },
+                    else => {
+                        // Other structure types = closed for our purposes
+                        is_open = false;
+                        has_flex = false;
+                        break;
+                    },
+                }
+            },
+            .alias => |alias| {
+                // Follow alias to its backing var
+                current_ext = type_store.getAliasBackingVar(alias);
+                // Don't break - continue with the resolved alias
+            },
+            else => {
+                // Other content types = treat as closed
+                is_open = false;
+                has_flex = false;
+                break;
+            },
+        }
+    }
 
     // Allocate alternatives (add one extra for open unions)
-    const num_alts = tag_names.len + @as(usize, if (is_open) 1 else 0);
+    const num_alts = all_tags.items.len + @as(usize, if (is_open) 1 else 0);
     const alternatives = try allocator.alloc(CtorInfo, num_alts);
 
-    for (tag_names, tag_args, 0..) |name, args_range, i| {
-        const arg_vars = type_store.sliceVars(args_range);
+    for (all_tags.items, 0..) |tag, i| {
+        const arg_vars = type_store.sliceVars(tag.args);
         alternatives[i] = .{
-            .name = .{ .tag = name },
+            .name = .{ .tag = tag.name },
             .tag_id = @enumFromInt(i),
             .arity = arg_vars.len,
         };
@@ -987,20 +1061,12 @@ fn buildUnionFromTagUnion(
 
     // Add synthetic #Open constructor for open unions
     if (is_open) {
-        alternatives[tag_names.len] = .{
+        alternatives[all_tags.items.len] = .{
             .name = .{ .tag = Ident.Idx.NONE }, // Represents "#Open"
-            .tag_id = @enumFromInt(tag_names.len),
+            .tag_id = @enumFromInt(all_tags.items.len),
             .arity = 0,
         };
     }
-
-    // Track flex extension for optimization in redundancy checking.
-    // Note: Both flex and rigid extensions are "open" (isOpenExtension returns true
-    // for both), so both get the #Open constructor added above. The has_flex_extension
-    // flag is purely an optimization - flex extensions can skip some redundancy checks
-    // since wildcards are always useful. For rigid extensions, the #Open constructor
-    // in alternatives ensures correct behavior without the fast-path.
-    const has_flex = hasFlexExtension(type_store, tag_union.ext);
 
     return .{ .success = .{
         .alternatives = alternatives,
@@ -1008,6 +1074,12 @@ fn buildUnionFromTagUnion(
         .has_flex_extension = has_flex,
     } };
 }
+
+/// A tag gathered during extension chain traversal
+const GatheredTag = struct {
+    name: Ident.Idx,
+    args: types.Var.SafeList.Range,
+};
 
 /// Check if an extension variable is specifically a flex var (unconstrained).
 ///
@@ -1304,17 +1376,51 @@ fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
 /// Get the argument types for a constructor.
 /// For nominal types with type arguments (like Try(A, B)), we need to return
 /// the actual type arguments, not the backing type's unsubstituted type params.
+///
+/// IMPORTANT: This function follows extension chains to find the tag at the given index.
+/// Tag unions from unification may have tags split across the main union
+/// and its extension chain (e.g., [Normal, ..ext] where ext = [HasEmpty, ..]).
 fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const Var {
     const resolved = type_store.resolveVar(type_var);
     const content = resolved.desc.content;
 
     if (content.unwrapTagUnion()) |tag_union| {
-        const tags_slice = type_store.getTagsSlice(tag_union.tags);
-        const tag_args = tags_slice.items(.args);
+        // Follow extension chain to find the tag at the given index
+        var current_tags = tag_union.tags;
+        var current_ext = tag_union.ext;
+        var current_offset: usize = 0;
+        const target_idx = @intFromEnum(tag_id);
 
-        const idx = @intFromEnum(tag_id);
-        if (idx < tag_args.len) {
-            return type_store.sliceVars(tag_args[idx]);
+        var iteration_guard: u32 = 0;
+        const max_iterations: u32 = 1000;
+        while (iteration_guard < max_iterations) : (iteration_guard += 1) {
+            const tags_slice = type_store.getTagsSlice(current_tags);
+            const tag_args = tags_slice.items(.args);
+
+            // Check if the target index is in this level
+            if (target_idx < current_offset + tag_args.len) {
+                const local_idx = target_idx - current_offset;
+                return type_store.sliceVars(tag_args[local_idx]);
+            }
+
+            // Move to the extension
+            current_offset += tag_args.len;
+            const ext_resolved = type_store.resolveVar(current_ext);
+            const ext_content = ext_resolved.desc.content;
+
+            switch (ext_content) {
+                .structure => |flat_type| switch (flat_type) {
+                    .tag_union => |ext_tu| {
+                        current_tags = ext_tu.tags;
+                        current_ext = ext_tu.ext;
+                    },
+                    else => break,
+                },
+                .alias => |alias| {
+                    current_ext = type_store.getAliasBackingVar(alias);
+                },
+                else => break,
+            }
         }
     }
 

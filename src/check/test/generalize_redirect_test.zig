@@ -40,7 +40,7 @@ test "nested lambda with higher-rank variables does not panic during generalizat
         \\    get_next_token : List(U8), U64 -> TokenizerResult
         \\    get_next_token = |file, index| {
         \\        match List.get(file, index) {
-        \\            Ok('\n') => (Ok(NewlineToken), index, index + 1)
+        \\            Ok(_) => (Ok(NewlineToken), index, index + 1)
         \\            Err(_) => (Ok(EndOfFileToken), index, index)
         \\        }
         \\    }
