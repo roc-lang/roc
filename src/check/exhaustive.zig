@@ -17,6 +17,26 @@
 //! 2. **Type Resolution & Checking**: During type checking, patterns are resolved with
 //!    full type information, then checked using a pattern matrix algorithm.
 //!
+//! ## Two Implementation Paths
+//!
+//! This module provides two parallel implementations of the exhaustiveness algorithm:
+//!
+//! - **Reified path** (`checkExhaustive`, `isUseful`): For patterns already resolved
+//!   with type information.
+//! - **Sketched path** (`checkExhaustiveSketched`, `isUsefulSketched`): For patterns
+//!   that need on-demand type resolution.
+//!
+//! Both implement Maranget's algorithm but differ in pattern representation.
+//! See the "1-Phase On-Demand Reification" section for details.
+//!
+//! ## Known Limitations
+//!
+//! **Record field handling in reified patterns**: When using the reified pattern path,
+//! record patterns are matched positionally rather than by field name. If different
+//! patterns destructure different fields, the arity mismatch causes exhaustiveness
+//! checking to be skipped (returns `TypeError`). The sketched path handles this
+//! correctly by matching fields by name.
+//!
 //! ## References
 //!
 //! - [Warnings for Pattern Matching](http://moscova.inria.fr/~maranget/papers/warn/warn.pdf)
@@ -176,15 +196,14 @@ pub const Pattern = union(enum) {
                 // Wildcards without type info should only occur in intermediate patterns
                 // during matrix specialization, which should never be checked for inhabitedness.
                 // If we reach here, it indicates a bug in the exhaustiveness checker.
-                if (std.debug.runtime_safety) {
-                    std.debug.panic(
-                        "Pattern.isInhabited called on wildcard with null type. " ++
-                            "This indicates intermediate patterns are being checked for inhabitedness, " ++
-                            "which should not happen. Missing patterns should always have type info from ColumnTypes.",
-                        .{},
-                    );
-                }
-                // In release mode, assume inhabited to avoid cascading errors
+                // Log and assume inhabited to avoid cascading errors.
+                std.log.err(
+                    "Pattern.isInhabited called on wildcard with null type. " ++
+                        "This indicates intermediate patterns are being checked for inhabitedness, " ++
+                        "which should not happen. Missing patterns should always have type info from ColumnTypes.",
+                    .{},
+                );
+                std.debug.assert(false); // Fail in debug builds
                 return true;
             },
 
@@ -1623,7 +1642,12 @@ fn getCtorArgTypes(type_store: *TypeStore, type_var: Var, tag_id: TagId) []const
             const ext_var = ext_resolved.var_;
 
             // Cycle detection: have we seen this variable before?
-            const gop = seen_exts.getOrPut(ext_var) catch return &[_]Var{};
+            const gop = seen_exts.getOrPut(ext_var) catch {
+                // OOM during cycle detection - log and return empty to avoid crash.
+                // This is conservative: caller will see wrong arity but won't crash.
+                std.log.err("OOM in getCtorArgTypes cycle detection", .{});
+                return &[_]Var{};
+            };
             if (gop.found_existing) {
                 // Cycle detected - tag not found
                 break;
@@ -1689,50 +1713,64 @@ fn getRecordFieldTypes(type_store: *TypeStore, fields: types.RecordField.SafeMul
 /// Look up a record field's type by its name.
 /// Returns null if the field doesn't exist in the record type.
 /// Handles record, record_unbound, and follows aliases/recursion vars.
+/// Uses iterative approach to avoid stack overflow on deeply nested types.
 fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name: Ident.Idx) ?Var {
-    const resolved = type_store.resolveVar(record_type);
-    const content = resolved.desc.content;
+    var current_type = record_type;
 
-    switch (content) {
-        .structure => |flat_type| switch (flat_type) {
-            .record => |record| {
-                const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                const field_names = fields_slice.items(.name);
-                const field_vars = fields_slice.items(.var_);
+    // Limit iterations to prevent infinite loops on malformed types
+    var iteration_count: u32 = 0;
+    const max_iterations: u32 = 1000;
 
-                for (field_names, field_vars) |name, var_| {
-                    // Compare by idx (interned string index), not the full Ident.Idx
-                    if (name.idx == field_name.idx) {
-                        return var_;
+    while (iteration_count < max_iterations) : (iteration_count += 1) {
+        const resolved = type_store.resolveVar(current_type);
+        const content = resolved.desc.content;
+
+        switch (content) {
+            .structure => |flat_type| switch (flat_type) {
+                .record => |record| {
+                    const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+                    const field_names = fields_slice.items(.name);
+                    const field_vars = fields_slice.items(.var_);
+
+                    for (field_names, field_vars) |name, var_| {
+                        // Compare by idx (interned string index), not the full Ident.Idx
+                        if (name.idx == field_name.idx) {
+                            return var_;
+                        }
                     }
-                }
-                // Field not found in this record - check extension
-                return getRecordFieldTypeByName(type_store, record.ext, field_name);
-            },
-            .record_unbound => |fields| {
-                const fields_slice = type_store.getRecordFieldsSlice(fields);
-                const field_names = fields_slice.items(.name);
-                const field_vars = fields_slice.items(.var_);
+                    // Field not found in this record - check extension
+                    current_type = record.ext;
+                    continue;
+                },
+                .record_unbound => |fields| {
+                    const fields_slice = type_store.getRecordFieldsSlice(fields);
+                    const field_names = fields_slice.items(.name);
+                    const field_vars = fields_slice.items(.var_);
 
-                for (field_names, field_vars) |name, var_| {
-                    if (name.idx == field_name.idx) {
-                        return var_;
+                    for (field_names, field_vars) |name, var_| {
+                        if (name.idx == field_name.idx) {
+                            return var_;
+                        }
                     }
-                }
-                return null;
+                    return null;
+                },
+                .empty_record => return null,
+                else => return null,
             },
-            .empty_record => return null,
+            .alias => |alias| {
+                current_type = type_store.getAliasBackingVar(alias);
+                continue;
+            },
+            .recursion_var => |rec| {
+                current_type = rec.structure;
+                continue;
+            },
             else => return null,
-        },
-        .alias => |alias| {
-            const backing_var = type_store.getAliasBackingVar(alias);
-            return getRecordFieldTypeByName(type_store, backing_var, field_name);
-        },
-        .recursion_var => |rec| {
-            return getRecordFieldTypeByName(type_store, rec.structure, field_name);
-        },
-        else => return null,
+        }
     }
+
+    // Hit iteration limit - return null to be safe
+    return null;
 }
 
 /// Get the element type from a List type.
@@ -1815,8 +1853,12 @@ pub const ColumnTypes = struct {
     ///
     /// Returns error.TypeError if the payload types don't match the expected arity.
     /// This can happen for records where the pattern destructures fewer fields
-    /// than the actual record type has - a known limitation of the current algorithm
-    /// that treats records positionally instead of by field name.
+    /// than the actual record type has. This is a known limitation of the reified
+    /// pattern algorithm that treats record fields positionally instead of by name.
+    ///
+    /// When this happens, exhaustiveness checking is skipped for the match expression.
+    /// The sketched pattern path (`specializeByRecordPattern`) handles records correctly
+    /// by matching fields by name. See module-level docs for more details.
     pub fn specializeByConstructor(
         self: ColumnTypes,
         allocator: std.mem.Allocator,
@@ -2672,11 +2714,33 @@ pub fn checkRedundancy(
     };
 }
 
-// 1-Phase On-Demand Reification
+// 1-Phase On-Demand Reification (Sketched Pattern Path)
 //
-// These functions work with UnresolvedPattern directly, reifying on-demand
-// during usefulness checking. This allows type errors to propagate immediately
-// rather than being silently skipped.
+// This section contains parallel implementations of the exhaustiveness algorithms
+// that work with UnresolvedPattern directly, reifying on-demand during checking.
+//
+// ## Why Two Paths Exist
+//
+// The module provides two parallel implementations:
+//
+// 1. **Reified Path** (`checkExhaustive`, `isUseful`, etc.): Works with `Pattern` types
+//    where type information has already been resolved. Simpler but has limitations with
+//    records (see Known Limitations in module docs).
+//
+// 2. **Sketched Path** (`checkExhaustiveSketched`, `isUsefulSketched`, etc.): Works with
+//    `UnresolvedPattern` and resolves types on-demand. Handles records correctly by
+//    matching fields by name rather than position.
+//
+// The sketched path is preferred when type information is available incrementally.
+// Both paths implement the same core algorithm (Maranget's), just with different
+// pattern representations.
+//
+// ## Future Consolidation
+//
+// These paths could potentially be consolidated using Zig's comptime features to
+// generate both from a single generic implementation, parameterized over the pattern
+// type. This would reduce code duplication but adds complexity. For now, both are
+// maintained separately with clear documentation of their relationship.
 
 /// A matrix of sketched (unresolved) patterns for exhaustiveness checking.
 /// Patterns are reified on-demand when type information is needed.
