@@ -1560,9 +1560,8 @@ fn getCtorArgTypes(allocator: std.mem.Allocator, type_store: *TypeStore, type_va
 
             // Cycle detection: have we seen this variable before?
             const gop = seen_exts.getOrPut(ext_var) catch {
-                // OOM during cycle detection - log and return empty to avoid crash.
+                // OOM during cycle detection - return empty to avoid crash.
                 // This is conservative: caller will see wrong arity but won't crash.
-                std.log.err("OOM in getCtorArgTypes cycle detection", .{});
                 return &[_]Var{};
             };
             if (gop.found_existing) {
