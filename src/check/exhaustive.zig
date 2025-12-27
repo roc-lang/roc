@@ -1112,6 +1112,28 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
 //
 // Based on the algorithm from the Rust implementation in crates/compiler/types/src/subs.rs.
 
+/// Work item for the work-list based inhabitedness algorithm.
+/// This enables purely iterative checking without recursion, preventing
+/// stack overflow on deeply nested types.
+const WorkItem = union(enum) {
+    /// Check if this type is inhabited, push result onto results stack
+    check_type: Var,
+
+    /// Pop N results, AND them together, push combined result.
+    /// All must be true for result to be true.
+    /// count=0 pushes true (empty AND is vacuously true).
+    and_combine: u32,
+
+    /// Pop N results, OR them together, push combined result.
+    /// Any must be true for result to be true.
+    /// count=0 pushes false (empty OR has no witnesses).
+    or_combine: u32,
+
+    /// Pop result; if false and extension is open (flex/rigid), push true; else push original.
+    /// The Var is the extension variable to check.
+    check_open_extension: Var,
+};
+
 /// Check if a type is inhabited (has at least one possible value).
 ///
 /// A type is uninhabited if:
@@ -1126,170 +1148,205 @@ fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
 /// - It's a builtin primitive type (Builtin.Num.*, Builtin.Str, etc.)
 /// - It's a function type
 /// - It has at least one constructor with all inhabited arguments
+///
+/// This implementation uses a work-list algorithm to avoid stack overflow on
+/// deeply nested types. See docs/exhaustiveness/004_worklist_inhabitedness_algorithm.md
 fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
     // Use a seen set to detect cycles in recursive types
     var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
     defer seen.deinit(type_store.gpa);
-    return isTypeInhabitedWithSeen(type_store, builtin_idents, type_var, &seen);
-}
 
-/// Internal helper that tracks seen variables to detect cycles.
-fn isTypeInhabitedWithSeen(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    var stack: std.ArrayList(Var) = .empty;
-    defer stack.deinit(type_store.gpa);
-    try stack.append(type_store.gpa, type_var);
+    const gpa = type_store.gpa;
 
-    while (stack.items.len > 0) {
-        const var_to_check = stack.pop().?;
-        const resolved = type_store.resolveVar(var_to_check);
-        const resolved_var = resolved.var_;
-        const content = resolved.desc.content;
+    // Work-list of items to process (LIFO order)
+    var work_list: std.ArrayList(WorkItem) = .empty;
+    defer work_list.deinit(gpa);
 
-        // Cycle detection: if we've seen this resolved variable before, skip it.
-        // Cycles in recursive types are considered inhabited (if we got here,
-        // there must be a non-recursive path that's inhabited).
-        const gop = try seen.getOrPut(type_store.gpa, resolved_var);
-        if (gop.found_existing) continue;
+    // Stack of boolean results from completed checks
+    var results: std.ArrayList(bool) = .empty;
+    defer results.deinit(gpa);
 
-        switch (content) {
-            // Flex and rigid variables are unconstrained - assume inhabited
-            .flex, .rigid => {},
+    // Start with the initial type
+    try work_list.append(gpa, .{ .check_type = type_var });
 
-            // Recursion vars are always inhabited because:
-            // - If inferred from a value, a value of that type exists
-            // - If from an annotation, illegal recursive types are caught in canonicalization
-            .recursion_var => |_| {},
+    while (work_list.pop()) |item| {
+        switch (item) {
+            .check_type => |var_to_check| {
+                const resolved = type_store.resolveVar(var_to_check);
+                const resolved_var = resolved.var_;
+                const content = resolved.desc.content;
 
-            // Error types are treated as inhabited (we don't want to cascade errors)
-            .err => {},
+                // Cycle detection: if we've seen this resolved variable before,
+                // treat it as inhabited. Cycles in recursive types are considered
+                // inhabited (if we got here, there must be a non-recursive path).
+                const gop = try seen.getOrPut(gpa, resolved_var);
+                if (gop.found_existing) {
+                    try results.append(gpa, true);
+                    continue;
+                }
 
-            // Aliases - check the backing type
-            .alias => |alias| {
-                const backing_var = type_store.getAliasBackingVar(alias);
-                try stack.append(type_store.gpa, backing_var);
+                switch (content) {
+                    // Flex and rigid variables are unconstrained - assume inhabited
+                    .flex, .rigid => try results.append(gpa, true),
+
+                    // Recursion vars are always inhabited because:
+                    // - If inferred from a value, a value of that type exists
+                    // - If from an annotation, illegal recursive types are caught in canonicalization
+                    .recursion_var => |_| try results.append(gpa, true),
+
+                    // Error types are treated as inhabited (we don't want to cascade errors)
+                    .err => try results.append(gpa, true),
+
+                    // Aliases - check the backing type
+                    .alias => |alias| {
+                        const backing_var = type_store.getAliasBackingVar(alias);
+                        try work_list.append(gpa, .{ .check_type = backing_var });
+                    },
+
+                    .structure => |flat_type| switch (flat_type) {
+                        // Empty tag union is uninhabited
+                        .empty_tag_union => try results.append(gpa, false),
+
+                        // Empty record is inhabited (the unit type)
+                        .empty_record => try results.append(gpa, true),
+
+                        // Tag unions: need OR semantics across tags, AND semantics within each tag's args
+                        .tag_union => |tag_union| {
+                            try pushTagUnionWork(gpa, type_store, &work_list, tag_union);
+                        },
+
+                        // Nominal types - check for builtin primitives which have special backing.
+                        .nominal_type => |nominal| {
+                            // Check if this is a builtin number type (Builtin.Num.*)
+                            // These have [] as backing type but are inhabited primitives.
+                            if (builtin_idents.isBuiltinNumericType(nominal)) {
+                                try results.append(gpa, true);
+                            } else {
+                                // For other nominal types, check the backing var
+                                const backing_var = type_store.getNominalBackingVar(nominal);
+                                try work_list.append(gpa, .{ .check_type = backing_var });
+                            }
+                        },
+
+                        // Records - all fields must be inhabited (AND semantics)
+                        .record => |record| {
+                            const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+                            const field_vars = fields_slice.items(.var_);
+                            try pushAndWork(gpa, &work_list, field_vars);
+                        },
+
+                        .record_unbound => |fields| {
+                            const fields_slice = type_store.getRecordFieldsSlice(fields);
+                            const field_vars = fields_slice.items(.var_);
+                            try pushAndWork(gpa, &work_list, field_vars);
+                        },
+
+                        // Tuples - all elements must be inhabited (AND semantics)
+                        .tuple => |tuple| {
+                            const elem_vars = type_store.sliceVars(tuple.elems);
+                            try pushAndWork(gpa, &work_list, elem_vars);
+                        },
+
+                        // Functions are always inhabited (they're values)
+                        .fn_pure, .fn_effectful, .fn_unbound => try results.append(gpa, true),
+                    },
+                }
             },
 
-            .structure => |flat_type| switch (flat_type) {
-                // Empty tag union is uninhabited
-                .empty_tag_union => return false,
-
-                // Empty record is inhabited (the unit type)
-                .empty_record => {},
-
-                // Tag unions: uninhabited only if ALL variants have at least one uninhabited arg
-                .tag_union => |tag_union| {
-                    // Check if at least one tag variant is inhabited (OR semantics)
-                    // A tag is inhabited if all its arguments are inhabited
-                    // We follow extension chains to gather all tags.
-                    const any_tag_inhabited = try isTagUnionInhabited(
-                        type_store,
-                        builtin_idents,
-                        tag_union,
-                        seen,
-                    );
-
-                    if (!any_tag_inhabited) {
-                        return false;
+            .and_combine => |count| {
+                // Pop N results, AND them together
+                // Empty AND is vacuously true
+                var combined: bool = true;
+                for (0..count) |_| {
+                    if (!(results.pop() orelse true)) {
+                        combined = false;
                     }
-                },
+                }
+                try results.append(gpa, combined);
+            },
 
-                // Nominal types - check for builtin primitives which have special backing.
-                .nominal_type => |nominal| {
-                    // Check if this is a builtin number type (Builtin.Num.*)
-                    // These have [] as backing type but are inhabited primitives.
-                    // This mirrors Rust's handling in is_inhabited() which special-cases
-                    // types from ModuleId::NUM.
-                    if (builtin_idents.isBuiltinNumericType(nominal)) {
-                        // Builtin number types (I64, U8, F32, Dec, etc.) are always inhabited
-                        continue;
+            .or_combine => |count| {
+                // Pop N results, OR them together
+                // Empty OR has no witnesses (false)
+                var combined: bool = false;
+                for (0..count) |_| {
+                    if (results.pop() orelse false) {
+                        combined = true;
                     }
-                    // For other nominal types, check the backing var
-                    const backing_var = type_store.getNominalBackingVar(nominal);
-                    try stack.append(type_store.gpa, backing_var);
-                },
+                }
+                try results.append(gpa, combined);
+            },
 
-                // Records - all fields must be inhabited (AND semantics)
-                // Push all fields to the stack - if any is uninhabited, we'll return false
-                .record => |record| {
-                    const fields_slice = type_store.getRecordFieldsSlice(record.fields);
-                    const field_vars = fields_slice.items(.var_);
-                    for (field_vars) |field_var| {
-                        try stack.append(type_store.gpa, field_var);
-                    }
-                },
-
-                .record_unbound => |fields| {
-                    const fields_slice = type_store.getRecordFieldsSlice(fields);
-                    const field_vars = fields_slice.items(.var_);
-                    for (field_vars) |field_var| {
-                        try stack.append(type_store.gpa, field_var);
-                    }
-                },
-
-                // Tuples - all elements must be inhabited (AND semantics)
-                .tuple => |tuple| {
-                    const elem_vars = type_store.sliceVars(tuple.elems);
-                    for (elem_vars) |elem_var| {
-                        try stack.append(type_store.gpa, elem_var);
-                    }
-                },
-
-                // Functions are always inhabited (they're values)
-                .fn_pure, .fn_effectful, .fn_unbound => {},
+            .check_open_extension => |ext_var| {
+                // Pop the current result; if false and extension is open, the union is still inhabited
+                const current = results.pop() orelse false;
+                if (current) {
+                    // Already inhabited, no need to check extension
+                    try results.append(gpa, true);
+                } else {
+                    // Check if extension is open (flex/rigid)
+                    const is_open = isExtensionOpen(type_store, ext_var);
+                    try results.append(gpa, is_open);
+                }
             },
         }
     }
 
-    return true;
+    // Final result should be on top of the results stack
+    return if (results.items.len > 0) results.items[0] else true;
 }
 
-/// Check if a tag union is inhabited by following extension chains and checking
-/// if at least one tag has all inhabited arguments.
-fn isTagUnionInhabited(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    initial_tag_union: types.TagUnion,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    // Track seen extension variables to detect cycles in extension chains
+/// Push work items for AND semantics: all types must be inhabited.
+/// Pushes AndCombine(N) followed by CheckType for each var.
+fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars: []const Var) !void {
+    const count: u32 = @intCast(vars.len);
+    if (count == 0) {
+        // Empty AND is true - push result directly
+        try work_list.append(gpa, .{ .and_combine = 0 });
+    } else {
+        // Push combine instruction first (will be processed last due to LIFO)
+        try work_list.append(gpa, .{ .and_combine = count });
+        // Push all type checks (will be processed first)
+        for (vars) |v| {
+            try work_list.append(gpa, .{ .check_type = v });
+        }
+    }
+}
+
+/// Push work items for a tag union: OR semantics across tags, AND within each tag's args.
+/// Also handles extension chain following.
+fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *std.ArrayList(WorkItem), initial_tag_union: types.TagUnion) !void {
+    // First, collect all tags by following the extension chain
+    var all_tag_args: std.ArrayList(Var.SafeList.Range) = .empty;
+    defer all_tag_args.deinit(gpa);
+
+    var final_ext = initial_tag_union.ext;
+
+    // Track seen extension variables to detect cycles
     var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen_exts.deinit(type_store.gpa);
+    defer seen_exts.deinit(gpa);
 
     var current_tags = initial_tag_union.tags;
     var current_ext = initial_tag_union.ext;
 
-    // Follow extension chain to check all tags
+    // Follow extension chain to collect all tags
     while (true) {
         const tags_slice = type_store.getTagsSlice(current_tags);
         const tag_args = tags_slice.items(.args);
 
-        // Check each tag at this level
-        tag_loop: for (tag_args) |args_range| {
-            const arg_vars = type_store.sliceVars(args_range);
-
-            // Check all arguments of this tag - all must be inhabited
-            for (arg_vars) |arg_var| {
-                if (!try isTypeInhabitedWithSeen(type_store, builtin_idents, arg_var, seen)) {
-                    continue :tag_loop; // Uninhabited arg, try next tag
-                }
-            }
-            // All args of this tag are inhabited - the union is inhabited!
-            return true;
+        // Add all tags at this level
+        for (tag_args) |args_range| {
+            try all_tag_args.append(gpa, args_range);
         }
 
-        // No inhabited tag at this level - check the extension
+        // Check the extension
         const ext_resolved = type_store.resolveVar(current_ext);
         const ext_var = ext_resolved.var_;
+        final_ext = current_ext;
 
         // Cycle detection for extension chain
-        const gop = try seen_exts.getOrPut(type_store.gpa, ext_var);
+        const gop = try seen_exts.getOrPut(gpa, ext_var);
         if (gop.found_existing) {
-            // Cycle detected - no more tags to check
             break;
         }
 
@@ -1297,8 +1354,8 @@ fn isTagUnionInhabited(
 
         switch (ext_content) {
             .flex, .rigid => {
-                // Open extension - could have more tags, assume inhabited
-                return true;
+                // Open extension - we'll handle this in check_open_extension
+                break;
             },
             .structure => |flat_type| switch (flat_type) {
                 .tag_union => |ext_tu| {
@@ -1313,14 +1370,71 @@ fn isTagUnionInhabited(
                 else => break,
             },
             .alias => |alias| {
-                // Follow alias - treat as continuing the chain
+                // Follow alias
                 current_ext = type_store.getAliasBackingVar(alias);
             },
             else => break,
         }
     }
 
-    // No inhabited tag found
+    const num_tags: u32 = @intCast(all_tag_args.items.len);
+
+    if (num_tags == 0) {
+        // No tags - result depends only on whether extension is open
+        // Push false, then check_open_extension will override if extension is open
+        try work_list.append(gpa, .{ .check_open_extension = final_ext });
+        try work_list.append(gpa, .{ .or_combine = 0 }); // Empty OR = false
+    } else {
+        // Push items in reverse order (LIFO):
+        // 1. check_open_extension (processed last)
+        // 2. or_combine (processed after all tags)
+        // 3. For each tag: and_combine + check_type for each arg (processed first)
+        try work_list.append(gpa, .{ .check_open_extension = final_ext });
+        try work_list.append(gpa, .{ .or_combine = num_tags });
+
+        // Push work for each tag (AND semantics for args within each tag)
+        for (all_tag_args.items) |args_range| {
+            const arg_vars = type_store.sliceVars(args_range);
+            const arg_count: u32 = @intCast(arg_vars.len);
+
+            // Each tag contributes one result (AND of its args)
+            try work_list.append(gpa, .{ .and_combine = arg_count });
+            for (arg_vars) |arg_var| {
+                try work_list.append(gpa, .{ .check_type = arg_var });
+            }
+        }
+    }
+}
+
+/// Check if an extension variable represents an open extension (flex or rigid).
+fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) bool {
+    // Follow the extension chain to find the actual extension type
+    var current_ext = ext_var;
+    var seen_count: u32 = 0;
+    const max_chain_length: u32 = 1000; // Prevent infinite loops
+
+    while (seen_count < max_chain_length) {
+        seen_count += 1;
+        const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_content = ext_resolved.desc.content;
+
+        switch (ext_content) {
+            .flex, .rigid => return true,
+            .structure => |flat_type| switch (flat_type) {
+                .tag_union => |ext_tu| {
+                    current_ext = ext_tu.ext;
+                },
+                .empty_tag_union => return false,
+                else => return false,
+            },
+            .alias => |alias| {
+                current_ext = type_store.getAliasBackingVar(alias);
+            },
+            else => return false,
+        }
+    }
+
+    // If we hit the limit, assume closed to be safe
     return false;
 }
 
