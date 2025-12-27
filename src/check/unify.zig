@@ -194,13 +194,6 @@ pub fn unifyWithConf(
     // First reset the scratch store
     unify_scratch.reset();
 
-    // Snapshot types BEFORE unification to preserve accurate type info for error messages.
-    // This prevents type corruption during nested payload unification, where type variables
-    // get merged before we can capture their original state for error reporting.
-    // Note: Formatting is deferred to the error path to avoid runtime bugs in code generation.
-    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
@@ -210,11 +203,8 @@ pub fn unifyWithConf(
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
-                    // Format the types AFTER unification fails.
-                    // We snapshot before unification to capture accurate types,
-                    // but format after to avoid runtime bugs in code generation.
-                    try snapshots.formatSnapshot(type_writer, expected_snapshot, a);
-                    try snapshots.formatSnapshot(type_writer, actual_snapshot, b);
+                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                    const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
 
                     break :blk .{ .type_mismatch = .{
                         .types = .{
