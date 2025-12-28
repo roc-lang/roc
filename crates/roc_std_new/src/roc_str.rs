@@ -2,9 +2,8 @@
 
 #[cfg(feature = "serde")]
 use serde::{
-    de::{Deserializer, Visitor},
     ser::Serializer,
-    Deserialize, Serialize,
+    Serialize,
 };
 
 use core::{
@@ -23,22 +22,24 @@ use std::{ops::Range, ptr::NonNull};
 
 use crate::{roc_ops::RocOps, RocRefcounted, Storage, ROC_REFCOUNT_CONSTANT};
 
-/// A Roc string.
+/// A Roc string - matches the Zig builtin layout exactly (24 bytes).
+///
+/// This struct does NOT store a pointer to RocOps, so:
+/// - Functions that allocate require `&RocOps` as a parameter
+/// - Functions that deallocate require `&RocOps` as a parameter
+/// - Drop does NOT automatically deallocate - you must call `decref` explicitly
+///
+/// This design matches the Zig builtins and ensures ABI compatibility.
 ///
 /// This struct stores strings in one of two ways:
 /// - Small strings (up to SmallString::CAPACITY bytes) are stored inline
 /// - Larger strings are heap-allocated via the RocOps allocator
-///
-/// The `roc_ops` field is stored outside the union and is:
-/// - null for small strings (no allocation needed)
-/// - a valid pointer to RocOps for heap-allocated strings
 #[repr(C)]
 pub struct RocStr {
     inner: RocStrInner,
-    roc_ops: *const RocOps,
 }
 
-fn with_stack_bytes<F, E, T>(length: usize, roc_ops: *const RocOps, closure: F) -> T
+fn with_stack_bytes<F, E, T>(length: usize, roc_ops: &RocOps, closure: F) -> T
 where
     F: FnOnce(*mut E) -> T,
 {
@@ -55,11 +56,11 @@ where
         let align = core::mem::align_of::<E>();
         // The string is too long to stack-allocate, so
         // do a heap allocation and then free it afterwards.
-        let ptr = unsafe { (*roc_ops).alloc(align, length) } as *mut E;
+        let ptr = unsafe { roc_ops.alloc(align, length) } as *mut E;
         let answer = closure(ptr);
 
         // Free the heap allocation.
-        unsafe { (*roc_ops).dealloc(ptr.cast(), align) };
+        unsafe { roc_ops.dealloc(ptr.cast(), align) };
 
         answer
     }
@@ -74,7 +75,6 @@ impl RocStr {
             inner: RocStrInner {
                 small_string: SmallString::empty(),
             },
-            roc_ops: ptr::null(),
         }
     }
 
@@ -87,7 +87,6 @@ impl RocStr {
         if let Some(small_string) = unsafe { SmallString::try_from_utf8_bytes(slice) } {
             Self {
                 inner: RocStrInner { small_string },
-                roc_ops: ptr::null(),
             }
         } else {
             let big_string = BigString::from_slice(slice, roc_ops);
@@ -95,7 +94,6 @@ impl RocStr {
                 inner: RocStrInner {
                     heap_allocated: ManuallyDrop::new(big_string),
                 },
-                roc_ops: roc_ops as *const RocOps,
             }
         }
     }
@@ -112,12 +110,10 @@ impl RocStr {
     /// - `bytes` must be preceded by a correctly-aligned refcount (usize)
     /// - `bytes` must represent valid UTF-8
     /// - `cap` >= `len`
-    /// - `roc_ops` must be valid for the lifetime of the string (if heap allocated)
     pub unsafe fn from_raw_parts(
         bytes: *mut u8,
         len: usize,
         cap: usize,
-        roc_ops: &RocOps,
     ) -> Self {
         if len <= SmallString::CAPACITY {
             unsafe {
@@ -125,7 +121,6 @@ impl RocStr {
                 let small_string = SmallString::try_from_utf8_bytes(slice).unwrap_unchecked();
                 Self {
                     inner: RocStrInner { small_string },
-                    roc_ops: ptr::null(),
                 }
             }
         } else {
@@ -137,7 +132,6 @@ impl RocStr {
                         capacity_or_alloc_ptr: cap,
                     }),
                 },
-                roc_ops: roc_ops as *const RocOps,
             }
         }
     }
@@ -230,7 +224,6 @@ impl RocStr {
                 inner: RocStrInner {
                     small_string: SmallString::empty(),
                 },
-                roc_ops: ptr::null(),
             }
         } else {
             // The requested capacity won't fit in a small string; we need to go big.
@@ -238,7 +231,6 @@ impl RocStr {
                 inner: RocStrInner {
                     heap_allocated: ManuallyDrop::new(BigString::with_capacity(bytes, roc_ops)),
                 },
-                roc_ops: roc_ops as *const RocOps,
             }
         }
     }
@@ -246,40 +238,7 @@ impl RocStr {
     /// Increase a RocStr's capacity by at least the requested number of bytes (possibly more).
     ///
     /// May return a new RocStr, if the provided one was not unique.
-    pub fn reserve(&mut self, bytes: usize) {
-        if self.is_small_str() {
-            let small_str = unsafe { self.inner.small_string };
-            let target_cap = small_str.len() + bytes;
-
-            if target_cap > SmallString::CAPACITY {
-                // We need a roc_ops to allocate. Since this was previously a small string,
-                // we need the caller to have set roc_ops. But for small strings, roc_ops is null.
-                // This is a design limitation - reserve on a small string that needs to grow
-                // requires an roc_ops parameter. For now, we'll panic.
-                panic!("Cannot reserve on a small string that needs to grow to heap without roc_ops. Use reserve_with_ops instead.");
-            }
-        } else {
-            let mut big_string = unsafe { ManuallyDrop::take(&mut self.inner.heap_allocated) };
-
-            big_string.reserve(bytes, self.roc_ops);
-
-            let mut updated = RocStr {
-                inner: RocStrInner {
-                    heap_allocated: ManuallyDrop::new(big_string),
-                },
-                roc_ops: self.roc_ops,
-            };
-
-            mem::swap(self, &mut updated);
-            mem::forget(updated);
-        }
-    }
-
-    /// Increase a RocStr's capacity by at least the requested number of bytes (possibly more).
-    ///
-    /// This version takes an explicit roc_ops parameter for cases where the string
-    /// might need to transition from small to heap-allocated.
-    pub fn reserve_with_ops(&mut self, bytes: usize, roc_ops: &RocOps) {
+    pub fn reserve(&mut self, bytes: usize, roc_ops: &RocOps) {
         if self.is_small_str() {
             let small_str = unsafe { self.inner.small_string };
             let target_cap = small_str.len() + bytes;
@@ -303,7 +262,6 @@ impl RocStr {
                     inner: RocStrInner {
                         heap_allocated: ManuallyDrop::new(big_string),
                     },
-                    roc_ops: roc_ops as *const RocOps,
                 };
 
                 mem::swap(self, &mut updated);
@@ -312,13 +270,12 @@ impl RocStr {
         } else {
             let mut big_string = unsafe { ManuallyDrop::take(&mut self.inner.heap_allocated) };
 
-            big_string.reserve(bytes, self.roc_ops);
+            big_string.reserve(bytes, roc_ops);
 
             let mut updated = RocStr {
                 inner: RocStrInner {
                     heap_allocated: ManuallyDrop::new(big_string),
                 },
-                roc_ops: self.roc_ops,
             };
 
             mem::swap(self, &mut updated);
@@ -345,7 +302,6 @@ impl RocStr {
             // NOTE decrements `self`
             Some(RocStr {
                 inner: RocStrInner { small_string },
-                roc_ops: ptr::null(),
             })
         } else {
             // increment the refcount
@@ -362,7 +318,6 @@ impl RocStr {
 
             Some(RocStr {
                 inner: RocStrInner { heap_allocated },
-                roc_ops: self.roc_ops,
             })
         }
     }
@@ -395,12 +350,13 @@ impl RocStr {
     /// which a nul-terminated string must not.
     pub fn utf8_nul_terminated<T, F: Fn(*mut u8, usize) -> T>(
         self,
+        roc_ops: &RocOps,
         func: F,
     ) -> Result<T, InteriorNulError> {
         if let Some(pos) = self.first_nul_byte() {
             Err(InteriorNulError { pos, roc_str: self })
         } else {
-            Ok(self.with_utf8_terminator(b'\0', func))
+            Ok(self.with_utf8_terminator(b'\0', roc_ops, func))
         }
     }
 
@@ -427,7 +383,7 @@ impl RocStr {
     /// strings can have excess capacity which can hold a terminator, or if they have no
     /// excess capacity, all the bytes can be shifted over the refcount in order to free up
     /// a `usize` worth of free space at the end - which can easily fit a 1-byte terminator.
-    pub fn with_utf8_terminator<T, F: Fn(*mut u8, usize) -> T>(self, terminator: u8, func: F) -> T {
+    pub fn with_utf8_terminator<T, F: Fn(*mut u8, usize) -> T>(self, terminator: u8, roc_ops: &RocOps, func: F) -> T {
         // Note that this function does not use with_terminator because it can be
         // more efficient than that - due to knowing that it's already in UTF-8 and always
         // has room for a 1-byte terminator in the existing allocation (either in the refcount
@@ -474,7 +430,7 @@ impl RocStr {
 
                         // The backing list was not unique, so we can't mutate it in-place.
                         // ask for `len + 1` to store the original string and the terminator
-                        with_stack_bytes(len + 1, self.roc_ops, |alloc_ptr: *mut u8| {
+                        with_stack_bytes(len + 1, roc_ops, |alloc_ptr: *mut u8| {
                             let elem_ptr = big_string.ptr_to_first_elem();
 
                             // memcpy the bytes into the stack allocation
@@ -502,12 +458,13 @@ impl RocStr {
     /// which a nul-terminated string must not.
     pub fn utf16_nul_terminated<T, F: Fn(*mut u16, usize) -> T>(
         self,
+        roc_ops: &RocOps,
         func: F,
     ) -> Result<T, InteriorNulError> {
         if let Some(pos) = self.first_nul_byte() {
             Err(InteriorNulError { pos, roc_str: self })
         } else {
-            Ok(self.with_utf16_terminator(0, func))
+            Ok(self.with_utf16_terminator(0, roc_ops, func))
         }
     }
 
@@ -538,9 +495,10 @@ impl RocStr {
     pub fn with_utf16_terminator<T, F: Fn(*mut u16, usize) -> T>(
         self,
         terminator: u16,
+        roc_ops: &RocOps,
         func: F,
     ) -> T {
-        self.with_terminator(terminator, |dest_ptr: *mut u16, str_slice: &str| {
+        self.with_terminator(terminator, roc_ops, |dest_ptr: *mut u16, str_slice: &str| {
             // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
             for (index, wchar) in str_slice.encode_utf16().enumerate() {
                 unsafe { std::ptr::write_unaligned(dest_ptr.add(index), wchar) };
@@ -552,12 +510,13 @@ impl RocStr {
 
     pub fn with_windows_path<T, F: Fn(*mut u16, usize) -> T>(
         self,
+        roc_ops: &RocOps,
         func: F,
     ) -> Result<T, InteriorNulError> {
         if let Some(pos) = self.first_nul_byte() {
             Err(InteriorNulError { pos, roc_str: self })
         } else {
-            let answer = self.with_terminator(0u16, |dest_ptr: *mut u16, str_slice: &str| {
+            let answer = self.with_terminator(0u16, roc_ops, |dest_ptr: *mut u16, str_slice: &str| {
                 // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
                 for (index, mut wchar) in str_slice.encode_utf16().enumerate() {
                     // Replace slashes with backslashes
@@ -600,9 +559,10 @@ impl RocStr {
     ///
     ///     pub fn with_windows_path<T, F: Fn(*mut u16, usize) -> T>(
     ///         roc_str: RocStr,
+    ///         roc_ops: &RocOps,
     ///         func: F,
     ///     ) -> Result<T, InteriorNulError> {
-    ///         let answer = roc_str.with_terminator(0u16, |dest_ptr: *mut u16, str_slice: &str| {
+    ///         let answer = roc_str.with_terminator(0u16, roc_ops, |dest_ptr: *mut u16, str_slice: &str| {
     ///             // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
     ///             for (index, mut wchar) in str_slice.encode_utf16().enumerate() {
     ///                 // Replace slashes with backslashes
@@ -624,6 +584,7 @@ impl RocStr {
     pub fn with_terminator<E: Copy, A, F: Fn(*mut E, &str) -> A>(
         self,
         terminator: E,
+        roc_ops: &RocOps,
         func: F,
     ) -> A {
         use core::mem::align_of;
@@ -636,7 +597,7 @@ impl RocStr {
 
         // When we don't have an existing allocation that can work, fall back on this.
         // It uses either a stack allocation, or, if that would be too big, a heap allocation.
-        let fallback = |str_slice: &str, roc_ops: *const RocOps| {
+        let fallback = |str_slice: &str, roc_ops: &RocOps| {
             // We need 1 extra elem for the terminator. It must be an elem,
             // not a byte, because we'll be providing a pointer to elems.
             let needed_bytes = (str_slice.len() + 1) * size_of::<E>();
@@ -674,20 +635,21 @@ impl RocStr {
                             // We cannot rely on the RocStr::drop implementation, because
                             // it tries to use the refcount - which we just overwrote
                             // with string bytes.
-                            let roc_ops = self.roc_ops;
+                            // Note: We can't deallocate here since we don't own the RocStr
+                            // and Drop won't run. The caller must handle cleanup.
                             mem::forget(self);
-                            (*roc_ops).dealloc(ptr.cast(), mem::align_of::<E>());
+                            roc_ops.dealloc(ptr.cast(), mem::align_of::<E>());
 
                             answer
                         } else {
                             // We didn't have sufficient excess capacity already,
                             // so we need to do either a new stack allocation or a new
                             // heap allocation.
-                            fallback(self.as_str(), self.roc_ops)
+                            fallback(self.as_str(), roc_ops)
                         }
                     } else {
                         // The backing list was not unique, so we can't mutate it in-place.
-                        fallback(self.as_str(), self.roc_ops)
+                        fallback(self.as_str(), roc_ops)
                     }
                 }
             }
@@ -703,10 +665,28 @@ impl RocStr {
                     let mut bytes = small_str.bytes;
                     terminate(&mut bytes as *mut u8 as *mut E, self.as_str())
                 } else {
-                    fallback(self.as_str(), self.roc_ops)
+                    fallback(self.as_str(), roc_ops)
                 }
             }
         }
+    }
+
+    /// Decrement the reference count and deallocate if needed.
+    ///
+    /// This must be called explicitly since RocStr does not store the RocOps
+    /// pointer and cannot deallocate in Drop.
+    pub fn decref(&mut self, roc_ops: &RocOps) {
+        if !self.is_small_str() {
+            unsafe {
+                let big_string = &mut self.inner.heap_allocated;
+                big_string.dec(roc_ops);
+            }
+        }
+
+        // Reset to empty string
+        self.inner = RocStrInner {
+            small_string: SmallString::empty(),
+        };
     }
 }
 
@@ -766,7 +746,6 @@ impl TryFrom<&CStr> for RocStr {
                 let small_string = unsafe { SmallString::try_from_utf8_bytes(s.as_bytes()).unwrap() };
                 RocStr {
                     inner: RocStrInner { small_string },
-                    roc_ops: ptr::null(),
                 }
             } else {
                 panic!("CStr too long for small string; use RocStr::from_str with explicit RocOps")
@@ -788,7 +767,6 @@ impl TryFrom<CString> for RocStr {
                 let small_string = unsafe { SmallString::try_from_utf8_bytes(s.as_bytes()).unwrap() };
                 RocStr {
                     inner: RocStrInner { small_string },
-                    roc_ops: ptr::null(),
                 }
             } else {
                 panic!("CString too long for small string; use RocStr::from_str with explicit RocOps")
@@ -797,7 +775,6 @@ impl TryFrom<CString> for RocStr {
     }
 }
 
-#[cfg(not(feature = "no_std"))]
 /// Like https://doc.rust-lang.org/std/ffi/struct.NulError.html but
 /// only for interior nuls, not for missing nul terminators.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -851,26 +828,18 @@ impl Clone for RocStr {
                 inner: RocStrInner {
                     heap_allocated: ManuallyDrop::new(h.clone()),
                 },
-                roc_ops: self.roc_ops,
             },
             RocStrInnerRef::SmallString(s) => Self {
                 inner: RocStrInner { small_string: *s },
-                roc_ops: ptr::null(),
             },
         }
     }
 }
 
-impl Drop for RocStr {
-    fn drop(&mut self) {
-        if !self.is_small_str() && !self.roc_ops.is_null() {
-            unsafe {
-                let big_string = &mut self.inner.heap_allocated;
-                big_string.dec(self.roc_ops);
-            }
-        }
-    }
-}
+// Note: We intentionally do NOT implement Drop for RocStr.
+// Deallocation requires RocOps, which is not stored in the struct.
+// Users must call decref(&roc_ops) explicitly before the string goes out of scope.
+// If you forget to call decref, the memory will leak.
 
 // This is a RocStr that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
 #[repr(transparent)]
@@ -897,41 +866,22 @@ impl Clone for SendSafeRocStr {
         if self.0.is_readonly() || self.0.is_small_str() {
             SendSafeRocStr(self.0.clone())
         } else {
-            // To keep self send safe, this must copy.
-            // Note: We can only create a small string here since we don't have RocOps.
-            // For larger strings, we'd need RocOps to allocate.
-            if self.0.len() <= SmallString::CAPACITY {
-                let small_string = unsafe { SmallString::try_from_utf8_bytes(self.0.as_bytes()).unwrap() };
-                SendSafeRocStr(RocStr {
-                    inner: RocStrInner { small_string },
-                    roc_ops: ptr::null(),
-                })
-            } else {
-                // For larger strings without RocOps, we clone as-is (incrementing refcount).
-                // The caller should ensure this is safe.
-                SendSafeRocStr(self.0.clone())
-            }
+            // To keep self send safe, we need to clone.
+            // Note: This requires RocOps which we don't have here.
+            // For now, just increment the refcount.
+            SendSafeRocStr(self.0.clone())
         }
     }
 }
 
 impl From<RocStr> for SendSafeRocStr {
     fn from(s: RocStr) -> Self {
-        if s.is_unique() || s.is_readonly() {
+        if s.is_unique() || s.is_readonly() || s.is_small_str() {
             SendSafeRocStr(s)
         } else {
-            // This is not unique. For small strings, we can copy.
-            // For large strings without RocOps, we must accept the reference.
-            if s.len() <= SmallString::CAPACITY {
-                let small_string = unsafe { SmallString::try_from_utf8_bytes(s.as_bytes()).unwrap() };
-                SendSafeRocStr(RocStr {
-                    inner: RocStrInner { small_string },
-                    roc_ops: ptr::null(),
-                })
-            } else {
-                // Accept the RocStr as-is; the caller should ensure thread safety.
-                SendSafeRocStr(s)
-            }
+            // This is not unique, but we can't deep copy without RocOps.
+            // Just use the string as-is with incremented refcount.
+            SendSafeRocStr(s)
         }
     }
 }
@@ -950,9 +900,10 @@ impl RocRefcounted for RocStr {
     }
 
     fn dec(&mut self) {
-        if !self.is_small_str() && !self.roc_ops.is_null() {
-            unsafe { self.inner.heap_allocated.deref_mut().dec(self.roc_ops) }
-        }
+        // Note: This is a no-op because we don't have access to RocOps.
+        // Caller must use decref(&roc_ops) explicitly.
+        // This is intentional to match the Zig ABI where deallocation
+        // requires the RocOps pointer.
     }
 
     fn is_refcounted() -> bool {
@@ -990,19 +941,11 @@ impl From<RocStr> for ReadOnlyRocStr {
         if s.is_readonly() || s.is_small_str() {
             ReadOnlyRocStr(s)
         } else {
-            // This is not readonly or unique. For small strings, we can copy.
-            // For large strings, we need to make a copy and set it readonly.
-            if s.len() <= SmallString::CAPACITY {
-                let small_string = unsafe { SmallString::try_from_utf8_bytes(s.as_bytes()).unwrap() };
-                ReadOnlyRocStr(RocStr {
-                    inner: RocStrInner { small_string },
-                    roc_ops: ptr::null(),
-                })
-            } else {
-                // For large strings without ability to deep copy (no RocOps),
-                // we must accept the reference. The caller should ensure this is safe.
-                ReadOnlyRocStr(s)
-            }
+            // This is not readonly or unique.
+            // For small strings, we can use directly.
+            // For large strings without ability to deep copy (no RocOps),
+            // we must accept the reference. The caller should ensure this is safe.
+            ReadOnlyRocStr(s)
         }
     }
 }
@@ -1107,7 +1050,7 @@ impl BigString {
         }
     }
 
-    fn dec(&mut self, roc_ops: *const RocOps) {
+    fn dec(&mut self, roc_ops: &RocOps) {
         if self.capacity() == 0 {
             // no valid allocation, elements pointer is dangling
             return;
@@ -1122,7 +1065,7 @@ impl BigString {
                 }
                 1 => {
                     // refcount becomes zero; free allocation
-                    (*roc_ops).dealloc(self.ptr_to_allocation().cast(), 1);
+                    roc_ops.dealloc(self.ptr_to_allocation().cast(), 1);
                 }
                 _ => {
                     std::ptr::write(ptr, (value - 1) as usize);
@@ -1150,7 +1093,7 @@ impl BigString {
             capacity_or_alloc_ptr: 0,
         };
 
-        this.reserve(cap, roc_ops as *const RocOps);
+        this.reserve(cap, roc_ops);
 
         this
     }
@@ -1158,7 +1101,7 @@ impl BigString {
     /// Increase a BigString's capacity by at least the requested number of elements (possibly more).
     ///
     /// May return a new BigString, if the provided one was not unique.
-    fn reserve(&mut self, n: usize, roc_ops: *const RocOps) {
+    fn reserve(&mut self, n: usize, roc_ops: &RocOps) {
         let align = std::mem::size_of::<usize>();
         let desired_cap = self.len() + n;
         let desired_alloc = align + desired_cap;
@@ -1169,7 +1112,7 @@ impl BigString {
             }
 
             let new_alloc = unsafe {
-                (*roc_ops).realloc(
+                roc_ops.realloc(
                     self.ptr_to_allocation().cast(),
                     align,
                     desired_alloc,
@@ -1187,7 +1130,7 @@ impl BigString {
             std::mem::swap(&mut this, self);
             std::mem::forget(this);
         } else {
-            let ptr = unsafe { (*roc_ops).alloc(align, desired_alloc) } as *mut u8;
+            let ptr = unsafe { roc_ops.alloc(align, desired_alloc) } as *mut u8;
             let elements = unsafe { NonNull::new_unchecked(ptr.add(align)) };
 
             // Initialize the refcount to 1
@@ -1229,7 +1172,7 @@ impl Clone for BigString {
 }
 
 // Note: BigString does not implement Drop because it doesn't store the roc_ops pointer.
-// Deallocation is handled by RocStr::drop which has access to roc_ops.
+// Deallocation is handled by RocStr::decref which has access to roc_ops.
 
 #[repr(C)]
 union RocStrInner {
@@ -1348,19 +1291,16 @@ mod tests {
         assert_eq!(s.as_str(), "hello");
         assert_eq!(s.len(), 5);
         assert!(s.is_small_str());
-        // Small strings should have null roc_ops
-        assert!(s.roc_ops.is_null());
     }
 
     #[test]
     fn test_heap_allocated_string() {
         let ops = test_roc_ops();
         let long_str = "This is a very long string that exceeds the small string capacity";
-        let s = RocStr::from_str(long_str, &ops);
+        let mut s = RocStr::from_str(long_str, &ops);
         assert_eq!(s.as_str(), long_str);
         assert!(!s.is_small_str());
-        // Heap-allocated strings should have non-null roc_ops
-        assert!(!s.roc_ops.is_null());
+        s.decref(&ops);
     }
 
     #[test]
@@ -1375,22 +1315,31 @@ mod tests {
     fn test_clone_heap_string() {
         let ops = test_roc_ops();
         let long_str = "This is a very long string that exceeds the small string capacity";
-        let s1 = RocStr::from_str(long_str, &ops);
-        let s2 = s1.clone();
+        let mut s1 = RocStr::from_str(long_str, &ops);
+        let mut s2 = s1.clone();
         assert_eq!(s1.as_str(), s2.as_str());
+        s1.decref(&ops);
+        s2.decref(&ops);
     }
 
     #[test]
     fn test_with_capacity() {
         let ops = test_roc_ops();
-        let s = RocStr::with_capacity(100, &ops);
+        let mut s = RocStr::with_capacity(100, &ops);
         assert!(s.capacity() >= 100);
         assert!(!s.is_small_str());
+        s.decref(&ops);
     }
 
     #[test]
     fn test_default() {
         let s = RocStr::default();
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn test_str_size() {
+        // Verify RocStr is exactly 24 bytes to match Zig ABI
+        assert_eq!(std::mem::size_of::<RocStr>(), 24);
     }
 }
