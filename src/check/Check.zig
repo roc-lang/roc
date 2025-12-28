@@ -5186,7 +5186,7 @@ fn checkNominalTypeUsage(
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     var deferred_constraint_index: usize = 0;
-    outer: while (deferred_constraint_index < deferred_constraint_len) : ({
+    while (deferred_constraint_index < deferred_constraint_len) : ({
         deferred_constraint_index += 1;
         deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
     }) {
@@ -5194,18 +5194,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
 
-        // Detect recursive constraints
-        // Check if this var is already in the constraint check stack
+        // Verify no recursive constraints - recursion should be handled through
+        // nominal types which break the cycle naturally.
         for (self.constraint_check_stack.items) |stack_var| {
-            if (stack_var == dispatcher_resolved.var_) {
-                // Found recursion - skip this constraint to avoid infinite loop.
-                // Recursive types are handled through nominal types which break
-                // the cycle naturally.
-                continue :outer;
-            }
+            std.debug.assert(stack_var != dispatcher_resolved.var_);
         }
 
-        // Not recursive - push to stack and proceed normally
         try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
         defer _ = self.constraint_check_stack.pop();
 
