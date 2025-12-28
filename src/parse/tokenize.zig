@@ -1885,7 +1885,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append('u');
                     try buf2.append('(');
                     for (6..length) |_| {
-                        try buf2.append('A');
+                        try buf2.append('0');
                     }
                     try buf2.append(')');
                     try buf2.append('\'');
