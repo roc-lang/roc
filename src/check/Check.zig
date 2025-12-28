@@ -5477,6 +5477,16 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                             env,
                         );
                     }
+                } else if (constraint.fn_name == self.cir.idents.to_str) {
+                    // to_str is supported on all types via Str.inspect semantics
+                    // Unify return type with Str
+                    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                    const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                    if (mb_resolved_func) |resolved_func| {
+                        const region = self.getRegionAt(deferred_constraint.var_);
+                        const str_var = try self.freshStr(env, region);
+                        _ = try self.unify(str_var, resolved_func.ret, env);
+                    }
                 } else {
                     // Other methods are not supported on anonymous types
                     try self.reportConstraintError(
@@ -5503,6 +5513,16 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                             constraint,
                             env,
                         );
+                    } else if (constraint.fn_name == self.cir.idents.to_str) {
+                        // to_str is supported on all types via Str.inspect semantics
+                        // Unify return type with Str
+                        const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+                        const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
+                        if (mb_resolved_func) |resolved_func| {
+                            const region = self.getRegionAt(deferred_constraint.var_);
+                            const str_var = try self.freshStr(env, region);
+                            _ = try self.unify(str_var, resolved_func.ret, env);
+                        }
                     } else {
                         try self.reportConstraintError(
                             deferred_constraint.var_,

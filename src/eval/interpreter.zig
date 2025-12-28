@@ -1756,8 +1756,8 @@ pub const Interpreter = struct {
                 out.is_initialized = true;
                 return out;
             },
-            .str_from_utf8 => {
-                // Str.from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem: Utf8Problem, index: U64 })])
+            .str_from_utf8, .list_to_str => {
+                // Str.from_utf8 / List.to_str : List(U8) -> Try(Str, [BadUtf8({ problem: Utf8Problem, index: U64 })])
                 std.debug.assert(args.len == 1);
 
                 const list_arg = args[0];
@@ -4795,6 +4795,24 @@ pub const Interpreter = struct {
             .i128_to_str => return self.intToStr(i128, args, roc_ops),
             .f32_to_str => return self.floatToStr(f32, args, roc_ops),
             .f64_to_str => return self.floatToStr(f64, args, roc_ops),
+
+            .dict_to_str => {
+                // Dict.to_str : Dict(k, v) -> Str
+                std.debug.assert(args.len == 1); // expects 1 argument: Dict
+
+                const dict_arg = args[0];
+                std.debug.assert(dict_arg.ptr != null);
+
+                // Render the dict value using the existing rendering infrastructure
+                const rendered = try self.renderValueRocWithType(dict_arg, dict_arg.rt_var, roc_ops);
+                defer self.allocator.free(rendered);
+
+                const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                const value = try self.pushStr(str_rt_var);
+                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                return value;
+            },
 
             // U8 conversion operations
             .u8_to_i8_wrap => return self.intConvertWrap(u8, i8, args),
@@ -16541,6 +16559,21 @@ pub const Interpreter = struct {
                 };
 
                 if (nominal_info == null) {
+                    // For non-nominal types (like anonymous records), try universal to_str fallback
+                    if (da.field_name == self.root_env.idents.to_str and arg_exprs.len == 0) {
+                        defer receiver_value.decref(&self.runtime_layout_store, roc_ops);
+
+                        // Render the value using the existing rendering infrastructure
+                        const rendered = try self.renderValueRocWithType(receiver_value, effective_receiver_rt_var, roc_ops);
+                        defer self.allocator.free(rendered);
+
+                        const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                        const result = try self.pushStr(str_rt_var);
+                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
+                        roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    }
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.InvalidMethodReceiver;
                 }
@@ -16583,6 +16616,19 @@ pub const Interpreter = struct {
                 ) catch |err| {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     if (err == error.MethodLookupFailed) {
+                        // For to_str, use universal fallback instead of crashing
+                        if (da.field_name == self.root_env.idents.to_str and arg_exprs.len == 0) {
+                            const rendered = try self.renderValueRocWithType(receiver_value, effective_receiver_rt_var, roc_ops);
+                            defer self.allocator.free(rendered);
+
+                            const str_rt_var = try self.getCanonicalStrRuntimeVar();
+                            const result = try self.pushStr(str_rt_var);
+                            const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
+                            roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
+                            try value_stack.push(result);
+                            return true;
+                        }
+
                         const layout_env = self.runtime_layout_store.env;
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,

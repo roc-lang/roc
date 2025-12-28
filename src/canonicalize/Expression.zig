@@ -505,6 +505,9 @@ pub const Expr = union(enum) {
         f32_to_str,
         f64_to_str,
 
+        // Dict operations
+        dict_to_str,
+
         // List operations
         list_len,
         list_is_empty,
@@ -516,6 +519,7 @@ pub const Expr = union(enum) {
         list_drop_at,
         list_sublist,
         list_append,
+        list_to_str,
 
         // Set operations
         // set_is_empty,
@@ -874,6 +878,9 @@ pub const Expr = union(enum) {
                 // Numeric to_str - value types (no ownership)
                 .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str => &.{.borrow},
 
+                // Dict operations - borrowing
+                .dict_to_str => &.{.borrow},
+
                 // List operations - borrowing
                 .list_len, .list_is_empty, .list_get_unsafe => &.{.borrow},
 
@@ -885,6 +892,7 @@ pub const Expr = union(enum) {
                 .list_append => &.{ .consume, .borrow }, // list consumed, element borrowed
                 .list_drop_at => &.{ .consume, .borrow }, // list consumed, index is value type
                 .list_sublist => &.{ .consume, .borrow }, // list consumed, {start, len} record is value type
+                .list_to_str => &.{.consume}, // list consumed, converted to string
 
                 // Bool operations - value types
                 .bool_is_eq => &.{ .borrow, .borrow },
