@@ -1885,10 +1885,6 @@ const Formatter = struct {
         switch (clause) {
             .mod_method => |c| {
                 // Format as: a.method : Type
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -1945,10 +1941,6 @@ const Formatter = struct {
             },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
