@@ -736,7 +736,7 @@ const Formatter = struct {
             fmt.curr_indent = curr_indent;
         }
         if (qualifier) |q| {
-            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident });
+            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident + 1 });
             try fmt.pushTokenText(q);
             if (multiline and try fmt.flushCommentsAfter(q)) {
                 fmt.curr_indent += 1;
