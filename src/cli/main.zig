@@ -4774,7 +4774,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 }
 
 fn rocRepl(ctx: *CliContext, args: cli_args.ReplArgs) !void {
-    _ = args; // TODO: Use args.optimize to select LLVM backend vs interpreter
+    _ = args; // TODO: Use args.opt to select LLVM backend vs interpreter
     ctx.io.stderr().print("repl not implemented\n", .{}) catch {};
     return error.NotImplemented;
 }
