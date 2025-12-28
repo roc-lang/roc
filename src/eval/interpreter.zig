@@ -7280,17 +7280,30 @@ pub const Interpreter = struct {
                         // union in memory is sized for the largest variant. When extracting a
                         // specific variant's payload, we need the correct layout for that variant.
                         //
-                        // Check if the arg var has a rigid substitution (from polymorphic method
-                        // instantiation). If so, use the substituted type's layout.
+                        // The arg_var contains the actual type of the payload (e.g., Item).
+                        // We should try to compute its layout directly rather than using
+                        // the field_value.layout which is the raw payload union layout.
+                        //
+                        // This is critical for opaque types returned from polymorphic functions
+                        // where the field layout might not match the expected tag union layout
+                        // of the opaque type's backing.
                         const arg_var = arg_vars[0];
                         const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                        const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                // Use the substituted concrete type's layout
-                                break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                        const effective_layout = blk: {
+                            // First try: if arg is a rigid with a substitution, use substituted type's layout
+                            if (arg_resolved.desc.content == .rigid) {
+                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                }
                             }
+                            // Second try: compute layout directly from arg_var
+                            // This handles concrete types like opaque Item returned from polymorphic functions
+                            if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                                break :blk computed_layout;
+                            } else |_| {}
+                            // Fallback to field_value.layout
                             break :blk field_value.layout;
-                        } else field_value.layout;
+                        };
 
                         payload_value = StackValue{
                             .layout = effective_layout,
@@ -7388,12 +7401,21 @@ pub const Interpreter = struct {
                     const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                    const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                        if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                            break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                    const effective_layout = blk: {
+                        // First try: if arg is a rigid with a substitution, use substituted type's layout
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                            }
                         }
+                        // Second try: compute layout directly from arg_var
+                        // This handles concrete types like opaque Item returned from polymorphic functions
+                        if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                            break :blk computed_layout;
+                        } else |_| {}
+                        // Fallback to variant_layout
                         break :blk variant_layout;
-                    } else variant_layout;
+                    };
 
                     payload_value = StackValue{
                         .layout = effective_layout,
