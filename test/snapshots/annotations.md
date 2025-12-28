@@ -109,7 +109,7 @@ The tag is:
 
 But the nominal type needs it to be:
 
-    Pair(a, b)
+    Pair(a, a)
 
 # TOKENS
 ~~~zig
