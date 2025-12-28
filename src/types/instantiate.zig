@@ -183,11 +183,6 @@ pub const Instantiator = struct {
                 const fresh_flat_type = try self.instantiateFlatType(flat_type);
                 break :blk Content{ .structure = fresh_flat_type };
             },
-            .recursion_var => |rec_var| blk: {
-                // Instantiate the structure the recursion var points to
-                const fresh_structure = try self.instantiateVar(rec_var.structure);
-                break :blk Content{ .recursion_var = .{ .structure = fresh_structure, .name = rec_var.name } };
-            },
             .err => Content.err,
         };
     }
