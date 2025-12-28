@@ -648,8 +648,12 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 return buf.toOwnedSlice();
             },
             .int => {
-                const i = value.asI128();
-                return try std.fmt.allocPrint(gpa, "{d}", .{i});
+                // Check if this is an unsigned type that needs asU128
+                const precision = value.getIntPrecision();
+                return switch (precision) {
+                    .u64, .u128 => try std.fmt.allocPrint(gpa, "{d}", .{value.asU128()}),
+                    else => try std.fmt.allocPrint(gpa, "{d}", .{value.asI128()}),
+                };
             },
             .frac => {
                 std.debug.assert(value.ptr != null);

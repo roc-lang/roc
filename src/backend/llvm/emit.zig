@@ -33,7 +33,22 @@ pub const NumKind = enum {
     f64,
     dec,
     numeral,
+
+    /// Compile-time validation that this enum matches the expected structure.
+    pub fn validate() void {
+        comptime {
+            const fields = @typeInfo(NumKind).@"enum".fields;
+            if (fields.len != 14) @compileError("NumKind must have exactly 14 variants");
+            if (!std.mem.eql(u8, fields[0].name, "u8")) @compileError("NumKind[0] must be u8");
+            if (!std.mem.eql(u8, fields[1].name, "i8")) @compileError("NumKind[1] must be i8");
+            if (!std.mem.eql(u8, fields[13].name, "numeral")) @compileError("NumKind[13] must be numeral");
+        }
+    }
 };
+
+comptime {
+    NumKind.validate();
+}
 
 /// Represents Roc's Str type in LLVM
 /// Str is a pointer-and-length pair (no capacity, since strings are immutable)
@@ -192,7 +207,7 @@ pub const LlvmEmitter = struct {
     }
 
     /// Emit an integer constant
-    pub fn emitIntConst(self: *LlvmEmitter, llvm_type: Builder.Type, value: i64) Error!Builder.Value {
+    pub fn emitIntConst(self: *LlvmEmitter, llvm_type: Builder.Type, value: i128) Error!Builder.Value {
         const constant = self.builder.intConst(llvm_type, value) catch return error.OutOfMemory;
         return constant.toValue();
     }

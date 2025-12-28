@@ -17,6 +17,7 @@ const Builder = @import("Builder.zig");
 const emit = @import("emit.zig");
 const bindings = @import("bindings.zig");
 const bitcode_writer = @import("bitcode_writer.zig");
+const target = @import("../../target/mod.zig");
 
 /// Result of code generation
 pub const CodegenResult = struct {
@@ -211,22 +212,7 @@ pub const Codegen = struct {
 
 /// Get the host target triple
 pub fn getHostTriple() []const u8 {
-    // This would ideally come from LLVM or be detected at runtime
-    // For now, return a default based on the build target
-    return switch (@import("builtin").os.tag) {
-        .linux => switch (@import("builtin").cpu.arch) {
-            .x86_64 => "x86_64-linux-gnu",
-            .aarch64 => "aarch64-linux-gnu",
-            else => "unknown-linux-gnu",
-        },
-        .macos => switch (@import("builtin").cpu.arch) {
-            .x86_64 => "x86_64-macos-none",
-            .aarch64 => "aarch64-macos-none",
-            else => "unknown-macos-none",
-        },
-        .windows => "x86_64-windows-msvc",
-        else => "unknown-unknown-unknown",
-    };
+    return target.RocTarget.detectNative().toTriple();
 }
 
 // Note: Tests are in a separate file that's part of the main build system

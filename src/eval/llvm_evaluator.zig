@@ -1,8 +1,8 @@
 //! LLVM-based Evaluator for Roc expressions
 //!
 //! This module provides an alternative to the interpreter that uses LLVM
-//! to compile and execute Roc expressions. It's used when the `--optimize`
-//! flag is passed to the REPL.
+//! to compile and execute Roc expressions. It's used when the `--opt=size`
+//! or `--opt=speed` flags are passed to the REPL.
 //!
 //! The evaluator works by:
 //! 1. Taking a CIR expression
@@ -25,6 +25,7 @@ const layout = @import("layout");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
+const target = @import("target");
 
 // LLVM Builder from Zig's standard library (for IR generation)
 const llvm = @import("std").zig.llvm;
@@ -231,12 +232,37 @@ pub const LlvmEvaluator = struct {
         return self.evalExprDirectly(module_env, expr);
     }
 
-    /// Type of the result value for JIT execution
+    /// Type of the result value for JIT execution.
+    /// This enum must be kept in sync with llvm_compile.ResultType.
+    /// The snapshot_tool depends on both having identical variants in the same order.
+    /// See llvm_compile/compile.zig for the canonical definition.
     pub const ResultType = enum {
         i64,
+        u64,
         i128,
+        u128,
         f64,
+        dec,
+
+        /// Compile-time validation that this enum matches the expected structure.
+        /// This helps catch accidental divergence from llvm_compile.ResultType.
+        pub fn validate() void {
+            comptime {
+                const fields = @typeInfo(ResultType).@"enum".fields;
+                if (fields.len != 6) @compileError("ResultType must have exactly 6 variants");
+                if (!std.mem.eql(u8, fields[0].name, "i64")) @compileError("ResultType[0] must be i64");
+                if (!std.mem.eql(u8, fields[1].name, "u64")) @compileError("ResultType[1] must be u64");
+                if (!std.mem.eql(u8, fields[2].name, "i128")) @compileError("ResultType[2] must be i128");
+                if (!std.mem.eql(u8, fields[3].name, "u128")) @compileError("ResultType[3] must be u128");
+                if (!std.mem.eql(u8, fields[4].name, "f64")) @compileError("ResultType[4] must be f64");
+                if (!std.mem.eql(u8, fields[5].name, "dec")) @compileError("ResultType[5] must be dec");
+            }
+        }
     };
+
+    comptime {
+        ResultType.validate();
+    }
 
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
@@ -266,11 +292,9 @@ pub const LlvmEvaluator = struct {
         const value = try self.emitExprValue(&builder, module_env, expr);
 
         // Determine the result type for JIT execution
-        const result_type: ResultType = switch (value_type) {
-            .float, .double => .f64,
-            .i128 => .i128,
-            else => .i64,
-        };
+        // We need to look at the original expression to get signedness,
+        // since LLVM types don't distinguish signed from unsigned
+        const result_type: ResultType = self.getExprResultType(expr);
 
         // Generate a main function that prints the result
         try self.emitMainWithPrint(&builder, value_type, value);
@@ -384,6 +408,30 @@ pub const LlvmEvaluator = struct {
         return true;
     }
 
+    /// Get the ResultType for JIT execution from a CIR expression
+    /// This captures signedness which LLVM types don't distinguish
+    fn getExprResultType(_: *LlvmEvaluator, expr: CIR.Expr) ResultType {
+        return switch (expr) {
+            .e_num => |num| switch (num.kind) {
+                // Signed types that fit in i64
+                .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
+                // Unsigned types that fit in u64
+                .u8, .u16, .u32, .u64 => .u64,
+                // 128-bit signed
+                .i128 => .i128,
+                // 128-bit unsigned
+                .u128 => .u128,
+                // Float types
+                .f32, .f64 => .f64,
+                // Dec type (fixed-point decimal stored as i128)
+                .dec => .dec,
+            },
+            .e_frac_f32, .e_frac_f64 => .f64,
+            .e_dec, .e_dec_small => .dec,
+            else => .i64, // Default for other expression types
+        };
+    }
+
     /// Get the LLVM type for a CIR expression
     fn getExprLlvmType(_: *LlvmEvaluator, builder: *LlvmBuilder, expr: CIR.Expr) !LlvmBuilder.Type {
         return switch (expr) {
@@ -392,23 +440,37 @@ pub const LlvmEvaluator = struct {
                 .u16, .i16 => .i16,
                 .u32, .i32 => .i32,
                 .u64, .i64, .num_unbound, .int_unbound => .i64,
-                .u128, .i128 => .i128,
-                else => error.UnsupportedType,
+                .u128, .i128, .dec => .i128, // Dec is stored as i128 (scaled by 10^18)
+                .f32 => .float,
+                .f64 => .double,
             },
             .e_frac_f32 => .float,
             .e_frac_f64 => .double,
-            .e_dec, .e_dec_small => .double, // Represent Dec as double for printing
+            .e_dec, .e_dec_small => .i128, // Dec is stored as i128 (scaled by 10^18)
             else => try builder.ptrType(.default), // For complex types, use pointer
         };
     }
 
     /// Emit LLVM value for a CIR expression
+    ///
+    /// Note on u128 handling: We use toI128() for all integer values, including u128.
+    /// For u128 values larger than i128 max, this reinterprets the bits as a negative
+    /// i128. This works correctly because LLVM's i128 type is just 128 bits - signedness
+    /// is a matter of interpretation. The JIT execution in compile.zig interprets the
+    /// return value based on ResultType (u128 vs i128) to display the correct value.
     fn emitExprValue(self: *LlvmEvaluator, builder: *LlvmBuilder, _: *ModuleEnv, expr: CIR.Expr) !LlvmBuilder.Constant {
         return switch (expr) {
             .e_num => |num| {
                 const int_value = num.value.toI128();
-                const llvm_type = try self.getExprLlvmType(builder, expr);
-                return builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;
+                // Handle float suffixes (e.g., 42f32, 42f64)
+                return switch (num.kind) {
+                    .f32 => builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
+                    .f64 => builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
+                    else => blk: {
+                        const llvm_type = try self.getExprLlvmType(builder, expr);
+                        break :blk builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;
+                    },
+                };
             },
             .e_frac_f32 => |frac| {
                 return builder.floatConst(frac.value) catch return error.CompilationFailed;
@@ -417,13 +479,16 @@ pub const LlvmEvaluator = struct {
                 return builder.doubleConst(frac.value) catch return error.CompilationFailed;
             },
             .e_dec => |dec| {
-                const scaled: f64 = @as(f64, @floatFromInt(dec.value.num)) / 1e18;
-                return builder.doubleConst(scaled) catch return error.CompilationFailed;
+                // Dec is stored as i128 internally (scaled by 10^18)
+                return builder.intConst(.i128, dec.value.num) catch return error.CompilationFailed;
             },
             .e_dec_small => |dec| {
-                const numerator: f64 = @floatFromInt(dec.value.numerator);
-                const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(dec.value.denominator_power_of_ten));
-                return builder.doubleConst(numerator / divisor) catch return error.CompilationFailed;
+                // Convert small Dec representation to full i128
+                // RocDec.decimal_places is 18
+                const decimal_places: u5 = 18;
+                const scale_factor = std.math.pow(i128, 10, decimal_places - dec.value.denominator_power_of_ten);
+                const scaled_value = @as(i128, dec.value.numerator) * scale_factor;
+                return builder.intConst(.i128, scaled_value) catch return error.CompilationFailed;
             },
             else => return error.UnsupportedType,
         };
@@ -475,14 +540,15 @@ pub const LlvmEvaluator = struct {
                 return std.fmt.allocPrint(self.allocator, "{d}", .{frac.value}) catch return error.OutOfMemory;
             },
             .e_dec => |dec| {
-                // Dec is stored as an integer scaled by 10^18
-                const scaled: f64 = @as(f64, @floatFromInt(dec.value.num)) / 1e18;
-                return std.fmt.allocPrint(self.allocator, "{d}", .{scaled}) catch return error.OutOfMemory;
+                // Dec is stored as i128 internally (scaled by 10^18)
+                return formatDecValue(self.allocator, dec.value.num) catch return error.OutOfMemory;
             },
             .e_dec_small => |dec| {
-                const numerator: f64 = @floatFromInt(dec.value.numerator);
-                const divisor: f64 = std.math.pow(f64, 10.0, @floatFromInt(dec.value.denominator_power_of_ten));
-                return std.fmt.allocPrint(self.allocator, "{d}", .{numerator / divisor}) catch return error.OutOfMemory;
+                // Convert small Dec representation to full i128
+                const decimal_places: u5 = 18;
+                const scale_factor = std.math.pow(i128, 10, decimal_places - dec.value.denominator_power_of_ten);
+                const scaled_value = @as(i128, dec.value.numerator) * scale_factor;
+                return formatDecValue(self.allocator, scaled_value) catch return error.OutOfMemory;
             },
             .e_str_segment => |seg| {
                 const literal = module_env.getString(seg.literal);
@@ -506,20 +572,7 @@ pub const LlvmEvaluator = struct {
 
     /// Get the target triple for the current host
     fn getHostTriple(_: *LlvmEvaluator) []const u8 {
-        return switch (builtin.os.tag) {
-            .linux => switch (builtin.cpu.arch) {
-                .x86_64 => "x86_64-linux-gnu",
-                .aarch64 => "aarch64-linux-gnu",
-                else => "unknown-linux-gnu",
-            },
-            .macos => switch (builtin.cpu.arch) {
-                .x86_64 => "x86_64-macos-none",
-                .aarch64 => "aarch64-macos-none",
-                else => "unknown-macos-none",
-            },
-            .windows => "x86_64-windows-msvc",
-            else => "unknown-unknown-unknown",
-        };
+        return target.RocTarget.detectNative().toTriple();
     }
 
     /// Generate a unique temporary file path
@@ -557,140 +610,69 @@ pub const LlvmEvaluator = struct {
     }
 };
 
-/// LLVM emit NumKind enum (duplicated here since we can't import from backend)
-/// This must be kept in sync with src/backend/llvm/emit.zig
-pub const LlvmNumKind = enum {
-    u8,
-    i8,
-    u16,
-    i16,
-    u32,
-    i32,
-    u64,
-    i64,
-    u128,
-    i128,
-    f32,
-    f64,
-    dec,
-    numeral,
-};
-
-/// Translate a CIR NumKind to the LLVM emit NumKind
-/// Returns null for unbound numeric types that need type inference first
-pub fn cirNumKindToLlvmNumKind(cir_kind: CIR.NumKind) ?LlvmNumKind {
-    return switch (cir_kind) {
-        // Unbound types need to be resolved through type inference first
-        .num_unbound, .int_unbound => null,
-        // Concrete numeric types
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-    };
-}
-
-/// Convert CIR NumKind to display name matching interpreter output
-fn numKindToTypeName(kind: CIR.NumKind) []const u8 {
-    return switch (kind) {
-        .u8 => "U8",
-        .i8 => "I8",
-        .u16 => "U16",
-        .i16 => "I16",
-        .u32 => "U32",
-        .i32 => "I32",
-        .u64 => "U64",
-        .i64 => "I64",
-        .u128 => "U128",
-        .i128 => "I128",
-        .f32 => "F32",
-        .f64 => "F64",
-        .dec => "Dec",
-        .num_unbound, .int_unbound => "",
-    };
-}
-
-// ============================================================================
-// Platform-Specific i128 ABI Handling
-// ============================================================================
-//
-// Different platforms represent i128 values differently when passing them
-// to/from functions compiled by Zig:
-//
-// - Windows: Uses <2 x i64> vector type for i128 values
-// - macOS ARM64: Uses [2 x i64] array type for i128 values
-// - Other platforms (x86-64 Linux/macOS): Use native i128 type
-//
-// This matters when calling Zig-compiled builtin functions (like Dec operations)
-// that take or return i128. The Roc builtins are compiled from Zig to LLVM
-// bitcode, and Zig's code generation for i128 varies by platform.
-//
-// When generating LLVM IR that calls into these builtins, we need to:
-// 1. Convert our native i128 values to the platform-specific format before calling
-// 2. Convert the return value back to native i128 after the call
-//
-// Currently, the LLVM evaluator only handles numeric literals without calling
-// any builtins, so this ABI handling is not yet active. When builtin function
-// call support is added, use the helpers below.
-
-/// Platform-specific representation used for i128 values in function calls
-pub const I128Repr = enum {
-    /// Native i128 type - used on x86-64 Linux and macOS x86-64
-    native,
-    /// <2 x i64> vector type - used on Windows
-    vector_2xi64,
-    /// [2 x i64] array type - used on macOS ARM64
-    array_2xi64,
-};
-
-/// Detect the i128 representation needed for the current target platform.
-/// This should be used when generating calls to Zig-compiled builtin functions.
-pub fn getI128Repr() I128Repr {
-    if (builtin.os.tag == .windows) {
-        return .vector_2xi64;
-    } else if (builtin.os.tag == .macos and builtin.cpu.arch == .aarch64) {
-        return .array_2xi64;
-    } else {
-        return .native;
+/// Dec (fixed-point decimal) has 18 decimal places.
+/// The internal representation is i128 scaled by 10^18.
+const dec_decimal_places: u5 = 18;
+const dec_scale_factor: i128 = blk: {
+    var result: i128 = 1;
+    for (0..dec_decimal_places) |_| {
+        result *= 10;
     }
-}
+    break :blk result;
+};
 
-/// Check if i128 values need ABI conversion for the current platform.
-/// Returns true if we're on Windows or macOS ARM64.
-pub fn needsI128Conversion() bool {
-    return getI128Repr() != .native;
-}
+/// Format a Dec value (i128 with 18 decimal places) as a string.
+/// This preserves full precision unlike f64 conversion.
+fn formatDecValue(allocator: std.mem.Allocator, num: i128) std.mem.Allocator.Error![]u8 {
+    if (num == 0) {
+        return try allocator.dupe(u8, "0");
+    }
 
-// TODO: When adding builtin function call support, implement these helpers:
-//
-// /// Convert an i128 LLVM value to the platform-specific representation.
-// /// Use this before passing i128 arguments to Zig-compiled builtins.
-// pub fn prepareI128Arg(builder: *LlvmBuilder, value: LlvmBuilder.Value) !LlvmBuilder.Value {
-//     return switch (getI128Repr()) {
-//         .native => value,
-//         .vector_2xi64 => // bitcast i128 to <2 x i64>
-//         .array_2xi64 => // bitcast i128 to [2 x i64]
-//     };
-// }
-//
-// /// Convert a platform-specific i128 representation back to native i128.
-// /// Use this after receiving i128 return values from Zig-compiled builtins.
-// pub fn normalizeI128Return(builder: *LlvmBuilder, value: LlvmBuilder.Value) !LlvmBuilder.Value {
-//     return switch (getI128Repr()) {
-//         .native => value,
-//         .vector_2xi64 => // bitcast <2 x i64> to i128
-//         .array_2xi64 => // bitcast [2 x i64] to i128
-//     };
-// }
+    var out = std.array_list.Managed(u8).init(allocator);
+    errdefer out.deinit();
+
+    const is_negative = num < 0;
+    // Use @abs which handles i128 min correctly by returning u128
+    const abs_value: u128 = @abs(num);
+
+    if (is_negative) {
+        try out.append('-');
+    }
+
+    const integer_part = @divTrunc(abs_value, @as(u128, @intCast(dec_scale_factor)));
+    const fractional_part = @rem(abs_value, @as(u128, @intCast(dec_scale_factor)));
+
+    // Format integer part
+    var int_buf: [40]u8 = undefined;
+    const int_str = std.fmt.bufPrint(&int_buf, "{d}", .{integer_part}) catch unreachable;
+    try out.appendSlice(int_str);
+
+    if (fractional_part == 0) {
+        return try out.toOwnedSlice();
+    }
+
+    try out.append('.');
+
+    // Format fractional part with leading zeros preserved
+    var digits: [dec_decimal_places]u8 = undefined;
+    @memset(&digits, '0');
+    var remaining = fractional_part;
+    var idx: usize = dec_decimal_places;
+    while (idx > 0) : (idx -= 1) {
+        const digit: u8 = @intCast(@mod(remaining, 10));
+        digits[idx - 1] = digit + '0';
+        remaining = @divTrunc(remaining, 10);
+    }
+
+    // Trim trailing zeros
+    var end: usize = dec_decimal_places;
+    while (end > 1 and digits[end - 1] == '0') {
+        end -= 1;
+    }
+
+    try out.appendSlice(digits[0..end]);
+    return try out.toOwnedSlice();
+}
 
 test "llvm evaluator initialization" {
     const allocator = std.testing.allocator;
@@ -700,27 +682,4 @@ test "llvm evaluator initialization" {
 
     // Just verify initialization works
     try std.testing.expect(evaluator.counter == 0);
-}
-
-test "i128 platform detection" {
-    const repr = getI128Repr();
-
-    // Verify the platform detection returns a valid value
-    switch (repr) {
-        .native => {
-            // On native platforms, no conversion is needed
-            try std.testing.expect(!needsI128Conversion());
-        },
-        .vector_2xi64 => {
-            // Windows uses vector representation
-            try std.testing.expect(builtin.os.tag == .windows);
-            try std.testing.expect(needsI128Conversion());
-        },
-        .array_2xi64 => {
-            // macOS ARM64 uses array representation
-            try std.testing.expect(builtin.os.tag == .macos);
-            try std.testing.expect(builtin.cpu.arch == .aarch64);
-            try std.testing.expect(needsI128Conversion());
-        },
-    }
 }
