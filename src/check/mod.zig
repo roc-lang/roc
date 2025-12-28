@@ -44,4 +44,5 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
     std.testing.refAllDecls(@import("test/recursive_alias_test.zig"));
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
+    std.testing.refAllDecls(@import("test/repros_test.zig"));
 }
