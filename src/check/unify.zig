@@ -1305,7 +1305,7 @@ const Unifier = struct {
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
                     vars,
-                    self.scratch.in_both_fields.sliceRange(partitioned.in_both),
+                    partitioned.in_both,
                     null,
                     null,
                     a_gathered_ext,
@@ -1329,7 +1329,7 @@ const Unifier = struct {
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
                     vars,
-                    self.scratch.in_both_fields.sliceRange(partitioned.in_both),
+                    partitioned.in_both,
                     null,
                     null,
                     only_in_a_var,
@@ -1353,7 +1353,7 @@ const Unifier = struct {
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
                     vars,
-                    self.scratch.in_both_fields.sliceRange(partitioned.in_both),
+                    partitioned.in_both,
                     null,
                     null,
                     only_in_b_var,
@@ -1391,9 +1391,9 @@ const Unifier = struct {
                 // This copies fields from scratch into type_store
                 try self.unifySharedFields(
                     vars,
-                    self.scratch.in_both_fields.sliceRange(partitioned.in_both),
-                    self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                    self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
+                    partitioned.in_both,
+                    partitioned.only_in_a,
+                    partitioned.only_in_b,
                     new_ext_var,
                 );
             },
@@ -1583,9 +1583,9 @@ const Unifier = struct {
     fn unifySharedFields(
         self: *Self,
         vars: *const ResolvedVarDescs,
-        shared_fields: TwoRecordFieldsSafeList.Slice,
-        mb_a_extended_fields: ?RecordFieldSafeList.Slice,
-        mb_b_extended_fields: ?RecordFieldSafeList.Slice,
+        shared_fields_range: TwoRecordFieldsSafeList.Range, // Into scratch.in_both_fields
+        mb_a_extended_fields: ?RecordFieldSafeList.Range, // Into scratch.only_in_a_fields
+        mb_b_extended_fields: ?RecordFieldSafeList.Range, // Into scratch.only_in_b_fields
         ext: Var,
     ) Error!void {
         const trace = tracy.trace(@src());
@@ -1594,7 +1594,11 @@ const Unifier = struct {
         // First, unify all field types. This may cause nested record unifications
         // which will append their own fields to the store. We must NOT interleave
         // our field appends with these nested calls.
-        for (shared_fields) |shared| {
+        //
+        // Additionally, we *must* use an iterator here, as recursive calls can
+        // cause `in_both_fields` to reallocate, invalidating the slice pointer.
+        var shared_fields_iter = self.scratch.in_both_fields.iterRange(shared_fields_range);
+        while (shared_fields_iter.next()) |shared| {
             try self.unifyGuarded(shared.a.var_, shared.b.var_);
         }
 
@@ -1602,7 +1606,9 @@ const Unifier = struct {
         // This ensures our fields form a contiguous range.
         const range_start: u32 = self.types_store.record_fields.len();
 
-        for (shared_fields) |shared| {
+        // Here, it's safe to use a slice since appending fields cannot trigger
+        // any reallocation
+        for (self.scratch.in_both_fields.sliceRange(shared_fields_range)) |shared| {
             _ = self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
@@ -1611,10 +1617,14 @@ const Unifier = struct {
 
         // Append combined fields
         if (mb_a_extended_fields) |extended_fields| {
-            _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
+            _ = self.types_store.appendRecordFields(
+                self.scratch.only_in_a_fields.sliceRange(extended_fields),
+            ) catch return Error.AllocatorError;
         }
         if (mb_b_extended_fields) |extended_fields| {
-            _ = self.types_store.appendRecordFields(extended_fields) catch return Error.AllocatorError;
+            _ = self.types_store.appendRecordFields(
+                self.scratch.only_in_b_fields.sliceRange(extended_fields),
+            ) catch return Error.AllocatorError;
         }
 
         // Merge vars - now the range correctly contains only THIS record's fields
@@ -1777,7 +1787,7 @@ const Unifier = struct {
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
                     vars,
-                    self.scratch.in_both_tags.sliceRange(partitioned.in_both),
+                    partitioned.in_both,
                     null,
                     null,
                     a_gathered_tags.ext,
@@ -1801,7 +1811,7 @@ const Unifier = struct {
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
                     vars,
-                    self.scratch.in_both_tags.sliceRange(partitioned.in_both),
+                    partitioned.in_both,
                     null,
                     null,
                     only_in_a_var,
@@ -1825,7 +1835,7 @@ const Unifier = struct {
                 // This copies tags from scratch into type_store
                 try self.unifySharedTags(
                     vars,
-                    self.scratch.in_both_tags.sliceRange(partitioned.in_both),
+                    partitioned.in_both,
                     null,
                     null,
                     only_in_b_var,
@@ -1868,9 +1878,9 @@ const Unifier = struct {
                 // is for proper type equality, not for visibility
                 try self.unifySharedTags(
                     vars,
-                    self.scratch.in_both_tags.sliceRange(partitioned.in_both),
-                    self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                    self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
+                    partitioned.in_both,
+                    partitioned.only_in_a,
+                    partitioned.only_in_b,
                     new_ext_var,
                 );
             },
@@ -2029,19 +2039,24 @@ const Unifier = struct {
     fn unifySharedTags(
         self: *Self,
         vars: *const ResolvedVarDescs,
-        shared_tags: []TwoTags,
-        mb_a_extended_tags: ?[]Tag,
-        mb_b_extended_tags: ?[]Tag,
+        shared_tags_range: TwoTags.SafeList.Range, // Into scratch.in_both_tags
+        mb_a_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_a_tags
+        mb_b_extended_tags: ?Tag.SafeList.Range, // Into scratch.only_in_b_tags
         ext: Var,
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // IMPORTANT: First unify all shared tag arguments BEFORE recording range_start.
-        // This is because unifyGuarded may trigger recursive unifications that also
-        // append tags to the global tags list. We need to record range_start AFTER
-        // all inner unifications complete, so we only capture this level's tags.
-        for (shared_tags) |tags| {
+        // IMPORTANT: First unify all shared tag arguments BEFORE recording
+        // range_start. This is because unifyGuarded may trigger recursive
+        // unifications that also append tags to the global tags list. We need
+        // to record range_start AFTER all inner unifications complete, so we
+        // only capture this level's tags.
+        //
+        // Additionally, we *must* use an iterator here, as recursive calls can
+        // cause `in_both_tags` to reallocate, invalidating the slice pointer.
+        var shared_tags_iter = self.scratch.in_both_tags.iterRange(shared_tags_range);
+        while (shared_tags_iter.next()) |tags| {
             const tag_a_args = self.types_store.sliceVars(tags.a.args);
             const tag_b_args = self.types_store.sliceVars(tags.b.args);
 
@@ -2056,7 +2071,10 @@ const Unifier = struct {
         const range_start: u32 = self.types_store.tags.len();
 
         // Append this level's shared tags
-        for (shared_tags) |tags| {
+        //
+        // Here, it's safe to use a slice since appending tags cannot trigger
+        // any reallocation
+        for (self.scratch.in_both_tags.sliceRange(shared_tags_range)) |tags| {
             _ = self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
@@ -2065,10 +2083,14 @@ const Unifier = struct {
 
         // Append combined tags
         if (mb_a_extended_tags) |extended_tags| {
-            _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
+            _ = self.types_store.appendTags(
+                self.scratch.only_in_a_tags.sliceRange(extended_tags),
+            ) catch return Error.AllocatorError;
         }
         if (mb_b_extended_tags) |extended_tags| {
-            _ = self.types_store.appendTags(extended_tags) catch return Error.AllocatorError;
+            _ = self.types_store.appendTags(
+                self.scratch.only_in_b_tags.sliceRange(extended_tags),
+            ) catch return Error.AllocatorError;
         }
 
         // Merge vars (sorting happens in merge() for all tag unions)

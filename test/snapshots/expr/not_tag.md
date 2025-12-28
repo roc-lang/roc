@@ -8,24 +8,20 @@ type=expr
 !(C(2))
 ~~~
 # EXPECTED
-TYPE MISMATCH - not_tag.md:1:3:1:7
+MISSING METHOD - not_tag.md:1:1:1:8
 # PROBLEMS
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**not_tag.md:1:3:1:7:**
+**MISSING METHOD**
+This **not** method is being called on a value whose type doesn't have that method:
+**not_tag.md:1:1:1:8:**
 ```roc
 !(C(2))
 ```
-  ^^^^
+^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **not**, is:
 
     [C(a), .._others]
       where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
-But I expected it to be:
-
-    Bool
 
 # TOKENS
 ~~~zig
