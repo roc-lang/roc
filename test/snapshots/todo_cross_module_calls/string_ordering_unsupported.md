@@ -11,12 +11,12 @@ type=repl
 » "first" <= "second"
 ~~~
 # OUTPUT
-Evaluation error: error.MethodLookupFailed
+TYPE MISMATCH
 ---
-Evaluation error: error.MethodLookupFailed
+TYPE MISMATCH
 ---
-Evaluation error: error.MethodLookupFailed
+TYPE MISMATCH
 ---
-Evaluation error: error.MethodLookupFailed
+TYPE MISMATCH
 # PROBLEMS
 NIL

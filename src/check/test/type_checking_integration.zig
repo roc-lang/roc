@@ -184,7 +184,12 @@ test "check type - binop operands same type works - unbound plus unbound" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -372,7 +377,7 @@ test "check type - (a == b) desugars to a.is_eq(b) with unified args" {
     ;
 
     // The binop version unifies a and b, so they have the same type variable
-    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> d]";
+    const expected_binop: []const u8 = "c, c -> Bool where [c.is_eq : c, c -> Bool]";
     try checkTypesExpr(src_binop, .pass, expected_binop);
 
     // The direct method call version does NOT unify a and b
@@ -390,7 +395,7 @@ test "check type - (a != b) desugars to a.is_eq(b).not() with unified args" {
     ;
 
     // The binop version unifies a and b, so they have the same type variable
-    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> e, e.not : e -> d]";
+    const expected_binop: []const u8 = "c, c -> Bool where [c.is_eq : c, c -> Bool]";
     try checkTypesExpr(src_binop, .pass, expected_binop);
 
     // The direct method call version does NOT unify a and b
@@ -579,7 +584,12 @@ test "check type - def - nested lambda" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]",
+        \\d
+        \\  where [
+        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        \\    d.plus : d, d -> d,
+        \\  ]
+        ,
     );
 }
 
@@ -1035,7 +1045,7 @@ test "check type - match - diff branch types" {
 
 test "check type - unary not" {
     const source =
-        \\x = !True
+        \\x = !Bool.True
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
@@ -1044,10 +1054,10 @@ test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
-// unary not
+// unary minus
 
 test "check type - unary minus" {
     const source =
@@ -1085,7 +1095,12 @@ test "check type - binops math sub" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.minus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1402,7 +1417,7 @@ test "check type - patterns record field mismatch" {
 
 // vars + reassignment //
 
-test "check type - var ressignment" {
+test "check type - var reassignment" {
     const source =
         \\main = {
         \\  var x = 1
@@ -1413,7 +1428,12 @@ test "check type - var ressignment" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1513,14 +1533,19 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
 test "check type - for mismatch" {
     const source =
         \\main = {
-        \\  var result = 0
+        \\  var result = 0u8
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
         \\  }
@@ -1530,7 +1555,7 @@ test "check type - for mismatch" {
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "TYPE MISMATCH",
     );
 }
 
@@ -1838,7 +1863,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
         \\main! = |_| {}
         \\
         \\# Four layers of nested lambdas
-        \\curried_add : a, a, a, a -> a where [a.add : a, a -> a]
+        \\curried_add : a, a, a, a -> a where [a.plus : a, a -> a]
         \\curried_add = |a, b, c, d| a + b + c + d
         \\
         \\func = {
@@ -1851,14 +1876,14 @@ test "check type - comprehensive - multiple layers of lambdas" {
         .{ .pass = .{ .def = "func" } },
         \\a
         \\  where [
-        \\    a.add : a, a -> a,
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
 }
 
-test "check type - comprehensive - static dispatch with multiple methods" {
+test "check type - comprehensive - static dispatch with multiple methods 1" {
     const source =
         \\main! = |_| {}
         \\
@@ -1905,7 +1930,12 @@ test "check type - comprehensive - static dispatch with multiple methods" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1959,7 +1989,12 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Container(b) where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]",
+        \\Container(b)
+        \\  where [
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    b.plus : b, b -> b,
+        \\  ]
+        ,
     );
 }
 
@@ -2173,12 +2208,17 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
+        // TODO: Look at why constraints are not deduped!
         \\{ chained: b, final: b, id_results: (e, Str, Bool), processed: c, transformed: a }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    b.plus : b, b -> b,
+        \\    b.plus : b, b -> b,
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    c.plus : c, c -> c,
         \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
         \\  ]
         ,
@@ -2377,7 +2417,16 @@ test "List.fold works as builtin associated item" {
         \\
         \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "item where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "x" } },
+        \\item
+        \\  where [
+        \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
+        \\    item.plus : item, item -> item,
+        \\  ]
+        ,
+    );
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
@@ -2880,5 +2929,38 @@ test "check type - simple function call should have return type" {
         source,
         .{ .pass = .{ .def = "result" } },
         "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+    );
+}
+
+// Lots of inferred constraints
+
+test "check type - range inferred" {
+    const source =
+        \\range = |var $current, end| {
+        \\  if end < $current {
+        \\    return []
+        \\  }
+        \\
+        \\  var $answer = List.with_capacity(((end - $current) + 1).to_u64())
+        \\  while $current <= end {
+        \\    $answer = $answer.append($current)
+        \\    $current = $current + 1
+        \\  }
+        \\  $answer
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        \\a, a -> List(a)
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.is_lt : a, a -> Bool,
+        \\    a.is_lte : a, a -> Bool,
+        \\    a.minus : a, a -> a,
+        \\    a.plus : a, a -> a,
+        \\    a.to_u64 : a -> U64,
+        \\  ]
+        ,
     );
 }

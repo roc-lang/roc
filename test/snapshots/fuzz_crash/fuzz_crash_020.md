@@ -1029,7 +1029,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    _f
+    Bool
 
 # TOKENS
 ~~~zig

@@ -86,8 +86,7 @@ Hash(a, hasher) # After header
 	: # After colon
 		a # After var
 			where [ # After where
-								# After where
-					a.hash : hasher # After method
+				a.hash : hasher # After method
 					-> # After arrow
 						hasher, # After first clause
 				hasher.Hasher,
