@@ -422,6 +422,21 @@ const CheckEnumFromIntZeroStep = struct {
         line_content: []const u8,
     };
 
+    // Files in backend/llvm that are copies from Zig's stdlib and should be excluded
+    const stdlib_copies = [_][]const u8{
+        "backend/llvm/Builder.zig",
+        "backend/llvm/ir.zig",
+        "backend/llvm/bitcode_writer.zig",
+        "backend/llvm/BitcodeReader.zig",
+    };
+
+    fn isStdlibCopy(path: []const u8) bool {
+        for (stdlib_copies) |excluded| {
+            if (std.mem.endsWith(u8, path, excluded)) return true;
+        }
+        return false;
+    }
+
     fn scanDirectoryForEnumFromIntZero(
         allocator: std.mem.Allocator,
         dir: std.fs.Dir,
@@ -436,6 +451,9 @@ const CheckEnumFromIntZeroStep = struct {
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            // Skip Zig stdlib copies in backend/llvm
+            if (isStdlibCopy(full_path)) continue;
 
             const file = dir.openFile(entry.path, .{}) catch continue;
             defer file.close();
@@ -552,6 +570,21 @@ const CheckUnusedSuppressionStep = struct {
         line_content: []const u8,
     };
 
+    // Files in backend/llvm that are copies from Zig's stdlib and should be excluded
+    const stdlib_copies = [_][]const u8{
+        "backend/llvm/Builder.zig",
+        "backend/llvm/ir.zig",
+        "backend/llvm/bitcode_writer.zig",
+        "backend/llvm/BitcodeReader.zig",
+    };
+
+    fn isStdlibCopy(path: []const u8) bool {
+        for (stdlib_copies) |excluded| {
+            if (std.mem.endsWith(u8, path, excluded)) return true;
+        }
+        return false;
+    }
+
     fn scanDirectoryForUnusedSuppression(
         allocator: std.mem.Allocator,
         dir: std.fs.Dir,
@@ -566,6 +599,9 @@ const CheckUnusedSuppressionStep = struct {
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            // Skip Zig stdlib copies in backend/llvm
+            if (isStdlibCopy(full_path)) continue;
 
             const file = dir.openFile(entry.path, .{}) catch continue;
             defer file.close();
@@ -1963,7 +1999,20 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
-    add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
+
+    // Add LLVM support to snapshot tool for dual-mode testing
+    if (enable_llvm) {
+        const llvm_paths = llvmPaths(b, target, user_llvm_path) orelse return;
+        snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+        snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+        try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
+        // Add llvm_compile module for LLVM compilation pipeline
+        snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
+            .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        });
+    }
+
+    add_tracy(b, roc_modules.build_options, snapshot_exe, target, enable_llvm, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
     const playground_exe = b.addExecutable(.{
@@ -2157,7 +2206,19 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(snapshot_test);
         snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_test.step.dependOn(&write_compiled_builtins.step);
-        add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
+
+        // Add LLVM support for dual-mode testing
+        if (enable_llvm) {
+            const llvm_paths = llvmPaths(b, target, user_llvm_path) orelse return;
+            snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+            snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+            try addStaticLlvmOptionsToModule(snapshot_test.root_module);
+            snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
+                .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            });
+        }
+
+        add_tracy(b, roc_modules.build_options, snapshot_test, target, enable_llvm, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);
         if (run_args.len != 0) {

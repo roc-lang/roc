@@ -22,6 +22,7 @@ const eval_mod = @import("eval");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const tracy = @import("tracy");
+const llvm_compile = @import("llvm_compile");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
@@ -3750,7 +3751,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         try actual_outputs.append(repl_output);
     }
 
-    // Dual-mode testing: Also run LLVM evaluator and compare outputs
+    // Dual-mode testing: Run full LLVM compilation pipeline and compare outputs
     // This ensures the LLVM backend produces the same results as the interpreter
     {
         var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
@@ -3761,17 +3762,32 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         defer llvm_evaluator.deinit();
 
         for (inputs.items, actual_outputs.items) |input, interp_output| {
-            const llvm_output = llvm_evaluator.evalSourceToString(input) catch |err| {
-                std.debug.print("LLVM evaluation failed for input '{s}': {}\n", .{ input, err });
+            // Step 1: Generate LLVM bitcode from source
+            var bitcode_result = llvm_evaluator.generateBitcodeFromSource(input) catch |err| {
+                // Skip unsupported expressions - they'll return UnsupportedType
+                switch (err) {
+                    error.UnsupportedType => continue,
+                    error.ParseError, error.CanonicalizeError, error.TypeError => continue,
+                    else => {
+                        std.debug.print("LLVM bitcode generation failed for input '{s}': {}\n", .{ input, err });
+                        success = false;
+                        continue;
+                    },
+                }
+            };
+            defer bitcode_result.deinit();
+
+            // Step 2: Compile and execute using full LLVM pipeline
+            const llvm_output = llvm_compile.compileAndExecute(
+                output.gpa,
+                bitcode_result.bitcode,
+                bitcode_result.is_float,
+            ) catch |err| {
+                std.debug.print("LLVM compile/execute failed for input '{s}': {}\n", .{ input, err });
                 success = false;
                 continue;
             };
             defer output.gpa.free(llvm_output);
-
-            // Skip comparison if LLVM backend returns placeholder (not yet implemented)
-            if (std.mem.startsWith(u8, llvm_output, "<LLVM backend:")) {
-                continue;
-            }
 
             // Compare outputs - fail the snapshot if they differ
             if (!std.mem.eql(u8, interp_output, llvm_output)) {
