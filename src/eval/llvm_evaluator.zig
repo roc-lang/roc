@@ -685,3 +685,49 @@ test "llvm evaluator initialization" {
     // Just verify initialization works
     try std.testing.expect(evaluator.counter == 0);
 }
+
+test "formatDecValue preserves full precision" {
+    const allocator = std.testing.allocator;
+
+    // Test: 1.123456789012345678 = 1123456789012345678 (scaled by 10^18)
+    {
+        const result = try formatDecValue(allocator, 1123456789012345678);
+        defer allocator.free(result);
+        try std.testing.expectEqualStrings("1.123456789012345678", result);
+    }
+
+    // Test: 0.000000000000000001 = 1 (smallest positive Dec value)
+    {
+        const result = try formatDecValue(allocator, 1);
+        defer allocator.free(result);
+        try std.testing.expectEqualStrings("0.000000000000000001", result);
+    }
+
+    // Test: 0 should render as "0"
+    {
+        const result = try formatDecValue(allocator, 0);
+        defer allocator.free(result);
+        try std.testing.expectEqualStrings("0", result);
+    }
+
+    // Test: -1.5 = -1500000000000000000 (scaled by 10^18)
+    {
+        const result = try formatDecValue(allocator, -1500000000000000000);
+        defer allocator.free(result);
+        try std.testing.expectEqualStrings("-1.5", result);
+    }
+
+    // Test: trailing zeros are trimmed (0.125 = 125000000000000000)
+    {
+        const result = try formatDecValue(allocator, 125000000000000000);
+        defer allocator.free(result);
+        try std.testing.expectEqualStrings("0.125", result);
+    }
+
+    // Test: whole numbers without fractional part (42.0 = 42000000000000000000)
+    {
+        const result = try formatDecValue(allocator, 42000000000000000000);
+        defer allocator.free(result);
+        try std.testing.expectEqualStrings("42", result);
+    }
+}
