@@ -10,8 +10,8 @@ items = [1, 2, 3]
 
 result : I64
 result = match List.first(items) {
-    Ok(n) => n
-    Err(_) => 0
+	Ok(n) => n
+	Err(_) => 0
 }
 
 expect result == 1
@@ -71,16 +71,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-items : List(I64)
-items = [1, 2, 3]
-
-result : I64
-result = match List.first(items) {
-	Ok(n) => n
-	Err(_) => 0
-}
-
-expect result == 1
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

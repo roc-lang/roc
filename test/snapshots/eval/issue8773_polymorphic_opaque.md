@@ -6,24 +6,24 @@ type=snippet
 # SOURCE
 ~~~roc
 Item := [
-    Element(Str, List(Item)),
-    Text(Str),
+	Element(Str, List(Item)),
+	Text(Str),
 ]
 
 get_text : Item -> Str
 get_text = |item|
-    match item {
-        Element(tag, _) => tag
-        Text(content) => content
-    }
+	match item {
+		Element(tag, _) => tag
+		Text(content) => content
+	}
 
 items : List(Item)
 items = [Text("hello"), Text("world")]
 
 result : Str
 result = match List.first(items) {
-    Ok(item) => get_text(item)
-    Err(_) => "empty"
+	Ok(item) => get_text(item)
+	Err(_) => "empty"
 }
 
 expect result == "hello"
@@ -137,28 +137,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Item := [
-	Element(Str, List(Item)),
-	Text(Str),
-]
-
-get_text : Item -> Str
-get_text = |item|
-	match item {
-		Element(tag, _) => tag
-		Text(content) => content
-	}
-
-items : List(Item)
-items = [Text("hello"), Text("world")]
-
-result : Str
-result = match List.first(items) {
-	Ok(item) => get_text(item)
-	Err(_) => "empty"
-}
-
-expect result == "hello"
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
