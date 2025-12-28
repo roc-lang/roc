@@ -1036,7 +1036,7 @@ This expression is used in an unexpected way:
 
 It has the type:
 
-    [Stdoline!(Error), ..[Err(_d), Ok({  }), .._others2]]
+    [Stdoline!(Error), .._others2]
 
 But the type annotation says it should have the type:
 

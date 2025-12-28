@@ -1373,7 +1373,8 @@ test "unify - closed tag union extends open" {
 
 // unification - recursion //
 
-test "unify - fails on infinite type" {
+test "unify - infinite type detected by occurs check" {
+    // Unification succeeds, but the post-unification occurs check detects the infinite type.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -1391,33 +1392,19 @@ test "unify - fails on infinite type" {
     try env.module_env.types.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
     const result = try env.unify(a, b);
+    try std.testing.expectEqual(.ok, result);
 
-    switch (result) {
-        .ok => try std.testing.expect(false),
-        .problem => |problem_idx| {
-            const problem = env.problems.get(problem_idx);
-            try std.testing.expectEqual(.infinite_recursion, @as(Problem.Tag, problem));
-
-            // Verify that a snapshot was created for the recursion error
-            const snapshot_idx = problem.infinite_recursion.snapshot;
-            const snapshot_content = env.snapshots.getContent(snapshot_idx);
-            // The snapshot should be some valid content (not just err)
-            try std.testing.expect(snapshot_content != .err);
-
-            // Verify a formatted string was created
-            const formatted = env.snapshots.getFormattedString(snapshot_idx);
-            try std.testing.expect(formatted != null);
-        },
-    }
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
+    try std.testing.expectEqual(.infinite, occurs_result);
 }
 
-test "unify - fails on anonymous recursion" {
+test "unify - anonymous recursion detected by occurs check" {
+    // Unification succeeds, but the post-unification occurs check detects the anonymous recursion.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a tag union that recursively contains itself (anonymous recursion)
-    // This is like: a = [A a] unifying with b = [A b]
+    // Create self-referential tag unions: a = [A a], b = [A b]
     const tag_var_a = try env.module_env.types.fresh();
     const tag_a = try env.mkTag("A", &[_]Var{tag_var_a});
     const tag_union_a = try env.mkTagUnionClosed(&[_]Tag{tag_a});
@@ -1429,24 +1416,10 @@ test "unify - fails on anonymous recursion" {
     try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
 
     const result = try env.unify(tag_var_a, tag_var_b);
+    try std.testing.expectEqual(.ok, result);
 
-    switch (result) {
-        .ok => try std.testing.expect(false),
-        .problem => |problem_idx| {
-            const problem = env.problems.get(problem_idx);
-            try std.testing.expectEqual(.anonymous_recursion, @as(Problem.Tag, problem));
-
-            // Verify that a snapshot was created for the recursion error
-            const snapshot_idx = problem.anonymous_recursion.snapshot;
-            const snapshot_content = env.snapshots.getContent(snapshot_idx);
-            // The snapshot should be some valid content (not just err)
-            try std.testing.expect(snapshot_content != .err);
-
-            // Verify a formatted string was created
-            const formatted = env.snapshots.getFormattedString(snapshot_idx);
-            try std.testing.expect(formatted != null);
-        },
-    }
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, tag_var_a);
+    try std.testing.expectEqual(.recursive_anonymous, occurs_result);
 }
 
 test "unify - succeeds on nominal, tag union recursion" {

@@ -462,6 +462,31 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
     return null;
 }
 
+/// Check if a variable contains an infinite type (e.g. `a = List a`).
+fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
+    const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
+
+    switch (occurs_result) {
+        .not_recursive, .recursive_nominal => {},
+        .recursive_anonymous => {
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+            _ = try self.problems.appendProblem(self.gpa, .{ .anonymous_recursion = .{
+                .var_ = var_,
+                .snapshot = snapshot,
+            } });
+            try self.types.setVarContent(var_, .err);
+        },
+        .infinite => {
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+            _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
+                .var_ = var_,
+                .snapshot = snapshot,
+            } });
+            try self.types.setVarContent(var_, .err);
+        },
+    }
+}
+
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -1556,6 +1581,8 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
         // Check that the def and ptrn match
         _ = try self.unify(def_var, ptrn_var, env);
+
+        try self.checkForInfiniteType(def_var);
     }
 
     // Mark as processed

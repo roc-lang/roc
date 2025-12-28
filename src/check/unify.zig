@@ -194,9 +194,22 @@ pub fn unifyWithConf(
     // First reset the scratch store
     unify_scratch.reset();
 
+    // Take a snapshot before unification so we can rollback on failure.
+    // This allows us to capture the original (unmerged) types for error messages.
+    var type_store_snapshot = try types.snapshot();
+    errdefer type_store_snapshot.deinit(types.gpa);
+
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
+        // Rollback to restore original types before capturing error snapshots
+        types.rollbackTo(&type_store_snapshot);
+        type_store_snapshot.deinit(types.gpa);
+
+        // Reset scratch state since any fresh variables created during unification
+        // were rolled back and no longer exist in the type store
+        unify_scratch.reset();
+
         const problem: Problem = blk: {
             switch (err) {
                 error.AllocatorError => {
@@ -233,12 +246,12 @@ pub fn unifyWithConf(
                     };
 
                     const literal_var = if (literal_is_a) a else b;
-                    const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
+                    const num_expected_var = if (literal_is_a) b else a;
+                    const num_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, num_expected_var);
 
                     break :blk .{ .number_does_not_fit = .{
                         .literal_var = literal_var,
-                        .expected_type = expected_snapshot,
+                        .expected_type = num_expected_snapshot,
                     } };
                 },
                 error.NegativeUnsignedInt => {
@@ -256,12 +269,12 @@ pub fn unifyWithConf(
                     };
 
                     const literal_var = if (literal_is_a) a else b;
-                    const expected_var = if (literal_is_a) b else a;
-                    const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, expected_var);
+                    const neg_expected_var = if (literal_is_a) b else a;
+                    const neg_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, neg_expected_var);
 
                     break :blk .{ .negative_unsigned_int = .{
                         .literal_var = literal_var,
-                        .expected_type = expected_snapshot,
+                        .expected_type = neg_expected_snapshot,
                     } };
                 },
                 error.UnifyErr => {
@@ -316,13 +329,13 @@ pub fn unifyWithConf(
                             },
                         }
                     } else {
-                        const expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                        const actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
+                        const bug_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
+                        const bug_actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
                         break :blk .{ .bug = .{
                             .expected_var = a,
-                            .expected = expected_snapshot,
+                            .expected = bug_expected_snapshot,
                             .actual_var = b,
-                            .actual = actual_snapshot,
+                            .actual = bug_actual_snapshot,
                         } };
                     }
                 },
@@ -337,6 +350,8 @@ pub fn unifyWithConf(
         return Result{ .problem = problem_idx };
     };
 
+    // Unification succeeded, discard the snapshot
+    type_store_snapshot.deinit(types.gpa);
     return .ok;
 }
 
@@ -365,8 +380,6 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    depth: u8,
-    skip_depth_check: bool,
 
     /// Init unifier
     pub fn init(
@@ -380,8 +393,6 @@ const Unifier = struct {
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
-            .depth = 0,
-            .skip_depth_check = false,
         };
     }
 
@@ -423,8 +434,6 @@ const Unifier = struct {
         b_is_nominal,
     };
 
-    const max_depth_before_occurs = 8;
-
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -436,25 +445,13 @@ const Unifier = struct {
                 return;
             },
             .not_equiv => |vars| {
-                if (self.skip_depth_check or self.depth < max_depth_before_occurs) {
-                    self.depth += 1;
-                    const result = self.unifyVars(&vars);
-                    self.depth -= 1;
-                    _ = try result;
-                } else {
-                    try self.checkRecursive(&vars);
-
-                    self.skip_depth_check = true;
-                    try self.unifyVars(&vars);
-                    self.skip_depth_check = false;
-                }
+                try self.unifyVars(&vars);
             },
         }
     }
 
     /// Unify two vars
-    /// Internal entry point for unification logic. Use `unifyGuarded` to ensure
-    /// proper depth tracking and occurs checking.
+    /// Internal entry point for unification logic.
     fn unifyVars(self: *Self, vars: *const ResolvedVarDescs) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -476,37 +473,6 @@ const Unifier = struct {
                 try self.unifyRecursionVar(vars, a_rec_var, vars.b.desc.content);
             },
             .err => self.merge(vars, .err),
-        }
-    }
-
-    /// Run a full occurs check on each variable, erroring if it is infinite
-    /// or anonymous recursion
-    ///
-    /// This function is called when unify has recursed a sufficient depth that
-    /// a recursive type seems likely.
-    fn checkRecursive(self: *Self, vars: *const ResolvedVarDescs) Error!void {
-        const a_occurs = occurs.occurs(self.types_store, self.occurs_scratch, vars.a.var_) catch return Error.AllocatorError;
-        switch (a_occurs) {
-            .not_recursive => {},
-            .recursive_nominal => {},
-            .recursive_anonymous => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_anonymous = vars.a.var_ });
-            },
-            .infinite => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_infinite = vars.a.var_ });
-            },
-        }
-
-        const b_occurs = occurs.occurs(self.types_store, self.occurs_scratch, vars.b.var_) catch return Error.AllocatorError;
-        switch (b_occurs) {
-            .not_recursive => {},
-            .recursive_nominal => {},
-            .recursive_anonymous => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_anonymous = vars.b.var_ });
-            },
-            .infinite => {
-                return self.setUnifyErrAndThrow(UnifyErrCtx{ .recursion_infinite = vars.b.var_ });
-            },
         }
     }
 
@@ -1026,7 +992,7 @@ const Unifier = struct {
                         }
                     },
                     .tag_union => |b_tag_union| {
-                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
+                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union, true);
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
@@ -1102,13 +1068,14 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
+        // Early merge so self-referential types don't infinitely recurse
+        self.merge(vars, vars.b.desc.content);
+
         const a_elems = self.types_store.sliceVars(a_tuple.elems);
         const b_elems = self.types_store.sliceVars(b_tuple.elems);
         for (a_elems, b_elems) |a_elem, b_elem| {
             try self.unifyGuarded(a_elem, b_elem);
         }
-
-        self.merge(vars, vars.b.desc.content);
     }
 
     // Unify nominal type //
@@ -1208,12 +1175,38 @@ const Unifier = struct {
 
         const nominal_backing_tag_union = nominal_backing_flat.tag_union;
 
-        // Unify the two tag unions directly (without modifying the nominal's backing)
-        // This checks that:
-        // - All tags in the anonymous union exist in the nominal union
-        // - Payload types match
-        // - Extension variables are compatible
-        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
+        // Check if all tags in the anon union exist in the nominal union BEFORE
+        // doing any modifications. This prevents corrupting type information when
+        // unification fails (which would cause bad error messages).
+        // Check that nominal has an open extension or all anon tags are in nominal
+        const nominal_ext_resolved = self.types_store.resolveVar(nominal_backing_tag_union.ext);
+        const nominal_is_closed = nominal_ext_resolved.desc.content == .structure and
+            nominal_ext_resolved.desc.content.structure == .empty_tag_union;
+
+        if (nominal_is_closed) {
+            // For closed nominals, every tag in anon must exist in nominal
+            const anon_tag_slice = self.types_store.tags.sliceRange(anon_tag_union.tags);
+            const nominal_tag_slice = self.types_store.tags.sliceRange(nominal_backing_tag_union.tags);
+            const anon_names = anon_tag_slice.items(.name);
+            const nominal_names = nominal_tag_slice.items(.name);
+
+            for (anon_names) |anon_name| {
+                var found = false;
+                for (nominal_names) |nominal_name| {
+                    if (anon_name == nominal_name) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return error.TypeMismatch;
+                }
+            }
+        }
+
+        // Now safe to proceed with full unification.
+        // Don't do early merge here - preserve types for error messages if payload unification fails.
+        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union, false);
 
         // If we get here, unification succeeded!
         // Merge to the NOMINAL type (not the tag union)
@@ -1806,12 +1799,12 @@ const Unifier = struct {
         vars: *const ResolvedVarDescs,
         a_tag_union: TagUnion,
         b_tag_union: TagUnion,
+        comptime do_early_merge: bool,
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // First, unwrap all fields for tag unions, erroring if we encounter an
-        // invalid record ext var
+        // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
@@ -1834,6 +1827,37 @@ const Unifier = struct {
             tags_ext = .a_extends_b;
         } else if (b_has_uniq_tags) {
             tags_ext = .b_extends_a;
+        }
+
+        // Check if extensions are closed (empty_tag_union)
+        const a_ext_resolved = self.types_store.resolveVar(a_gathered_tags.ext);
+        const b_ext_resolved = self.types_store.resolveVar(b_gathered_tags.ext);
+        const a_ext_is_closed = a_ext_resolved.desc.content == .structure and
+            a_ext_resolved.desc.content.structure == .empty_tag_union;
+        const b_ext_is_closed = b_ext_resolved.desc.content == .structure and
+            b_ext_resolved.desc.content.structure == .empty_tag_union;
+
+        // Fast-fail cases where unification will definitely fail (before any merging)
+        // This prevents corrupting type information for better error messages
+        if (tags_ext == .both_extend and (a_ext_is_closed or b_ext_is_closed)) {
+            // If we have unique tags on both sides AND either side is closed,
+            // unification cannot succeed - fail immediately
+            return error.TypeMismatch;
+        }
+        if (tags_ext == .a_extends_b and b_ext_is_closed) {
+            // a has unique tags but b is closed - can't extend
+            return error.TypeMismatch;
+        }
+        if (tags_ext == .b_extends_a and a_ext_is_closed) {
+            // b has unique tags but a is closed - can't extend
+            return error.TypeMismatch;
+        }
+
+        // Early merge so self-referential types don't infinitely recurse.
+        // Only do this when the caller expects it (e.g., general tag union unification).
+        // Don't do this when called from nominal type checking, to preserve type info for errors.
+        if (do_early_merge) {
+            self.merge(vars, vars.b.desc.content);
         }
 
         // Unify tags
