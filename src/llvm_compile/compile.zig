@@ -15,6 +15,13 @@ const bindings = @import("bindings.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Type of the result value for JIT execution
+pub const ResultType = enum {
+    i64,
+    i128,
+    f64,
+};
+
 pub const Error = error{
     OutOfMemory,
     JITCreationFailed,
@@ -28,7 +35,7 @@ pub const Error = error{
 pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
-    is_float: bool,
+    result_type: ResultType,
 ) Error![]const u8 {
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
@@ -120,22 +127,34 @@ pub fn compileAndExecute(
         return error.SymbolNotFound;
     }
 
-    // Call the function and format the result
-    if (is_float) {
-        // Function returns f64
-        const EvalFn = *const fn () callconv(.c) f64;
-        const eval_fn: EvalFn = @ptrFromInt(eval_addr);
-        const result = eval_fn();
+    // Call the function and format the result based on the return type
+    switch (result_type) {
+        .f64 => {
+            // Function returns f64
+            const EvalFn = *const fn () callconv(.c) f64;
+            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const result = eval_fn();
 
-        // Format the float result
-        return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-    } else {
-        // Function returns i64
-        const EvalFn = *const fn () callconv(.c) i64;
-        const eval_fn: EvalFn = @ptrFromInt(eval_addr);
-        const result = eval_fn();
+            // Format the float result
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
+        .i128 => {
+            // Function returns i128
+            const EvalFn = *const fn () callconv(.c) i128;
+            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const result = eval_fn();
 
-        // Format the integer result
-        return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+            // Format the i128 result
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
+        .i64 => {
+            // Function returns i64
+            const EvalFn = *const fn () callconv(.c) i64;
+            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const result = eval_fn();
+
+            // Format the integer result
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
     }
 }

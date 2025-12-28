@@ -3778,10 +3778,12 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
             defer bitcode_result.deinit();
 
             // Step 2: Compile and execute using full LLVM pipeline
+            // Convert between the two ResultType enums (they have the same variants)
+            const result_type: llvm_compile.ResultType = @enumFromInt(@intFromEnum(bitcode_result.result_type));
             const llvm_output = llvm_compile.compileAndExecute(
                 output.gpa,
                 bitcode_result.bitcode,
-                bitcode_result.is_float,
+                result_type,
             ) catch |err| {
                 std.debug.print("LLVM compile/execute failed for input '{s}': {}\n", .{ input, err });
                 success = false;

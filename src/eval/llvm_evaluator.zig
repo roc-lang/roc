@@ -231,10 +231,17 @@ pub const LlvmEvaluator = struct {
         return self.evalExprDirectly(module_env, expr);
     }
 
+    /// Type of the result value for JIT execution
+    pub const ResultType = enum {
+        i64,
+        i128,
+        f64,
+    };
+
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
-        is_float: bool,
+        result_type: ResultType,
         allocator: Allocator,
 
         pub fn deinit(self: *BitcodeResult) void {
@@ -258,10 +265,11 @@ pub const LlvmEvaluator = struct {
         const value_type = try self.getExprLlvmType(&builder, expr);
         const value = try self.emitExprValue(&builder, module_env, expr);
 
-        // Determine if this is a float type
-        const is_float = switch (value_type) {
-            .float, .double => true,
-            else => false,
+        // Determine the result type for JIT execution
+        const result_type: ResultType = switch (value_type) {
+            .float, .double => .f64,
+            .i128 => .i128,
+            else => .i64,
         };
 
         // Generate a main function that prints the result
@@ -277,7 +285,7 @@ pub const LlvmEvaluator = struct {
 
         return BitcodeResult{
             .bitcode = bitcode,
-            .is_float = is_float,
+            .result_type = result_type,
             .allocator = self.allocator,
         };
     }
@@ -400,9 +408,7 @@ pub const LlvmEvaluator = struct {
             .e_num => |num| {
                 const int_value = num.value.toI128();
                 const llvm_type = try self.getExprLlvmType(builder, expr);
-                // Cast to i64 for most numeric types (i128 values would need special handling)
-                const truncated: i64 = @intCast(int_value);
-                return builder.intConst(llvm_type, truncated) catch return error.CompilationFailed;
+                return builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;
             },
             .e_frac_f32 => |frac| {
                 return builder.floatConst(frac.value) catch return error.CompilationFailed;
