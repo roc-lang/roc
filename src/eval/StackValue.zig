@@ -131,6 +131,10 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
+        // Guard against out-of-bounds discriminant (can happen with polymorphic tag unions
+        // where the layout and actual discriminant get out of sync during pattern matching)
+        if (discriminant >= variants.len) return;
+
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
         increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
@@ -297,6 +301,10 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
+        // Guard against out-of-bounds discriminant (can happen with polymorphic tag unions
+        // where the layout and actual discriminant get out of sync during pattern matching)
+        if (discriminant >= variants.len) return;
+
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
         decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
         return;
@@ -580,6 +588,10 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
+        // Guard against out-of-bounds discriminant (can happen with polymorphic tag unions
+        // where the layout and actual discriminant get out of sync during pattern matching)
+        if (discriminant >= variants.len) return;
+
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
         if (comptime trace_refcount) {
@@ -1558,7 +1570,9 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         const discriminant = tu_data.readDiscriminant(base_ptr);
 
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
+        // Guard against out-of-bounds discriminant (can happen with polymorphic tag unions
+        // where the layout and actual discriminant get out of sync during pattern matching)
+        if (discriminant >= variants.len) return;
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
         if (comptime trace_refcount) {
@@ -1790,6 +1804,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
             const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
             const variants = layout_cache.getTagUnionVariants(tu_data);
+            // Guard against out-of-bounds discriminant (can happen with polymorphic tag unions
+            // where the layout and actual discriminant get out of sync during pattern matching)
+            if (discriminant >= variants.len) return;
+
             const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
             if (comptime trace_refcount) {

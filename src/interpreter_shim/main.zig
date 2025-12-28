@@ -817,6 +817,20 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
         return error.InterpreterSetupFailed;
     };
 
+    // Debug: Print type store sizes for all modules
+    {
+        var debug_buf: [512]u8 = undefined;
+        const primary_types_len = env_ptr.types.len();
+        const primary_msg = std.fmt.bufPrint(&debug_buf, "DEBUG: primary_env=\"{s}\" types.len={d}", .{ env_ptr.module_name, primary_types_len }) catch "DEBUG: primary_env info";
+        roc_ops.dbg(primary_msg);
+
+        if (app_env) |a_env| {
+            const app_types_len = a_env.types.len();
+            const app_msg = std.fmt.bufPrint(&debug_buf, "DEBUG: app_env=\"{s}\" types.len={d}", .{ a_env.module_name, app_types_len }) catch "DEBUG: app_env info";
+            roc_ops.dbg(app_msg);
+        }
+    }
+
     // Setup for-clause type mappings from platform to app.
     // This maps rigid variable names (like "model") to their concrete app types.
     interpreter.setupForClauseTypeMappings(env_ptr) catch {

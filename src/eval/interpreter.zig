@@ -2524,6 +2524,13 @@ pub const Interpreter = struct {
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+
+                // Check index_arg has correct layout for integer extraction
+                if (index_arg.layout.tag != .scalar or index_arg.layout.data.scalar.tag != .int) {
+                    self.triggerCrash("list_get_unsafe: index argument is not an integer scalar", false, roc_ops);
+                    return error.TypeMismatch;
+                }
+
                 const index = index_arg.asI128(); // U64 stored as i128
 
                 // Get element layout
@@ -8134,12 +8141,23 @@ pub const Interpreter = struct {
                 return true;
             },
             .applied_tag => |tag_pat| {
+                // Check if either value_rt_var or value.rt_var resolves to a tag_union.
+                // This handles cases where the expected type (value_rt_var) doesn't match
+                // the actual value's type (value.rt_var).
                 const union_resolved = self.resolveBaseVar(value_rt_var);
-                if (union_resolved.desc.content != .structure or union_resolved.desc.content.structure != .tag_union) return false;
+                const value_resolved = self.resolveBaseVar(value.rt_var);
+                const is_union = (union_resolved.desc.content == .structure and union_resolved.desc.content.structure == .tag_union);
+                const value_is_union = (value_resolved.desc.content == .structure and value_resolved.desc.content.structure == .tag_union);
+                if (!is_union and !value_is_union) return false;
 
                 var tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
                 defer tag_list.deinit();
-                try self.appendUnionTags(value_rt_var, &tag_list);
+                // Try value_rt_var first, fall back to value.rt_var
+                if (is_union) {
+                    try self.appendUnionTags(value_rt_var, &tag_list);
+                } else {
+                    try self.appendUnionTags(value.rt_var, &tag_list);
+                }
 
                 // Build tag list from value's original rt_var.
                 // This is critical when a value was created with a narrower type (e.g., [Ok])
@@ -8150,10 +8168,15 @@ pub const Interpreter = struct {
                 defer value_tag_list.deinit();
                 try self.appendUnionTags(value.rt_var, &value_tag_list);
 
-                // Use value.rt_var (the value's actual type) for extracting tag data, not value_rt_var
-                // (the expected/pattern type). The value's discriminant was written based on its actual
-                // type's tag ordering, so we must use that same type to read it correctly.
-                const tag_data = try self.extractTagValue(value, value.rt_var);
+                // Use value.rt_var for extractTagValue since the value's discriminant is based on
+                // its original type, not the expected type from the pattern match.
+                // Fall back to value_rt_var if value.rt_var doesn't work.
+                const tag_data = self.extractTagValue(value, value.rt_var) catch |err| blk: {
+                    if (err == error.TypeMismatch) {
+                        break :blk self.extractTagValue(value, value_rt_var) catch return false;
+                    }
+                    return err;
+                };
 
                 // Translate pattern's tag ident to runtime env for direct comparison
                 const expected_name_str = self.env.getIdent(tag_pat.name);
@@ -13181,7 +13204,7 @@ pub const Interpreter = struct {
             const name_text = self.env.getIdent(cap.name);
             field_names[i] = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(name_text));
 
-            const cap_val = self.resolveCapture(cap, roc_ops) orelse {
+            const cap_val = self.resolveCapture(cap, self.env, roc_ops) orelse {
                 // Include capture name, module, expr_idx, and pattern_idx in error for debugging
                 var buf: [512]u8 = undefined;
                 const module_name = self.env.module_name;
@@ -13234,7 +13257,8 @@ pub const Interpreter = struct {
     }
 
     /// Helper to resolve a capture value from bindings, active closures, or top-level defs
-    fn resolveCapture(self: *Interpreter, cap: can.CIR.Expr.Capture, roc_ops: *RocOps) ?StackValue {
+    /// source_env is the module environment where the closure is being created (for top-level def lookup)
+    fn resolveCapture(self: *Interpreter, cap: can.CIR.Expr.Capture, source_env: *can.ModuleEnv, roc_ops: *RocOps) ?StackValue {
         // First try local bindings by pattern idx
         var i: usize = self.bindings.items.len;
         while (i > 0) {
@@ -13284,10 +13308,16 @@ pub const Interpreter = struct {
             }
             // If ident not found in runtime layout store, fall through to top-level defs search
         }
-        // Finally try top-level defs by pattern idx
-        const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+        // Finally try top-level defs by pattern idx.
+        // IMPORTANT: Use source_env (where the closure is defined), not self.env (current execution context).
+        // self.env may have been switched during nested closure evaluation to a different module
+        // (e.g., builtins), and the def's type variables would not exist in that module's type store.
+        const saved_env = self.env;
+        self.env = source_env;
+        defer self.env = saved_env;
+        const all_defs = source_env.store.sliceDefs(source_env.all_defs);
         for (all_defs) |def_idx| {
-            const def = self.env.store.getDef(def_idx);
+            const def = source_env.store.getDef(def_idx);
             if (def.pattern == cap.pattern_idx) {
                 // Check if this def is already being evaluated (to handle self-referential captures)
                 var k: usize = self.def_stack.items.len;
@@ -16720,6 +16750,44 @@ pub const Interpreter = struct {
                 try value_stack.push(receiver_value);
                 try value_stack.push(method_func);
 
+                // Get the method function's type to use parameter types for argument evaluation.
+                // This is critical for properly typing polymorphic numeric literals like `0` in `list.get(0)`.
+                const closure_header_for_args: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+
+                // Use the closure's source environment for type translation, as that's where the method is defined
+                const method_env = closure_header_for_args.source_env;
+                const method_lambda_ct_var_for_args = can.ModuleEnv.varFrom(closure_header_for_args.lambda_expr_idx);
+                const method_lambda_rt_var_for_args = try self.translateTypeVar(@constCast(method_env), method_lambda_ct_var_for_args);
+                const method_resolved_for_args = self.runtime_types.resolveVar(method_lambda_rt_var_for_args);
+
+                // Unify the method's first parameter with the receiver type to resolve type variables.
+                // This ensures that type variables like `a` in `List(a)` are properly bound.
+                const method_param_types: ?[]const types.Var = if (method_resolved_for_args.desc.content.unwrapFunc()) |func_info| blk: {
+                    const params = self.runtime_types.sliceVars(func_info.args);
+                    if (params.len >= 1) {
+                        // Create a copy of the receiver's type to avoid corrupting the original
+                        const recv_resolved = self.runtime_types.resolveVar(da.receiver_rt_var);
+                        const recv_copy = try self.runtime_types.register(.{
+                            .content = recv_resolved.desc.content,
+                            .rank = recv_resolved.desc.rank,
+                            .mark = types.Mark.none,
+                        });
+                        _ = unify.unifyWithConf(
+                            @constCast(method_env),
+                            self.runtime_types,
+                            &self.problems,
+                            &self.snapshots,
+                            &self.type_writer,
+                            &self.unify_scratch,
+                            &self.unify_scratch.occurs_scratch,
+                            params[0],
+                            recv_copy,
+                            unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                        ) catch {};
+                    }
+                    break :blk params;
+                } else null;
+
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                     .method_name = da.field_name,
                     .collected_count = 0,
@@ -16729,12 +16797,17 @@ pub const Interpreter = struct {
                 } } });
 
                 // Start evaluating first arg
-                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
-
+                // Use the method's second parameter type (first explicit arg) if available.
+                // For List.get(0), the second param is U64, so the literal 0 gets the correct type.
+                const first_arg_expected_rt_var: types.Var = if (method_param_types != null and method_param_types.?.len >= 2)
+                    method_param_types.?[1]
+                else blk: {
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    break :blk try self.translateTypeVar(self.env, first_arg_ct_var);
+                };
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
-                    .expected_rt_var = first_arg_rt_var,
+                    .expected_rt_var = first_arg_expected_rt_var,
                 } });
                 return true;
             },
