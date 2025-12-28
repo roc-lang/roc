@@ -19,7 +19,7 @@ const bindings = @import("bindings.zig");
 const bitcode_writer = @import("bitcode_writer.zig");
 const target = @import("../../target/mod.zig");
 
-/// Result of code generation
+/// Outcome of code generation including path to object file or error details.
 pub const CodegenResult = struct {
     /// Path to the generated object file (if successful)
     object_path: ?[]const u8,
@@ -28,6 +28,7 @@ pub const CodegenResult = struct {
     /// Whether code generation succeeded
     success: bool,
 
+    /// Creates a successful result with the given object file path.
     pub fn ok(path: []const u8) CodegenResult {
         return .{
             .object_path = path,
@@ -36,6 +37,7 @@ pub const CodegenResult = struct {
         };
     }
 
+    /// Creates a failed result with the given error message.
     pub fn err(message: []const u8) CodegenResult {
         return .{
             .object_path = null,
@@ -66,6 +68,7 @@ pub const Codegen = struct {
     allocator: Allocator,
     emitter: emit.LlvmEmitter,
 
+    /// Error types that can occur during code generation.
     pub const Error = error{
         OutOfMemory,
         CompilationFailed,

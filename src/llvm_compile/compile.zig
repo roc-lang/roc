@@ -123,6 +123,7 @@ fn formatDec(allocator: Allocator, num: i128) Allocator.Error![]const u8 {
     return try out.toOwnedSlice();
 }
 
+/// Errors that can occur during LLVM JIT compilation and execution.
 pub const Error = error{
     OutOfMemory,
     JITCreationFailed,

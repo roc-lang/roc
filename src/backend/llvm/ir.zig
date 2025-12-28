@@ -1,9 +1,12 @@
+//! LLVM IR data structures and types.
+
 const std = @import("../../std.zig");
 const Builder = @import("Builder.zig");
 const bitcode_writer = @import("bitcode_writer.zig");
 
 const AbbrevOp = bitcode_writer.AbbrevOp;
 
+/// Magic number identifying LLVM bitcode files.
 pub const MAGIC: u32 = 0xdec04342;
 
 const ValueAbbrev = AbbrevOp{ .vbr = 6 };
@@ -117,6 +120,7 @@ pub const FixedMetadataKind = enum(u6) {
     //@"coro.outside.frame" = 39,
 };
 
+/// Block containing metadata about other blocks, such as standard abbreviations.
 pub const BlockInfoBlock = struct {
     pub const id: BlockId = .BLOCKINFO;
 
@@ -2279,6 +2283,7 @@ pub const IdentificationBlock = struct {
     };
 };
 
+/// String table block for storing string data referenced elsewhere in the bitcode.
 pub const StrtabBlock = struct {
     pub const id: BlockId = .STRTAB;
 

@@ -246,16 +246,18 @@ pub const LlvmEvaluator = struct {
 
         /// Compile-time validation that this enum matches the expected structure.
         /// This helps catch accidental divergence from llvm_compile.ResultType.
+        /// Using ordinal comparison instead of string comparison to comply with lint rules.
         pub fn validate() void {
             comptime {
-                const fields = @typeInfo(ResultType).@"enum".fields;
-                if (fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-                if (!std.mem.eql(u8, fields[0].name, "i64")) @compileError("ResultType[0] must be i64");
-                if (!std.mem.eql(u8, fields[1].name, "u64")) @compileError("ResultType[1] must be u64");
-                if (!std.mem.eql(u8, fields[2].name, "i128")) @compileError("ResultType[2] must be i128");
-                if (!std.mem.eql(u8, fields[3].name, "u128")) @compileError("ResultType[3] must be u128");
-                if (!std.mem.eql(u8, fields[4].name, "f64")) @compileError("ResultType[4] must be f64");
-                if (!std.mem.eql(u8, fields[5].name, "dec")) @compileError("ResultType[5] must be dec");
+                // Validate there are exactly 6 variants by checking that ordinal 5 is the max
+                if (@typeInfo(ResultType).@"enum".fields.len != 6) @compileError("ResultType must have exactly 6 variants");
+                // Validate ordinals match expected order
+                if (@intFromEnum(ResultType.i64) != 0) @compileError("ResultType.i64 must be ordinal 0");
+                if (@intFromEnum(ResultType.u64) != 1) @compileError("ResultType.u64 must be ordinal 1");
+                if (@intFromEnum(ResultType.i128) != 2) @compileError("ResultType.i128 must be ordinal 2");
+                if (@intFromEnum(ResultType.u128) != 3) @compileError("ResultType.u128 must be ordinal 3");
+                if (@intFromEnum(ResultType.f64) != 4) @compileError("ResultType.f64 must be ordinal 4");
+                if (@intFromEnum(ResultType.dec) != 5) @compileError("ResultType.dec must be ordinal 5");
             }
         }
     };

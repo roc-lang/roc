@@ -56,6 +56,7 @@ pub const StrLayout = struct {
     ptr: Builder.Type = .ptr,
     len: Builder.Type = .i64,
 
+    /// Returns the LLVM types for pointer and length fields.
     pub fn toFieldTypes(self: StrLayout) [2]Builder.Type {
         return .{ self.ptr, self.len };
     }
@@ -68,6 +69,7 @@ pub const ListLayout = struct {
     len: Builder.Type = .i64,
     capacity: Builder.Type = .i64,
 
+    /// Returns the LLVM types for pointer, length, and capacity fields.
     pub fn toFieldTypes(self: ListLayout) [3]Builder.Type {
         return .{ self.ptr, self.len, self.capacity };
     }
@@ -143,7 +145,7 @@ pub const LlvmEmitter = struct {
         };
     }
 
-    // ==================== Type Creation Methods ====================
+    // Type Creation Methods
 
     /// Get the LLVM type for Roc's Bool
     pub fn boolType(_: *LlvmEmitter) Builder.Type {
@@ -366,7 +368,7 @@ pub const LlvmEmitter = struct {
         wip.cursor = .{ .block = block };
     }
 
-    // ==================== Struct Operations ====================
+    // Struct Operations
 
     /// Extract a value from a struct/record by field index
     pub fn emitExtractValue(
@@ -400,7 +402,7 @@ pub const LlvmEmitter = struct {
         return wip.gepStruct(struct_type, ptr, field_index, "") catch return error.OutOfMemory;
     }
 
-    // ==================== Comparison Operations ====================
+    // Comparison Operations
 
     /// Integer comparison conditions
     pub const IntCond = enum {
@@ -468,7 +470,7 @@ pub const LlvmEmitter = struct {
         return wip.fcmp(.normal, llvm_cond, lhs, rhs, "") catch return error.OutOfMemory;
     }
 
-    // ==================== Memory Operations ====================
+    // Memory Operations
 
     /// Emit an alloca instruction (allocate on stack)
     pub fn emitAlloca(self: *LlvmEmitter, ty: Builder.Type) Error!Builder.Value {
@@ -488,7 +490,7 @@ pub const LlvmEmitter = struct {
         _ = wip.store(.normal, val, ptr, "") catch return error.OutOfMemory;
     }
 
-    // ==================== Call Operations ====================
+    // Call Operations
 
     /// Emit a function call
     pub fn emitCall(
@@ -501,7 +503,7 @@ pub const LlvmEmitter = struct {
         return wip.call(.normal, fn_type, callee, args, "") catch return error.OutOfMemory;
     }
 
-    // ==================== PHI Node Operations ====================
+    // PHI Node Operations
 
     /// Emit a phi node for merging values from different branches
     pub fn emitPhi(
@@ -512,7 +514,7 @@ pub const LlvmEmitter = struct {
         return wip.phi(ty, "") catch return error.OutOfMemory;
     }
 
-    // ==================== Boolean Operations ====================
+    // Boolean Operations
 
     /// Emit a boolean constant
     pub fn emitBoolConst(self: *LlvmEmitter, value: bool) Error!Builder.Value {
@@ -544,7 +546,7 @@ pub const LlvmEmitter = struct {
         return self.emitXor(val, true_val);
     }
 
-    // ==================== Builder Access ====================
+    // Builder Access
 
     /// Get the underlying LLVM Builder for direct access
     pub fn getBuilder(self: *LlvmEmitter) *Builder {

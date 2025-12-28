@@ -9,6 +9,8 @@ const max_file_bytes: usize = 16 * 1024 * 1024;
 const test_file_exclusions = [_][]const u8{
     // TODO Fixing in progress...
     "src/cli/test_docs.zig",
+    // Copied from Zig stdlib; tests are tested upstream
+    "src/backend/llvm/BitcodeReader.zig",
 };
 
 const TermColor = struct {

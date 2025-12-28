@@ -1,5 +1,8 @@
+//! LLVM bitcode writer for serializing IR to bitcode format.
+
 const std = @import("../../std.zig");
 
+/// Represents an abbreviation operand used in LLVM bitcode encoding.
 pub const AbbrevOp = union(enum) {
     literal: u32, // 0
     fixed: u16, // 1
@@ -13,8 +16,10 @@ pub const AbbrevOp = union(enum) {
     array_char6: void, // 3, 4
 };
 
+/// Error type for bitcode writer operations.
 pub const Error = error{OutOfMemory};
 
+/// Creates a bitcode writer type parameterized by the given types for width tracking.
 pub fn BitcodeWriter(comptime types: []const type) type {
     return struct {
         const BcWriter = @This();
