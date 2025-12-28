@@ -9116,23 +9116,15 @@ pub const Interpreter = struct {
             return;
         }
 
-        // If the CT type is a rigid var, add mappings to BOTH flex_type_context and rigid_name_subst.
-        //
-        // flex_type_context: keyed by var ID - handles cases where the same var ID is used.
-        //
-        // rigid_name_subst: keyed by NAME - this is critical because different occurrences of
-        // the same rigid var (e.g., `item` in `List(item) -> Try(item, ...)`) may have different
-        // var IDs after serialization, even though they're semantically the same type parameter.
-        // By also storing by name, translateTypeVar can find the mapping for any occurrence.
+        // If the CT type is a rigid var, also add to flex_type_context.
+        // This is needed because: in polymorphic functions, the parameter type might be rigid
+        // (from the function signature), but flex vars inside the function body were unified
+        // with this rigid var at compile time. After serialization, these unifications might
+        // not be preserved, so we need to map both the rigid var and any flex vars that might
+        // be looking for it.
         if (ct_resolved.desc.content == .rigid) {
-            const rigid = ct_resolved.desc.content.rigid;
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
             try self.putFlexTypeContext(flex_key, rt_var);
-
-            // Also store by name in rigid_name_subst for name-based lookup
-            const rigid_name_str = module.getIdent(rigid.name);
-            const rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(rigid_name_str));
-            try self.rigid_name_subst.put(rt_name.idx, rt_var);
             return;
         }
 
@@ -9575,17 +9567,6 @@ pub const Interpreter = struct {
                     break :blk fresh_flex;
                 },
                 .rigid => |rigid| {
-                    // Translate the rigid's name from source module's ident store to runtime ident store
-                    const source_name_str = module.getIdent(rigid.name);
-                    const rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
-
-                    // Check rigid_name_subst FIRST - this handles polymorphic type propagation
-                    // where different occurrences of the same rigid name (e.g., `item` in both
-                    // `List(item)` and `Try(item, ...)`) should resolve to the same concrete type.
-                    if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        break :blk concrete_rt_var;
-                    }
-
                     // Check if this rigid should be substituted (during nominal type backing translation)
                     if (self.translate_rigid_subst.get(resolved.var_)) |substitute_var| {
                         // Check if the substitute_var is itself a rigid with a for-clause mapping
@@ -9602,6 +9583,10 @@ pub const Interpreter = struct {
                         // Translate the substitute type instead of the rigid
                         break :blk try self.translateTypeVar(module, substitute_var);
                     }
+
+                    // Translate the rigid's name from source module's ident store to runtime ident store
+                    const source_name_str = module.getIdent(rigid.name);
+                    const rt_name = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
 
                     // Translate static dispatch constraints if present
                     const rt_rigid = if (rigid.constraints.len() > 0) blk_rigid: {
@@ -14777,19 +14762,57 @@ pub const Interpreter = struct {
                         // Tag union layout: payload at offset 0, discriminant at discriminant_offset
                         const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
 
-                        // Debug assertion: verify the payload fits within the expected layout.
-                        // If this fails, it indicates a bug in polymorphic type propagation.
-                        if (comptime builtin.mode == .Debug) {
-                            if (total_count == 1) {
-                                const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
-                                const expected_payload_size = tu_data.discriminant_offset;
-                                if (arg_size > expected_payload_size) {
-                                    std.debug.panic(
-                                        "Tag union payload size mismatch: payload size {} exceeds discriminant offset {}. " ++
-                                            "This indicates a polymorphic type propagation bug.",
-                                        .{ arg_size, expected_payload_size },
-                                    );
+                        // Check for layout mismatch - if the expected payload is smaller than actual
+                        // we need to use a properly-sized tuple layout to avoid corruption.
+                        // This happens with polymorphic types like Result where the type param
+                        // is a disconnected flex var that defaults to ZST layout.
+                        if (total_count == 1) {
+                            const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                            const expected_payload_size = tu_data.discriminant_offset; // payload is before discriminant
+                            // Apply fix when expected payload is very small but actual is larger
+                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
+                            if (needs_fix) {
+                                // Layout mismatch - create a tuple layout [payload, discriminant]
+                                // This is the same approach as layout_type == 1
+                                const disc_precision: types.Int.Precision = switch (tu_data.discriminant_size) {
+                                    1 => .u8,
+                                    2 => .u16,
+                                    4 => .u32,
+                                    8 => .u64,
+                                    else => .u8,
+                                };
+                                const disc_layout = Layout{
+                                    .tag = .scalar,
+                                    .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
+                                };
+                                var elem_layouts_fixed = [2]Layout{ values[0].layout, disc_layout };
+                                const proper_tuple_idx = try self.runtime_layout_store.putTuple(&elem_layouts_fixed);
+                                const proper_tuple_layout = self.runtime_layout_store.getLayout(proper_tuple_idx);
+                                var proper_dest = try self.pushRaw(proper_tuple_layout, 0, tc.rt_var);
+                                var proper_acc = try proper_dest.asTuple(&self.runtime_layout_store);
+
+                                // Create fresh vars for tuple element access
+                                const disc_rt_var = try self.runtime_types.fresh();
+
+                                // Write tag discriminant (element 1)
+                                const proper_tag_field = try proper_acc.getElement(1, disc_rt_var);
+                                if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                    var tmp = proper_tag_field;
+                                    tmp.is_initialized = false;
+                                    try tmp.setInt(@intCast(tc.tag_index));
                                 }
+
+                                // Write payload (element 0)
+                                const proper_payload_field = try proper_acc.getElement(0, values[0].rt_var);
+                                if (proper_payload_field.ptr) |proper_ptr| {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, proper_ptr, roc_ops);
+                                }
+
+                                for (values) |val| {
+                                    val.decref(&self.runtime_layout_store, roc_ops);
+                                }
+                                try value_stack.push(proper_dest);
+                                return true;
                             }
                         }
 
@@ -14798,10 +14821,9 @@ pub const Interpreter = struct {
                         const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
 
                         // Write payload at offset 0 FIRST, before writing the discriminant.
-                        // This ordering is better for alignment: the payload's alignment is
-                        // almost always >= the discriminant's alignment (typically 1-4 bytes),
-                        // so placing the payload first at the base address ensures it's
-                        // naturally aligned without padding.
+                        // This is crucial because the payload may be larger than the discriminant
+                        // offset (e.g., when wrapping an opaque type in a Result), and copying
+                        // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
                             try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
@@ -14828,10 +14850,8 @@ pub const Interpreter = struct {
                             }
                         }
 
-                        // Write discriminant after the payload. This ordering matches the
-                        // memory layout (payload at offset 0, discriminant after) and is
-                        // better for alignment since payloads typically have higher
-                        // alignment requirements than discriminants.
+                        // Write discriminant AFTER the payload, so it doesn't get overwritten
+                        // by a payload that extends past the discriminant offset.
                         const disc_ptr = base_ptr + tu_data.discriminant_offset;
                         switch (tu_data.discriminant_size) {
                             1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
@@ -16644,20 +16664,6 @@ pub const Interpreter = struct {
 
                     try self.active_closures.append(method_func);
 
-                    // Save flex_type_context before adding parameter mappings.
-                    // This will be restored in call_cleanup.
-                    var saved_flex_type_context = try self.flex_type_context.clone();
-                    errdefer saved_flex_type_context.deinit();
-
-                    // Propagate flex mappings from the receiver's compile-time parameter type
-                    // to the receiver's runtime type. This is critical for polymorphic methods
-                    // like List.first where the element type needs to be mapped.
-                    const receiver_rt_resolved = self.runtime_types.resolveVar(da.receiver_rt_var);
-                    if (receiver_rt_resolved.desc.content == .structure) {
-                        const receiver_param_ct_var = can.ModuleEnv.varFrom(params[0]);
-                        try self.propagateFlexMappings(self.env, receiver_param_ct_var, da.receiver_rt_var);
-                    }
-
                     // Use patternMatchesBind to properly bind nested patterns (e.g., nominal patterns
                     // like `|Widget.Content(s)|` need to bind `s`, not just the outer pattern).
                     const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
@@ -16667,10 +16673,6 @@ pub const Interpreter = struct {
                         _ = self.active_closures.pop();
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                        // Restore flex_type_context on error
-                        self.flex_type_context.deinit();
-                        self.flex_type_context = saved_flex_type_context;
-                        self.poly_context_generation +%= 1;
                         return error.TypeMismatch;
                     }
                     // Decref original receiver value since patternMatchesBind made a copy
@@ -16684,7 +16686,7 @@ pub const Interpreter = struct {
                         .did_instantiate = false,
                         .call_ret_rt_var = effective_ret_var,
                         .saved_rigid_subst = null,
-                        .saved_flex_type_context = saved_flex_type_context,
+                        .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
                     try work_stack.push(.{ .eval_expr = .{

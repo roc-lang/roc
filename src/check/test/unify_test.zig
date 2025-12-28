@@ -175,8 +175,18 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 0 },
+            self.module_env.module_name_idx, // Use actual module name idx for proper canLiftInner check
             false, // Use nominal for tests
+        );
+    }
+
+    fn mkOpaqueType(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
+        return try self.module_env.types.mkNominal(
+            try self.mkTypeIdent(name),
+            backing_var,
+            args,
+            self.module_env.module_name_idx, // Use actual module name idx for proper canLiftInner check
+            true, // Opaque type
         );
     }
 
@@ -781,6 +791,69 @@ test "unify - empty nominal type with non-empty tag union fails" {
 
     // Should fail
     try std.testing.expectEqual(false, result.isOk());
+}
+
+// unification - opaque types with anonymous tag unions //
+// These tests verify that opaque types (::) can unify with tag unions
+// when we're in the same module where the opaque type is defined.
+
+test "unify - anonymous tag union unifies with opaque type (same module)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create opaque type: Foo :: [A, B]
+    const tag_a = try env.mkTag("A", &[_]Var{});
+    const tag_b = try env.mkTag("B", &[_]Var{});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_a, tag_b });
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const opaque_var = try env.module_env.types.freshFromContent(
+        try env.mkOpaqueType("Foo", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [A]
+    const anon_tag_a = try env.mkTag("A", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_a});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: Foo ~ [A] - should succeed since we're in the same module
+    const result = try env.unify(opaque_var, anon_var);
+
+    // Should succeed and merge to opaque type
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(anon_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
+}
+
+test "unify - anonymous tag union unifies with opaque type (tag union on left)" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    // Create opaque type: Bar :: [X, Y, Z]
+    const tag_x = try env.mkTag("X", &[_]Var{});
+    const tag_y = try env.mkTag("Y", &[_]Var{});
+    const tag_z = try env.mkTag("Z", &[_]Var{});
+    const backing_tu = try env.mkTagUnionClosed(&[_]Tag{ tag_x, tag_y, tag_z });
+    const backing_var = try env.module_env.types.freshFromContent(backing_tu.content);
+    const opaque_var = try env.module_env.types.freshFromContent(
+        try env.mkOpaqueType("Bar", backing_var, &[_]Var{}),
+    );
+
+    // Create anonymous tag union: [Y]
+    const anon_tag_y = try env.mkTag("Y", &[_]Var{});
+    const anon_tu = try env.mkTagUnionOpen(&[_]Tag{anon_tag_y});
+    const anon_var = try env.module_env.types.freshFromContent(anon_tu.content);
+
+    // Unify: [Y] ~ Bar - should succeed since we're in the same module
+    const result = try env.unify(anon_var, opaque_var);
+
+    // Should succeed and merge to opaque type
+    try std.testing.expectEqual(.ok, result);
+    const resolved = env.module_env.types.resolveVar(anon_var);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .nominal_type);
 }
 
 // unification - records - partition fields //
