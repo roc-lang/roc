@@ -79,7 +79,11 @@ pub const TypeScope = struct {
 };
 
 /// A type descriptor
-pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
+pub const Descriptor = struct {
+    content: Content,
+    rank: Rank,
+    mark: Mark,
+};
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
 /// Top-level definitions have rank 1. A let inside a top-level definition gets rank 2, and so on.
