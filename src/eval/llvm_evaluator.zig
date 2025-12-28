@@ -619,6 +619,79 @@ fn numKindToTypeName(kind: CIR.NumKind) []const u8 {
     };
 }
 
+// ============================================================================
+// Platform-Specific i128 ABI Handling
+// ============================================================================
+//
+// Different platforms represent i128 values differently when passing them
+// to/from functions compiled by Zig:
+//
+// - Windows: Uses <2 x i64> vector type for i128 values
+// - macOS ARM64: Uses [2 x i64] array type for i128 values
+// - Other platforms (x86-64 Linux/macOS): Use native i128 type
+//
+// This matters when calling Zig-compiled builtin functions (like Dec operations)
+// that take or return i128. The Roc builtins are compiled from Zig to LLVM
+// bitcode, and Zig's code generation for i128 varies by platform.
+//
+// When generating LLVM IR that calls into these builtins, we need to:
+// 1. Convert our native i128 values to the platform-specific format before calling
+// 2. Convert the return value back to native i128 after the call
+//
+// Currently, the LLVM evaluator only handles numeric literals without calling
+// any builtins, so this ABI handling is not yet active. When builtin function
+// call support is added, use the helpers below.
+
+/// Platform-specific representation used for i128 values in function calls
+pub const I128Repr = enum {
+    /// Native i128 type - used on x86-64 Linux and macOS x86-64
+    native,
+    /// <2 x i64> vector type - used on Windows
+    vector_2xi64,
+    /// [2 x i64] array type - used on macOS ARM64
+    array_2xi64,
+};
+
+/// Detect the i128 representation needed for the current target platform.
+/// This should be used when generating calls to Zig-compiled builtin functions.
+pub fn getI128Repr() I128Repr {
+    if (builtin.os.tag == .windows) {
+        return .vector_2xi64;
+    } else if (builtin.os.tag == .macos and builtin.cpu.arch == .aarch64) {
+        return .array_2xi64;
+    } else {
+        return .native;
+    }
+}
+
+/// Check if i128 values need ABI conversion for the current platform.
+/// Returns true if we're on Windows or macOS ARM64.
+pub fn needsI128Conversion() bool {
+    return getI128Repr() != .native;
+}
+
+// TODO: When adding builtin function call support, implement these helpers:
+//
+// /// Convert an i128 LLVM value to the platform-specific representation.
+// /// Use this before passing i128 arguments to Zig-compiled builtins.
+// pub fn prepareI128Arg(builder: *LlvmBuilder, value: LlvmBuilder.Value) !LlvmBuilder.Value {
+//     return switch (getI128Repr()) {
+//         .native => value,
+//         .vector_2xi64 => // bitcast i128 to <2 x i64>
+//         .array_2xi64 => // bitcast i128 to [2 x i64]
+//     };
+// }
+//
+// /// Convert a platform-specific i128 representation back to native i128.
+// /// Use this after receiving i128 return values from Zig-compiled builtins.
+// pub fn normalizeI128Return(builder: *LlvmBuilder, value: LlvmBuilder.Value) !LlvmBuilder.Value {
+//     return switch (getI128Repr()) {
+//         .native => value,
+//         .vector_2xi64 => // bitcast <2 x i64> to i128
+//         .array_2xi64 => // bitcast [2 x i64] to i128
+//     };
+// }
+
 test "llvm evaluator initialization" {
     const allocator = std.testing.allocator;
 
@@ -627,4 +700,27 @@ test "llvm evaluator initialization" {
 
     // Just verify initialization works
     try std.testing.expect(evaluator.counter == 0);
+}
+
+test "i128 platform detection" {
+    const repr = getI128Repr();
+
+    // Verify the platform detection returns a valid value
+    switch (repr) {
+        .native => {
+            // On native platforms, no conversion is needed
+            try std.testing.expect(!needsI128Conversion());
+        },
+        .vector_2xi64 => {
+            // Windows uses vector representation
+            try std.testing.expect(builtin.os.tag == .windows);
+            try std.testing.expect(needsI128Conversion());
+        },
+        .array_2xi64 => {
+            // macOS ARM64 uses array representation
+            try std.testing.expect(builtin.os.tag == .macos);
+            try std.testing.expect(builtin.cpu.arch == .aarch64);
+            try std.testing.expect(needsI128Conversion());
+        },
+    }
 }
