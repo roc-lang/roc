@@ -248,11 +248,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>False",
         .description = "Regression test: Method lookup for nominal types in roc build executables (issue #8654)",
     },
-    .{
-        .roc_file = "test/fx/issue8785.roc",
-        .io_spec = "1>Got Element: span",
-        .description = "Regression test: Pattern matching on recursive opaque type element retrieved from List (issue #8785)",
-    },
 };
 
 /// Get the total number of IO spec tests

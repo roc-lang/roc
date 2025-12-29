@@ -59,3 +59,40 @@ test "check - repro - issue 8764" {
 
     try test_env.assertNoErrors();
 }
+
+test "check - repro - issue 8785" {
+    // Pattern matching on recursive opaque type element retrieved from List
+    const src =
+        \\main! = |_| {}
+        \\
+        \\Node := [
+        \\    Element(Str, List(Node)),
+        \\    Text(Str),
+        \\]
+        \\
+        \\test_pattern_match = |node| {
+        \\    match node {
+        \\        Element(tag, _) => tag
+        \\        Text(text) => text
+        \\    }
+        \\}
+        \\
+        \\result = {
+        \\    element_val : Node
+        \\    element_val = Element("span", [])
+        \\
+        \\    element_list : List(Node)
+        \\    element_list = [element_val]
+        \\
+        \\    match List.first(element_list) {
+        \\        Ok(v) => test_pattern_match(v)
+        \\        Err(_) => "Error"
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
