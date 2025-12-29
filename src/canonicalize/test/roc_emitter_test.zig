@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 
 const Emitter = @import("../RocEmitter.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");

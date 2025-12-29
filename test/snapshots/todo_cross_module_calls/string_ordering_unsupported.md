@@ -11,12 +11,12 @@ type=repl
 » "first" <= "second"
 ~~~
 # OUTPUT
-Evaluation error: error.StringOrderingNotSupported
+TYPE MISMATCH
 ---
-Evaluation error: error.StringOrderingNotSupported
+TYPE MISMATCH
 ---
-Evaluation error: error.StringOrderingNotSupported
+TYPE MISMATCH
 ---
-Evaluation error: error.StringOrderingNotSupported
+TYPE MISMATCH
 # PROBLEMS
 NIL

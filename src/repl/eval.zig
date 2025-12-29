@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const compile = @import("compile");
 const parse = @import("parse");
 const types = @import("types");
 const can = @import("can");
@@ -14,8 +13,6 @@ const eval_mod = @import("eval");
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
-const collections = @import("collections");
-const reporting = @import("reporting");
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -291,22 +288,6 @@ pub const Repl = struct {
         }
     }
 
-    /// Process regular input (not special commands) - returns string (legacy API)
-    fn processInput(self: *Repl, input: []const u8) ![]const u8 {
-        const result = try self.processInputStructured(input);
-        return switch (result) {
-            .expression => |s| s,
-            .definition => |s| s,
-            .help => |s| s,
-            .parse_error => |s| s,
-            .canonicalize_error => |s| s,
-            .type_error => |s| s,
-            .eval_error => |s| s,
-            .quit => try self.allocator.dupe(u8, "Goodbye!"),
-            .empty => try self.allocator.dupe(u8, ""),
-        };
-    }
-
     const ParseResult = union(enum) {
         assignment: struct {
             source: []const u8, // Borrowed from input
@@ -475,229 +456,6 @@ pub const Repl = struct {
     fn evaluateSourceStructured(self: *Repl, source: []const u8) !StepResult {
         const module_env = try self.allocateModuleEnv(source);
         return try self.evaluatePureExpressionStructured(module_env);
-    }
-
-    /// Evaluate source code - returns string (legacy API)
-    fn evaluateSource(self: *Repl, source: []const u8) ![]const u8 {
-        const result = try self.evaluateSourceStructured(source);
-        return switch (result) {
-            .expression => |s| s,
-            .definition => |s| s,
-            .help => |s| s,
-            .parse_error => |s| s,
-            .canonicalize_error => |s| s,
-            .type_error => |s| s,
-            .eval_error => |s| s,
-            .quit => try self.allocator.dupe(u8, "Goodbye!"),
-            .empty => try self.allocator.dupe(u8, ""),
-        };
-    }
-
-    /// Evaluate a program (which may contain definitions)
-    fn evaluatePureExpression(self: *Repl, module_env: *ModuleEnv) ![]const u8 {
-
-        // Determine if we have definitions (which means we built a block expression)
-        const has_definitions = self.definitions.count() > 0;
-
-        // Parse appropriately based on whether we have definitions
-        var parse_ast = if (has_definitions)
-            // Has definitions - we built a block expression, parse as expression
-            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
-                return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
-            }
-        else
-            // No definitions - simple expression, parse as expression
-            parse.parseExpr(&module_env.common, self.allocator) catch |err| {
-                return try std.fmt.allocPrint(self.allocator, "Parse error: {}", .{err});
-            };
-        defer parse_ast.deinit(self.allocator);
-
-        // Check for parse errors and render them
-        if (parse_ast.hasErrors()) {
-            // Render the first error as the error message
-            if (parse_ast.tokenize_diagnostics.items.len > 0) {
-                var report = try parse_ast.tokenizeDiagnosticToReport(
-                    parse_ast.tokenize_diagnostics.items[0],
-                    self.allocator,
-                    null,
-                );
-                defer report.deinit();
-
-                var output = std.array_list.Managed(u8).init(self.allocator);
-                var unmanaged = output.moveToUnmanaged();
-                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
-                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
-                    error.WriteFailed => return error.OutOfMemory,
-                    else => return err,
-                };
-                unmanaged = writer_alloc.toArrayList();
-                output = unmanaged.toManaged(self.allocator);
-                return try output.toOwnedSlice();
-            } else if (parse_ast.parse_diagnostics.items.len > 0) {
-                var report = try parse_ast.parseDiagnosticToReport(
-                    &module_env.common,
-                    parse_ast.parse_diagnostics.items[0],
-                    self.allocator,
-                    "repl",
-                );
-                defer report.deinit();
-
-                var output = std.array_list.Managed(u8).init(self.allocator);
-                var unmanaged = output.moveToUnmanaged();
-                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
-                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
-                    error.WriteFailed => return error.OutOfMemory,
-                    else => return err,
-                };
-                unmanaged = writer_alloc.toArrayList();
-                output = unmanaged.toManaged(self.allocator);
-                // Trim trailing newlines from the output and return a properly allocated copy
-                const full_result = try output.toOwnedSlice();
-                defer self.allocator.free(full_result);
-                const trimmed = std.mem.trimRight(u8, full_result, "\n");
-                return try self.allocator.dupe(u8, trimmed);
-            }
-        }
-
-        // Empty scratch space
-        parse_ast.store.emptyScratch();
-
-        // Create CIR
-        const cir = module_env; // CIR is now just ModuleEnv
-        try cir.initCIRFields("repl");
-
-        // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
-        // These refer to the actual statements in the Builtin module
-        const bool_stmt_in_bool_module = self.builtin_indices.bool_type;
-        const try_stmt_in_try_module = self.builtin_indices.try_type;
-        const str_stmt_in_builtin_module = self.builtin_indices.str_type;
-
-        const module_builtin_ctx: Check.BuiltinContext = .{
-            .module_name = try module_env.insertIdent(base.Ident.for_text("repl")),
-            .bool_stmt = bool_stmt_in_bool_module,
-            .try_stmt = try_stmt_in_try_module,
-            .str_stmt = str_stmt_in_builtin_module,
-            .builtin_module = self.builtin_module.env,
-            .builtin_indices = self.builtin_indices,
-        };
-
-        // Create canonicalizer with nested types available for qualified name resolution
-        // Populate all auto-imported builtin types using the shared helper to keep behavior consistent
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, can.Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        );
-
-        var czer = Can.init(cir, &parse_ast, &module_envs_map) catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "Canonicalize init error: {}", .{err});
-        };
-        defer czer.deinit();
-
-        // NOTE: True/False/Ok/Err are now just anonymous tags that unify with Bool/Try automatically!
-        // No need to register unqualified_nominal_tags - the type system handles it.
-
-        // Since we're always parsing as expressions now, handle them the same way
-        const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-
-        const canonical_expr = try czer.canonicalizeExpr(expr_idx) orelse {
-            // Check for diagnostics and render them as error messages
-            const diagnostics = try module_env.getDiagnostics();
-            if (diagnostics.len > 0) {
-                // Render the first diagnostic as the error message
-                const diagnostic = diagnostics[0];
-                var report = try module_env.diagnosticToReport(diagnostic, self.allocator, "repl");
-                defer report.deinit();
-
-                var output = std.array_list.Managed(u8).init(self.allocator);
-                var unmanaged = output.moveToUnmanaged();
-                var writer_alloc = std.Io.Writer.Allocating.fromArrayList(self.allocator, &unmanaged);
-                report.render(&writer_alloc.writer, .markdown) catch |err| switch (err) {
-                    error.WriteFailed => return error.OutOfMemory,
-                    else => return err,
-                };
-                unmanaged = writer_alloc.toArrayList();
-                output = unmanaged.toManaged(self.allocator);
-                return try output.toOwnedSlice();
-            }
-            return try self.allocator.dupe(u8, "Canonicalize expr error: expression returned null");
-        };
-        const final_expr_idx = canonical_expr.get_idx();
-
-        // Type check - Pass Builtin as imported module
-        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
-
-        // Resolve imports - map each import to its index in imported_modules
-        // This uses the same resolution logic as compile_package.zig
-        module_env.imports.resolveImports(module_env, &imported_modules);
-
-        var checker = Check.init(
-            self.allocator,
-            &module_env.types,
-            cir,
-            &imported_modules,
-            &module_envs_map,
-            &cir.store.regions,
-            module_builtin_ctx,
-        ) catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "Type check init error: {}", .{err});
-        };
-        defer checker.deinit();
-
-        // Check the expression (no need to check defs since we're parsing as expressions)
-        _ = checker.checkExprRepl(final_expr_idx) catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "Type check expr error: {}", .{err});
-        };
-
-        // Create interpreter instance with BuiltinTypes containing real Builtin module
-        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping, null) catch |err| {
-            return try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err});
-        };
-        defer interpreter.deinitAndFreeOtherEnvs();
-
-        if (self.crash_ctx) |ctx| {
-            ctx.reset();
-        }
-
-        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
-            error.Crash => {
-                if (self.crash_ctx) |ctx| {
-                    if (ctx.crashMessage()) |msg| {
-                        return try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg});
-                    }
-                }
-                return try self.allocator.dupe(u8, "Evaluation error: error.Crash");
-            },
-            else => return try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}),
-        };
-
-        // Generate debug HTML if enabled
-        if (self.debug_store_snapshots) {
-            try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
-        }
-
-        // Use the runtime type from the result value if available (set by e.g. makeBoolValue),
-        // otherwise fall back to translating the compile-time type from the expression.
-        // This is important when the compile-time type is a generic constraint (e.g. from == or !=)
-        // but the runtime type is concrete (e.g. Bool).
-        const output = blk: {
-            if (result.rt_var) |rt_var| {
-                break :blk try interpreter.renderValueRocWithType(result, rt_var, self.roc_ops);
-            }
-            const expr_ct_var = can.ModuleEnv.varFrom(final_expr_idx);
-            const expr_rt_var = interpreter.translateTypeVar(module_env, expr_ct_var) catch {
-                break :blk try interpreter.renderValueRoc(result);
-            };
-            break :blk try interpreter.renderValueRocWithType(result, expr_rt_var, self.roc_ops);
-        };
-
-        result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        return output;
     }
 
     /// Evaluate a program (which may contain definitions) - returns structured result

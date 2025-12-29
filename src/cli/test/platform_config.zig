@@ -59,12 +59,6 @@ const targets_with_glibc = [_]TargetInfo{
     .{ .name = "arm64glibc", .requires_linux = true },
 };
 
-/// Standard targets for platforms without glibc support
-const targets_musl_only = [_]TargetInfo{
-    .{ .name = "x64musl", .requires_linux = false },
-    .{ .name = "arm64musl", .requires_linux = false },
-};
-
 /// Targets for fx platforms (musl + Windows)
 const targets_fx = [_]TargetInfo{
     .{ .name = "x64musl", .requires_linux = false },

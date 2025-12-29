@@ -45,6 +45,18 @@ pub const RocDec = extern struct {
         return .{ .num = num * one_point_zero_i128 };
     }
 
+    /// Convert a fraction represented as numerator / 10^denominator_power to RocDec.
+    /// For example, 314 with power 2 represents 3.14 (314 / 100).
+    pub fn fromFraction(numerator: i128, denominator_power: u8) RocDec {
+        // decimal_places is 18, so scale_power = 18 - denominator_power (clamped to 0)
+        const scale_power: u7 = if (denominator_power >= decimal_places)
+            0
+        else
+            decimal_places - @as(u5, @intCast(denominator_power));
+        const scale = math.pow(i128, 10, scale_power);
+        return .{ .num = numerator * scale };
+    }
+
     pub fn fromF64(num: f64) ?RocDec {
         const result: f64 = num * comptime @as(f64, @floatFromInt(one_point_zero_i128));
 
@@ -1003,9 +1015,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
-const expectError = testing.expectError;
 const expectEqualSlices = std.testing.expectEqualSlices;
-const expect = std.testing.expect;
 
 // exports
 

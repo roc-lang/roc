@@ -5,9 +5,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const Allocator = std.mem.Allocator;
-const base = @import("base");
-const Allocators = base.Allocators;
 const libc_finder = @import("libc_finder.zig");
 const RocTarget = @import("roc_target").RocTarget;
 const cli_ctx = @import("CliContext.zig");
@@ -162,9 +159,9 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             try args.append("13.0"); // minimum deployment target
             try args.append("13.0"); // SDK version
 
-            // Add SDK path
+            // Use bundled libSystem stub instead of requiring macOS SDK
             try args.append("-syslibroot");
-            try args.append("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
+            try args.append(build_options.darwin_sysroot);
 
             // Link against system libraries on macOS
             try args.append("-lSystem");

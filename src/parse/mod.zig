@@ -10,9 +10,6 @@ const tracy = @import("tracy");
 pub const tokenize = @import("tokenize.zig");
 
 const CommonEnv = base.CommonEnv;
-const TokenIndex = tokenize.TokenIndex;
-const TokenizedBuffer = tokenize.TokenizedBuffer;
-const NodeList = AST.NodeList;
 const Diagnostic = AST.Diagnostic;
 
 /// **AST.Parser**

@@ -9,14 +9,11 @@ const parse = @import("parse");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
-const Interpreter = @import("../interpreter.zig").Interpreter;
-const helpers = @import("helpers.zig");
 
 const Can = can.Can;
 const Check = check.Check;
@@ -710,6 +707,19 @@ test "e_low_level_lambda - List.concat with Str.to_utf8 inside lambda (issue 861
     const value = try evalModuleAndGetString(src, 1, test_allocator);
     defer test_allocator.free(value);
     try testing.expectEqualStrings("[0, 97, 98, 99]", value);
+}
+
+test "top-level List.concat with Str.to_utf8 (value restriction check)" {
+    // This tests whether value restriction at top-level causes issues
+    // similar to what we saw when applying it to local bindings
+    const src =
+        \\line = "abc"
+        \\result = line.to_utf8().concat([0])
+    ;
+
+    const value = try evalModuleAndGetString(src, 1, test_allocator);
+    defer test_allocator.free(value);
+    try testing.expectEqualStrings("[97, 98, 99, 0]", value);
 }
 
 test "e_low_level_lambda - List.concat with strings (refcounted elements)" {
@@ -2898,6 +2908,8 @@ test "e_low_level_lambda - I64.mod_by with zero result" {
 // variable in polymorphic contexts, leading to the wrong layout being used
 // for the return value (should be empty record {}).
 test "issue 8750: dbg in polymorphic debug function with List.len" {
+    std.debug.print("Ignore the dbg prints to stderr below, they are expected.\n", .{});
+
     const src =
         \\debug = |v| {
         \\    dbg v
@@ -3057,4 +3069,23 @@ test "issue 8750: List.fold render value" {
     const rendered = try result.evaluator.interpreter.renderValueRocWithType(stack_value, rt_var, ops);
     defer test_allocator.free(rendered);
     try testing.expectEqualStrings("6", rendered);
+}
+
+test "issue 8765: Box.unbox with record containing numeric literal" {
+    // Regression test for issue #8765 - Box.unbox loses type resolution when the
+    // boxed value contains a record with numeric literals. The bug was that numeric
+    // literals in nested structures weren't propagating their constraint information
+    // through Box.unbox, causing type inference to fail.
+    const src =
+        \\update = |boxed| {
+        \\    { count } = Box.unbox(boxed)
+        \\    count + 1
+        \\}
+        \\initial = Box.box({ count: 0 })
+        \\result = update(initial)
+    ;
+
+    const result = try evalModuleAndGetString(src, 2, test_allocator);
+    defer test_allocator.free(result);
+    try testing.expectEqualStrings("1", result);
 }

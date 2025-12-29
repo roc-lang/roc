@@ -34,11 +34,9 @@ const Allocator = std.mem.Allocator;
 
 const platform_config = @import("platform_config.zig");
 const runner_core = @import("runner_core.zig");
-const fx_test_specs = @import("fx_test_specs.zig");
 
 const PlatformConfig = platform_config.PlatformConfig;
 const TestStats = runner_core.TestStats;
-const TestResult = runner_core.TestResult;
 
 /// Test mode
 const TestMode = enum {

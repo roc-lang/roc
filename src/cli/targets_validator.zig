@@ -15,7 +15,6 @@ const reporting = @import("reporting");
 
 const RocTarget = target_mod.RocTarget;
 const TargetsConfig = target_mod.TargetsConfig;
-const LinkItem = target_mod.LinkItem;
 const TargetLinkSpec = target_mod.TargetLinkSpec;
 const LinkType = target_mod.LinkType;
 const Report = reporting.Report;

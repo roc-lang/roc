@@ -1687,13 +1687,6 @@ pub const BuildEnv = struct {
         self.sink.tryEmitLocked();
     }
 
-    fn depthOf(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) !u32 {
-        if (self.schedulers.get(pkg_name)) |sched| {
-            return sched.getModuleDepth(module_name) orelse @as(u32, std.math.maxInt(u32));
-        }
-        return @as(u32, std.math.maxInt(u32));
-    }
-
     fn moduleToPath(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) ![]const u8 {
         if (self.packages.get(pkg_name)) |pkg| {
             return try self.dottedToPath(pkg.root_dir, module_name);
@@ -1897,12 +1890,6 @@ pub const OrderedSink = struct {
                 return lessIgnoreCase(ea.module_name, eb.module_name);
             }
         }.lt);
-    }
-
-    // Package sink wrapper that adds package context
-    fn makePkgSink(_: *OrderedSink, _: []const u8) PackageEnv.ReportSink {
-        // This will be set up by PkgSinkCtx
-        return .{ .ctx = undefined, .emitFn = undefined };
     }
 
     // Emit with package and module names

@@ -5,7 +5,6 @@
 //! generalization would try to add the resolved variable at rank 2 to the
 //! tmp_var_pool which only goes up to rank 1, causing a panic.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "nested lambda with higher-rank variables does not panic during generalization" {
@@ -40,7 +39,7 @@ test "nested lambda with higher-rank variables does not panic during generalizat
         \\    get_next_token : List(U8), U64 -> TokenizerResult
         \\    get_next_token = |file, index| {
         \\        match List.get(file, index) {
-        \\            Ok('\n') => (Ok(NewlineToken), index, index + 1)
+        \\            Ok(_) => (Ok(NewlineToken), index, index + 1)
         \\            Err(_) => (Ok(EndOfFileToken), index, index)
         \\        }
         \\    }

@@ -56,13 +56,13 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Foo := [A, B].{
-	# # This is a multi-line doc comment
-	# # for a nested type declaration
-	# # that spans multiple lines
+	## This is a multi-line doc comment
+	## for a nested type declaration
+	## that spans multiple lines
 	Bar := [X, Y, Z]
 
-	# # Multi-line documentation
-	# # for an associated value
+	## Multi-line documentation
+	## for an associated value
 	defaultValue = 42
 }
 ~~~

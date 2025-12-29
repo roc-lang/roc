@@ -2,19 +2,9 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const can = @import("can");
-const types_mod = @import("types");
-const problem_mod = @import("../problem.zig");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
 
-const Can = can.Can;
-const ModuleEnv = can.ModuleEnv;
-const CanonicalizedExpr = can.Can.CanonicalizedExpr;
 const testing = std.testing;
-const test_allocator = testing.allocator;
 
 // primitives - nums //
 
@@ -184,7 +174,12 @@ test "check type - binop operands same type works - unbound plus unbound" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -372,7 +367,7 @@ test "check type - (a == b) desugars to a.is_eq(b) with unified args" {
     ;
 
     // The binop version unifies a and b, so they have the same type variable
-    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> d]";
+    const expected_binop: []const u8 = "c, c -> Bool where [c.is_eq : c, c -> Bool]";
     try checkTypesExpr(src_binop, .pass, expected_binop);
 
     // The direct method call version does NOT unify a and b
@@ -390,7 +385,7 @@ test "check type - (a != b) desugars to a.is_eq(b).not() with unified args" {
     ;
 
     // The binop version unifies a and b, so they have the same type variable
-    const expected_binop: []const u8 = "c, c -> d where [c.is_eq : c, c -> e, e.not : e -> d]";
+    const expected_binop: []const u8 = "c, c -> Bool where [c.is_eq : c, c -> Bool]";
     try checkTypesExpr(src_binop, .pass, expected_binop);
 
     // The direct method call version does NOT unify a and b
@@ -579,7 +574,12 @@ test "check type - def - nested lambda" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]",
+        \\d
+        \\  where [
+        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        \\    d.plus : d, d -> d,
+        \\  ]
+        ,
     );
 }
 
@@ -1035,7 +1035,7 @@ test "check type - match - diff branch types" {
 
 test "check type - unary not" {
     const source =
-        \\x = !True
+        \\x = !Bool.True
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
 }
@@ -1044,10 +1044,10 @@ test "check type - unary not mismatch" {
     const source =
         \\x = !"Hello"
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
-// unary not
+// unary minus
 
 test "check type - unary minus" {
     const source =
@@ -1085,7 +1085,12 @@ test "check type - binops math sub" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.minus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1340,6 +1345,9 @@ test "check type - patterns frac 3" {
 }
 
 test "check type - patterns list" {
+    // The pattern [_a, .. as b] is redundant because [.. as b, _a] already matches
+    // all non-empty lists. Both patterns match lists with 1+ elements, just extracting
+    // different parts (first vs last element).
     const source =
         \\{
         \\  x = ["a", "b", "c"]
@@ -1351,7 +1359,7 @@ test "check type - patterns list" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "List(Str)");
+    try checkTypesExpr(source, .fail, "REDUNDANT PATTERN");
 }
 
 test "check type - patterns record" {
@@ -1402,7 +1410,7 @@ test "check type - patterns record field mismatch" {
 
 // vars + reassignment //
 
-test "check type - var ressignment" {
+test "check type - var reassignment" {
     const source =
         \\main = {
         \\  var x = 1
@@ -1413,7 +1421,12 @@ test "check type - var ressignment" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1513,14 +1526,19 @@ test "check type - for" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
 test "check type - for mismatch" {
     const source =
         \\main = {
-        \\  var result = 0
+        \\  var result = 0u8
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
         \\  }
@@ -1530,7 +1548,7 @@ test "check type - for mismatch" {
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "TYPE MISMATCH",
     );
 }
 
@@ -1838,7 +1856,7 @@ test "check type - comprehensive - multiple layers of lambdas" {
         \\main! = |_| {}
         \\
         \\# Four layers of nested lambdas
-        \\curried_add : a, a, a, a -> a where [a.add : a, a -> a]
+        \\curried_add : a, a, a, a -> a where [a.plus : a, a -> a]
         \\curried_add = |a, b, c, d| a + b + c + d
         \\
         \\func = {
@@ -1851,14 +1869,14 @@ test "check type - comprehensive - multiple layers of lambdas" {
         .{ .pass = .{ .def = "func" } },
         \\a
         \\  where [
-        \\    a.add : a, a -> a,
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
 }
 
-test "check type - comprehensive - static dispatch with multiple methods" {
+test "check type - comprehensive - static dispatch with multiple methods 1" {
     const source =
         \\main! = |_| {}
         \\
@@ -1905,7 +1923,12 @@ test "check type - comprehensive - static dispatch with multiple methods" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1959,7 +1982,12 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "func" } },
-        "Container(b) where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]",
+        \\Container(b)
+        \\  where [
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    b.plus : b, b -> b,
+        \\  ]
+        ,
     );
 }
 
@@ -2173,12 +2201,17 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
+        // TODO: Look at why constraints are not deduped!
         \\{ chained: b, final: b, id_results: (e, Str, Bool), processed: c, transformed: a }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    b.plus : b, b -> b,
+        \\    b.plus : b, b -> b,
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    c.plus : c, c -> c,
         \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
         \\  ]
         ,
@@ -2377,7 +2410,16 @@ test "List.fold works as builtin associated item" {
         \\
         \\x = List.fold([1, 2, 3], 0, |acc, item| acc + item)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "x" } }, "item where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]");
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "x" } },
+        \\item
+        \\  where [
+        \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
+        \\    item.plus : item, item -> item,
+        \\  ]
+        ,
+    );
 }
 
 test "associated item: type annotation followed by body should not create duplicate definition" {
@@ -2848,6 +2890,80 @@ test "check type - List.first method syntax should not create cyclic types" {
         .{ .pass = .last_def },
         \\Try(item, [ListWasEmpty, ..others])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
+        ,
+    );
+}
+
+test "check type - lambda capturing top-level constant with plus - mono_pure_lambda case" {
+    // This test verifies the type inference for the mono_pure_lambda snapshot.
+    // The result of add_one(5) should be a numeric type with from_numeral and plus constraints,
+    // NOT Bool.
+    const source =
+        \\one = 1
+        \\add_one = |x| x + one
+        \\result = add_one(5)
+    ;
+    // Expected: result should have numeric type with from_numeral and plus constraints
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "result" } },
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
+    );
+}
+
+test "check type - simple function call should have return type" {
+    // Simpler test: directly call a lambda to verify the call expression gets the right type
+    const source =
+        \\add_one = |x| x + 1
+        \\result = add_one(5)
+    ;
+    // Both add_one and result should have numeric types with from_numeral and plus constraints
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "result" } },
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
+    );
+}
+
+// Lots of inferred constraints
+
+test "check type - range inferred" {
+    const source =
+        \\range = |var $current, end| {
+        \\  if end < $current {
+        \\    return []
+        \\  }
+        \\
+        \\  var $answer = List.with_capacity(((end - $current) + 1).to_u64())
+        \\  while $current <= end {
+        \\    $answer = $answer.append($current)
+        \\    $current = $current + 1
+        \\  }
+        \\  $answer
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        \\a, a -> List(a)
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.is_lt : a, a -> Bool,
+        \\    a.is_lte : a, a -> Bool,
+        \\    a.minus : a, a -> a,
+        \\    a.plus : a, a -> a,
+        \\    a.to_u64 : a -> U64,
+        \\  ]
         ,
     );
 }

@@ -19,8 +19,6 @@ const Can = can.Can;
 const Check = check.Check;
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
-const Content = types.Content;
-const Var = types.Var;
 
 const max_builtin_bytes = 1024 * 1024;
 
@@ -29,18 +27,18 @@ var stderr_buffer: [4096]u8 = undefined;
 var stderr_writer: std.fs.File.Writer = undefined;
 var stderr_initialized = false;
 
+fn flushStderr() void {
+    if (stderr_initialized) {
+        stderr_writer.interface.flush() catch {};
+    }
+}
+
 fn stderrWriter() *std.Io.Writer {
     if (!stderr_initialized) {
         stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
         stderr_initialized = true;
     }
     return &stderr_writer.interface;
-}
-
-fn flushStderr() void {
-    if (stderr_initialized) {
-        stderr_writer.interface.flush() catch {};
-    }
 }
 
 // Use the canonical BuiltinIndices from CIR
@@ -1810,13 +1808,6 @@ fn serializeModuleEnv(
 
     // Write to file
     try writer.writeGather(arena_alloc, file);
-}
-
-/// Get the ident index from a type declaration statement
-fn getTypeIdent(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) base.Ident.Idx {
-    const stmt = env.store.getStatement(stmt_idx);
-    const header = env.store.getTypeHeader(stmt.s_nominal_decl.header);
-    return header.name;
 }
 
 /// Find a type declaration by name in a compiled module

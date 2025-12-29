@@ -125,5 +125,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+(expr (type "a where [a.div_by : a, a -> a, a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.minus : a, a -> a, a.plus : a, a -> a, a.times : a, a -> a]"))
 ~~~
