@@ -248,6 +248,49 @@ pub fn compileAndExecute(
     const builder = bindings.OrcLLJITBuilder.create();
     // Note: builder is consumed by createLLJIT
 
+    // Configure the JIT to use a generic CPU target to avoid issues with
+    // unrecognized CPU features on various ARM64 platforms.
+    // LLVM's default host detection may return CPU names/features that
+    // the bundled LLVM version doesn't fully support.
+    {
+        // Get the host target triple
+        const triple = bindings.GetDefaultTargetTriple();
+        defer bindings.disposeMessage(triple);
+
+        // Get the target from the triple
+        var target: *bindings.Target = undefined;
+        var error_message: [*:0]const u8 = undefined;
+        if (bindings.Target.getFromTriple(triple, &target, &error_message).toBool()) {
+            bindings.disposeMessage(error_message);
+            ts_module.dispose();
+            return error.JITCreationFailed;
+        }
+
+        // Create a target machine with "generic" CPU and no specific features.
+        // This avoids issues where LLVM detects CPU features it doesn't fully support.
+        const target_machine = bindings.TargetMachine.create(
+            target,
+            triple,
+            "generic", // Use generic CPU instead of detecting specific CPU
+            "", // No specific features
+            .Default, // optimization level
+            .Default, // reloc mode
+            .Default, // code model
+            false, // function_sections (not needed for JIT)
+            false, // data_sections (not needed for JIT)
+            .Default, // float_abi
+            null, // abi_name
+            false, // emulated_tls
+        );
+
+        // Create JIT target machine builder from the target machine
+        // This takes ownership of the target machine
+        const jtmb = bindings.OrcJITTargetMachineBuilder.createFromTargetMachine(target_machine);
+
+        // Set the target machine builder on the LLJIT builder
+        builder.setJITTargetMachineBuilder(jtmb);
+    }
+
     // Create LLJIT instance
     var jit: *bindings.OrcLLJIT = undefined;
     if (bindings.createLLJIT(&jit, builder)) |err| {

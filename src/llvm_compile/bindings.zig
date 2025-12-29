@@ -465,6 +465,23 @@ pub const OrcLLJIT = opaque {
     extern fn LLVMOrcLLJITGetTripleString(*OrcLLJIT) [*:0]const u8;
 };
 
+/// Opaque handle to a JIT target machine builder for configuring code generation.
+pub const OrcJITTargetMachineBuilder = opaque {
+    /// Creates a JITTargetMachineBuilder by detecting the host.
+    /// This uses LLVM's host detection which may return CPU features
+    /// that aren't fully supported. Use createFromTargetMachine for more control.
+    pub const detectHost = LLVMOrcJITTargetMachineBuilderDetectHost;
+    extern fn LLVMOrcJITTargetMachineBuilderDetectHost(Result: **OrcJITTargetMachineBuilder) OrcError;
+
+    /// Creates a JITTargetMachineBuilder from an existing TargetMachine.
+    /// Takes ownership of the TargetMachine.
+    pub const createFromTargetMachine = LLVMOrcJITTargetMachineBuilderCreateFromTargetMachine;
+    extern fn LLVMOrcJITTargetMachineBuilderCreateFromTargetMachine(*TargetMachine) *OrcJITTargetMachineBuilder;
+
+    pub const dispose = LLVMOrcDisposeJITTargetMachineBuilder;
+    extern fn LLVMOrcDisposeJITTargetMachineBuilder(*OrcJITTargetMachineBuilder) void;
+};
+
 /// Opaque handle to an ORC LLJIT builder for configuring JIT compilation.
 pub const OrcLLJITBuilder = opaque {
     pub const create = LLVMOrcCreateLLJITBuilder;
@@ -472,6 +489,11 @@ pub const OrcLLJITBuilder = opaque {
 
     pub const dispose = LLVMOrcDisposeLLJITBuilder;
     extern fn LLVMOrcDisposeLLJITBuilder(*OrcLLJITBuilder) void;
+
+    /// Sets the JITTargetMachineBuilder for this LLJIT instance.
+    /// This controls how code is generated for the target platform.
+    pub const setJITTargetMachineBuilder = LLVMOrcLLJITBuilderSetJITTargetMachineBuilder;
+    extern fn LLVMOrcLLJITBuilderSetJITTargetMachineBuilder(*OrcLLJITBuilder, *OrcJITTargetMachineBuilder) void;
 };
 
 /// Opaque handle to an ORC JIT dynamic library for symbol resolution.
@@ -564,6 +586,11 @@ extern fn LLVMGetHostCPUName() ?[*:0]u8;
 /// Returns the feature string for the host CPU (e.g., "+sse4.2,+avx").
 pub const GetHostCPUFeatures = LLVMGetHostCPUFeatures;
 extern fn LLVMGetHostCPUFeatures() ?[*:0]u8;
+
+/// Returns the default target triple for the host (e.g., "x86_64-unknown-linux-gnu").
+/// The returned string must be freed with disposeMessage.
+pub const GetDefaultTargetTriple = LLVMGetDefaultTargetTriple;
+extern fn LLVMGetDefaultTargetTriple() [*:0]u8;
 
 /// High-level function to compile bitcode to an object file.
 /// Returns an error message on failure, null on success.
