@@ -23,7 +23,6 @@ const reporting = @import("reporting");
 const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
-const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");
@@ -1061,18 +1060,14 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     czer.canonicalizeFile() catch |err| {
         logDebug("compileSource: canonicalizeFile failed: {}\n", .{err});
-        if (err == error.OutOfMemory) {
-            // If we're out of memory here, the state is likely unstable.
-            // Propagate this error up to halt compilation gracefully.
-            return err;
-        }
+        // If we're out of memory here, the state is likely unstable.
+        // Propagate this error up to halt compilation gracefully.
+        return err;
     };
 
     czer.validateForChecking() catch |err| {
         logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-        if (err == error.OutOfMemory) {
-            return err;
-        }
+        return err;
     };
     logDebug("compileSource: Canonicalization complete\n", .{});
 
@@ -1108,13 +1103,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
         solver.checkFile() catch |check_err| {
             logDebug("compileSource: checkFile failed: {}\n", .{check_err});
-            if (check_err == error.OutOfMemory) {
-                // OOM during type checking is critical.
-                // Deinit solver and propagate error.
-                solver.deinit();
-                result.solver = null; // Prevent double deinit in CompilerStageData.deinit
-                return check_err;
-            }
+            // OOM during type checking is critical.
+            // Deinit solver and propagate error.
+            solver.deinit();
+            result.solver = null; // Prevent double deinit in CompilerStageData.deinit
+            return check_err;
         };
         logDebug("compileSource: Type checking complete\n", .{});
 
@@ -1133,31 +1126,17 @@ fn compileSource(source: []const u8) !CompilerStageData {
         for (solver.problems.problems.items) |type_problem| {
             const report = report_builder.build(type_problem) catch |build_err| {
                 logDebug("compileSource: report_builder.build failed: {}\n", .{build_err});
-                if (build_err == error.OutOfMemory) return build_err;
-                continue;
+                return build_err;
             };
             result.type_reports.append(report) catch |append_err| {
                 logDebug("compileSource: append TYPE report failed: {}\n", .{append_err});
-                if (append_err == error.OutOfMemory) return append_err;
+                return append_err;
             };
         }
     }
 
     logDebug("compileSource: Compilation complete\n", .{});
     return result;
-}
-
-/// Helper to write a response with a u32 length prefix.
-fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) ResponseWriteError!void {
-    if (response_buffer.len < @sizeOf(u32) + json_payload.len) {
-        return error.OutOfBufferSpace;
-    }
-
-    // Write length prefix (little-endian)
-    std.mem.writeInt(u32, response_buffer[0..@sizeOf(u32)], @intCast(json_payload.len), .little);
-
-    // Write JSON payload
-    @memcpy(response_buffer[@sizeOf(u32)..][0..json_payload.len], json_payload);
 }
 
 /// Writer that tracks bytes written and fails if buffer is exceeded.

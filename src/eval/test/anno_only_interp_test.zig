@@ -10,7 +10,6 @@ const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;

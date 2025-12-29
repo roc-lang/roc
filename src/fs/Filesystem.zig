@@ -2,7 +2,6 @@
 //! and also provide an alternative implementation for WASM (webREPL, playground).
 
 const std = @import("std");
-const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 

@@ -22,7 +22,6 @@ const Record = types_mod.Record;
 const TagUnion = types_mod.TagUnion;
 const RecordField = types_mod.RecordField;
 const Tag = types_mod.Tag;
-const Num = types_mod.Num;
 const NominalType = types_mod.NominalType;
 
 /// A mapping from source type variables to destination type variables

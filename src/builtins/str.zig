@@ -62,17 +62,6 @@ pub const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
-fn init_blank_small_string(comptime n: usize) [n]u8 {
-    var prime_list: [n]u8 = undefined;
-
-    var i = 0;
-    while (i < n) : (i += 1) {
-        prime_list[i] = 0;
-    }
-
-    return prime_list;
-}
-
 /// TODO: Document RocStr struct.
 pub const RocStr = extern struct {
     bytes: ?[*]u8,
@@ -1693,11 +1682,6 @@ pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
     }
 
     return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
-}
-
-fn decStr(ptr: ?[*]u8) callconv(.c) void {
-    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, ptr orelse unreachable, @src());
-    str_ptr.decref();
 }
 
 /// A backwards version of Utf8View from std.unicode

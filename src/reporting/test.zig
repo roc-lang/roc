@@ -6,13 +6,7 @@ const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 const Document = @import("document.zig").Document;
-const DocumentBuilder = @import("document.zig").DocumentBuilder;
-const Annotation = @import("document.zig").Annotation;
-const DocumentElement = @import("document.zig").DocumentElement;
-const SourceRegion = @import("document.zig").SourceRegion;
 const Report = @import("report.zig").Report;
-const Severity = @import("severity.zig").Severity;
-const ReportingConfig = @import("config.zig").ReportingConfig;
 const ColorPalette = @import("style.zig").ColorPalette;
 const reporting = @import("mod.zig");
 

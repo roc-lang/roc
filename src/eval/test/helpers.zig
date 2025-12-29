@@ -6,7 +6,6 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const eval_mod = @import("../mod.zig");

@@ -1015,9 +1015,7 @@ fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
 
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
-const expectError = testing.expectError;
 const expectEqualSlices = std.testing.expectEqualSlices;
-const expect = std.testing.expect;
 
 // exports
 

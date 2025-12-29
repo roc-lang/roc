@@ -7,7 +7,6 @@ const reporting = @import("reporting");
 const Region = base.Region;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const Document = reporting.Document;
 const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;

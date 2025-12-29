@@ -40,8 +40,6 @@ const reporting = @import("reporting");
 const problem_mod = @import("CliProblem.zig");
 
 const CliProblem = problem_mod.CliProblem;
-const Report = reporting.Report;
-const Severity = reporting.Severity;
 const ColorPalette = reporting.ColorPalette;
 const ReportingConfig = reporting.ReportingConfig;
 

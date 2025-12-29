@@ -1,7 +1,6 @@
 //! Test for instantiating tag unions with tag payloads
 //! This test is a regression test for a bug where tag union args were uninitialized.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "instantiate polymorphic function with nested recursive tag unions" {

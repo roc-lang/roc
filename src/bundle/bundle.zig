@@ -602,12 +602,12 @@ pub fn unbundleStream(
 
     // Process each file in the archive - streaming directly from decompression
     while (true) {
-        const file = tar_iter.next() catch |err| {
-            if (err == error.EndOfStream) break;
+        const file = tar_iter.next() catch |err| switch (err) {
+            error.EndOfStream => break,
             // Any other error means the tar archive is corrupted or malformed.
             // We don't try to recover because partial extraction could leave
             // the system in an inconsistent state.
-            return error.InvalidTarHeader;
+            else => return error.InvalidTarHeader,
         };
 
         if (file == null) break;

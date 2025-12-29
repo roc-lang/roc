@@ -5,7 +5,6 @@
 //! generalization would try to add the resolved variable at rank 2 to the
 //! tmp_var_pool which only goes up to rank 1, causing a panic.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "nested lambda with higher-rank variables does not panic during generalization" {

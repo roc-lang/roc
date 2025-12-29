@@ -5,13 +5,9 @@
 //! compiler's canonical internal representation (CIR).
 
 const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const compile = @import("compile");
 const builtins = @import("builtins");
+const parse = @import("parse");
 
-const Can = @import("../Can.zig");
-const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const RocDec = builtins.dec.RocDec;

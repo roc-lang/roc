@@ -9,11 +9,8 @@
 //! This is the foundation for the monomorphization pipeline testing.
 
 const std = @import("std");
-const parse = @import("parse");
-const types = @import("types");
 const base = @import("base");
 const can = @import("can");
-const check = @import("check");
 const builtins = @import("builtins");
 
 const helpers = @import("helpers.zig");
