@@ -1,7 +1,7 @@
 //! Checks whether a type variable is recursively defined.
 //!
 //! This module implements an "occurs check" to detect:
-//! - structurally infinite types (e.g., `a = List a`)
+//! - structurally infinite types (e.g., `a = List(a)`)
 //! - recursion through unnamed constructs (anonymous recursion)
 //! - recursion through named nominal types (permitted in Roc under some rules)
 //!
