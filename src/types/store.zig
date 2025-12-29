@@ -480,7 +480,6 @@ pub const Store = struct {
             .rigid => true, // Rigid variables need instantiation when used outside their defining scope
             .alias => true, // Aliases may contain type variables, so assume they need instantiation
             .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
-            .recursion_var => |rec_var| self.needsInstantiation(rec_var.structure),
             .err => false,
         };
     }
