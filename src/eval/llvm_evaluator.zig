@@ -144,8 +144,9 @@ pub const LlvmEvaluator = struct {
         // since LLVM types don't distinguish signed from unsigned
         const result_type: ResultType = self.getExprResultType(expr);
 
-        // Generate a main function that prints the result
-        try self.emitMainWithPrint(&builder, value_type, value);
+        // Generate a main function that returns the result
+        // The return type must match what compile.zig expects based on result_type
+        try self.emitMainWithPrint(&builder, value_type, value, result_type);
 
         // Serialize to bitcode
         const producer = LlvmBuilder.Producer{
@@ -327,10 +328,24 @@ pub const LlvmEvaluator = struct {
 
     /// Emit an eval function that returns the computed value directly.
     /// For JIT execution, this avoids printf complexity and vararg ABI issues.
-    /// Returns the value in its native LLVM type.
-    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant) !void {
-        // Use the actual value type as the return type (no conversion needed)
-        const return_type = value_type;
+    /// The return type must match what compile.zig expects based on result_type:
+    /// - i64/u64 -> i64 (64-bit integer)
+    /// - i128/u128/dec -> i128 (128-bit integer)
+    /// - f64 -> double
+    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
+        // Determine the return type based on what compile.zig expects
+        const return_type: LlvmBuilder.Type = switch (result_type) {
+            .i64, .u64 => .i64,
+            .i128, .u128, .dec => .i128,
+            .f64 => .double,
+        };
+
+        // Determine signedness for integer extension
+        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
+            .i64, .i128 => .signed,
+            .u64, .u128 => .unsigned,
+            .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
+        };
 
         // Create eval function
         const eval_type = try builder.fnType(return_type, &.{}, .normal);
@@ -351,8 +366,13 @@ pub const LlvmEvaluator = struct {
         const entry_block = try wip.block(0, "entry");
         wip.cursor = .{ .block = entry_block };
 
-        // Return the value directly - types match exactly
-        _ = try wip.ret(value.toValue());
+        // Convert the value to the return type if needed
+        const return_value = if (value_type == return_type)
+            value.toValue()
+        else
+            try wip.conv(signedness, value.toValue(), return_type, "");
+
+        _ = try wip.ret(return_value);
         try wip.finish();
     }
 };
