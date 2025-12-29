@@ -2903,18 +2903,23 @@ test "check type - List.first method syntax should not create cyclic types" {
 
 test "check type - lambda capturing top-level constant with plus - mono_pure_lambda case" {
     // This test verifies the type inference for the mono_pure_lambda snapshot.
-    // The result of add_one(5) should be a numeric type with from_numeral constraint,
+    // The result of add_one(5) should be a numeric type with from_numeral and plus constraints,
     // NOT Bool.
     const source =
         \\one = 1
         \\add_one = |x| x + one
         \\result = add_one(5)
     ;
-    // Expected: result should have numeric type with from_numeral constraint
+    // Expected: result should have numeric type with from_numeral and plus constraints
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "result" } },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -2924,11 +2929,16 @@ test "check type - simple function call should have return type" {
         \\add_one = |x| x + 1
         \\result = add_one(5)
     ;
-    // Both add_one and result should have numeric types
+    // Both add_one and result should have numeric types with from_numeral and plus constraints
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "result" } },
-        "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
     );
 }
 
