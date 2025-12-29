@@ -192,7 +192,7 @@ const SourceFile = struct {
 
 fn tidyFile(
     gpa: Allocator,
-    _: *IdentifierCounter, // unused - dead code detection disabled
+    counter: *IdentifierCounter,
     file: SourceFile,
     errors: *Errors,
 ) Allocator.Error!void {
@@ -204,9 +204,7 @@ fn tidyFile(
         var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
         defer tree.deinit(gpa);
 
-        // Note: tidyDeadDeclarations is disabled because it produces too many false positives
-        // for patterns common in this codebase (conditional imports, comptime, extern FFI symbols).
-        // tidyDeadDeclarations(file, &tree, counter, errors);
+        tidyDeadDeclarations(file, &tree, counter, errors);
         tidyAst(file, &tree, errors);
     }
     if (file.hasExtension(".md")) {
@@ -439,28 +437,36 @@ fn tidyDeadDeclarationsIsPrivateDeclaration(
     token_index: Ast.TokenIndex,
 ) bool {
     assert(tree.tokens.items(.tag)[token_index] == .identifier);
-    var declaration_keyword = false;
+    var declaration_keyword: ?std.zig.Token.Tag = null;
+    var saw_extern = false;
     for (0..4) |context_offset| {
         const context_tag = if (token_index - context_offset < 1)
             .eof
         else
-            tree.tokens.get(token_index - context_offset - 1).tag;
+            tree.tokens.items(.tag)[token_index - context_offset - 1];
 
-        if (!declaration_keyword) {
+        if (declaration_keyword == null) {
             switch (context_tag) {
-                .keyword_fn, .keyword_const => declaration_keyword = true,
+                .keyword_fn, .keyword_const => declaration_keyword = context_tag,
                 // Not a declaration.
                 else => return false,
             }
         } else {
             switch (context_tag) {
-                .keyword_inline, .keyword_extern, .string_literal => {},
+                .keyword_inline, .string_literal => {},
+                .keyword_extern => saw_extern = true,
                 // Public declaration can be used in a different file.
                 .keyword_pub, .keyword_export => return false,
                 // []const u8 or *const u8, not a declaration.
                 .r_bracket, .asterisk => return false,
                 // Non public declarations, never used.
-                else => return true,
+                else => {
+                    // Extern fn declarations are FFI bindings called by external code
+                    if (saw_extern and declaration_keyword == .keyword_fn) {
+                        return false;
+                    }
+                    return true;
+                },
             }
         }
     } else unreachable;
