@@ -6,13 +6,10 @@ const base = @import("base");
 const types = @import("types");
 const layout = @import("layout.zig");
 const layout_store_ = @import("store.zig");
-const collections = @import("collections");
 const ModuleEnv = @import("can").ModuleEnv;
 
 const types_store = types.store;
 const Ident = base.Ident;
-const target = base.target;
-const LayoutError = layout_store_.LayoutError;
 const Store = layout_store_.Store;
 const TypeScope = types.TypeScope;
 const testing = std.testing;

@@ -8,7 +8,6 @@
 //! The emitter walks the CIR expression tree and writes corresponding Roc syntax.
 
 const std = @import("std");
-const types = @import("types");
 const base = @import("base");
 
 const ModuleEnv = @import("ModuleEnv.zig");
@@ -16,7 +15,6 @@ const CIR = @import("CIR.zig");
 const PatternMod = @import("Pattern.zig");
 const Expr = CIR.Expr;
 const Pattern = PatternMod.Pattern;
-const TypeVar = types.Var;
 
 const Self = @This();
 

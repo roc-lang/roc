@@ -9,7 +9,6 @@ const std = @import("std");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
-const RocList = @import("list.zig").RocList;
 const RocOps = @import("utils.zig").RocOps;
 const TestEnv = @import("utils.zig").TestEnv;
 const RocStr = @import("str.zig").RocStr;

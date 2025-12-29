@@ -11,17 +11,13 @@ const ModuleEnv = @import("ModuleEnv.zig");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
 
-const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
-
 const Allocator = std.mem.Allocator;
 const CompactWriter = collections.CompactWriter;
 const SafeList = collections.SafeList;
 const RocDec = builtins.dec.RocDec;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
-const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
-const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
 
 /// When storing optional indices/values where 0 is a valid value, we add this offset

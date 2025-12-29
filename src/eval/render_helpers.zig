@@ -1,10 +1,8 @@
 //! Helpers for rendering interpreter values back into readable Roc syntax.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const types = @import("types");
 const can = @import("can");
-const base = @import("base");
 const layout = @import("layout");
 const builtins = @import("builtins");
 const StackValue = @import("StackValue.zig");

@@ -378,39 +378,40 @@ fn parseWasmResponseJson(allocator: std.mem.Allocator, response_json_slice: []co
         .allocate = .alloc_always,
     };
 
-    return std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, parse_options) catch |err| {
-        if (err != error.SyntaxError) {
+    return std.json.parseFromSlice(WasmResponse, allocator, response_json_slice, parse_options) catch |err| switch (err) {
+        error.SyntaxError => {
+            logDebug("[WARNING] JSON response contained invalid bytes; attempting to sanitize. Parse error: {}\n", .{err});
+            logDebug("[WARNING] Raw JSON bytes: {x}\n", .{response_json_slice});
+
+            var sanitized = try allocator.dupe(u8, response_json_slice);
+            defer allocator.free(sanitized);
+
+            var replacements: usize = 0;
+            for (sanitized, 0..) |byte, idx| {
+                if (byte >= 0x80) {
+                    sanitized[idx] = '?';
+                    replacements += 1;
+                }
+            }
+
+            if (replacements == 0) {
+                logDebug("[ERROR] No high-bit bytes detected while attempting to sanitize JSON.\n", .{});
+                return err;
+            }
+
+            logDebug("[WARNING] Replaced {} invalid byte(s) in WASM response JSON before retrying parse.\n", .{replacements});
+
+            return std.json.parseFromSlice(WasmResponse, allocator, sanitized, parse_options) catch |retry_err| {
+                logDebug("[ERROR] Failed to parse sanitized JSON response: {}. Sanitized JSON: {s}\n", .{ retry_err, sanitized });
+                logDebug("[ERROR] Sanitized JSON bytes: {x}\n", .{sanitized});
+                return retry_err;
+            };
+        },
+        else => {
             logDebug("[ERROR] Failed to parse JSON response: {}. JSON was: {s}\n", .{ err, response_json_slice });
             logDebug("[ERROR] JSON bytes: {x}\n", .{response_json_slice});
             return err;
-        }
-
-        logDebug("[WARNING] JSON response contained invalid bytes; attempting to sanitize. Parse error: {}\n", .{err});
-        logDebug("[WARNING] Raw JSON bytes: {x}\n", .{response_json_slice});
-
-        var sanitized = try allocator.dupe(u8, response_json_slice);
-        defer allocator.free(sanitized);
-
-        var replacements: usize = 0;
-        for (sanitized, 0..) |byte, idx| {
-            if (byte >= 0x80) {
-                sanitized[idx] = '?';
-                replacements += 1;
-            }
-        }
-
-        if (replacements == 0) {
-            logDebug("[ERROR] No high-bit bytes detected while attempting to sanitize JSON.\n", .{});
-            return err;
-        }
-
-        logDebug("[WARNING] Replaced {} invalid byte(s) in WASM response JSON before retrying parse.\n", .{replacements});
-
-        return std.json.parseFromSlice(WasmResponse, allocator, sanitized, parse_options) catch |retry_err| {
-            logDebug("[ERROR] Failed to parse sanitized JSON response: {}. Sanitized JSON: {s}\n", .{ retry_err, sanitized });
-            logDebug("[ERROR] Sanitized JSON bytes: {x}\n", .{sanitized});
-            return retry_err;
-        };
+        },
     };
 }
 
@@ -892,14 +893,6 @@ fn runTests(arena: std.mem.Allocator, gpa: std.mem.Allocator, test_cases: []cons
     }
 
     return stats;
-}
-
-fn teardownResetState(allocator: std.mem.Allocator, wasm_interface: *WasmInterface) !void {
-    const message = WasmMessage{ .type = "RESET" };
-    const response = try sendMessageToWasm(wasm_interface, allocator, message);
-    // No defer response.deinit(); needed.
-
-    try expectStatus(response.status, "SUCCESS");
 }
 
 // Helper function to create a simple test case with INIT, LOAD_SOURCE, and optional QUERY_TYPES

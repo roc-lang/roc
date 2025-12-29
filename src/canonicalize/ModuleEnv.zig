@@ -25,7 +25,6 @@ const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
 const Region = base.Region;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 const TypeStore = types_mod.Store;
 
@@ -2189,21 +2188,6 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
     }
 }
 
-/// Assert that nodes, regions and types are all in sync
-inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
-    if (builtin.mode == .Debug) {
-        const idx1_int = @intFromEnum(idx1);
-        const idx2_int = @intFromEnum(idx2);
-
-        if (idx1_int != idx2_int) {
-            std.debug.panic(
-                "{s} idxs out of sync: {} != {}\n",
-                .{ desc, idx1_int, idx2_int },
-            );
-        }
-    }
-}
-
 /// Add a new expression to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
@@ -2392,13 +2376,6 @@ pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []cons
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
-}
-
-/// Helper to format pattern index for s-expr output
-fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: CIR.Pattern.Idx) SExpr {
-    var node = SExpr.init(gpa, "pid");
-    node.appendUnsignedInt(gpa, @intFromEnum(pattern_idx));
-    return node;
 }
 
 /// Helper function to generate the S-expression node for the entire module.

@@ -24,11 +24,9 @@ const MkSafeList = collections.SafeList;
 const Store = types.Store;
 const DescStoreIdx = types.DescStoreIdx;
 const ResolvedVarDesc = types.ResolvedVarDesc;
-const Desc = types.Descriptor;
 const Content = types.Content;
 const Mark = types.Mark;
 const Var = types.Var;
-const NominalType = types.NominalType;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 

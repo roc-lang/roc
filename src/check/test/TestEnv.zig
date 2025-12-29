@@ -12,7 +12,6 @@ const collections = @import("collections");
 const Check = @import("../Check.zig");
 const problem_mod = @import("../problem.zig");
 
-const CommonEnv = base.CommonEnv;
 const testing = std.testing;
 
 const compiled_builtins = @import("compiled_builtins");

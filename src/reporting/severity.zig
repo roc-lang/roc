@@ -1,7 +1,5 @@
 //! Severity levels for warning and error problem reports.
 
-const std = @import("std");
-
 /// Represents the severity level of a problem.
 pub const Severity = enum {
     /// Informational messages that provide helpful context.

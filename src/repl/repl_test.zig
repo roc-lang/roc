@@ -4,7 +4,6 @@ const can_mod = @import("can");
 const check_mod = @import("check");
 const eval = @import("eval");
 const base = @import("base");
-const check = @import("check");
 const parse = @import("parse");
 const types = @import("types");
 const collections = @import("collections");

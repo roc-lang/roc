@@ -5,15 +5,11 @@
 //! of shadowing behavior during the canonicalization process.
 
 const std = @import("std");
-const compile = @import("compile");
 const parse = @import("parse");
-const base = @import("base");
 
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
 
-const AST = parse.AST;
-const tokenize = parse.tokenize;
 const testing = std.testing;
 
 test "exposed but not implemented - values" {

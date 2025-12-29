@@ -7,7 +7,6 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -19,8 +18,6 @@ const compile = @import("compile");
 const fmt = @import("fmt");
 const repl = @import("repl");
 const eval_mod = @import("eval");
-const collections = @import("collections");
-const compiled_builtins = @import("compiled_builtins");
 const tracy = @import("tracy");
 const llvm_compile = @import("llvm_compile");
 
@@ -47,26 +44,12 @@ const CacheModule = compile.CacheModule;
 const AST = parse.AST;
 const Report = reporting.Report;
 const types_problem_mod = check.problem;
-const tokenize = parse.tokenize;
 const parallel = base.parallel;
 
 var verbose_log: bool = false;
 var prng = std.Random.DefaultPrng.init(1234567890);
 
 const rand = prng.random();
-
-const is_windows = builtin.target.os.tag == .windows;
-
-var stderr_file_writer: std.fs.File.Writer = .{
-    .interface = std.fs.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.fs.File.stderr(),
-    .mode = .streaming,
-};
-
-fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.fs.File.stderr();
-    return &stderr_file_writer.interface;
-}
 
 /// Logs a message if verbose logging is enabled.
 fn log(comptime fmt_str: []const u8, args: anytype) void {
@@ -377,98 +360,6 @@ fn generateExpectedContent(allocator: std.mem.Allocator, problems: []const Probl
     return buffer.toOwnedSlice();
 }
 
-/// Parse an EXPECTED line like "UNEXPECTED TOKEN IN EXPRESSION - record_field_update_error.md:1:10:1:15"
-fn parseExpectedLine(allocator: std.mem.Allocator, line: []const u8) !?ProblemEntry {
-    const trimmed = std.mem.trim(u8, line, " \t\r\n");
-    if (trimmed.len == 0) {
-        return null;
-    }
-
-    // Find the separator " - "
-    const separator = " - ";
-    const sep_index = std.mem.indexOf(u8, line, separator) orelse return null;
-
-    const problem_type = std.mem.trim(u8, line[0..sep_index], " \t");
-    const location = std.mem.trim(u8, line[sep_index + separator.len ..], " \t\r\n");
-
-    // Handle special case where location is just ":0:0:0:0" (no file)
-    if (std.mem.startsWith(u8, location, ":")) {
-        // Skip the first colon
-        var parts = std.mem.tokenizeScalar(u8, location[1..], ':');
-
-        const start_line_str = parts.next() orelse return null;
-        const start_col_str = parts.next() orelse return null;
-        const end_line_str = parts.next() orelse return null;
-        const end_col_str = parts.next() orelse return null;
-
-        return ProblemEntry{
-            .problem_type = try allocator.dupe(u8, problem_type),
-            .file = try allocator.dupe(u8, ""),
-            .start_line = try std.fmt.parseInt(u32, start_line_str, 10),
-            .start_col = try std.fmt.parseInt(u32, start_col_str, 10),
-            .end_line = try std.fmt.parseInt(u32, end_line_str, 10),
-            .end_col = try std.fmt.parseInt(u32, end_col_str, 10),
-        };
-    }
-
-    // Parse location "file.md:start_line:start_col:end_line:end_col"
-    var parts = std.mem.tokenizeScalar(u8, location, ':');
-
-    const file = parts.next() orelse return null;
-    const start_line_str = parts.next() orelse return null;
-    const start_col_str = parts.next() orelse return null;
-    const end_line_str = parts.next() orelse return null;
-    const end_col_str = parts.next() orelse return null;
-
-    return ProblemEntry{
-        .problem_type = try allocator.dupe(u8, problem_type),
-        .file = try allocator.dupe(u8, file),
-        .start_line = try std.fmt.parseInt(u32, start_line_str, 10),
-        .start_col = try std.fmt.parseInt(u32, start_col_str, 10),
-        .end_line = try std.fmt.parseInt(u32, end_line_str, 10),
-        .end_col = try std.fmt.parseInt(u32, end_col_str, 10),
-    };
-}
-
-/// Parse all problems from EXPECTED section
-fn parseExpectedSection(allocator: std.mem.Allocator, content: []const u8) !std.array_list.Managed(ProblemEntry) {
-    var problems = std.array_list.Managed(ProblemEntry).init(allocator);
-    errdefer {
-        for (problems.items) |p| {
-            allocator.free(p.problem_type);
-            allocator.free(p.file);
-        }
-        problems.deinit();
-    }
-
-    // Check if the entire content is just NIL
-    const trimmed_content = std.mem.trim(u8, content, " \t\r\n");
-    if (std.mem.eql(u8, trimmed_content, "NIL")) {
-        // NIL means we expect no problems
-        return problems;
-    }
-
-    var lines = std.mem.tokenizeScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        const problem = try parseExpectedLine(allocator, line);
-        if (problem) |p| {
-            try problems.append(p);
-        }
-    }
-
-    return problems;
-}
-
-/// Compare two problem entries for equality
-fn problemsEqual(a: ProblemEntry, b: ProblemEntry) bool {
-    return std.mem.eql(u8, a.problem_type, b.problem_type) and
-        std.mem.eql(u8, a.file, b.file) and
-        a.start_line == b.start_line and
-        a.start_col == b.start_col and
-        a.end_line == b.end_line and
-        a.end_col == b.end_col;
-}
-
 /// Generate all reports from the compilation pipeline
 fn generateAllReports(
     allocator: std.mem.Allocator,
@@ -603,53 +494,6 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     }
 
     return try generateExpectedContent(allocator, parsed_problems.items);
-}
-
-/// Helper function to extract section content only
-fn extractSectionContent(content: []const u8, section_name: []const u8) ?[]const u8 {
-    var header_buf: [256]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "# {s}\n", .{section_name}) catch return null;
-    const start_idx = std.mem.indexOf(u8, content, header) orelse return null;
-    const content_start = start_idx + header.len;
-
-    // Find the next section header
-    var next_section_idx = content.len;
-    var search_idx = content_start;
-    while (search_idx < content.len - 2) {
-        if (content[search_idx] == '\n' and
-            content[search_idx + 1] == '#' and
-            content[search_idx + 2] == ' ')
-        {
-            next_section_idx = search_idx + 1;
-            break;
-        }
-        search_idx += 1;
-    }
-
-    return std.mem.trim(u8, content[content_start..next_section_idx], " \t\r\n");
-}
-
-/// Helper function to get section info with start/end positions
-fn extractSectionInfo(content: []const u8, section_name: []const u8) ?struct { start: usize, end: usize } {
-    var header_buf: [256]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "# {s}\n", .{section_name}) catch return null;
-    const start_idx = std.mem.indexOf(u8, content, header) orelse return null;
-
-    // Find the next section header
-    var next_section_idx = content.len;
-    var search_idx = start_idx + header.len;
-    while (search_idx < content.len - 2) {
-        if (content[search_idx] == '\n' and
-            content[search_idx + 1] == '#' and
-            content[search_idx + 2] == ' ')
-        {
-            next_section_idx = search_idx + 1;
-            break;
-        }
-        search_idx += 1;
-    }
-
-    return .{ .start = start_idx, .end = next_section_idx };
 }
 
 var debug_allocator: std.heap.DebugAllocator(.{}) = .{
@@ -1040,49 +884,6 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
     }
 
     return success;
-}
-
-fn processRocFileAsSnapshot(
-    allocator: Allocator,
-    output_path: []const u8,
-    roc_content: []const u8,
-    meta: Meta,
-    config: *const Config,
-) !bool {
-    // Try to read existing EXPECTED section if the file exists
-    var expected_content: ?[]const u8 = null;
-    defer if (expected_content) |content| allocator.free(content);
-
-    if (std.fs.cwd().readFileAlloc(allocator, output_path, 1024 * 1024)) |existing_content| {
-        defer allocator.free(existing_content);
-
-        // Extract EXPECTED section manually since extractSections is defined later
-        const expected_header = "# EXPECTED\n";
-        if (std.mem.indexOf(u8, existing_content, expected_header)) |start_idx| {
-            const content_start = start_idx + expected_header.len;
-
-            // Find the next section header
-            var end_idx = existing_content.len;
-            var search_idx = content_start;
-            while (search_idx < existing_content.len - 2) {
-                if (existing_content[search_idx] == '\n' and
-                    existing_content[search_idx + 1] == '#' and
-                    existing_content[search_idx + 2] == ' ')
-                {
-                    end_idx = search_idx + 1;
-                    break;
-                }
-                search_idx += 1;
-            }
-
-            const expected_section = std.mem.trim(u8, existing_content[content_start..end_idx], " \t\r\n");
-            expected_content = try allocator.dupe(u8, expected_section);
-        }
-    } else |_| {
-        // File doesn't exist yet, that's fine
-    }
-
-    try processRocFileAsSnapshotWithExpected(allocator, output_path, roc_content, meta, expected_content, config);
 }
 
 fn processSnapshotContent(
@@ -1775,9 +1576,9 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
                 }
             }
         }
-    } else |dir_err| {
+    } else |dir_err| switch (dir_err) {
         // Not a directory, try as file
-        if (dir_err == error.NotDir) {
+        error.NotDir => {
             if (isSnapshotFile(canonical_path)) {
                 const path_copy = try gpa.dupe(u8, canonical_path);
                 try work_list.append(WorkItem{
@@ -1787,9 +1588,8 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) !voi
             } else {
                 std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
             }
-        } else {
-            std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
-        }
+        },
+        else => std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) }),
     }
 }
 
@@ -3336,47 +3136,6 @@ fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx
     }
     try output.end_code_block();
     try output.end_section();
-}
-
-/// Generate TYPES section displaying types store for both markdown and HTML
-/// This is used for debugging.
-fn generateTypesStoreSection(gpa: std.mem.Allocator, output: *DualOutput, can_ir: *ModuleEnv) !void {
-    var solved_unmanaged = std.ArrayList(u8).empty;
-    var solved_writer: std.Io.Writer.Allocating = .fromArrayList(output.gpa, &solved_unmanaged);
-    defer solved_unmanaged.deinit(output.gpa);
-
-    try types.writers.SExprWriter.allVarsToSExprStr(&solved_writer.writer, gpa, can_ir.env);
-
-    // Transfer contents from writer back to buffer
-    solved_unmanaged = solved_writer.toArrayList();
-
-    // Markdown TYPES section
-    try output.md_writer.writer.writeAll(Section.TYPES);
-    try output.md_writer.writer.writeAll(solved_unmanaged.items);
-    try output.md_writer.writer.writeAll("\n");
-    try output.md_writer.writer.writeAll(Section.SECTION_END[0 .. Section.SECTION_END.len - 1]);
-
-    // HTML TYPES section
-    if (output.html_writer) |writer| {
-        try writer.writer.writeAll(
-            \\        <div class="section">
-            \\            <div class="section-header">TYPES</div>
-            \\            <div class="section-content">
-            \\                <pre>
-        );
-
-        // Escape HTML in types content
-        for (solved_unmanaged.items) |char| {
-            try escapeHtmlChar(&writer.writer, char);
-        }
-
-        try writer.writer.writeAll(
-            \\</pre>
-            \\            </div>
-            \\        </div>
-            \\
-        );
-    }
 }
 
 /// Generate HTML document structure and JavaScript

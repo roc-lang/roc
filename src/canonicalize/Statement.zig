@@ -13,16 +13,13 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
-const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Pattern = CIR.Pattern;
 const Expr = CIR.Expr;

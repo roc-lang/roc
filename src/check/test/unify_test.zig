@@ -9,7 +9,6 @@ const problem_mod = @import("../problem.zig");
 const occurs = @import("../occurs.zig");
 const snapshot_mod = @import("../snapshot.zig");
 
-const Region = base.Region;
 const Ident = base.Ident;
 
 const ModuleEnv = can.ModuleEnv;
@@ -17,42 +16,18 @@ const ModuleEnv = can.ModuleEnv;
 const Scratch = unify_mod.Scratch;
 const Result = unify_mod.Result;
 
-const Slot = types_mod.Slot;
-const ResolvedVarDesc = types_mod.ResolvedVarDesc;
-const ResolvedVarDescs = types_mod.ResolvedVarDescs;
-
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
-const Desc = types_mod.Descriptor;
-const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
-const RecursionVar = types_mod.RecursionVar;
 const Content = types_mod.Content;
-const Alias = types_mod.Alias;
-const NominalType = types_mod.NominalType;
-const FlatType = types_mod.FlatType;
-const Builtin = types_mod.Builtin;
 const Tuple = types_mod.Tuple;
-const Func = types_mod.Func;
 const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
-const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
-const TwoTags = types_mod.TwoTags;
-
-const VarSafeList = Var.SafeList;
-const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const RecordFieldSafeList = RecordField.SafeList;
-const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
-const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
-const TagSafeList = Tag.SafeList;
-const TagSafeMultiList = Tag.SafeMultiList;
-const TwoTagsSafeList = TwoTags.SafeList;
-
-const Problem = problem_mod.Problem;
+const Desc = types_mod.Descriptor;
+const Slot = types_mod.Slot;
 
 /// A lightweight test harness used in unification and type inference tests.
 ///
@@ -212,11 +187,6 @@ const TestEnv = struct {
         return try self.module_env.types.mkFuncUnbound(args, ret);
     }
 
-    fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        // For flex functions, we use unbound since we don't know the effectfulness yet
-        return try self.module_env.types.mkFuncUnbound(args, ret);
-    }
-
     // helpers - structure - records //
 
     fn mkRecordField(self: *Self, name: []const u8, var_: Var) std.mem.Allocator.Error!RecordField {
@@ -249,10 +219,6 @@ const TestEnv = struct {
     // helpers - structure - tag union //
 
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
-
-    fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.module_env.types.appendVars(args);
-    }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
         const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));

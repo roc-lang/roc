@@ -1,13 +1,11 @@
 //! Stores Layout values by index.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
 const can = @import("can");
-const builtins = @import("builtins");
 
 const layout_mod = @import("layout.zig");
 const work = @import("./work.zig");
@@ -16,7 +14,6 @@ const ModuleEnv = can.ModuleEnv;
 const types_store = types.store;
 const target = base.target;
 const Ident = base.Ident;
-const Region = base.Region;
 const Var = types.Var;
 const TypeScope = types.TypeScope;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
@@ -24,7 +21,6 @@ const Layout = layout_mod.Layout;
 const Idx = layout_mod.Idx;
 const RecordField = layout_mod.RecordField;
 const Scalar = layout_mod.Scalar;
-const ScalarTag = layout_mod.ScalarTag;
 const RecordData = layout_mod.RecordData;
 const RecordIdx = layout_mod.RecordIdx;
 const TupleField = layout_mod.TupleField;
@@ -33,7 +29,6 @@ const TupleIdx = layout_mod.TupleIdx;
 const TagUnionVariant = layout_mod.TagUnionVariant;
 const TagUnionData = layout_mod.TagUnionData;
 const TagUnionIdx = layout_mod.TagUnionIdx;
-const TagUnionLayout = layout_mod.TagUnionLayout;
 const SizeAlign = layout_mod.SizeAlign;
 const Work = work.Work;
 

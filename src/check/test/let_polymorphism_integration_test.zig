@@ -1,18 +1,7 @@
 //! Integration tests for let-polymorphism that parse, canonicalize, and type-check
 //! actual code to ensure polymorphic values work correctly in practice.
 
-const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const can = @import("can");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
-
-const Can = can.Can;
-const ModuleEnv = can.ModuleEnv;
-const CanonicalizedExpr = can.Can.CanonicalizedExpr;
-const testing = std.testing;
-const test_allocator = testing.allocator;
 
 test "direct polymorphic identity usage" {
     const source =

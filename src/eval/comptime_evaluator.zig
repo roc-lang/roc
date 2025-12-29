@@ -299,29 +299,31 @@ pub const ComptimeEvaluator = struct {
                 return EvalResult{ .success = null };
             }
 
-            if (err == error.Crash) {
-                if (self.expect.crashMessage()) |msg| {
+            switch (err) {
+                error.Crash => {
+                    if (self.expect.crashMessage()) |msg| {
+                        return EvalResult{
+                            .expect_failed = .{
+                                .message = msg,
+                                .region = region,
+                            },
+                        };
+                    }
+                    const msg = self.crash.crashMessage() orelse unreachable;
                     return EvalResult{
-                        .expect_failed = .{
+                        .crash = .{
                             .message = msg,
                             .region = region,
                         },
                     };
-                }
-                const msg = self.crash.crashMessage() orelse unreachable;
-                return EvalResult{
-                    .crash = .{
-                        .message = msg,
+                },
+                else => return EvalResult{
+                    .error_eval = .{
+                        .err = err,
                         .region = region,
                     },
-                };
-            }
-            return EvalResult{
-                .error_eval = .{
-                    .err = err,
-                    .region = region,
                 },
-            };
+            }
         };
 
         // Try to fold the result to a constant expression (only for non-lambdas)
