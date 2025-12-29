@@ -3,11 +3,9 @@
 const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
-const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
 const reporting = @import("reporting");
-const Check = @import("Check.zig");
 
 const snapshot = @import("snapshot.zig");
 
@@ -17,20 +15,14 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Report = reporting.Report;
-const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
-const SourceRegion = reporting.SourceRegion;
 
-const TypesStore = types_mod.Store;
 const Ident = base.Ident;
-
-const MkSafeMultiList = collections.SafeMultiList;
 
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 
 const Var = types_mod.Var;
-const Content = types_mod.Content;
 
 /// Returns singular form if count is 1, plural form otherwise.
 /// Usage: pluralize(count, "argument", "arguments")

@@ -5,7 +5,6 @@
 const std = @import("std");
 const fs_mod = @import("fs");
 const Filesystem = fs_mod.Filesystem;
-const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 // Helper function to handle OOM errors

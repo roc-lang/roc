@@ -1,18 +1,14 @@
 //! Benchmarking utility for the Roc compiler, exposed as --z-* arguments in the main binary.
 
 const std = @import("std");
-const base = @import("base");
-const collections = @import("collections");
 const parse = @import("parse");
 const can = @import("can");
 
 const tracy = @import("tracy");
-const fmt = @import("fmt");
 const builtin = @import("builtin");
 
 const tokenize = parse.tokenize;
 const ModuleEnv = can.ModuleEnv;
-const CommonEnv = base.CommonEnv;
 
 const Allocator = std.mem.Allocator;
 

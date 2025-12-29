@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const serialization = @import("serialization");
 const testing = std.testing;
 
 const CompactWriter = collections.CompactWriter;

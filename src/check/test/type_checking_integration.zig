@@ -2,19 +2,9 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const can = @import("can");
-const types_mod = @import("types");
-const problem_mod = @import("../problem.zig");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
 
-const Can = can.Can;
-const ModuleEnv = can.ModuleEnv;
-const CanonicalizedExpr = can.Can.CanonicalizedExpr;
 const testing = std.testing;
-const test_allocator = testing.allocator;
 
 // primitives - nums //
 

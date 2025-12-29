@@ -5,15 +5,12 @@
 //! different phases of compilation.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const collections = @import("collections");
-const serialization = @import("serialization");
 
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const RegionInfo = @import("RegionInfo.zig");
 const Region = @import("Region.zig");
-const SExprTree = @import("SExprTree.zig");
 const SafeList = collections.SafeList;
 const ExposedItems = collections.ExposedItems;
 const CompactWriter = collections.CompactWriter;

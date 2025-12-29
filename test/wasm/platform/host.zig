@@ -17,7 +17,6 @@
 //! deallocation and reallocation support.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const builtins = @import("builtins");
 
 const RocStr = builtins.str.RocStr;

@@ -10,7 +10,6 @@ const std = @import("std");
 const testing = std.testing;
 const types = @import("types");
 const TestEnv = @import("TestEnv.zig");
-const Content = types.Content;
 
 test "infers type for small nums" {
     const test_cases = [_][]const u8{

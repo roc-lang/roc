@@ -30,7 +30,6 @@
 //! low-level platform operations are abstracted in `src/ipc/platform.zig`.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const platform = @import("platform.zig");
 const coordination = @import("coordination.zig");
 

@@ -5,7 +5,6 @@ const std = @import("std");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
-const serialization = @import("serialization");
 
 const types = @import("types.zig");
 const debug = @import("debug.zig");
@@ -30,7 +29,6 @@ const Alias = types.Alias;
 const FlatType = types.FlatType;
 const NominalType = types.NominalType;
 const Record = types.Record;
-const Num = types.Num;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
