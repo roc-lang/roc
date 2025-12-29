@@ -493,12 +493,167 @@ fn emitIf(
 ///
 /// Match expressions compile to a series of conditional checks and branches,
 /// similar to if expressions but with pattern matching logic.
+///
+/// For simple patterns (literals, wildcards), this generates direct comparisons.
+/// For complex patterns (destructuring), it generates extraction code.
 fn emitMatch(ctx: *CirContext, match_expr: CIR.Expr.Match) Error!Builder.Value {
-    _ = ctx;
-    _ = match_expr;
-    // TODO: Pattern matching requires Phase 9
-    // For now, return unsupported
-    return error.UnsupportedExpression;
+    const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+    const builder = ctx.emitter.builder;
+
+    // Evaluate the match subject
+    const subject_expr = ctx.module_env.store.getExpr(match_expr.subject);
+    const subject_val = try emitExpr(ctx, subject_expr);
+
+    // Create the merge block where all branches converge
+    const merge_block = wip.block(0, "match.merge") catch return error.OutOfMemory;
+
+    // Track incoming values for the phi node
+    var phi_incoming = std.ArrayList(struct { value: Builder.Value, block: Builder.WipFunction.Block.Index }).init(ctx.allocator);
+    defer phi_incoming.deinit();
+
+    // Get branches
+    const branches = match_expr.branches;
+    const branch_count = branches.count;
+
+    // Process each branch
+    var branch_idx: u32 = 0;
+    var iter = ctx.module_env.store.match_branches.iterate(branches);
+
+    while (iter.next()) |branch| {
+        const is_last = branch_idx == branch_count - 1;
+
+        // Create blocks for this branch
+        const body_block = wip.block(0, "match.body") catch return error.OutOfMemory;
+        const next_block = if (is_last)
+            // Last branch with no next - this should be exhaustive so use unreachable
+            wip.block(0, "match.unreachable") catch return error.OutOfMemory
+        else
+            wip.block(0, "match.next") catch return error.OutOfMemory;
+
+        // Generate pattern check
+        const pattern = ctx.module_env.store.getPattern(branch.pattern);
+        const matches = try emitPatternCheck(ctx, subject_val, pattern);
+
+        // Handle optional guard
+        const final_cond = if (branch.guard) |guard_idx| blk: {
+            // Guard: check && guard_expr
+            const guard_expr = ctx.module_env.store.getExpr(guard_idx);
+            const guard_val = try emitExpr(ctx, guard_expr);
+            break :blk ctx.emitter.emitAnd(matches, guard_val) catch return error.OutOfMemory;
+        } else matches;
+
+        // Branch based on pattern match
+        _ = wip.brCond(final_cond, body_block, next_block, "") catch return error.OutOfMemory;
+
+        // Emit body block
+        wip.cursor = .{ .block = body_block };
+
+        // Push scope for pattern bindings
+        ctx.emitter.pushScope() catch return error.OutOfMemory;
+
+        // Bind pattern variables
+        try bindPatternToValue(ctx, branch.pattern, subject_val);
+
+        // Emit body expression
+        const body_expr = ctx.module_env.store.getExpr(branch.body);
+        const body_val = try emitExpr(ctx, body_expr);
+
+        // Pop scope
+        ctx.emitter.popScope();
+
+        // Record value for phi node
+        phi_incoming.append(.{ .value = body_val, .block = body_block }) catch return error.OutOfMemory;
+
+        // Jump to merge
+        _ = wip.br(merge_block, "") catch return error.OutOfMemory;
+
+        // Position at next block
+        wip.cursor = .{ .block = next_block };
+
+        branch_idx += 1;
+    }
+
+    // If we get to the last "next" block, it's unreachable (exhaustive match)
+    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+
+    // Position at merge block and create phi node
+    wip.cursor = .{ .block = merge_block };
+
+    if (phi_incoming.items.len == 0) {
+        // No branches - this shouldn't happen in valid Roc code
+        return error.UnsupportedExpression;
+    }
+
+    // Determine result type from the first value
+    const result_type = phi_incoming.items[0].value.typeOf(wip.function, builder);
+
+    // Create phi node
+    const phi = wip.phi(result_type, "") catch return error.OutOfMemory;
+
+    // Add incoming values
+    for (phi_incoming.items) |incoming| {
+        wip.addPhiArg(phi, incoming.block, incoming.value) catch return error.OutOfMemory;
+    }
+
+    return phi;
+}
+
+/// Generate code to check if a value matches a pattern.
+/// Returns a boolean (i1) value.
+fn emitPatternCheck(
+    ctx: *CirContext,
+    subject_val: Builder.Value,
+    pattern: CIR.Pattern,
+) Error!Builder.Value {
+    return switch (pattern) {
+        .assign => {
+            // Assign always matches
+            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
+        },
+
+        .underscore => {
+            // Wildcard always matches
+            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
+        },
+
+        .num => |num| {
+            // Compare with numeric literal
+            const lit_val = try emitNumber(ctx, num.value, .i64);
+            ctx.emitter.emitICmpEq(subject_val, lit_val) catch return error.OutOfMemory
+        },
+
+        .str_literal => |str| {
+            // String comparison - TODO: needs string comparison builtin
+            _ = str;
+            return error.UnsupportedExpression;
+        },
+
+        .applied_tag => |tag| {
+            // Check if discriminant matches
+            // TODO: Extract discriminant and compare
+            _ = tag;
+            return error.UnsupportedExpression;
+        },
+
+        .record_destructure => {
+            // Records always match (fields are extracted in binding)
+            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
+        },
+
+        .tuple => {
+            // Tuples always match (elements are extracted in binding)
+            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
+        },
+
+        .list => |list_pattern| {
+            // List patterns need length check
+            // TODO: Check list length
+            _ = list_pattern;
+            return error.UnsupportedExpression;
+        },
+
+        else => return error.UnsupportedExpression,
+    };
 }
 
 // ============================================================
