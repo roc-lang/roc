@@ -9130,8 +9130,25 @@ pub const Interpreter = struct {
 
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
+            const flex = ct_resolved.desc.content.flex;
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
+
+            // Check if we've already mapped this flex var (cycle detection)
+            if (self.flex_type_context.get(flex_key)) |_| {
+                return; // Already processed, avoid infinite recursion
+            }
+
             try self.putFlexTypeContext(flex_key, rt_var);
+
+            // Also propagate through constraints if mapping to a nominal type.
+            // For example, if flex `a` has constraint `a.to_utf8 : a -> List(item)` and we map
+            // `a -> Str`, we should look up `Str.to_utf8 : Str -> List(U8)` and propagate
+            // `item -> U8` so numeric literals inside lambda bodies get the correct type.
+            if (flex.constraints.len() > 0 and rt_resolved.desc.content == .structure and
+                rt_resolved.desc.content.structure == .nominal_type)
+            {
+                try self.propagateConstraintMappings(module, flex.constraints, rt_resolved.desc.content.structure.nominal_type);
+            }
             return;
         }
 
@@ -9212,6 +9229,64 @@ pub const Interpreter = struct {
         if (ct_resolved.desc.content == .flex or ct_resolved.desc.content == .rigid) {
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
             try self.putFlexTypeContext(flex_key, rt_var);
+        }
+    }
+
+    /// Propagate type mappings through static dispatch constraints.
+    /// When a flex var with constraints is mapped to a concrete nominal type, we need to
+    /// resolve each constraint against the nominal type's actual methods and propagate
+    /// the return type mappings. This ensures that type variables inside lambda bodies
+    /// (like `item` in `List(item)`) get correctly mapped to their concrete types.
+    fn propagateConstraintMappings(
+        self: *Interpreter,
+        module: *can.ModuleEnv,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+        nominal_type: types.NominalType,
+    ) Error!void {
+        // Get the origin module for this nominal type
+        const origin_module = nominal_type.origin_module;
+        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse return;
+
+        // Get the nominal type's ident for method lookup
+        const nominal_ident = nominal_type.ident.ident_idx;
+
+        // Process each constraint
+        const ct_constraints = module.types.sliceStaticDispatchConstraints(constraints);
+        for (ct_constraints) |constraint| {
+            // Skip from_numeral constraints - they don't have methods to look up
+            if (constraint.origin == .from_numeral) continue;
+
+            // Look up the real method in the origin module
+            // constraint.fn_name is in module's ident space, nominal_ident is in runtime space
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                module,
+                constraint.fn_name,
+            ) orelse continue;
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse continue;
+            const def_idx: can.CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
+            const def_var = can.ModuleEnv.varFrom(def_idx);
+
+            // Get the real method's type
+            const real_resolved = origin_env.types.resolveVar(def_var);
+            const real_func = real_resolved.desc.content.unwrapFunc() orelse continue;
+
+            // Get the constraint's function type
+            const constraint_resolved = module.types.resolveVar(constraint.fn_var);
+            const constraint_func = constraint_resolved.desc.content.unwrapFunc() orelse continue;
+
+            // Propagate return type mapping: constraint ret -> real method ret
+            // For example: List(item) -> List(U8) propagates item -> U8
+            const ct_ret = constraint_func.ret;
+            const real_ret = real_func.ret;
+
+            // Translate the real method's return type to runtime
+            const rt_ret = self.translateTypeVar(@constCast(origin_env), real_ret) catch continue;
+
+            // Propagate mappings from constraint return type to real return type
+            try self.propagateFlexMappings(module, ct_ret, rt_ret);
         }
     }
 
