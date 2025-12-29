@@ -472,10 +472,19 @@ pub const LlvmEmitter = struct {
 
     // Memory Operations
 
-    /// Emit an alloca instruction (allocate on stack)
+    /// Emit an alloca instruction (allocate on stack).
+    /// Allocas are always placed in the entry block to ensure proper LLVM semantics
+    /// and prevent stack growth when called in loops.
     pub fn emitAlloca(self: *LlvmEmitter, ty: Builder.Type) Error!Builder.Value {
         const wip = self.wip_function orelse return error.NoActiveFunction;
-        return wip.alloca(.normal, ty, .none, "") catch return error.OutOfMemory;
+        // Save current cursor position
+        const saved_cursor = wip.cursor;
+        // Move to start of entry block (allocas should be at function entry, not in loops)
+        wip.cursor = .{ .block = .entry, .instruction = 0 };
+        const result = wip.alloca(.normal, ty, .none, .default, .default, "") catch return error.OutOfMemory;
+        // Restore cursor
+        wip.cursor = saved_cursor;
+        return result;
     }
 
     /// Emit a load instruction
