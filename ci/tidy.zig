@@ -196,6 +196,9 @@ fn tidyFile(
     file: SourceFile,
     errors: *Errors,
 ) Allocator.Error!void {
+    // Skip legacy crates/ directory entirely - it's scheduled for deletion
+    if (std.mem.startsWith(u8, file.path, "crates/")) return;
+
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
