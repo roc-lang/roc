@@ -9000,7 +9000,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9062,7 +9061,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9524,20 +9522,6 @@ pub const Interpreter = struct {
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .recursion_var => |rec_var| {
-                    // Translate the structure variable that the recursion var points to
-                    const rt_structure = try self.translateTypeVar(module, rec_var.structure);
-                    // Translate the recursion var's name (if present) from source module's ident store
-                    const rt_name: ?base_pkg.Ident.Idx = if (rec_var.name) |name| blk_name: {
-                        const source_name_str = module.getIdent(name);
-                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
-                    } else null;
-                    const content: types.Content = .{ .recursion_var = .{
-                        .structure = rt_structure,
-                        .name = rt_name,
-                    } };
-                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,

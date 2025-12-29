@@ -152,6 +152,66 @@ pub const Store = struct {
         return self.slots.backing.len();
     }
 
+    // snapshot/rollback for unification //
+
+    /// A snapshot of the type store state that can be used for rollback.
+    /// This is used during unification to restore the original state when
+    /// unification fails, allowing us to capture accurate error types.
+    pub const Snapshot = struct {
+        /// Cloned slots array
+        slots_clone: []Slot,
+        /// Cloned descs array
+        descs_clone: std.MultiArrayList(Desc),
+        /// Length of vars list at snapshot time
+        vars_len: usize,
+        /// Length of record_fields list at snapshot time
+        record_fields_len: usize,
+        /// Length of tags list at snapshot time
+        tags_len: usize,
+        /// Length of static_dispatch_constraints list at snapshot time
+        static_dispatch_constraints_len: usize,
+
+        /// Free the memory held by this snapshot
+        pub fn deinit(self: *Snapshot, gpa: Allocator) void {
+            gpa.free(self.slots_clone);
+            self.descs_clone.deinit(gpa);
+        }
+    };
+
+    /// Create a snapshot of the current type store state.
+    /// The snapshot can be used to rollback if unification fails.
+    pub fn snapshot(self: *const Self) Allocator.Error!Snapshot {
+        return Snapshot{
+            .slots_clone = try self.gpa.dupe(Slot, self.slots.backing.items.items),
+            .descs_clone = try self.descs.backing.items.clone(self.gpa),
+            .vars_len = self.vars.items.items.len,
+            .record_fields_len = self.record_fields.items.len,
+            .tags_len = self.tags.items.len,
+            .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+        };
+    }
+
+    /// Rollback the type store to a previous snapshot state.
+    /// This restores slots, descs, and truncates the append-only lists.
+    pub fn rollbackTo(self: *Self, snap: *Snapshot) void {
+        // Restore slots
+        @memcpy(self.slots.backing.items.items[0..snap.slots_clone.len], snap.slots_clone);
+        self.slots.backing.items.shrinkRetainingCapacity(snap.slots_clone.len);
+
+        // Restore descs - swap and deinit the current one
+        var old_descs = self.descs.backing.items;
+        self.descs.backing.items = snap.descs_clone;
+        old_descs.deinit(self.gpa);
+        // Clear the snapshot's descs since we took ownership
+        snap.descs_clone = .{};
+
+        // Truncate append-only lists
+        self.vars.items.shrinkRetainingCapacity(snap.vars_len);
+        self.record_fields.items.shrinkRetainingCapacity(snap.record_fields_len);
+        self.tags.items.shrinkRetainingCapacity(snap.tags_len);
+        self.static_dispatch_constraints.items.shrinkRetainingCapacity(snap.static_dispatch_constraints_len);
+    }
+
     // fresh variables //
 
     /// Create a new unbound, flexible type variable without a name
@@ -420,7 +480,6 @@ pub const Store = struct {
             .rigid => true, // Rigid variables need instantiation when used outside their defining scope
             .alias => true, // Aliases may contain type variables, so assume they need instantiation
             .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
-            .recursion_var => |rec_var| self.needsInstantiation(rec_var.structure),
             .err => false,
         };
     }
