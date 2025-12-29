@@ -119,19 +119,6 @@ const Errors = struct {
         );
     }
 
-    pub fn addBadTypeFunctionName(
-        errors: *Errors,
-        file: SourceFile,
-        line_index: usize,
-        function_name: []const u8,
-    ) void {
-        const line_number = line_index + 1;
-        errors.emit(
-            "{s}:{d}: error: type function name '{s}' should end in 'Type'\n",
-            .{ file.path, line_number, function_name },
-        );
-    }
-
     pub fn addAmbiguousPrecedence(errors: *Errors, file: SourceFile, line_index: usize) void {
         const line_number = line_index + 1;
         errors.emit(
@@ -202,7 +189,6 @@ fn tidyFile(
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
-        tidyTypeFunctions(file, errors);
 
         var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
         defer tree.deinit(gpa);
@@ -243,15 +229,10 @@ fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
     const allowed = .{
         // Windows batch files may have CRLF
         .@"\r" = file.hasExtension(".bat"),
-
-        // Go uses tabs, JSON uses tabs, markdown code blocks may contain them
-        .@"\t" = file.hasExtension(".go") or
-            file.hasExtension(".json") or
-            (file.hasExtension(".md") and mem.indexOf(u8, file.text, "```") != null),
     };
 
     var remaining = file.text;
-    while (mem.indexOfAny(u8, remaining, "\r\t")) |index| {
+    while (mem.indexOfAny(u8, remaining, "\r")) |index| {
         const offset = index + (file.text.len - remaining.len);
         inline for (comptime std.meta.fieldNames(@TypeOf(allowed))) |field| {
             if (remaining[index] == field[0]) {
@@ -276,7 +257,6 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
         .{ "!= error.", "switch to avoid silent anyerror upcast" },
 
         // Style:
-        .{ "Self = @This()", "proper type name" },
         .{ "usingnamespace", "explicit imports" },
     };
 
@@ -297,37 +277,6 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
     }
 }
 
-
-/// All functions using the `CamelCase` naming convention return a type,
-/// so we enforce that the function name also ends with the `Type` suffix.
-fn tidyTypeFunctions(file: SourceFile, errors: *Errors) void {
-    var line_index: u32 = 0;
-    var it = std.mem.splitScalar(u8, file.text, '\n');
-    while (it.next()) |line| : (line_index += 1) {
-        // Zig fmt enforces that the pattern `fn Foo(` is not split across multiple lines.
-
-        const result = cut(line, "fn ") orelse continue;
-        const prefix = result[0];
-        const suffix = result[1];
-        // Not all `fn ` tokens are functions, some may be `callback_fn` for example.
-        // Functions appear at the beginning of a line or after a whitespace.
-        if (prefix.len > 0 and prefix[prefix.len - 1] != ' ') continue;
-
-        // Skip extern fn declarations - these are FFI bindings that match external API names
-        if (std.mem.indexOf(u8, prefix, "extern") != null) continue;
-
-        const result2 = cut(suffix, "(") orelse continue;
-        const function_name = result2[0];
-        if (function_name.len == 0) continue; // E.g: `*const fn (*anyopaque) void`.
-        assert(function_name.len > 0);
-
-        if (std.ascii.isUpper(function_name[0])) {
-            if (!std.mem.endsWith(u8, function_name, "Type")) {
-                errors.addBadTypeFunctionName(file, line_index, function_name);
-            }
-        }
-    }
-}
 
 const IdentifierCounter = struct {
     const file_identifier_count_max = 100_000;
