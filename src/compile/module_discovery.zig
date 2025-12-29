@@ -7,7 +7,6 @@ const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 
-const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 
@@ -65,60 +64,7 @@ pub fn discoverSiblingModules(
     }
 }
 
-/// Read a source file and normalize its line endings (CRLF -> LF).
-/// This ensures consistent cross-platform behavior during parsing.
-///
-/// Parameters:
-/// - allocator: The allocator to use for the source buffer
-/// - file_path: The path to the source file
-///
-/// Returns: The normalized source content, or an error if the file couldn't be read.
-pub fn readAndNormalizeSource(allocator: Allocator, file_path: []const u8) ![]u8 {
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
-
-    const file_size = try file.getEndPos();
-    const source = try allocator.alloc(u8, @intCast(file_size));
-    errdefer allocator.free(source);
-
-    _ = try file.readAll(source);
-
-    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing
-    return base.source_utils.normalizeLineEndingsRealloc(allocator, source);
-}
-
-/// Initialize a ModuleEnv with source code, calculate line starts, and init CIR fields.
-/// This is the standard initialization sequence used by all compilation paths.
-///
-/// Parameters:
-/// - allocator: The allocator to use for the ModuleEnv
-/// - source: The source code (should already be normalized)
-/// - module_name: The name of the module
-///
-/// Returns: An initialized ModuleEnv ready for parsing and canonicalization.
-pub fn initializeModuleEnv(allocator: Allocator, source: []const u8, module_name: []const u8) !ModuleEnv {
-    var env = try ModuleEnv.init(allocator, source);
-    errdefer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(allocator);
-    try env.initCIRFields(module_name);
-
-    return env;
-}
-
 test "discoverSiblingModules finds .roc files" {
     // This test would require creating a temp directory with test files
-    // For now, just ensure the function compiles
-}
-
-test "readAndNormalizeSource normalizes line endings" {
-    // This test would require creating a temp file
-    // For now, just ensure the function compiles
-}
-
-test "initializeModuleEnv creates valid env" {
-    // This test would require a valid source string
     // For now, just ensure the function compiles
 }
