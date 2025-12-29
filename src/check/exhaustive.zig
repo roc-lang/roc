@@ -730,9 +730,6 @@ fn getUnionFromType(
             const backing_var = type_store.getAliasBackingVar(alias);
             return getUnionFromType(allocator, type_store, builtin_idents, backing_var);
         },
-        .recursion_var => |rec| {
-            return getUnionFromType(allocator, type_store, builtin_idents, rec.structure);
-        },
         // Polymorphic types (flex/rigid vars) cannot be treated as unions because
         // we don't know what constructors they have. This is correct behavior -
         // the caller should handle this by skipping exhaustiveness checking.
@@ -1001,11 +998,6 @@ fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
                 switch (content) {
                     // Flex and rigid variables are unconstrained - assume inhabited
                     .flex, .rigid => try results.append(gpa, true),
-
-                    // Recursion vars are always inhabited because:
-                    // - If inferred from a value, a value of that type exists
-                    // - If from an annotation, illegal recursive types are caught in canonicalization
-                    .recursion_var => |_| try results.append(gpa, true),
 
                     // Error types are treated as inhabited (we don't want to cascade errors)
                     .err => try results.append(gpa, true),
@@ -1511,9 +1503,6 @@ fn collectTypeParamsFromBackingType(
             .alias => |alias| {
                 try stack.append(gpa, type_store.getAliasBackingVar(alias));
             },
-            .recursion_var => |rec| {
-                try stack.append(gpa, rec.structure);
-            },
             else => {},
         }
     }
@@ -1749,10 +1738,6 @@ fn getRecordFieldTypeByName(type_store: *TypeStore, record_type: Var, field_name
             },
             .alias => |alias| {
                 current_type = type_store.getAliasBackingVar(alias);
-                continue;
-            },
-            .recursion_var => |rec| {
-                current_type = rec.structure;
                 continue;
             },
             else => return null,
