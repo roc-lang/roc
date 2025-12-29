@@ -239,7 +239,7 @@ fn nextRecord(bc: *BitcodeReader) !?Record {
                             switch (encoding) {
                                 .fixed, .vbr => try operands.append(try bc.readVbr(u7, 5)),
                                 .array, .char6, .blob => {},
-                                _ => return error.UnsuportedAbbrevEncoding,
+                                _ => return error.UnsupportedAbbrevEncoding,
                             }
                         },
                     },
