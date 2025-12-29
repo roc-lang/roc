@@ -26,7 +26,6 @@
 //! - Original Rust implementation in `crates/compiler/exhaustive/`
 
 const std = @import("std");
-const collections = @import("collections");
 const base = @import("base");
 const Can = @import("can");
 const types = @import("types");
@@ -36,7 +35,6 @@ const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const TypeStore = types.Store;
 const Var = types.Var;
-const Content = types.Content;
 
 /// Builtin type identifiers needed for special-casing in exhaustiveness checking.
 /// These types have special backing representations that would incorrectly appear uninhabited.
@@ -891,21 +889,6 @@ const GatheredTag = struct {
     name: Ident.Idx,
     args: types.Var.SafeList.Range,
 };
-
-/// Check if an extension variable is specifically a flex var (unconstrained).
-///
-/// This is used as an optimization in redundancy checking: when the extension is
-/// flex, wildcards are always useful (the type could unify with additional tags).
-/// This allows us to skip detailed analysis.
-///
-/// Note: This is separate from isOpenExtension, which returns true for BOTH flex
-/// and rigid extensions. Both are "open" for exhaustiveness purposes (needing a
-/// wildcard or #Open match), but only flex gets the fast-path optimization.
-fn hasFlexExtension(type_store: *TypeStore, ext: Var) bool {
-    const resolved = type_store.resolveVar(ext);
-    const content = resolved.desc.content;
-    return content == .flex;
-}
 
 // Inhabitedness Checking
 //

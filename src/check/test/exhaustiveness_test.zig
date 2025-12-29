@@ -5,7 +5,6 @@
 //! - Redundant patterns produce REDUNDANT PATTERN warnings
 //! - Exhaustive matches pass without errors
 
-const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
 // Basic Tag Union Exhaustiveness
