@@ -664,22 +664,68 @@ fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
     switch (stmt) {
         .s_decl => |decl| {
             // Let binding: evaluate value and bind to pattern
-            const value_expr = ctx.module_env.store.getExpr(decl.body);
+            const value_expr = ctx.module_env.store.getExpr(decl.expr);
             const value = try emitExpr(ctx, value_expr);
 
-            // Get the pattern to extract the variable name
-            const pattern = ctx.module_env.store.getPattern(decl.pattern);
+            // Bind the value to the pattern
+            try bindPatternToValue(ctx, decl.pattern, value);
+        },
 
+        .s_decl_gen => |decl| {
+            // Generalized let binding (polymorphic lambdas, number literals)
+            // Treat the same as s_decl for code generation purposes
+            const value_expr = ctx.module_env.store.getExpr(decl.expr);
+            const value = try emitExpr(ctx, value_expr);
+            try bindPatternToValue(ctx, decl.pattern, value);
+        },
+
+        .s_var => |var_decl| {
+            // Mutable variable: allocate stack slot and store initial value
+            const value_expr = ctx.module_env.store.getExpr(var_decl.expr);
+            const value = try emitExpr(ctx, value_expr);
+
+            // For mutable vars, we allocate on stack
+            const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+            const alloca = wip.alloca(.i64, .default, "") catch return error.OutOfMemory; // TODO: Get proper type
+
+            // Store initial value
+            ctx.emitter.emitStore(value, alloca) catch return error.OutOfMemory;
+
+            // Bind the alloca (not the value) to the pattern
+            const pattern = ctx.module_env.store.getPattern(var_decl.pattern_idx);
             switch (pattern) {
                 .assign => |assign| {
                     const name = ctx.module_env.getIdent(assign.ident);
-                    const scoped = emit.ScopedValue.simple(value, .i64); // TODO: Get proper type
+                    // Mark as pointer so lookups will load
+                    const scoped = emit.ScopedValue.refcounted(alloca, .ptr, true);
                     ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
                 },
-                else => {
-                    // Complex patterns need Phase 9
-                    return error.UnsupportedExpression;
+                else => return error.UnsupportedExpression,
+            }
+        },
+
+        .s_reassign => |reassign| {
+            // Reassignment: load the variable's storage pointer and store new value
+            const value_expr = ctx.module_env.store.getExpr(reassign.expr);
+            const value = try emitExpr(ctx, value_expr);
+
+            // Get the pattern to find the variable name
+            const pattern = ctx.module_env.store.getPattern(reassign.pattern_idx);
+            switch (pattern) {
+                .assign => |assign| {
+                    const name = ctx.module_env.getIdent(assign.ident);
+                    if (ctx.emitter.lookupVar(name)) |scoped| {
+                        if (scoped.is_ptr) {
+                            // Store to the alloca
+                            ctx.emitter.emitStore(value, scoped.value) catch return error.OutOfMemory;
+                        } else {
+                            return error.UnsupportedExpression; // Can't reassign non-var
+                        }
+                    } else {
+                        return error.VariableNotFound;
+                    }
                 },
+                else => return error.UnsupportedExpression,
             }
         },
 
@@ -696,7 +742,62 @@ fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
             ctx.emitter.emitRet(value) catch return error.OutOfMemory;
         },
 
-        // TODO: Implement other statement types
+        .s_break => {
+            // Break: jump to loop exit (needs loop context - TODO)
+            return error.UnsupportedExpression;
+        },
+
+        .s_crash => |crash| {
+            // Crash statement: Phase 10
+            _ = crash;
+            return error.UnsupportedExpression;
+        },
+
+        .s_dbg => |dbg| {
+            // Debug statement: evaluate expression (printing is side effect)
+            const expr = ctx.module_env.store.getExpr(dbg.expr);
+            _ = try emitExpr(ctx, expr);
+        },
+
+        .s_expect => {
+            // Expect statement: Phase 10
+            return error.UnsupportedExpression;
+        },
+
+        // For/while loops, type declarations, imports, etc. are not handled here
         else => return error.UnsupportedExpression,
     };
+}
+
+/// Bind a pattern to a value in the current scope
+fn bindPatternToValue(ctx: *CirContext, pattern_idx: CIR.Pattern.Idx, value: Builder.Value) Error!void {
+    const pattern = ctx.module_env.store.getPattern(pattern_idx);
+
+    switch (pattern) {
+        .assign => |assign| {
+            const name = ctx.module_env.getIdent(assign.ident);
+            const scoped = emit.ScopedValue.simple(value, .i64); // TODO: Get proper type
+            ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
+        },
+        .underscore => {
+            // Wildcard: don't bind anything
+        },
+        .record_destructure => {
+            // Record destructuring: Phase 9
+            return error.UnsupportedExpression;
+        },
+        .tuple => {
+            // Tuple destructuring: Phase 9
+            return error.UnsupportedExpression;
+        },
+        .list => {
+            // List destructuring: Phase 9
+            return error.UnsupportedExpression;
+        },
+        .applied_tag => {
+            // Tag destructuring: Phase 9
+            return error.UnsupportedExpression;
+        },
+        else => return error.UnsupportedExpression,
+    }
 }
