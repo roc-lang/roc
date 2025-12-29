@@ -2089,6 +2089,9 @@ pub fn build(b: *std.Build) void {
         // Add llvm_compile module for LLVM compilation pipeline
         snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            .imports = &.{
+                .{ .name = "result_type", .module = roc_modules.result_type },
+            },
         });
     }
 
@@ -2299,6 +2302,9 @@ pub fn build(b: *std.Build) void {
             try addStaticLlvmOptionsToModule(snapshot_test.root_module);
             snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
                 .root_source_file = b.path("src/llvm_compile/mod.zig"),
+                .imports = &.{
+                    .{ .name = "result_type", .module = roc_modules.result_type },
+                },
             });
         }
 

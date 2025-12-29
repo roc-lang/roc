@@ -18,6 +18,7 @@ const parse = @import("parse");
 const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
+const result_type_mod = @import("result_type");
 
 // LLVM Builder from Zig's standard library (for IR generation)
 const LlvmBuilder = std.zig.llvm.Builder;
@@ -79,38 +80,8 @@ pub const LlvmEvaluator = struct {
     }
 
     /// Type of the result value for JIT execution.
-    /// This enum must be kept in sync with llvm_compile.ResultType.
-    /// The snapshot_tool depends on both having identical variants in the same order.
-    /// See llvm_compile/compile.zig for the canonical definition.
-    pub const ResultType = enum {
-        i64,
-        u64,
-        i128,
-        u128,
-        f64,
-        dec,
-
-        /// Compile-time validation that this enum matches the expected structure.
-        /// This helps catch accidental divergence from llvm_compile.ResultType.
-        /// Using ordinal comparison instead of string comparison to comply with lint rules.
-        pub fn validate() void {
-            comptime {
-                // Validate there are exactly 6 variants by checking that ordinal 5 is the max
-                if (@typeInfo(ResultType).@"enum".fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-                // Validate ordinals match expected order
-                if (@intFromEnum(ResultType.i64) != 0) @compileError("ResultType.i64 must be ordinal 0");
-                if (@intFromEnum(ResultType.u64) != 1) @compileError("ResultType.u64 must be ordinal 1");
-                if (@intFromEnum(ResultType.i128) != 2) @compileError("ResultType.i128 must be ordinal 2");
-                if (@intFromEnum(ResultType.u128) != 3) @compileError("ResultType.u128 must be ordinal 3");
-                if (@intFromEnum(ResultType.f64) != 4) @compileError("ResultType.f64 must be ordinal 4");
-                if (@intFromEnum(ResultType.dec) != 5) @compileError("ResultType.dec must be ordinal 5");
-            }
-        }
-    };
-
-    comptime {
-        ResultType.validate();
-    }
+    /// Shared with llvm_compile module via result_type module.
+    pub const ResultType = result_type_mod.ResultType;
 
     /// Result of bitcode generation
     pub const BitcodeResult = struct {

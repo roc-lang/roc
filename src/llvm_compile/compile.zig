@@ -27,38 +27,8 @@ const bindings = @import("bindings.zig");
 const Allocator = std.mem.Allocator;
 
 /// Type of the result value for JIT execution.
-///
-/// NOTE: This enum is duplicated in llvm_evaluator.zig because of module boundary
-/// constraints. The eval module may be compiled without LLVM linked, while this
-/// module (llvm_compile) requires LLVM. The two definitions must stay in sync,
-/// which is enforced by comptime validation in both files.
-pub const ResultType = enum {
-    i64,
-    u64,
-    i128,
-    u128,
-    f64,
-    dec,
-
-    /// Compile-time validation that this enum matches the expected structure.
-    /// This helps catch accidental divergence from llvm_evaluator.ResultType.
-    pub fn validate() void {
-        comptime {
-            const fields = @typeInfo(ResultType).@"enum".fields;
-            if (fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-            if (!std.mem.eql(u8, fields[0].name, "i64")) @compileError("ResultType[0] must be i64");
-            if (!std.mem.eql(u8, fields[1].name, "u64")) @compileError("ResultType[1] must be u64");
-            if (!std.mem.eql(u8, fields[2].name, "i128")) @compileError("ResultType[2] must be i128");
-            if (!std.mem.eql(u8, fields[3].name, "u128")) @compileError("ResultType[3] must be u128");
-            if (!std.mem.eql(u8, fields[4].name, "f64")) @compileError("ResultType[4] must be f64");
-            if (!std.mem.eql(u8, fields[5].name, "dec")) @compileError("ResultType[5] must be dec");
-        }
-    }
-};
-
-comptime {
-    ResultType.validate();
-}
+/// Shared between llvm_compile and eval modules.
+pub const ResultType = @import("result_type").ResultType;
 
 /// Dec (fixed-point decimal) has 18 decimal places.
 /// The internal representation is i128 scaled by 10^18.
