@@ -2418,8 +2418,6 @@ pub const ReportBuilder = struct {
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
-            // Recursion vars: assume they support equality
-            .recursion_var => true,
             // Other types (flex, rigid, recursive, err) assumed to support equality
             else => true,
         };
