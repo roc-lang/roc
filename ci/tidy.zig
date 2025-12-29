@@ -132,14 +132,6 @@ const Errors = struct {
         );
     }
 
-    pub fn addLongFunction(errors: *Errors, file: SourceFile, line_index: usize, length: usize) void {
-        const line_number = line_index + 1;
-        errors.emit(
-            "{s}:{d}: error: function exceeds 70 lines (has {d} lines)\n",
-            .{ file.path, line_number, length },
-        );
-    }
-
     pub fn addAmbiguousPrecedence(errors: *Errors, file: SourceFile, line_index: usize) void {
         const line_number = line_index + 1;
         errors.emit(
@@ -199,8 +191,8 @@ const SourceFile = struct {
 };
 
 fn tidyFile(
-    _: Allocator,
-    _: *IdentifierCounter,
+    gpa: Allocator,
+    _: *IdentifierCounter, // unused - dead code detection disabled
     file: SourceFile,
     errors: *Errors,
 ) Allocator.Error!void {
@@ -208,9 +200,14 @@ fn tidyFile(
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
         tidyTypeFunctions(file, errors);
-        // Note: AST-based checks (dead declarations, function length, operator precedence)
-        // are disabled due to Zig 0.15 AST API changes. These could be re-enabled
-        // once the AST handling is updated for the new API.
+
+        var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
+        defer tree.deinit(gpa);
+
+        // Note: tidyDeadDeclarations is disabled because it produces too many false positives
+        // for patterns common in this codebase (conditional imports, comptime, extern FFI symbols).
+        // tidyDeadDeclarations(file, &tree, counter, errors);
+        tidyAst(file, &tree, errors);
     }
     if (file.hasExtension(".md")) {
         tidyMarkdownTitle(file, errors);
@@ -479,67 +476,22 @@ fn tidyAst(
     if (std.mem.endsWith(u8, file.path, "/build.zig")) return;
 
     const tags = tree.nodes.items(.tag);
-    const datas = tree.nodes.items(.data);
-    // We can implement this in a streaming fashion, but its more convenient to materialize all
-    // functions. 1k functions per file should be enough!
-    var functions: [1024]struct {
-        line_opening: usize,
-        line_closing: usize,
-    } = undefined;
-    var functions_count: u32 = 0;
 
-    for (tags, datas, 0..) |tag, data, node| {
-        if (tag == .fn_decl) { // Check function length.
-            const node_body = data.rhs;
-
-            const token_opening = tree.firstToken(@intCast(node));
-            const token_closing = tree.lastToken(@intCast(node_body));
-
-            const line_opening = tree.tokenLocation(0, token_opening).line;
-            const line_closing = tree.tokenLocation(0, token_closing).line;
-
-            if (functions_count < functions.len) {
-                functions[functions_count] = .{
-                    .line_opening = line_opening,
-                    .line_closing = line_closing,
-                };
-                functions_count += 1;
-            }
-        }
+    for (tags, 0..) |tag, node_usize| {
+        const node: u32 = @intCast(node_usize);
         if (isBinOp(tag)) { // Forbid mixing bitops and arithmetics without parentheses.
-            inline for (.{ data.lhs, data.rhs }) |child| {
-                const tag_child = tags[child];
-                if ((isBinOpBitwise(tag) and isBinOpArithmetic(tag_child)) or
-                    (isBinOpArithmetic(tag) and isBinOpBitwise(tag_child)))
+            // In Zig 0.15, binary operations use node_and_node data layout
+            const data = tree.nodeData(@enumFromInt(node));
+            const children = data.node_and_node;
+            inline for (children) |child| {
+                const child_tag = tags[@intFromEnum(child)];
+                if ((isBinOpBitwise(tag) and isBinOpArithmetic(child_tag)) or
+                    (isBinOpArithmetic(tag) and isBinOpBitwise(child_tag)))
                 {
-                    const token_opening = tree.firstToken(@intCast(node));
+                    const token_opening = tree.nodeMainToken(@enumFromInt(node));
                     const line_opening = tree.tokenLocation(0, token_opening).line;
                     errors.addAmbiguousPrecedence(file, line_opening);
                 }
-            }
-        }
-    }
-
-    // We ratchet 70-lines-per-function TigerStyle rule from the bottom up. Some functions want
-    // to be really long, and that is okay. The most value is in preventing originally small
-    // functions to grow over time.
-    const function_length_red_zone = .{
-        .min = 70, // NB: both are exclusive, so red zone is intentionally empty to start!
-        .max = 70,
-    };
-
-    for (functions[0..functions_count], 0..) |f, index| {
-        // Functions are sorted by the start line.
-        if (index > 0) assert(functions[index - 1].line_opening < f.line_opening);
-
-        if (index == functions_count - 1 or
-            functions[index + 1].line_opening > f.line_closing)
-        {
-            const function_length = f.line_closing - f.line_opening + 1;
-            if (function_length_red_zone.min < function_length and
-                function_length < function_length_red_zone.max)
-            {
-                errors.addLongFunction(file, f.line_opening, function_length);
             }
         }
     }
