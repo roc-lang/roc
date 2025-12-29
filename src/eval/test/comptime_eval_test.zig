@@ -1819,3 +1819,28 @@ test "comptime eval - modulo by zero produces error" {
 // Note: "division by zero does not halt other defs" test is skipped because
 // the interpreter state after an eval error may not allow continuing evaluation
 // of subsequent definitions that share the same evaluation context.
+
+test "encode - custom format type with infallible encoding (empty error type)" {
+    // Test that a custom format type can define an encode_str method that can't fail.
+    // Using [] as the error type means encoding always succeeds.
+    // This matches the signature required by Str.encode's where clause:
+    //   where [fmt.encode_str : fmt, Str -> Try(ok, err)]
+    const src =
+        \\# Define a format type with infallible encoding (error type is [])
+        \\Utf8 := [Format].{
+        \\    encode_str : Str -> Try(List(U8), [])
+        \\    encode_str = |str| Ok(Str.to_utf8(str))
+        \\}
+        \\
+        \\fmt = Utf8.Format
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Type definition and value creation should succeed
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}

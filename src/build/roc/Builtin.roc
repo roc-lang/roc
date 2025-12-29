@@ -39,6 +39,13 @@ Builtin :: [].{
 		is_eq : Str, Str -> Bool
 
 		inspect : _val -> Str
+
+		# Encode a string using a format that provides encode_str
+		encode : Str, fmt -> Try(ok, err)
+			where [fmt.encode_str : fmt, Str -> Try(ok, err)]
+		encode = |self, format| {
+			format.encode_str(self)
+		}
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
@@ -250,6 +257,16 @@ Builtin :: [].{
 		sum = |list| {
 			Item : item
 			List.fold(list, Item.default(), |acc, elem| acc + elem)
+		}
+
+		# Encode a list using a format that provides encode_list
+		encode : List(item), fmt -> Try(ok, err)
+			where [
+				fmt.encode_list : fmt, List(item), (item, fmt -> Try(ok, err)) -> Try(ok, err),
+				item.encode : item, fmt -> Try(ok, err)
+			]
+		encode = |self, format| {
+			format.encode_list(self, |elem, f| elem.encode(f))
 		}
 
 	}
@@ -1256,6 +1273,16 @@ Builtin :: [].{
 					Err(OutOfRange)
 				}
 			}
+		}
+	}
+
+	# Encoding module for serializing values to bytes
+	Encode :: {}.{
+		# Encode a value using a format
+		encode : val, fmt -> Try(ok, err)
+			where [val.encode : val, fmt -> Try(ok, err)]
+		encode = |value, format| {
+			value.encode(format)
 		}
 	}
 }
