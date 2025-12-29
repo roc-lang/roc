@@ -34,6 +34,7 @@ const RocAlloc = builtins.host_abi.RocAlloc;
 const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
+const LambdaLifter = @import("LambdaLifter.zig");
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
@@ -910,6 +911,7 @@ fn processSnapshotContent(
     // Parse the source code based on node type
     var parse_ast: AST = switch (content.meta.node_type) {
         .file => try parse.parse(&module_env.common, allocator),
+        .mono => try parse.parse(&module_env.common, allocator), // mono tests are headerless type modules
         .header => try parse.parseHeader(&module_env.common, allocator),
         .expr => try parse.parseExpr(&module_env.common, allocator),
         .statement => try parse.parseStatement(&module_env.common, allocator),
@@ -955,9 +957,8 @@ fn processSnapshotContent(
         .file, .package, .platform, .app => {
             // All file types that use canonicalizeFile() will use the combined function below
         },
-        .snippet => {
-            // Snippet tests can have arbitrary content (type declarations, expressions, etc.)
-            // that may not work with canonicalizeFile(), so handle them separately
+        .snippet, .mono => {
+            // Snippet and mono tests are full modules
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
             defer module_envs.deinit();
 
@@ -1014,7 +1015,7 @@ fn processSnapshotContent(
     // will call canonicalizeFile which sets it. Only do this for .expr/.statement which
     // don't call canonicalizeFile.
     const needs_evaluation_order = switch (content.meta.node_type) {
-        .expr, .statement => true,
+        .expr, .statement, .mono => true,
         .file, .package, .platform, .app, .snippet, .repl, .header => false,
     };
 
@@ -1113,9 +1114,9 @@ fn processSnapshotContent(
             );
             break :blk checker;
         },
-        .snippet, .statement, .header, .expr => blk: {
-            // For snippet/statement/header/expr tests, type check the already-canonicalized IR
-            // Note: .expr can reach here if canonicalizeExpr returned null (error during canonicalization)
+        .snippet, .statement, .header, .expr, .mono => blk: {
+            // For snippet/statement/header/expr/mono tests, type check the already-canonicalized IR
+            // Note: .expr and .mono can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
 
             if (config.builtin_module) |builtin_env| {
@@ -1192,6 +1193,159 @@ fn processSnapshotContent(
         }
     }
 
+    // Run closure transformation for mono tests
+    // This transforms closures to tags and generates dispatch match expressions
+    var has_closure_transforms = false;
+
+    // Lambda lifting storage - will be populated if we have closures
+    var lifter: ?LambdaLifter = null;
+    defer {
+        if (lifter) |*l| l.deinit();
+    }
+
+    if (content.meta.node_type == .mono) {
+        const ClosureTransformer = can.ClosureTransformer;
+        var transformer = ClosureTransformer.init(allocator, can_ir);
+        defer transformer.deinit();
+
+        // First pass: mark all top-level patterns
+        // Top-level constants don't need to be captured since they're always in scope
+        const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+        for (defs) |def_idx| {
+            const def = can_ir.store.getDef(def_idx);
+            try transformer.markTopLevel(def.pattern);
+        }
+
+        // Second pass: transform all top-level definitions
+        for (defs) |def_idx| {
+            const def = can_ir.store.getDef(def_idx);
+
+            // Get name hint from pattern
+            const pattern = can_ir.store.getPattern(def.pattern);
+            const name_hint: ?base.Ident.Idx = switch (pattern) {
+                .assign => |a| a.ident,
+                else => null,
+            };
+
+            // Transform the definition expression
+            const old_expr = def.expr;
+            const result = try transformer.transformExprWithLambdaSet(def.expr, name_hint);
+
+            // If the expression changed, compute the correct type for the new expression
+            // based on its structure (e.g., tag union for closure transforms)
+            // Note: We don't modify the pattern's type here to avoid breaking type unification.
+            // Instead, the type will be computed from the expression in generateMonoSection.
+            if (old_expr != result.expr) {
+                _ = try computeTransformedExprType(can_ir, result.expr);
+            }
+
+            // Track the lambda set for this pattern
+            if (result.lambda_set) |lambda_set| {
+                try transformer.pattern_lambda_sets.put(def.pattern, lambda_set);
+                has_closure_transforms = true;
+            }
+
+            // If the expression is a lambda with a return set, track what it returns when called
+            // This allows propagating closure information through calls to this lambda
+            if (transformer.lambda_return_sets.get(result.expr)) |return_set| {
+                // Clone the return set to avoid double-free issues
+                const cloned = try return_set.clone(allocator);
+                try transformer.pattern_lambda_return_sets.put(def.pattern, cloned);
+            }
+
+            // Update the definition to use the transformed expression
+            can_ir.store.setDefExpr(def_idx, result.expr);
+        }
+
+        // Also check if any closures were transformed (even nested inside pure lambdas)
+        // This is important because nested closures may not produce a lambda_set at the top level
+        has_closure_transforms = has_closure_transforms or transformer.closures.count() > 0;
+
+        // Validate that all lambda sets have been fully resolved.
+        // Any remaining unspecialized closures indicate a failure to resolve static dispatch implementations.
+        const validation_result = transformer.validateAllResolved();
+        if (!validation_result.is_valid) {
+            // Log the validation failure
+            if (validation_result.first_error) |err| {
+                std.log.err("Lambda set validation failed: {d} unresolved closures. First error: {s}", .{
+                    validation_result.unresolved_count,
+                    @tagName(err.kind),
+                });
+            } else {
+                std.log.err("Lambda set validation failed: {d} unresolved closures", .{
+                    validation_result.unresolved_count,
+                });
+            }
+            return error.UnresolvedLambdaSets;
+        }
+
+        // Phase 4 & 5: Lambda lifting - extract closures to top-level function definitions
+        // After the ClosureTransformer has identified all closures, use LambdaLifter
+        // to create lifted function definitions for each one.
+        const has_any_closures = transformer.closures.count() > 0 or
+            transformer.pattern_lambda_sets.count() > 0;
+
+        if (has_any_closures) {
+            lifter = LambdaLifter.init(allocator, can_ir, &transformer.top_level_patterns);
+
+            // Iterate over all transformed closures (closures with captures)
+            var closure_iter = transformer.closures.iterator();
+            while (closure_iter.next()) |entry| {
+                const closure_idx = entry.key_ptr.*;
+                const closure_info = entry.value_ptr.*;
+
+                // Lift this closure to a top-level function
+                try lifter.?.liftClosure(closure_idx, closure_info.tag_name);
+            }
+
+            // Also lift closures from pattern_lambda_sets (pure lambdas converted to tags)
+            var lambda_set_iter = transformer.pattern_lambda_sets.iterator();
+            while (lambda_set_iter.next()) |entry| {
+                const lambda_set = entry.value_ptr;
+                for (lambda_set.closures.items) |closure_info| {
+                    // Check if this closure was already lifted via transformer.closures
+                    // (closures with captures are in both places)
+                    var already_lifted = false;
+                    var check_iter = transformer.closures.iterator();
+                    while (check_iter.next()) |check_entry| {
+                        if (check_entry.value_ptr.tag_name == closure_info.tag_name) {
+                            already_lifted = true;
+                            break;
+                        }
+                    }
+
+                    if (!already_lifted) {
+                        // Lift this pure lambda using the info-based method
+                        try lifter.?.liftFromInfo(closure_info);
+                    }
+                }
+            }
+        }
+    }
+
+    // Run constant folding for mono tests (skip if we have closure transformations)
+    // This evaluates expressions at compile time and folds results back into the CIR.
+    // We skip this when closures have been transformed because the comptime evaluator
+    // doesn't yet know how to handle the closure tag format.
+    if (content.meta.node_type == .mono and !has_closure_transforms) {
+        if (config.builtin_module) |builtin_env| {
+            const BuiltinTypes = eval_mod.BuiltinTypes;
+            const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
+            const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
+            const imported_envs: []const *const ModuleEnv = builtin_modules.items;
+            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping);
+            defer comptime_evaluator.deinit();
+
+            // First evaluate any top-level defs
+            _ = try comptime_evaluator.evalAll();
+
+            // Then evaluate and fold the standalone expression if present
+            if (Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx)) |expr_idx| {
+                _ = try comptime_evaluator.evalAndFoldExpr(expr_idx);
+            }
+        }
+    }
+
     // Buffer all output in memory before writing files
     var md_buffer_unmanaged = std.ArrayList(u8).empty;
     var md_writer_allocating: std.Io.Writer.Allocating = .fromArrayList(allocator, &md_buffer_unmanaged);
@@ -1218,15 +1372,32 @@ fn processSnapshotContent(
     }
 
     // Generate all sections
+    // For mono tests, the order is: META, SOURCE, MONO, FORMATTED, then the rest
+    // For other tests, the order is: META, SOURCE, EXPECTED, PROBLEMS, TOKENS, PARSE, FORMATTED, CANONICALIZE, TYPES
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
-    success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
-    try generateProblemsSection(&output, &generated_reports);
-    try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
-    try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
-    try generateFormattedSection(&output, &content, &parse_ast);
-    try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
-    try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+
+    if (content.meta.node_type == .mono) {
+        // Mono tests: MONO and FORMATTED come right after SOURCE
+        const lifted_funcs = if (lifter) |l| l.getLiftedFunctions() else &[_]LambdaLifter.LiftedFunction{};
+        try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config, lifted_funcs);
+        try generateFormattedSection(&output, &content, &parse_ast);
+        success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
+        try generateProblemsSection(&output, &generated_reports);
+        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
+        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
+        try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+        try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+    } else {
+        // Other tests: standard order
+        success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
+        try generateProblemsSection(&output, &generated_reports);
+        try generateTokensSection(&output, &parse_ast, &content, &module_env, config.linecol_mode);
+        try generateParseSection(&output, &content, &parse_ast, &module_env.common, config.linecol_mode);
+        try generateFormattedSection(&output, &content, &parse_ast);
+        try generateCanonicalizeSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+        try generateTypesSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), config.linecol_mode);
+    }
 
     try generateHtmlClosing(&output);
 
@@ -1432,6 +1603,7 @@ const Section = union(enum) {
     tokens,
     problems,
     types,
+    mono,
 
     pub const META = "# META\n~~~ini\n";
     pub const SOURCE = "# SOURCE\n~~~roc\n";
@@ -1443,6 +1615,7 @@ const Section = union(enum) {
     pub const TOKENS = "# TOKENS\n~~~zig\n";
     pub const PROBLEMS = "# PROBLEMS\n";
     pub const TYPES = "# TYPES\n~~~clojure\n";
+    pub const MONO = "# MONO\n~~~roc\n";
 
     pub const SECTION_END = "~~~\n";
 
@@ -1457,6 +1630,7 @@ const Section = union(enum) {
         if (std.mem.startsWith(u8, str, TYPES)) return .types;
         if (std.mem.startsWith(u8, str, TOKENS)) return .tokens;
         if (std.mem.startsWith(u8, str, PROBLEMS)) return .problems;
+        if (std.mem.startsWith(u8, str, MONO)) return .mono;
         return null;
     }
 
@@ -1472,6 +1646,7 @@ const Section = union(enum) {
             .tokens => TOKENS,
             .problems => PROBLEMS,
             .types => TYPES,
+            .mono => MONO,
         };
     }
 
@@ -1505,6 +1680,7 @@ pub const NodeType = enum {
     app,
     repl,
     snippet,
+    mono,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1515,6 +1691,7 @@ pub const NodeType = enum {
     pub const APP = "app";
     pub const REPL = "repl";
     pub const SNIPPET = "snippet";
+    pub const MONO = "mono";
 
     fn fromString(str: []const u8) !NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1526,6 +1703,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, APP)) return .app;
         if (std.mem.eql(u8, str, REPL)) return .repl;
         if (std.mem.eql(u8, str, SNIPPET)) return .snippet;
+        if (std.mem.eql(u8, str, MONO)) return .mono;
         return Error.InvalidNodeType;
     }
 
@@ -1540,6 +1718,7 @@ pub const NodeType = enum {
             .app => "app",
             .repl => "repl",
             .snippet => "snippet",
+            .mono => "mono",
         };
     }
 };
@@ -2024,6 +2203,10 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
+        .mono => {
+            const file = parse_ast.store.getFile();
+            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
+        },
         .statement => {
             const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
             try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
@@ -2093,6 +2276,9 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
         .expr => {
             try fmt.formatExpr(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
+        },
+        .mono => {
+            try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .statement => {
             try fmt.formatStatement(parse_ast.*, &formatted.writer);
@@ -2188,6 +2374,759 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
             \\                <pre>
         );
         try tree.toHtml(&writer.writer, linecol_mode);
+        try writer.writer.writeAll(
+            \\</pre>
+            \\
+        );
+    }
+    try output.end_code_block();
+    try output.end_section();
+}
+
+/// Compute the correct type for a closure-transformed expression.
+/// Instead of copying the old function type, this builds the appropriate type
+/// based on the new expression's structure (e.g., tag union for closures).
+fn computeTransformedExprType(
+    can_ir: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+) !types.Var {
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+
+    // Ensure type var exists for this expression
+    if (@intFromEnum(expr_var) >= can_ir.types.len()) {
+        const current_len: usize = @intCast(can_ir.types.len());
+        const needed_len: usize = @intCast(@intFromEnum(expr_var) + 1);
+        var i: usize = current_len;
+        while (i < needed_len) : (i += 1) {
+            _ = try can_ir.types.fresh();
+        }
+    }
+
+    const expr = can_ir.store.getExpr(expr_idx);
+
+    switch (expr) {
+        .e_tag => |tag| {
+            // A tag expression (e.g., Closure_1({ y: y }))
+            // Type: [TagName(PayloadType)]
+            const tag_args = can_ir.store.exprSlice(tag.args);
+            if (tag_args.len == 1) {
+                // Single arg is the capture record - compute its type
+                const record_expr_idx = tag_args[0];
+                const record_type = try computeTransformedExprType(can_ir, record_expr_idx);
+
+                // Build tag union type: [TagName(record_type)]
+                const tag_type = try can_ir.types.mkTag(tag.name, &[_]types.Var{record_type});
+                const ext_var = try can_ir.types.fresh();
+                const content = try can_ir.types.mkTagUnion(&[_]types.Tag{tag_type}, ext_var);
+                try can_ir.types.setVarContent(expr_var, content);
+            } else if (tag_args.len == 0) {
+                // Tag with no payload
+                const tag_type = try can_ir.types.mkTag(tag.name, &[_]types.Var{});
+                const ext_var = try can_ir.types.fresh();
+                const content = try can_ir.types.mkTagUnion(&[_]types.Tag{tag_type}, ext_var);
+                try can_ir.types.setVarContent(expr_var, content);
+            }
+            return expr_var;
+        },
+        .e_record => |record| {
+            // Record expression - build record type from field types
+            const fields_slice = can_ir.store.sliceRecordFields(record.fields);
+
+            // Build record fields for the type
+            var type_fields = std.ArrayList(types.RecordField).empty;
+            defer type_fields.deinit(can_ir.gpa);
+
+            for (fields_slice) |field_idx| {
+                const field = can_ir.store.getRecordField(field_idx);
+                // Get the type of the field value expression
+                const field_type = try computeTransformedExprType(can_ir, field.value);
+                try type_fields.append(can_ir.gpa, .{ .name = field.name, .var_ = field_type });
+            }
+
+            const fields_range = try can_ir.types.appendRecordFields(type_fields.items);
+            const ext_var = try can_ir.types.fresh();
+            const content = types.Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
+            try can_ir.types.setVarContent(expr_var, content);
+            return expr_var;
+        },
+        .e_lambda => |lambda| {
+            // Lambda expression - build function type
+            // Get argument types from patterns
+            const arg_patterns = can_ir.store.slicePatterns(lambda.args);
+
+            var arg_types = std.ArrayList(types.Var).empty;
+            defer arg_types.deinit(can_ir.gpa);
+
+            for (arg_patterns) |pattern_idx| {
+                try arg_types.append(can_ir.gpa, ModuleEnv.varFrom(pattern_idx));
+            }
+
+            // Get return type from body (recursively compute it)
+            const ret_type = try computeTransformedExprType(can_ir, lambda.body);
+
+            // Build function type
+            const args_range = try can_ir.types.appendVars(arg_types.items);
+            const func = types.Func{ .args = args_range, .ret = ret_type, .needs_instantiation = false };
+            const content = types.Content{ .structure = .{ .fn_pure = func } };
+            try can_ir.types.setVarContent(expr_var, content);
+            return expr_var;
+        },
+        .e_lookup_local => |local| {
+            // Lookup - find the definition for this pattern and use its expression's type
+            // This ensures we get the transformed type, not the original pattern type
+            const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+            for (defs) |def_idx| {
+                const def = can_ir.store.getDef(def_idx);
+                if (def.pattern == local.pattern_idx) {
+                    // Found the definition - recursively compute the expression's type
+                    return try computeTransformedExprType(can_ir, def.expr);
+                }
+            }
+            // Fallback to pattern's type if definition not found
+            // Check if the pattern's type variable is within the type store's bounds
+            // (patterns created after type checking, like lifted function patterns, need fresh type vars)
+            const pattern_var = ModuleEnv.varFrom(local.pattern_idx);
+            if (@intFromEnum(pattern_var) >= can_ir.types.len()) {
+                // Create fresh type variables up to this index
+                const current_len: usize = @intCast(can_ir.types.len());
+                const needed_len: usize = @intCast(@intFromEnum(pattern_var) + 1);
+                var i: usize = current_len;
+                while (i < needed_len) : (i += 1) {
+                    _ = try can_ir.types.fresh();
+                }
+            }
+            return pattern_var;
+        },
+        .e_call => |call| {
+            // Function call - the type is the return type of the function being called
+            // First compute the function's type
+            const func_type = try computeTransformedExprType(can_ir, call.func);
+            const func_resolved = can_ir.types.resolveVar(func_type);
+
+            // If it's a function type, set the call's type to the return type
+            // This is important for newly created call expressions (from closure transform)
+            // which may not have had their type vars initialized during type checking
+            if (func_resolved.desc.content == .structure) {
+                const flat_type = func_resolved.desc.content.structure;
+                switch (flat_type) {
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        // Set the call expression's type to match the function's return type
+                        const ret_resolved = can_ir.types.resolveVar(func.ret);
+                        try can_ir.types.setVarContent(expr_var, ret_resolved.desc.content);
+                        return expr_var;
+                    },
+                    else => {},
+                }
+            }
+            // Fall back to original expression type
+            return expr_var;
+        },
+        .e_num => {
+            // Numeric literal - use the original expression's type (with numeral constraint)
+            return expr_var;
+        },
+        .e_block => |block| {
+            // Block - the type is the type of the final expression
+            return try computeTransformedExprType(can_ir, block.final_expr);
+        },
+        .e_binop => |binop| {
+            // Binary operation - the result type is typically the same as the operand types
+            // For arithmetic operations, use the left operand's type (both should be the same)
+            return try computeTransformedExprType(can_ir, binop.lhs);
+        },
+        .e_match => |match_expr| {
+            // Match expression - the type is the type of the branch bodies
+            // All branches should have the same type, so we use the first branch
+            const branches = can_ir.store.sliceMatchBranches(match_expr.branches);
+            if (branches.len > 0) {
+                const first_branch = can_ir.store.getMatchBranch(branches[0]);
+                return try computeTransformedExprType(can_ir, first_branch.value);
+            }
+            return expr_var;
+        },
+        else => {
+            // For other expressions, use the original type from type-checking
+            return expr_var;
+        },
+    }
+}
+
+/// Get the defaulted (monomorphized) type string for an expression.
+/// This defaults flex vars with from_numeral constraint to Dec.
+/// Uses a seen set for cycle detection.
+fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
+    var seen = std.ArrayList(types.Var).empty;
+    defer seen.deinit(allocator);
+    return getDefaultedTypeStringWithSeen(allocator, can_ir, type_var, &seen);
+}
+
+fn getDefaultedTypeStringWithSeen(
+    allocator: std.mem.Allocator,
+    can_ir: *ModuleEnv,
+    type_var: types.Var,
+    seen: *std.ArrayList(types.Var),
+) ![]const u8 {
+    const resolved = can_ir.types.resolveVar(type_var);
+
+    // Check for cycle - use "_" (type wildcard) for cyclic references
+    // This is valid Roc syntax, unlike "..." which was causing parse errors
+    for (seen.items) |seen_var| {
+        if (seen_var == resolved.var_) {
+            return allocator.dupe(u8, "_");
+        }
+    }
+
+    // Add to seen set
+    try seen.append(allocator, resolved.var_);
+    defer _ = seen.pop();
+
+    switch (resolved.desc.content) {
+        .flex => |flex| {
+            // Check if this flex var has a from_numeral constraint
+            const constraints = can_ir.types.sliceStaticDispatchConstraints(flex.constraints);
+            for (constraints) |constraint| {
+                if (constraint.origin == .from_numeral) {
+                    return allocator.dupe(u8, "Dec");
+                }
+            }
+            // No numeral constraint - fall through to TypeWriter
+        },
+        .structure => |flat_type| {
+            switch (flat_type) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    // Recursively default function argument and return types
+                    // Use Roc syntax: a, b -> c (not curried a -> b -> c)
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    const arg_vars = can_ir.types.sliceVars(func.args);
+                    for (arg_vars, 0..) |arg_var, i| {
+                        if (i > 0) try result.appendSlice(", ");
+                        const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen);
+                        defer allocator.free(arg_type);
+                        try result.appendSlice(arg_type);
+                    }
+
+                    try result.appendSlice(" -> ");
+
+                    // Check if return type is also a function - if so, wrap in parens
+                    const ret_resolved = can_ir.types.resolveVar(func.ret);
+                    const ret_is_fn = ret_resolved.desc.content == .structure and
+                        (ret_resolved.desc.content.structure == .fn_pure or
+                            ret_resolved.desc.content.structure == .fn_effectful or
+                            ret_resolved.desc.content.structure == .fn_unbound);
+
+                    const ret_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, func.ret, seen);
+                    defer allocator.free(ret_type);
+
+                    if (ret_is_fn) {
+                        try result.append('(');
+                        try result.appendSlice(ret_type);
+                        try result.append(')');
+                    } else {
+                        try result.appendSlice(ret_type);
+                    }
+
+                    return result.toOwnedSlice();
+                },
+                .tag_union => |tag_union| {
+                    // Emit tag union as closed union (without extension variable)
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    try result.append('[');
+                    const tags_slice = can_ir.types.getTagsSlice(tag_union.tags);
+                    for (tags_slice.items(.name), tags_slice.items(.args), 0..) |tag_name_idx, tag_args, i| {
+                        if (i > 0) try result.appendSlice(", ");
+
+                        const tag_name = can_ir.getIdent(tag_name_idx);
+                        try result.appendSlice(tag_name);
+
+                        // Add payload types if any
+                        const arg_vars = can_ir.types.sliceVars(tag_args);
+                        if (arg_vars.len > 0) {
+                            try result.append('(');
+                            for (arg_vars, 0..) |arg_var, j| {
+                                if (j > 0) try result.appendSlice(", ");
+                                const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen);
+                                defer allocator.free(arg_type);
+                                try result.appendSlice(arg_type);
+                            }
+                            try result.append(')');
+                        }
+                    }
+                    try result.append(']');
+
+                    return result.toOwnedSlice();
+                },
+                .record => |record| {
+                    // Emit record as closed record (without extension variable)
+                    var result = std.array_list.Managed(u8).init(allocator);
+                    errdefer result.deinit();
+
+                    try result.appendSlice("{ ");
+                    const fields_slice = can_ir.types.getRecordFieldsSlice(record.fields);
+                    const field_names = fields_slice.items(.name);
+                    const field_vars = fields_slice.items(.var_);
+                    for (field_names, field_vars, 0..) |field_name_idx, field_var, i| {
+                        if (i > 0) try result.appendSlice(", ");
+
+                        const field_name = can_ir.getIdent(field_name_idx);
+                        try result.appendSlice(field_name);
+                        try result.appendSlice(" : ");
+
+                        const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen);
+                        defer allocator.free(field_type);
+                        try result.appendSlice(field_type);
+                    }
+                    try result.appendSlice(" }");
+
+                    return result.toOwnedSlice();
+                },
+                else => {},
+            }
+        },
+        else => {},
+    }
+
+    // Use TypeWriter for all other cases - it has proper cycle detection
+    var type_writer = try can_ir.initTypeWriter();
+    defer type_writer.deinit();
+    try type_writer.write(type_var, .one_line);
+
+    // Copy the result since type_writer will be deinitialized
+    return allocator.dupe(u8, type_writer.get());
+}
+
+/// Check if a pattern is a top-level definition.
+/// Top-level captures are always in scope and should not be lifted as closure parameters.
+fn isTopLevelPattern(can_ir: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
+    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+    for (defs) |def_idx| {
+        const def = can_ir.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Get the monomorphized type string for an expression.
+/// For closures, this includes capture types as leading function arguments.
+fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx: CIR.Expr.Idx) ![]const u8 {
+    const expr = can_ir.store.getExpr(expr_idx);
+
+    // For blocks, get the type of the final expression (what the block evaluates to)
+    if (expr == .e_block) {
+        return getMonoTypeString(allocator, can_ir, expr.e_block.final_expr);
+    }
+
+    // Handle closures specially - include capture types in the function type
+    if (expr == .e_closure) {
+        const closure = expr.e_closure;
+        const captures = can_ir.store.sliceCaptures(closure.captures);
+
+        // Get the lambda's function type
+        const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
+        const resolved = can_ir.types.resolveVar(lambda_var);
+
+        // Check if this is a function type
+        if (resolved.desc.content == .structure) {
+            const flat_type = resolved.desc.content.structure;
+            if (flat_type == .fn_pure or flat_type == .fn_effectful or flat_type == .fn_unbound) {
+                const func = switch (flat_type) {
+                    .fn_pure => |f| f,
+                    .fn_effectful => |f| f,
+                    .fn_unbound => |f| f,
+                    else => unreachable,
+                };
+
+                var result = std.array_list.Managed(u8).init(allocator);
+                errdefer result.deinit();
+
+                // First, add non-top-level capture types (top-level captures are always in scope)
+                var emitted_captures: u32 = 0;
+                for (captures) |capture_idx| {
+                    const capture = can_ir.store.getCapture(capture_idx);
+
+                    // Skip top-level captures - they're always in scope
+                    if (isTopLevelPattern(can_ir, capture.pattern_idx)) continue;
+
+                    if (emitted_captures > 0) try result.appendSlice(", ");
+                    emitted_captures += 1;
+
+                    const capture_var = ModuleEnv.varFrom(capture.pattern_idx);
+                    const capture_type = try getDefaultedTypeString(allocator, can_ir, capture_var);
+                    defer allocator.free(capture_type);
+                    try result.appendSlice(capture_type);
+                }
+
+                // Then add the lambda's own argument types
+                const arg_vars = can_ir.types.sliceVars(func.args);
+                for (arg_vars, 0..) |arg_var, i| {
+                    if (emitted_captures > 0 or i > 0) try result.appendSlice(", ");
+                    const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
+                    defer allocator.free(arg_type);
+                    try result.appendSlice(arg_type);
+                }
+
+                try result.appendSlice(" -> ");
+
+                // Get the return type - if the body is also a closure, recursively process it
+                const lambda_expr = can_ir.store.getExpr(closure.lambda_idx);
+                std.debug.assert(lambda_expr == .e_lambda);
+                const body_expr = can_ir.store.getExpr(lambda_expr.e_lambda.body);
+
+                const is_nested_function = body_expr == .e_closure;
+                const ret_type = if (is_nested_function)
+                    // Recursively process nested closures to include their captures
+                    try getMonoTypeString(allocator, can_ir, lambda_expr.e_lambda.body)
+                else
+                    try getDefaultedTypeString(allocator, can_ir, func.ret);
+                defer allocator.free(ret_type);
+
+                // Nested function types need parens in Roc
+                if (is_nested_function) try result.appendSlice("(");
+                try result.appendSlice(ret_type);
+                if (is_nested_function) try result.appendSlice(")");
+
+                return result.toOwnedSlice();
+            }
+        }
+    }
+
+    // For non-closures, just use the regular type defaulting
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    return getDefaultedTypeString(allocator, can_ir, expr_var);
+}
+
+/// Validate that the MONO output is valid Roc code by parsing, canonicalizing, and type-checking it.
+/// Returns true if validation passed, false if there were errors.
+fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path: []const u8, config: *const Config) bool {
+    // Create a module environment for validation
+    var validation_env = ModuleEnv.init(allocator, mono_source) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to create validation environment: {}", .{ source_path, err });
+        return false;
+    };
+    defer validation_env.deinit();
+
+    // Calculate line starts for error reporting
+    validation_env.common.calcLineStarts(allocator) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to calculate line starts: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Parse the MONO output as a headerless type module
+    var validation_ast = parse.parse(&validation_env.common, allocator) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Parse failed: {}", .{ source_path, err });
+        return false;
+    };
+    defer validation_ast.deinit(allocator);
+
+    // Check for parse errors
+    if (validation_ast.hasErrors()) {
+        const tokenize_errs = validation_ast.tokenize_diagnostics.items.len;
+        const parse_errs = validation_ast.parse_diagnostics.items.len;
+        std.log.err("MONO PARSE ERROR in {s}: {d} tokenize error(s), {d} parse error(s) in generated MONO output:", .{ source_path, tokenize_errs, parse_errs });
+        for (validation_ast.tokenize_diagnostics.items) |diag| {
+            const tag_name = @tagName(diag.tag);
+            std.log.err("  - tokenize: {s}", .{tag_name});
+        }
+        for (validation_ast.parse_diagnostics.items) |diag| {
+            const tag_name = @tagName(diag.tag);
+            std.log.err("  - parse: {s}", .{tag_name});
+        }
+        std.log.err("MONO source that failed to parse:\n{s}", .{mono_source});
+        return false;
+    }
+
+    // Initialize CIR fields for canonicalization
+    validation_env.initCIRFields("mono_validation") catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to init CIR fields: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Set up module_envs with builtin types if available
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+
+    if (config.builtin_module) |builtin_env| {
+        Can.populateModuleEnvs(&module_envs, &validation_env, builtin_env, config.builtin_indices) catch |err| {
+            std.log.err("MONO VALIDATION ERROR in {s}: Failed to populate module envs: {}", .{ source_path, err });
+            return false;
+        };
+    }
+
+    // Canonicalize the parsed MONO output
+    var czer = Can.init(&validation_env, &validation_ast, &module_envs) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize canonicalizer: {}", .{ source_path, err });
+        return false;
+    };
+    defer czer.deinit();
+
+    czer.canonicalizeFile() catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Canonicalization failed: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Check for canonicalization diagnostics (skip warnings, only fail on errors)
+    const can_diagnostics = validation_env.getDiagnostics() catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to get diagnostics: {}", .{ source_path, err });
+        return false;
+    };
+    defer allocator.free(can_diagnostics);
+
+    // Count only actual errors, not warnings (shadowing_warning is just a warning)
+    var error_count: usize = 0;
+    for (can_diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .shadowing_warning => {}, // Skip warnings
+            else => error_count += 1,
+        }
+    }
+
+    if (error_count > 0) {
+        std.log.err("MONO CANONICALIZATION ERROR in {s}: {d} error(s) in generated MONO output:", .{ source_path, error_count });
+        for (can_diagnostics) |diagnostic| {
+            switch (diagnostic) {
+                .shadowing_warning => {}, // Skip warnings in output too
+                else => {
+                    const tag_name = @tagName(diagnostic);
+                    std.log.err("  - {s}", .{tag_name});
+                },
+            }
+        }
+        std.log.err("MONO source that failed canonicalization:\n{s}", .{mono_source});
+        return false;
+    }
+
+    // Type-check the canonicalized MONO output
+    // Create a BuiltinContext using the config's builtin information
+    const module_name = validation_env.insertIdent(base.Ident.for_text("mono_validation")) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to insert module name: {}", .{ source_path, err });
+        return false;
+    };
+
+    const builtin_ctx: Check.BuiltinContext = .{
+        .module_name = module_name,
+        .bool_stmt = config.builtin_indices.bool_type,
+        .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
+        .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
+    };
+
+    var checker = Check.init(
+        allocator,
+        &validation_env.types,
+        &validation_env,
+        &.{}, // No imported modules
+        &module_envs,
+        &validation_env.store.regions,
+        builtin_ctx,
+    ) catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Failed to initialize type checker: {}", .{ source_path, err });
+        return false;
+    };
+    defer checker.deinit();
+
+    checker.checkFile() catch |err| {
+        std.log.err("MONO VALIDATION ERROR in {s}: Type checking failed: {}", .{ source_path, err });
+        return false;
+    };
+
+    // Check for type-checking problems
+    const type_problems = checker.problems.problems.items;
+    if (type_problems.len > 0) {
+        std.log.err("MONO TYPE ERROR in {s}: {d} type error(s) in generated MONO output:", .{ source_path, type_problems.len });
+        for (type_problems) |problem| {
+            const tag_name = @tagName(problem);
+            std.log.err("  - {s}", .{tag_name});
+        }
+        std.log.err("MONO source that failed type-checking:\n{s}", .{mono_source});
+        return false;
+    }
+
+    return true;
+}
+
+/// Validate that the MONO output is properly formatted.
+/// Returns true if the code is already properly formatted, false if there are formatting differences.
+/// If formatting differs, logs the differences as an error.
+fn validateMonoFormatting(allocator: Allocator, mono_source: []const u8, source_path: []const u8) bool {
+    // Parse and format the code
+    const formatted = parseAndFormat(allocator, mono_source) catch |err| {
+        std.log.err("MONO FORMATTING ERROR in {s}: Failed to format: {}", .{ source_path, err });
+        return false;
+    };
+    defer allocator.free(formatted);
+
+    // Compare formatted with original
+    if (std.mem.eql(u8, mono_source, formatted)) {
+        return true; // Already properly formatted
+    }
+
+    // Code is not properly formatted - report the difference
+    std.log.err("MONO FORMATTING ERROR in {s}: MONO section is not properly formatted.", .{source_path});
+    std.log.err("=== ORIGINAL ===", .{});
+    std.log.err("{s}", .{mono_source});
+    std.log.err("=== FORMATTED (expected) ===", .{});
+    std.log.err("{s}", .{formatted});
+    std.log.err("=== END DIFF ===", .{});
+
+    return false;
+}
+
+/// Parse Roc source and return formatted output.
+fn parseAndFormat(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var module_env = try ModuleEnv.init(gpa, input);
+    defer module_env.deinit();
+
+    var parse_ast = try parse.parse(&module_env.common, gpa);
+    defer parse_ast.deinit(gpa);
+
+    // Check for parse errors - if there are any, we can't format
+    if (parse_ast.hasErrors()) {
+        return error.ParseFailed;
+    }
+
+    var result: std.Io.Writer.Allocating = .init(gpa);
+    errdefer result.deinit();
+    try fmt.formatAst(parse_ast, &result.writer);
+
+    return try result.toOwnedSlice();
+}
+
+/// Generate MONO section for mono tests - emits monomorphized type module
+fn generateMonoSection(output: *DualOutput, can_ir: *ModuleEnv, _: ?CIR.Expr.Idx, source_path: []const u8, config: *const Config, lifted_functions: []const LambdaLifter.LiftedFunction) !void {
+    // First, build the mono source in a buffer for validation
+    var mono_buffer = std.ArrayList(u8).empty;
+    defer mono_buffer.deinit(output.gpa);
+
+    // Emit all top-level definitions (no module header - type modules are headerless)
+    var emitter = can.RocEmitter.init(output.gpa, can_ir);
+    defer emitter.deinit();
+
+    // Phase 5: Output lifted function definitions first (before regular definitions)
+    // These are the closures that have been lifted to top-level functions.
+    // Dispatch now calls these functions instead of inlining the lambda bodies.
+    for (lifted_functions) |lifted_fn| {
+        // Get the function name and convert to a valid Roc identifier
+        const fn_name = can_ir.getIdent(lifted_fn.name);
+
+        // Convert # prefix to 'c' (for compiler-generated closures like #1_foo -> c1_foo)
+        // or uppercase first char to lowercase for backwards compatibility
+        var fn_name_lower = try output.gpa.alloc(u8, fn_name.len);
+        defer output.gpa.free(fn_name_lower);
+        @memcpy(fn_name_lower, fn_name);
+        if (fn_name_lower.len > 0 and fn_name_lower[0] == '#') {
+            fn_name_lower[0] = 'c';
+        } else if (fn_name_lower.len > 0 and fn_name_lower[0] >= 'A' and fn_name_lower[0] <= 'Z') {
+            fn_name_lower[0] = fn_name_lower[0] + ('a' - 'A');
+        }
+
+        // Output as a proper definition
+        try mono_buffer.appendSlice(output.gpa, fn_name_lower);
+        try mono_buffer.appendSlice(output.gpa, " = |");
+
+        // Emit the original lambda arguments
+        const args = can_ir.store.slicePatterns(lifted_fn.args);
+        for (args, 0..) |arg_pattern, i| {
+            if (i > 0) {
+                try mono_buffer.appendSlice(output.gpa, ", ");
+            }
+            emitter.reset();
+            try emitter.emitPattern(arg_pattern);
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+        }
+
+        // Add the captures parameter if there are captures
+        if (lifted_fn.captures_pattern) |captures_pat| {
+            if (args.len > 0) {
+                try mono_buffer.appendSlice(output.gpa, ", ");
+            }
+            emitter.reset();
+            try emitter.emitPattern(captures_pat);
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+        }
+
+        try mono_buffer.appendSlice(output.gpa, "| ");
+
+        // Emit the transformed body
+        emitter.reset();
+        try emitter.emitExpr(lifted_fn.body);
+        try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+        try mono_buffer.appendSlice(output.gpa, "\n\n");
+    }
+
+    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
+    const has_lifted_functions = lifted_functions.len > 0;
+    for (defs) |def_idx| {
+        const def = can_ir.store.getDef(def_idx);
+
+        // Emit the pattern (left side of =)
+        emitter.reset();
+        try emitter.emitPattern(def.pattern);
+        const pattern_output = try output.gpa.dupe(u8, emitter.getOutput());
+        defer output.gpa.free(pattern_output);
+
+        // Emit the expression (right side of =)
+        emitter.reset();
+        try emitter.emitExpr(def.expr);
+
+        // For closure transforms, skip type annotations since computing them correctly
+        // is complex (transformed expressions have new indices without proper type vars).
+        // For non-closure transforms, emit type annotations using the pattern's type.
+        if (has_lifted_functions) {
+            // Skip type annotations - just emit: name = expr
+            try mono_buffer.appendSlice(output.gpa, pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " = ");
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            try mono_buffer.appendSlice(output.gpa, "\n\n");
+        } else {
+            // Use the pattern's type from type checking (not computed from expression)
+            const pattern_type = ModuleEnv.varFrom(def.pattern);
+            const type_str = try getDefaultedTypeString(output.gpa, can_ir, pattern_type);
+            defer output.gpa.free(type_str);
+
+            // Build the mono source: name : Type\nname = expr\n
+            try mono_buffer.appendSlice(output.gpa, pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " : ");
+            try mono_buffer.appendSlice(output.gpa, type_str);
+            try mono_buffer.appendSlice(output.gpa, "\n");
+            try mono_buffer.appendSlice(output.gpa, pattern_output);
+            try mono_buffer.appendSlice(output.gpa, " = ");
+            try mono_buffer.appendSlice(output.gpa, emitter.getOutput());
+            try mono_buffer.appendSlice(output.gpa, "\n\n");
+        }
+    }
+
+    // Trim trailing newline (we added one too many at the end)
+    if (mono_buffer.items.len > 0 and mono_buffer.items[mono_buffer.items.len - 1] == '\n') {
+        _ = mono_buffer.pop();
+    }
+
+    // Validate the MONO output for both non-closure and closure transforms
+    if (!validateMonoOutput(output.gpa, mono_buffer.items, source_path, config)) {
+        return error.MonoValidationFailed;
+    }
+    if (!validateMonoFormatting(output.gpa, mono_buffer.items, source_path)) {
+        return error.MonoFormattingFailed;
+    }
+
+    // Write the validated output to the section
+    try output.begin_section("MONO");
+    try output.begin_code_block("roc");
+    try output.md_writer.writer.writeAll(mono_buffer.items);
+
+    // HTML MONO section
+    if (output.html_writer) |writer| {
+        try writer.writer.writeAll(
+            \\                <pre>
+        );
+        // Re-emit for HTML (simplified - just copy the markdown content idea)
+        // For now, just show a placeholder
+        try writer.writer.writeAll("(see markdown)\n");
         try writer.writer.writeAll(
             \\</pre>
             \\
@@ -2802,6 +3741,10 @@ test "TODO: cross-module function calls - string_interpolation_comparison" {}
 test "TODO: cross-module function calls - string_multiline_comparison" {}
 
 test "TODO: cross-module function calls - string_ordering_unsupported" {}
+
+test "LambdaLifter" {
+    std.testing.refAllDecls(LambdaLifter);
+}
 
 /// An implementation of RocOps for snapshot testing.
 pub const SnapshotOps = struct {

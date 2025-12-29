@@ -25,6 +25,18 @@ const Monomorphizer = can.Monomorphizer;
 const testing = std.testing;
 const test_allocator = testing.allocator;
 
+/// Helper to check if output contains a closure tag (format: C followed by digit)
+/// Closure tags use internal format #N_hint which RocEmitter transforms to CN_hint
+fn hasClosureTag(output: []const u8) bool {
+    var i: usize = 0;
+    while (i < output.len) : (i += 1) {
+        if (output[i] == 'C' and i + 1 < output.len and output[i + 1] >= '0' and output[i + 1] <= '9') {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Helper to parse, canonicalize, type check, and emit Roc code
 fn emitFromSource(allocator: std.mem.Allocator, source: []const u8) ![]const u8 {
     const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
@@ -50,8 +62,8 @@ test "end-to-end: emit arithmetic expression" {
     const output = try emitFromSource(test_allocator, "1 + 2");
     defer test_allocator.free(output);
 
-    // After parsing, the expression becomes a binop
-    try testing.expectEqualStrings("(1 + 2)", output);
+    // After parsing, the expression becomes a binop (no parens needed)
+    try testing.expectEqualStrings("1 + 2", output);
 }
 
 test "end-to-end: emit True tag" {
@@ -100,14 +112,14 @@ test "end-to-end: emit lambda with body" {
     const output = try emitFromSource(test_allocator, "|x| x + 1");
     defer test_allocator.free(output);
 
-    try testing.expectEqualStrings("|x| (x + 1)", output);
+    try testing.expectEqualStrings("|x| x + 1", output);
 }
 
 test "end-to-end: emit if expression" {
     const output = try emitFromSource(test_allocator, "if True 1 else 2");
     defer test_allocator.free(output);
 
-    try testing.expectEqualStrings("if True 1 else 2", output);
+    try testing.expectEqualStrings("if (True) 1 else 2", output);
 }
 
 test "end-to-end: emit tuple" {
@@ -480,16 +492,17 @@ fn transformClosureExpr(allocator: std.mem.Allocator, source: []const u8) ![]con
     return try allocator.dupe(u8, emitter.getOutput());
 }
 
-test "transform pure lambda to tag" {
-    // Test a pure lambda (no captures) - parsed directly without a block
+test "pure lambda is left unchanged" {
+    // Test a pure lambda (no captures) - should NOT be transformed
     const source = "|x| x + 1";
 
     const output = try transformClosureExpr(test_allocator, source);
     defer test_allocator.free(output);
 
-    // Pure lambda should be transformed to a # tag with empty record
-    try testing.expect(std.mem.indexOf(u8, output, "#") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "{}") != null);
+    // Pure lambda should be left as-is, NOT transformed to a tag
+    // Closure tags now use format C1_hint or C1 (# prefix transformed to C by RocEmitter)
+    try testing.expect(!hasClosureTag(output));
+    try testing.expectEqualStrings("|x| x + 1", output);
 }
 
 /// Helper to transform closures in a block and emit the result
@@ -525,12 +538,13 @@ test "transform closure with single capture to tag" {
     const output = try transformBlockAndEmit(test_allocator, source);
     defer test_allocator.free(output);
 
-    // The closure should have been transformed to a # tag
-    try testing.expect(std.mem.indexOf(u8, output, "#") != null);
+    // The closure should have been transformed to a # tag (emitted as C1_...)
+    try testing.expect(hasClosureTag(output));
 
     // The capture 'x' should appear in the tag's record argument
-    try testing.expect(std.mem.indexOf(u8, output, "x:") != null or
-        std.mem.indexOf(u8, output, "{x") != null);
+    // RocEmitter uses shorthand syntax { x } for captures
+    try testing.expect(std.mem.indexOf(u8, output, "{ x }") != null or
+        std.mem.indexOf(u8, output, "x:") != null);
 
     // The call should have been transformed to a match expression
     try testing.expect(std.mem.indexOf(u8, output, "match") != null);
@@ -549,14 +563,16 @@ test "transform closure with multiple captures" {
     const output = try transformBlockAndEmit(test_allocator, source);
     defer test_allocator.free(output);
 
-    // The closure should have been transformed to a # tag
-    try testing.expect(std.mem.indexOf(u8, output, "#") != null);
+    // The closure should have been transformed to a # tag (emitted as C1_...)
+    try testing.expect(hasClosureTag(output));
 
     // Both captures 'a' and 'b' should appear in the tag's record
-    try testing.expect(std.mem.indexOf(u8, output, "a:") != null or
-        std.mem.indexOf(u8, output, "{a") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "b:") != null or
-        std.mem.indexOf(u8, output, ", b") != null);
+    // RocEmitter uses shorthand syntax { a, b } for captures
+    try testing.expect(std.mem.indexOf(u8, output, "{ a") != null or
+        std.mem.indexOf(u8, output, "a:") != null);
+    try testing.expect(std.mem.indexOf(u8, output, " b }") != null or
+        std.mem.indexOf(u8, output, ", b") != null or
+        std.mem.indexOf(u8, output, "b:") != null);
 
     // The call should have been transformed to a match expression
     try testing.expect(std.mem.indexOf(u8, output, "match") != null);
@@ -576,10 +592,10 @@ test "verify: closure with single capture transforms correctly" {
     defer test_allocator.free(transformed);
 
     // Verify transformation structure:
-    // - Should have a # tag (internal closure tag)
+    // - Should have a # tag (internal closure tag, emitted as C1_...)
     // - Should have a match expression for the call site
     // - Should reference the captured variable x
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -598,13 +614,13 @@ test "verify: closure with multiple captures transforms correctly" {
     defer test_allocator.free(transformed);
 
     // Verify transformation structure:
-    // - Should have a # tag (internal closure tag)
+    // - Should have a # tag (internal closure tag, emitted as C1_...)
     // - Should have a match expression for the call site
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
-test "verify: pure lambda (no captures) transforms correctly" {
+test "verify: pure lambda (no captures) is left unchanged" {
     const source =
         \\{
         \\    f = |x| x + 1
@@ -616,13 +632,14 @@ test "verify: pure lambda (no captures) transforms correctly" {
     const transformed = try transformBlockAndEmit(test_allocator, source);
     defer test_allocator.free(transformed);
 
-    // Verify transformation structure:
-    // - Should have a # tag (internal closure tag)
-    // - Should have a match expression for the call site
-    // - Pure lambdas should have empty record {}
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
-    try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
-    try testing.expect(std.mem.indexOf(u8, transformed, "{}") != null);
+    // Verify pure lambda is NOT transformed:
+    // - Should NOT have a closure tag (C followed by digit)
+    // - Should NOT have a match expression
+    // - Should have the lambda preserved as-is
+    try testing.expect(!hasClosureTag(transformed));
+    try testing.expect(std.mem.indexOf(u8, transformed, "match") == null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "|x|") != null);
+    try testing.expect(std.mem.indexOf(u8, transformed, "f(41)") != null);
 }
 
 test "verify: nested closures with captures transforms correctly" {
@@ -641,9 +658,9 @@ test "verify: nested closures with captures transforms correctly" {
     defer test_allocator.free(transformed);
 
     // Verify transformation structure:
-    // - Should have # tags (internal closure tags)
+    // - Should have # tags (internal closure tags, emitted as C1_...)
     // - Should have match expressions for the call sites
-    try testing.expect(std.mem.indexOf(u8, transformed, "#") != null);
+    try testing.expect(hasClosureTag(transformed));
     try testing.expect(std.mem.indexOf(u8, transformed, "match") != null);
 }
 
@@ -666,11 +683,153 @@ test "ClosureTransformer: can generate tag names" {
     const tag_name1 = try transformer.generateClosureTagName(hint);
     const tag_str1 = module_env.getIdent(tag_name1);
 
-    try testing.expectEqualStrings("#myFunc", tag_str1);
+    try testing.expectEqualStrings("#1_myFunc", tag_str1);
 
     // Generate another tag name without hint
     const tag_name2 = try transformer.generateClosureTagName(null);
     const tag_str2 = module_env.getIdent(tag_name2);
 
     try testing.expectEqualStrings("#2", tag_str2);
+}
+
+// Constant folding tests
+// These tests verify that compile-time evaluation correctly folds
+// tuples, tags with payloads, and nested structures
+
+test "end-to-end: emit tuple literal" {
+    const output = try emitFromSource(test_allocator, "(1, 2, 3)");
+    defer test_allocator.free(output);
+
+    try testing.expectEqualStrings("(1, 2, 3)", output);
+}
+
+test "end-to-end: emit nested tuple" {
+    const output = try emitFromSource(test_allocator, "((1, 2), (3, 4))");
+    defer test_allocator.free(output);
+
+    try testing.expectEqualStrings("((1, 2), (3, 4))", output);
+}
+
+test "end-to-end: emit tag application with single integer payload" {
+    // In Roc, `Some 42` is a tag call application, which emits as the tag name
+    // and its argument separately: the tag function applied to the argument
+    const output = try emitFromSource(test_allocator, "Some 42");
+    defer test_allocator.free(output);
+
+    // Tag applications are currently emitted as just the tag name for the tag part
+    // and the arguments follow the syntax of the original expression
+    try testing.expect(std.mem.indexOf(u8, output, "Some") != null);
+}
+
+test "end-to-end: emit tag application with multiple arguments" {
+    // `Pair 1 2` is a tag applied to two arguments
+    const output = try emitFromSource(test_allocator, "Pair 1 2");
+    defer test_allocator.free(output);
+
+    try testing.expect(std.mem.indexOf(u8, output, "Pair") != null);
+}
+
+test "end-to-end: emit nested tag application" {
+    const output = try emitFromSource(test_allocator, "Outer (Inner 5)");
+    defer test_allocator.free(output);
+
+    // The outer tag should be present
+    try testing.expect(std.mem.indexOf(u8, output, "Outer") != null);
+}
+
+/// Helper to evaluate an expression and get the first element of a tuple result
+fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
+    const resources = try helpers.parseAndCanonicalizeExpr(allocator, source);
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var test_env_instance = TestEnv.init(allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    // Get the first element of the tuple
+    if (result.layout.tag == .tuple) {
+        const fresh_var = try interpreter.runtime_types.fresh();
+        var accessor = try result.asTuple(layout_cache);
+        const first_elem = try accessor.getElement(0, fresh_var);
+        if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .int) {
+            const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
+            return tmp_sv.asI128();
+        } else if (first_elem.layout.tag == .scalar and first_elem.layout.data.scalar.tag == .frac) {
+            const tmp_sv = eval_mod.StackValue{ .layout = first_elem.layout, .ptr = first_elem.ptr, .is_initialized = true, .rt_var = fresh_var };
+            const dec_value = tmp_sv.asDec(ops);
+            const RocDec = builtins.dec.RocDec;
+            return @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        }
+    }
+    return error.NotATuple;
+}
+
+test "roundtrip: tuple literal produces same result" {
+    const source = "(10, 20)";
+
+    // Get original result - first element
+    const original_result = try evalTupleFirst(test_allocator, source);
+
+    // Emit and re-parse
+    const emitted = try emitFromSource(test_allocator, source);
+    defer test_allocator.free(emitted);
+
+    // Get result from emitted code
+    const emitted_result = try evalTupleFirst(test_allocator, emitted);
+
+    // Verify they match
+    try testing.expectEqual(original_result, emitted_result);
+    try testing.expectEqual(@as(i128, 10), emitted_result);
+}
+
+test "roundtrip: computed tuple produces same result" {
+    const source =
+        \\{
+        \\    x = 5
+        \\    y = 10
+        \\    (x, y)
+        \\}
+    ;
+
+    // Get original result
+    const original_result = try evalTupleFirst(test_allocator, source);
+
+    // Emit and re-parse
+    const emitted = try emitFromSource(test_allocator, source);
+    defer test_allocator.free(emitted);
+
+    // Get result from emitted code
+    const emitted_result = try evalTupleFirst(test_allocator, emitted);
+
+    // Verify they match
+    try testing.expectEqual(original_result, emitted_result);
+    try testing.expectEqual(@as(i128, 5), emitted_result);
+}
+
+test "roundtrip: arithmetic tuple produces same result" {
+    const source = "(1 + 2, 3 * 4)";
+
+    // Get original result - first element should be 3
+    const original_result = try evalTupleFirst(test_allocator, source);
+
+    // Emit and re-parse
+    const emitted = try emitFromSource(test_allocator, source);
+    defer test_allocator.free(emitted);
+
+    // Get result from emitted code
+    const emitted_result = try evalTupleFirst(test_allocator, emitted);
+
+    // Verify they match
+    try testing.expectEqual(original_result, emitted_result);
+    try testing.expectEqual(@as(i128, 3), emitted_result);
 }
