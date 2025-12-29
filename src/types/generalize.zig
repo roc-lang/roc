@@ -197,9 +197,6 @@ pub const Generalizer = struct {
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
                     // Rank unchanged and generalizing - safe to generalize.
-                    // Note: numeric literals with from_numeral constraints CAN be generalized
-                    // because the interpreter now propagates constraint return type mappings
-                    // when entering polymorphic functions (see propagateConstraintMappings).
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
