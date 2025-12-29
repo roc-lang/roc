@@ -652,12 +652,8 @@ pub const Cursor = struct {
                         continue;
                     },
                     '.' => {
-                        self.pos += 1;
-                        self.chompIntegerBase10() catch {}; // This is not an issue, have leading `0.`.
-                        tok = .Float;
-                        _ = self.chompExponent() catch {
-                            tok = .MalformedNumberNoExponentDigits;
-                        };
+                        self.pos -= 1; // Go back to the initial 0
+                        tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -1885,7 +1881,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append('u');
                     try buf2.append('(');
                     for (6..length) |_| {
-                        try buf2.append('A');
+                        try buf2.append('0');
                     }
                     try buf2.append(')');
                     try buf2.append('\'');

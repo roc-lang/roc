@@ -613,8 +613,62 @@ pub const Store = struct {
 
     /// Check if a layout is zero-sized
     /// This simply checks if the layout has size 0
-    pub fn isZeroSized(self: *const Self, layout: Layout) bool {
-        return self.layoutSize(layout) == 0;
+    pub fn isZeroSized(self: *const Self, l: Layout) bool {
+        return self.layoutSize(l) == 0;
+    }
+
+    /// Check if a layout contains any refcounted data (directly or transitively).
+    /// This is more comprehensive than Layout.isRefcounted() which only checks if
+    /// the layout itself is heap-allocated. This function also returns true for
+    /// tuples/records that contain strings, lists, or boxes.
+    pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
+        return switch (l.tag) {
+            .scalar => switch (l.data.scalar.tag) {
+                .str => true,
+                else => false,
+            },
+            .list, .list_of_zst => true,
+            .box, .box_of_zst => true,
+            .tuple => {
+                const tuple_data = self.getTupleData(l.data.tuple.idx);
+                const fields = self.tuple_fields.sliceRange(tuple_data.getFields());
+                for (0..fields.len) |i| {
+                    const field_layout = self.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsRefcounted(field_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .record => {
+                const record_data = self.getRecordData(l.data.record.idx);
+                const fields = self.record_fields.sliceRange(record_data.getFields());
+                for (0..fields.len) |i| {
+                    const field_layout = self.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsRefcounted(field_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .tag_union => {
+                const tu_data = self.getTagUnionData(l.data.tag_union.idx);
+                const variants = self.getTagUnionVariants(tu_data);
+                for (0..variants.len) |i| {
+                    const variant_layout = self.getLayout(variants.get(i).payload_layout);
+                    if (self.layoutContainsRefcounted(variant_layout)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .closure => {
+                // Check if the captured variables contain refcounted data
+                const captures_layout = self.getLayout(l.data.closure.captures_layout_idx);
+                return self.layoutContainsRefcounted(captures_layout);
+            },
+            .zst => false,
+        };
     }
 
     /// Add the tag union's tags to self.pending_tags,
@@ -1671,59 +1725,6 @@ pub const Store = struct {
                         const backing_var = self.types_store.getAliasBackingVar(alias);
                         current = self.types_store.resolveVar(backing_var);
                         continue;
-                    },
-                    .recursion_var => |rec_var| blk: {
-                        // A recursion_var represents a self-reference in a recursive type.
-                        // For example, in `Simple(state) := [Node({children: List(Simple(state))})]`,
-                        // the inner `Simple(state)` is a recursion_var pointing back to the outer type.
-                        //
-                        // We cannot simply follow the structure, as that would cause infinite recursion.
-                        // Instead, check if this recursion_var has already been cached (meaning the
-                        // recursive type's layout was already computed), or if we're inside a container
-                        // that provides indirection (List/Box).
-                        const resolved_structure = self.types_store.resolveVar(rec_var.structure);
-
-                        // First, check if we've already computed the layout for the structure
-                        if (self.layouts_by_var.get(resolved_structure.var_)) |cached_idx| {
-                            // The recursive type's layout was already computed, use it
-                            break :blk self.getLayout(cached_idx);
-                        }
-
-                        // Check if the resolved structure is a nominal type that's in progress.
-                        // If so, use its reserved placeholder layout. This is critical for recursive
-                        // types inside List/Box containers - we need to use the actual placeholder
-                        // index (which will be updated later) instead of opaquePtr().
-                        if (resolved_structure.desc.content == .structure) {
-                            const flat_type = resolved_structure.desc.content.structure;
-                            if (flat_type == .nominal_type) {
-                                const nominal_type = flat_type.nominal_type;
-                                const nominal_key = work.NominalKey{
-                                    .ident_idx = nominal_type.ident.ident_idx,
-                                    .origin_module = nominal_type.origin_module,
-                                };
-                                if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
-                                    if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
-                                        // Use the placeholder - it will be updated with the real layout.
-                                        break :blk self.getLayout(cached_idx);
-                                    }
-                                }
-                            }
-                        }
-
-                        // If we're inside a List or Box, the recursive reference will be heap-allocated,
-                        // so we can use opaque_ptr as a placeholder. The actual layout will be computed
-                        // when we return to process the outer type.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                break :blk Layout.opaquePtr();
-                            }
-                        }
-
-                        // For recursion_var outside of containers, we need to follow it.
-                        // This should only happen if the structure hasn't been processed yet.
-                        current = resolved_structure;
-                        continue :outer;
                     },
                     .err => return LayoutError.TypeContainedMismatch,
                 };

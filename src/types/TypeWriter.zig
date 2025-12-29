@@ -396,10 +396,6 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     _ = try writer.write(")");
                 }
             },
-            .recursion_var => |rec_var| {
-                // Write the recursion var by writing the structure it points to
-                try self.writeVar(writer, rec_var.structure, root_var);
-            },
             .err => {
                 _ = try writer.write("Error");
             },
@@ -744,12 +740,6 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
             try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
             _ = try writer.write("]");
         },
-        .recursion_var => {
-            if (has_tags) _ = try writer.write(", ");
-            _ = try writer.write("..");
-            try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
-            _ = try writer.write("]");
-        },
     }
 }
 
@@ -765,6 +755,15 @@ fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) std.
         }
         _ = try writer.write(")");
     }
+}
+
+/// Format a single tag and return the result as a string slice.
+/// The returned slice is only valid until the next call to any write method.
+pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error![]const u8 {
+    self.reset();
+    var writer = self.buf.writer();
+    try self.writeTag(&writer, tag, root_var);
+    return self.get();
 }
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
@@ -887,10 +886,6 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         },
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
-        },
-        .recursion_var => |rec_var| {
-            // Count the structure the recursion var points to
-            try self.countVar(search_var, rec_var.structure, count);
         },
         .err => {},
     }

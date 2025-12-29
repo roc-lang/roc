@@ -736,7 +736,7 @@ const Formatter = struct {
             fmt.curr_indent = curr_indent;
         }
         if (qualifier) |q| {
-            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident });
+            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident + 1 });
             try fmt.pushTokenText(q);
             if (multiline and try fmt.flushCommentsAfter(q)) {
                 fmt.curr_indent += 1;
@@ -1885,10 +1885,6 @@ const Formatter = struct {
         switch (clause) {
             .mod_method => |c| {
                 // Format as: a.method : Type
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -1945,10 +1941,6 @@ const Formatter = struct {
             },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -2165,7 +2157,8 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
@@ -2201,7 +2194,8 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);

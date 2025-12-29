@@ -15,9 +15,9 @@ type=repl
 » !Bool.True or !Bool.True
 ~~~
 # OUTPUT
-Crash: runtime error
+Crash: Compile-time error encountered at runtime
 ---
-Crash: runtime error
+Crash: Compile-time error encountered at runtime
 ---
 True
 ---

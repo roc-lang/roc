@@ -86,61 +86,6 @@ const RefcountContext = struct {
     roc_ops: *RocOps,
 };
 
-/// Check if a layout contains any refcounted data (directly or transitively).
-/// This is more comprehensive than Layout.isRefcounted() which only checks if
-/// the layout itself is heap-allocated. This function also returns true for
-/// tuples/records that contain strings, lists, or boxes.
-fn layoutContainsRefcounted(l: Layout, layout_store: *layout.Store) bool {
-    return switch (l.tag) {
-        .scalar => switch (l.data.scalar.tag) {
-            .str => true,
-            else => false,
-        },
-        .list, .list_of_zst => true,
-        .box, .box_of_zst => true,
-        .tuple => {
-            const tuple_data = layout_store.getTupleData(l.data.tuple.idx);
-            const fields = layout_store.tuple_fields.sliceRange(tuple_data.getFields());
-            for (0..fields.len) |i| {
-                const field_layout = layout_store.getLayout(fields.get(i).layout);
-                if (layoutContainsRefcounted(field_layout, layout_store)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .record => {
-            const record_data = layout_store.getRecordData(l.data.record.idx);
-            const fields = layout_store.record_fields.sliceRange(record_data.getFields());
-            for (0..fields.len) |i| {
-                const field_layout = layout_store.getLayout(fields.get(i).layout);
-                if (layoutContainsRefcounted(field_layout, layout_store)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .tag_union => {
-            const tu_data = layout_store.getTagUnionData(l.data.tag_union.idx);
-            const variants = layout_store.getTagUnionVariants(tu_data);
-            for (0..variants.len) |i| {
-                const variant_layout = layout_store.getLayout(variants.get(i).payload_layout);
-                if (layoutContainsRefcounted(variant_layout, layout_store)) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        .closure => {
-            // Closures capture variables which may be refcounted
-            // TODO: Check the captures layout for refcounted data
-            // For now, assume closures may contain refcounted data
-            return true;
-        },
-        .zst => false,
-    };
-}
-
 /// Increment callback for list operations - increments refcount of element via StackValue
 fn listElementInc(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) void {
     const context: *RefcountContext = @ptrCast(@alignCast(context_opaque.?));
@@ -1094,7 +1039,7 @@ pub const Interpreter = struct {
         const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
         // Make a unique copy of the list for sorting
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
         const elem_rt_var = try self.runtime_types.fresh();
         var refcount_context = RefcountContext{
             .layout_store = &self.runtime_layout_store,
@@ -2531,7 +2476,7 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -2769,7 +2714,7 @@ pub const Interpreter = struct {
                 }
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Create a fresh list by allocating and copying elements.
                 // We can't use the builtin listConcat here because it consumes its input lists
@@ -2887,7 +2832,7 @@ pub const Interpreter = struct {
                     const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                     // Determine if elements contain refcounted data
-                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                    const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                     // Set up context for refcount callbacks
                     const elem_rt_var = try self.runtime_types.fresh();
@@ -2988,7 +2933,7 @@ pub const Interpreter = struct {
                 // Determine if elements contain refcounted data (directly or transitively).
                 // This is more comprehensive than isRefcounted() - it also catches tuples/records
                 // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
@@ -3106,7 +3051,7 @@ pub const Interpreter = struct {
                     const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                     // Determine if elements contain refcounted data
-                    const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                    const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                     // Set up context for refcount callbacks
                     const elem_rt_var = try self.runtime_types.fresh();
@@ -3207,7 +3152,7 @@ pub const Interpreter = struct {
                 // Determine if elements contain refcounted data (directly or transitively).
                 // This is more comprehensive than isRefcounted() - it also catches tuples/records
                 // containing strings, which need proper refcounting (fixes issue #8650).
-                const elements_refcounted = layoutContainsRefcounted(elem_layout, &self.runtime_layout_store);
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Determine if list can be mutated in place
                 const update_mode = if (roc_list.isUnique(roc_ops)) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
@@ -3296,7 +3241,7 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -3360,7 +3305,7 @@ pub const Interpreter = struct {
                 const elem_alignment_u32: u32 = @intCast(elem_alignment);
 
                 // Determine if elements are refcounted
-                const elements_refcounted = elem_layout.isRefcounted();
+                const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
                 // Set up context for refcount callbacks
                 const elem_rt_var = try self.runtime_types.fresh();
@@ -7158,9 +7103,13 @@ pub const Interpreter = struct {
             }
         }
 
-        // Note: Tags are already sorted alphabetically in runtime_types.
-        // translateTypeVar flattens tag union extensions and sorts tags before storing,
-        // so no sorting is needed here. See the translateTypeVar function.
+        // Sort tags alphabetically to ensure consistent discriminant indices.
+        // While translateTypeVar sorts tags before storing, different translations
+        // of the same source type may produce different runtime type vars, and
+        // rendering may use a different type var than was used during value creation.
+        // Sorting here ensures both paths see tags in the same alphabetical order.
+        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
@@ -7331,17 +7280,30 @@ pub const Interpreter = struct {
                         // union in memory is sized for the largest variant. When extracting a
                         // specific variant's payload, we need the correct layout for that variant.
                         //
-                        // Check if the arg var has a rigid substitution (from polymorphic method
-                        // instantiation). If so, use the substituted type's layout.
+                        // The arg_var contains the actual type of the payload (e.g., Item).
+                        // We should try to compute its layout directly rather than using
+                        // the field_value.layout which is the raw payload union layout.
+                        //
+                        // This is critical for opaque types returned from polymorphic functions
+                        // where the field layout might not match the expected tag union layout
+                        // of the opaque type's backing.
                         const arg_var = arg_vars[0];
                         const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                        const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                // Use the substituted concrete type's layout
-                                break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                        const effective_layout = blk: {
+                            // First try: if arg is a rigid with a substitution, use substituted type's layout
+                            if (arg_resolved.desc.content == .rigid) {
+                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                }
                             }
+                            // Second try: compute layout directly from arg_var
+                            // This handles concrete types like opaque Item returned from polymorphic functions
+                            if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                                break :blk computed_layout;
+                            } else |_| {}
+                            // Fallback to field_value.layout
                             break :blk field_value.layout;
-                        } else field_value.layout;
+                        };
 
                         payload_value = StackValue{
                             .layout = effective_layout,
@@ -7439,12 +7401,21 @@ pub const Interpreter = struct {
                     const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                    const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                        if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                            break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                    const effective_layout = blk: {
+                        // First try: if arg is a rigid with a substitution, use substituted type's layout
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                            }
                         }
+                        // Second try: compute layout directly from arg_var
+                        // This handles concrete types like opaque Item returned from polymorphic functions
+                        if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                            break :blk computed_layout;
+                        } else |_| {}
+                        // Fallback to variant_layout
                         break :blk variant_layout;
-                    } else variant_layout;
+                    };
 
                     payload_value = StackValue{
                         .layout = effective_layout,
@@ -7605,7 +7576,7 @@ pub const Interpreter = struct {
 
             // If the element is refcounted, increment its refcount since we're
             // creating a new reference (the box still holds its own reference)
-            if (elem_layout.isRefcounted()) {
+            if (self.runtime_layout_store.layoutContainsRefcounted(elem_layout)) {
                 result.incref(&self.runtime_layout_store, roc_ops);
             }
 
@@ -7775,7 +7746,7 @@ pub const Interpreter = struct {
         }
 
         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(elem_layout);
 
         if (elements_refcounted and source.isUnique(roc_ops)) {
             var source_copy = source;
@@ -8030,15 +8001,20 @@ pub const Interpreter = struct {
                     break :blk vars[1];
                 };
 
-                // Get element layout from the actual list layout, not from the type system.
-                // The list's runtime layout may differ from the type system's expectation
-                // due to numeric literal defaulting.
-                const elem_layout = if (list_layout.tag == .list)
+                // Get element layout from the actual list layout for memory access.
+                // The list's runtime layout may differ from the type system's expectation.
+                const physical_elem_layout = if (list_layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_layout.data.list)
                 else
                     Layout.zst(); // list_of_zst has zero-sized elements
 
-                var accessor = try value.asList(&self.runtime_layout_store, elem_layout, roc_ops);
+                // Get type-based layout for element extraction.
+                // This is important for recursive opaque types where the physical layout is 'tuple'
+                // but we need 'tag_union' layout for proper pattern matching.
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch physical_elem_layout;
+
+                // Use physical layout for memory access (size/stride)
+                var accessor = try value.asList(&self.runtime_layout_store, physical_elem_layout, roc_ops);
                 const total_len = accessor.len();
                 const non_rest_patterns = self.env.store.slicePatterns(list_pat.patterns);
 
@@ -8050,7 +8026,13 @@ pub const Interpreter = struct {
 
                     var idx: usize = 0;
                     while (idx < prefix_len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary.
+                        // This handles recursive opaque types where the physical layout is 'tuple'
+                        // but we need 'tag_union' for proper pattern matching.
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8063,7 +8045,11 @@ pub const Interpreter = struct {
                     while (suffix_idx < suffix_len) : (suffix_idx += 1) {
                         const suffix_pattern_idx = non_rest_patterns[prefix_len + suffix_idx];
                         const element_idx = total_len - suffix_len + suffix_idx;
-                        const elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8074,7 +8060,7 @@ pub const Interpreter = struct {
 
                     if (rest_info.pattern) |rest_pat_idx| {
                         const rest_len = total_len - prefix_len - suffix_len;
-                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
+                        const rest_value = try self.makeListSliceValue(list_layout, physical_elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
                         if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
@@ -8088,7 +8074,11 @@ pub const Interpreter = struct {
                     if (total_len != non_rest_patterns.len) return false;
                     var idx: usize = 0;
                     while (idx < non_rest_patterns.len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -9010,7 +9000,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9072,7 +9061,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9534,20 +9522,6 @@ pub const Interpreter = struct {
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .recursion_var => |rec_var| {
-                    // Translate the structure variable that the recursion var points to
-                    const rt_structure = try self.translateTypeVar(module, rec_var.structure);
-                    // Translate the recursion var's name (if present) from source module's ident store
-                    const rt_name: ?base_pkg.Ident.Idx = if (rec_var.name) |name| blk_name: {
-                        const source_name_str = module.getIdent(name);
-                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
-                    } else null;
-                    const content: types.Content = .{ .recursion_var = .{
-                        .structure = rt_structure,
-                        .name = rt_name,
-                    } };
-                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
@@ -11904,9 +11878,9 @@ pub const Interpreter = struct {
                     const content_tag = @tagName(resolved.desc.content);
                     const struct_tag = if (resolved.desc.content == .structure) @tagName(resolved.desc.content.structure) else "n/a";
                     const tag_name_str = self.env.getIdent(tag.name);
-                    // Also show what the ct_var resolves to for debugging
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_resolved = self.env.types.resolveVar(ct_var);
+                    // Also show what the compile-time type resolves to for debugging
+                    const ct_var_for_debug = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_resolved = self.env.types.resolveVar(ct_var_for_debug);
                     const ct_content_tag = @tagName(ct_resolved.desc.content);
                     const has_expected = expected_rt_var != null;
                     const msg = std.fmt.allocPrint(self.allocator, "e_tag: expected tag_union but got rt={s}:{s} ct={s} has_expected={} for tag `{s}`", .{ content_tag, struct_tag, ct_content_tag, has_expected, tag_name_str }) catch "e_tag: expected tag_union structure type";
@@ -11925,8 +11899,8 @@ pub const Interpreter = struct {
                 // This handles open unions where the expected type doesn't include all tags.
                 if (tag_index_opt == null and expected_rt_var != null) {
                     // Fall back to compile-time type
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const ct_var_fallback = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var_fallback);
 
                     // Clear and rebuild tag list from compile-time type
                     tag_list.clearRetainingCapacity();
@@ -14315,7 +14289,7 @@ pub const Interpreter = struct {
                         const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
                         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
-                        const elements_refcounted = actual_elem_layout.isRefcounted();
+                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(actual_elem_layout);
 
                         var runtime_list = RocList.allocateExact(
                             elem_alignment_u32,
@@ -14863,18 +14837,12 @@ pub const Interpreter = struct {
 
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
 
-                        // Write discriminant
                         const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                        switch (tu_data.discriminant_size) {
-                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
-                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => {},
-                        }
 
-                        // Write payload at offset 0
+                        // Write payload at offset 0 FIRST, before writing the discriminant.
+                        // This is crucial because the payload may be larger than the discriminant
+                        // offset (e.g., when wrapping an opaque type in a Result), and copying
+                        // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
                             try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
@@ -14899,6 +14867,17 @@ pub const Interpreter = struct {
                             for (values, 0..) |val, idx| {
                                 try tup_acc.setElement(idx, val, roc_ops);
                             }
+                        }
+
+                        // Write discriminant AFTER the payload, so it doesn't get overwritten
+                        // by a payload that extends past the discriminant offset.
+                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                        switch (tu_data.discriminant_size) {
+                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
+                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            else => {},
                         }
 
                         for (values) |val| {
@@ -15510,6 +15489,7 @@ pub const Interpreter = struct {
                     // Push cleanup continuation, then evaluate body
                     const cleanup_saved_rigid_subst = saved_rigid_subst;
                     saved_rigid_subst = null;
+
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
                         .saved_bindings_len = saved_bindings_len,
@@ -17283,11 +17263,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                const elem_layout = if (list_value.layout.tag == .list)
+                var elem_layout = if (list_value.layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_value.layout.data.list)
                 else
                     layout.Layout.zst(); // list_of_zst has zero-sized elements
-                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
 
                 // Get the RocList header
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
@@ -17313,6 +17292,41 @@ pub const Interpreter = struct {
                     // Fall back to the pattern's translated type
                     break :blk fl_in.patt_rt_var;
                 };
+
+                // For recursive opaque types, the list's physical layout might have element layout
+                // as 'tuple' but the actual data is stored with 'tag_union' layout. We need to
+                // compute the type-based layout and use the larger size for correct iteration.
+                // Use elem_rt_var (which was already resolved from the list's type) rather than
+                // fl_in.patt_rt_var (which might be a flex variable that causes infinite loops).
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch elem_layout;
+
+                // For 'box' layouts (recursive types), unwrap to get the actual backing layout
+                const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
+                    const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
+                    if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
+                        // Need to resolve the nominal type to get its backing layout
+                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
+                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                            const nom = resolved.desc.content.structure.nominal_type;
+                            const backing = self.runtime_types.getNominalBackingVar(nom);
+                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
+                            break :blk backing_layout;
+                        }
+                    }
+                    break :blk inner;
+                } else type_based_elem_layout;
+
+                // Use the larger of the two layouts for element size to handle cases where
+                // the physical layout doesn't match the type-based layout
+                const stored_elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const type_based_size = self.runtime_layout_store.layoutSize(effective_elem_layout);
+                const elem_size: usize = @intCast(@max(stored_elem_size, type_based_size));
+
+                // Override elem_layout if physical is tuple but type-based is tag_union
+                // This ensures proper discriminant extraction during pattern matching
+                if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
+                    elem_layout = effective_elem_layout;
+                }
 
                 // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
