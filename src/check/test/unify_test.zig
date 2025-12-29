@@ -28,7 +28,6 @@ const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
 const Desc = types_mod.Descriptor;
 const Slot = types_mod.Slot;
-const VarSafeList = Var.SafeList;
 
 /// A lightweight test harness used in unification and type inference tests.
 ///
