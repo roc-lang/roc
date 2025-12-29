@@ -1,7 +1,6 @@
 //! Utilities for loading compiled builtin modules
 
 const std = @import("std");
-const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
 

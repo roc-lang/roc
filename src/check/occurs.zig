@@ -1,7 +1,7 @@
 //! Checks whether a type variable is recursively defined.
 //!
 //! This module implements an "occurs check" to detect:
-//! - structurally infinite types (e.g., `a = List a`)
+//! - structurally infinite types (e.g., `a = List(a)`)
 //! - recursion through unnamed constructs (anonymous recursion)
 //! - recursion through named nominal types (permitted in Roc under some rules)
 //!
@@ -24,11 +24,9 @@ const MkSafeList = collections.SafeList;
 const Store = types.Store;
 const DescStoreIdx = types.DescStoreIdx;
 const ResolvedVarDesc = types.ResolvedVarDesc;
-const Desc = types.Descriptor;
 const Content = types.Content;
 const Mark = types.Mark;
 const Var = types.Var;
-const NominalType = types.NominalType;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
@@ -215,9 +213,10 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => |_| {
+                .flex => {
                     // Flex variables are not checked for cycles - they are allowed to have
                     // self-referential constraints. Only structural content is checked.
+                    // This matches the Rust compiler behavior (see subs.rs occurs function).
                 },
                 .rigid => {},
                 .err => {},

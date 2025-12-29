@@ -1,7 +1,5 @@
 //! Tests for custom number types that implement from_numeral
 
-const std = @import("std");
-const testing = std.testing;
 const TestEnv = @import("./TestEnv.zig");
 
 test "Custom number type with from_numeral: integer literal unifies" {

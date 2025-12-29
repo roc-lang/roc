@@ -6,7 +6,6 @@ const base = @import("base");
 const AST = @import("AST.zig");
 const RegionInfo = base.RegionInfo;
 const CommonEnv = base.CommonEnv;
-const Token = @import("tokenize.zig").Token;
 
 /// Generate an interactive source range span for the playground
 fn writeSourceRangeSpan(writer: *std.io.Writer, region: base.Region, source: []const u8, line_starts: []const u32) !void {

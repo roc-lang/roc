@@ -16,20 +16,15 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 const builtins = @import("builtins");
-const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const Diagnostic = @import("Diagnostic.zig");
 const CIR = @import("CIR.zig");
-const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const TypeVar = types.Var;
 const RocDec = builtins.dec.RocDec;
 
 /// A pattern, including possible problems (e.g. shadowing) so that

@@ -3,11 +3,9 @@
 const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
-const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
 const reporting = @import("reporting");
-const Check = @import("Check.zig");
 
 const snapshot = @import("snapshot.zig");
 
@@ -17,20 +15,15 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Report = reporting.Report;
-const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
-const SourceRegion = reporting.SourceRegion;
 
-const TypesStore = types_mod.Store;
 const Ident = base.Ident;
 
-const MkSafeMultiList = collections.SafeMultiList;
-
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
+const ExtraStringIdx = snapshot.ExtraStringIdx;
 
 const Var = types_mod.Var;
-const Content = types_mod.Content;
 
 /// Returns singular form if count is 1, plural form otherwise.
 /// Usage: pluralize(count, "argument", "arguments")
@@ -62,6 +55,9 @@ pub const Problem = union(enum) {
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
+    non_exhaustive_match: NonExhaustiveMatch,
+    redundant_pattern: RedundantPattern,
+    unmatchable_pattern: UnmatchablePattern,
     bug: Bug,
 
     pub const Idx = enum(u32) { _ };
@@ -243,6 +239,29 @@ pub const IncompatibleMatchPatterns = struct {
 
 /// Problem data for when match branches have have incompatible types
 pub const IncompatibleMatchBranches = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: u32,
+    problem_branch_index: u32,
+};
+
+/// Problem data for a non-exhaustive match expression
+pub const NonExhaustiveMatch = struct {
+    match_expr: CIR.Expr.Idx,
+    /// Snapshot of the condition type for error messages
+    condition_snapshot: SnapshotContentIdx,
+    /// Indices into the snapshot store's extra strings for missing pattern descriptions
+    missing_patterns: []const ExtraStringIdx,
+};
+
+/// Problem data for a redundant pattern in a match
+pub const RedundantPattern = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: u32,
+    problem_branch_index: u32,
+};
+
+/// Problem data for an unmatchable pattern (pattern on uninhabited type)
+pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
@@ -532,6 +551,9 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
+            .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
@@ -2856,6 +2878,120 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildNonExhaustiveMatchReport(self: *Self, data: NonExhaustiveMatch) !Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" expression doesn't cover all possible cases:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const condition_type = self.getFormattedString(data.condition_snapshot);
+        try report.document.addText("The value being matched on has type:");
+        try report.document.addLineBreak();
+        try report.document.addText("        ");
+        try report.document.addAnnotated(condition_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Missing patterns:");
+        try report.document.addLineBreak();
+
+        for (data.missing_patterns) |pattern_idx| {
+            const pattern = self.snapshots.getExtraString(pattern_idx);
+            const owned_pattern = try report.addOwnedString(pattern);
+            try report.document.addText("    ");
+            try report.document.addCodeBlock(owned_pattern);
+            try report.document.addLineBreak();
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addText("Hint: Add branches to handle these cases, or use ");
+        try report.document.addAnnotated("_", .keyword);
+        try report.document.addText(" to match anything.");
+
+        return report;
+    }
+
+    fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) !Report {
+        var report = Report.init(self.gpa, "REDUNDANT PATTERN", .warning);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const ordinal_str = try report.addOwnedString(self.bytes_buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(ordinal_str);
+        try report.document.addText(" branch of this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" is redundant:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("This pattern can never match because earlier patterns already ");
+        try report.document.addText("cover all the values it would match.");
+
+        return report;
+    }
+
+    fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) !Report {
+        var report = Report.init(self.gpa, "UNMATCHABLE PATTERN", .warning);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const ordinal_str = try report.addOwnedString(self.bytes_buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(ordinal_str);
+        try report.document.addText(" branch of this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" can never match:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("This pattern matches a type that has no possible values (an uninhabited type), ");
+        try report.document.addText("so no value can ever match it.");
+
+        return report;
+    }
+
     // helpers //
 
     // Given a buffer and a number, write a the human-readably ordinal number
@@ -2947,6 +3083,14 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
+        // Free the indices slice in non_exhaustive_match problems
+        // (the actual strings are managed by the SnapshotStore)
+        for (self.problems.items) |prob| {
+            switch (prob) {
+                .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
+                else => {},
+            }
+        }
         self.problems.deinit(gpa);
     }
 

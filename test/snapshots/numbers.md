@@ -14,6 +14,8 @@ type=expr
     0o42,
     0.1e42,
     0.1E42,
+    1.e42,
+    1.E42,
     0xDEADBEEF,
     0xdeadbeef,
     0xDeAdBeEf,
@@ -50,6 +52,8 @@ Int,Comma,
 Int,Comma,
 Float,Comma,
 Float,Comma,
+Float,Comma,
+Float,Comma,
 Int,Comma,
 Int,Comma,
 Int,Comma,
@@ -67,6 +71,8 @@ EndOfFile,
 	(e-int (raw "0o42"))
 	(e-frac (raw "0.1e42"))
 	(e-frac (raw "0.1E42"))
+	(e-frac (raw "1.e42"))
+	(e-frac (raw "1.E42"))
 	(e-int (raw "0xDEADBEEF"))
 	(e-int (raw "0xdeadbeef"))
 	(e-int (raw "0xDeAdBeEf")))
@@ -82,6 +88,8 @@ EndOfFile,
 	0o42,
 	0.1e42,
 	0.1E42,
+	1.e42,
+	1.E42,
 	0xDEADBEEF,
 	0xdeadbeef,
 	0xDeAdBeEf,
@@ -99,11 +107,13 @@ EndOfFile,
 		(e-num (value "34"))
 		(e-frac-f64 (value "1e41"))
 		(e-frac-f64 (value "1e41"))
+		(e-frac-f64 (value "1e42"))
+		(e-frac-f64 (value "1e42"))
 		(e-num (value "3735928559"))
 		(e-num (value "3735928559"))
 		(e-num (value "3735928559"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(a, b, c, d, e, f, g, h, i, j, k) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]), k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)])]"))
+(expr (type "(a, b, c, d, e, f, g, h, i, j, k, l, m) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]), k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]), l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]), m.from_numeral : Numeral -> Try(m, [InvalidNumeral(Str)])]"))
 ~~~

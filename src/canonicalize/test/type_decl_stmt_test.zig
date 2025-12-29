@@ -4,13 +4,12 @@
 //! within function bodies and blocks, scoped to that block.
 
 const std = @import("std");
-const parse = @import("parse");
 const base = @import("base");
-const types = @import("types");
+const parse = @import("parse");
+const TestEnv = @import("TestEnv.zig").TestEnv;
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
-const TestEnv = @import("TestEnv.zig").TestEnv;
 
 const testing = std.testing;
 const Ident = base.Ident;

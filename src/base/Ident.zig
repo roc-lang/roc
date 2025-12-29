@@ -7,10 +7,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const serialization = @import("serialization");
 const collections = @import("collections");
 
-const Region = @import("Region.zig");
 const SmallStringInterner = @import("SmallStringInterner.zig");
 
 const CompactWriter = collections.CompactWriter;
