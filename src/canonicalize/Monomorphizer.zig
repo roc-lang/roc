@@ -13,8 +13,6 @@ const base = @import("base");
 const types = @import("types");
 
 const ModuleEnv = @import("ModuleEnv.zig");
-const CIR = @import("CIR.zig");
-const RocEmitter = @import("RocEmitter.zig");
 
 const Self = @This();
 

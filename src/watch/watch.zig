@@ -39,9 +39,6 @@ const FSEventStreamContext = extern struct {
     copyDescription: ?*const anyopaque,
 };
 
-// Check if we're compiling for native macOS (not cross-compiling)
-// We use a weak linkage approach to handle cross-compilation
-const is_native_macos = builtin.os.tag == .macos;
 
 // Only declare real externs when we're actually using them
 const macos_externs = if (use_real_fsevents) struct {
@@ -598,10 +595,12 @@ pub const Watcher = struct {
 
             if (poll_result == 0) continue;
 
-            const bytes_read = std.posix.read(self.impl.inotify_fd, &buffer) catch |err| {
-                if (err == error.WouldBlock) continue;
-                std.log.err("Read error: {}", .{err});
-                continue;
+            const bytes_read = std.posix.read(self.impl.inotify_fd, &buffer) catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => {
+                    std.log.err("Read error: {}", .{err});
+                    continue;
+                },
             };
 
             self.processLinuxEvents(buffer[0..bytes_read]);

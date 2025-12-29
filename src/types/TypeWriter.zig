@@ -13,24 +13,14 @@ const debug = @import("debug.zig");
 
 const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
-const Desc = types_mod.Descriptor;
 const Var = types_mod.Var;
-const Content = types_mod.Content;
-const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const RecordField = types_mod.RecordField;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
-const VarSafeList = Var.SafeList;
-const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const TagSafeMultiList = Tag.SafeMultiList;
-const Descriptor = types_mod.Descriptor;
-const TypeIdent = types_mod.TypeIdent;
 const Alias = types_mod.Alias;
 const FlatType = types_mod.FlatType;
 const NominalType = types_mod.NominalType;
 const Record = types_mod.Record;
-const Num = types_mod.Num;
 const Tuple = types_mod.Tuple;
 const Func = types_mod.Func;
 

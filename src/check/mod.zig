@@ -3,13 +3,6 @@
 //! This module implements constraint-based type inference.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const base = @import("base");
-const tracy = @import("tracy");
-const collections = @import("collections");
-const types_mod = @import("types");
-const Can = @import("can");
-const compile = @import("compile");
 
 /// **Hindley-Milner+ Unification**
 pub const unifier = @import("unify.zig");

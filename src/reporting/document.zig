@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 const ReportingConfig = @import("config.zig").ReportingConfig;

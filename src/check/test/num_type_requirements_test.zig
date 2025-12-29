@@ -1,6 +1,5 @@
 //! Tests for numeric literal size and type unification logic.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "U8: 255 fits" {

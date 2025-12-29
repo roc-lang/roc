@@ -5,13 +5,10 @@ const can = @import("can");
 const parse = @import("parse");
 const types = @import("types");
 const eval = @import("eval");
-const Check = @import("check").Check;
 const compile_package = @import("../compile_package.zig");
 const BuiltinModules = eval.BuiltinModules;
 
 const ModuleEnv = can.ModuleEnv;
-const Ident = base.Ident;
-const AST = parse.AST;
 
 test "canonicalizeAndTypeCheckModule preserves Try types in type printing" {
     const testing = std.testing;

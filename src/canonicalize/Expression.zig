@@ -23,7 +23,6 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const collections = @import("collections");
 const builtins = @import("builtins");
 
 const ModuleEnv = @import("ModuleEnv.zig");
@@ -35,7 +34,6 @@ const DataSpan = base.DataSpan;
 const CalledVia = base.CalledVia;
 const Ident = base.Ident;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const RocDec = builtins.dec.RocDec;
 const TypeVar = types.Var;
 

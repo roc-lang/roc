@@ -980,7 +980,8 @@
 //     _ = ws.buildApp(app_path) catch |err| {
 //         // The build should fail, but we need to check that pkgA and pkgD
 //         // can still use their respective "foo" shorthands without conflict
-//         try std.testing.expect(err == error.Internal or err == error.InvalidDependency);
+//         const is_expected = switch (err) { error.Internal, error.InvalidDependency => true, else => false };
+//         try std.testing.expect(is_expected);
 //     };
 
 //     // Now test that packages can use their shorthands without interference

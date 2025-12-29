@@ -41,36 +41,26 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
-const copy_import = @import("copy_import.zig");
-const Check = @import("check").Check;
 
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
 const ModuleEnv = can.ModuleEnv;
-const AutoImportedType = can.Can.AutoImportedType;
-const CIR = can.CIR;
 
-const Region = base.Region;
 const Ident = base.Ident;
 const MkSafeList = collections.SafeList;
 
-const SmallStringInterner = collections.SmallStringInterner;
-
-const Slot = types_mod.Slot;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
-const Desc = types_mod.Descriptor;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
@@ -80,11 +70,8 @@ const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
 const FlatType = types_mod.FlatType;
-const Builtin = types_mod.Builtin;
 const Tuple = types_mod.Tuple;
-const Num = types_mod.Num;
 const Func = types_mod.Func;
-const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
 const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
@@ -96,14 +83,12 @@ const TwoStaticDispatchConstraints = types_mod.TwoStaticDispatchConstraints;
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const RecordFieldSafeList = RecordField.SafeList;
-const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
 const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
 const TagSafeList = Tag.SafeList;
 const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
-const ProblemStore = problem_mod.Store;
 
 /// The result of unification
 pub const Result = union(enum) {

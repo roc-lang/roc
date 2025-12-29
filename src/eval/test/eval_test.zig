@@ -7,7 +7,6 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
-const serialization = @import("serialization");
 const compiled_builtins = @import("compiled_builtins");
 
 const helpers = @import("helpers.zig");

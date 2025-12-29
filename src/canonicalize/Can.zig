@@ -9,7 +9,6 @@ const build_options = @import("build_options");
 const testing = std.testing;
 const base = @import("base");
 const parse = @import("parse");
-const collections = @import("collections");
 const types = @import("types");
 const builtins = @import("builtins");
 const tracy = @import("tracy");
@@ -21,7 +20,6 @@ const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
 const RocDec = builtins.dec.RocDec;
-const CompileNodeStore = @import("NodeStore.zig");
 const AST = parse.AST;
 const Token = tokenize.Token;
 const DataSpan = base.DataSpan;
@@ -105,32 +103,23 @@ loop_depth: u32 = 0,
 
 const Ident = base.Ident;
 const Region = base.Region;
-const TagName = base.TagName;
 // ModuleEnv is already imported at the top
 const CalledVia = base.CalledVia;
 
 const TypeVar = types.Var;
 const Content = types.Content;
 const Flex = types.Flex;
-
-const FlatType = types.FlatType;
-const Num = types.Num;
-const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 
 // Type aliases for ModuleEnv types
 const Pattern = CIR.Pattern;
 const Statement = CIR.Statement;
-const Expression = CIR.Expression;
 const Expr = CIR.Expr;
 const Import = CIR.Import;
-const Type = CIR.Type;
 const TypeAnno = CIR.TypeAnno;
 const Annotation = CIR.Annotation;
 const WhereClause = CIR.WhereClause;
 const Diagnostic = CIR.Diagnostic;
-const Closure = CIR.Closure;
-const Ability = CIR.Ability;
 const RecordField = CIR.RecordField;
 
 /// Struct to track fields that have been seen before during canonicalization
@@ -177,11 +166,6 @@ const ModuleFoundStatus = enum {
 const TypeBindingLocation = struct {
     scope_index: usize,
     binding: *Scope.TypeBinding,
-};
-
-const TypeBindingLocationConst = struct {
-    scope_index: usize,
-    binding: *const Scope.TypeBinding,
 };
 
 /// Deinitialize canonicalizer resources
@@ -1366,65 +1350,6 @@ fn registerUserFacingName(
     try self.scopes.items[0].idents.put(self.env.gpa, user_facing_idx, pattern_idx);
 }
 
-/// Update a hierarchically-registered placeholder in all scopes.
-/// Updates all suffixes that were registered hierarchically.
-fn updatePlaceholderHierarchically(
-    self: *Self,
-    fully_qualified_idx: Ident.Idx,
-    new_pattern_idx: CIR.Pattern.Idx,
-) std.mem.Allocator.Error!void {
-    const fully_qualified_text = self.env.getIdent(fully_qualified_idx);
-
-    // Count components
-    var component_count: usize = 1;
-    for (fully_qualified_text) |c| {
-        if (c == '.') component_count += 1;
-    }
-
-    // Update all suffixes in each scope using the same logic as registration
-    const num_scopes = self.scopes.items.len;
-    var scope_idx: usize = 0;
-    while (scope_idx < num_scopes) : (scope_idx += 1) {
-        const scope = &self.scopes.items[scope_idx];
-
-        const depth_from_end = num_scopes - 1 - scope_idx;
-
-        const min_skip = scope_idx;
-        const max_skip = if (component_count > depth_from_end + 1)
-            component_count - depth_from_end - 1
-        else
-            component_count - 1;
-
-        var components_to_skip = min_skip;
-        while (components_to_skip <= max_skip and components_to_skip < component_count) : (components_to_skip += 1) {
-            const name_for_this_suffix = if (components_to_skip == 0)
-                fully_qualified_text
-            else blk: {
-                var dots_seen: usize = 0;
-                var start_pos: usize = 0;
-                for (fully_qualified_text, 0..) |c, i| {
-                    if (c == '.') {
-                        dots_seen += 1;
-                        if (dots_seen == components_to_skip) {
-                            start_pos = i + 1;
-                            break;
-                        }
-                    }
-                }
-                break :blk fully_qualified_text[start_pos..];
-            };
-
-            const ident_for_this_suffix = try self.env.insertIdent(base.Ident.for_text(name_for_this_suffix));
-            if (scope.idents.get(ident_for_this_suffix)) |_| {
-                try scope.idents.put(self.env.gpa, ident_for_this_suffix, new_pattern_idx);
-            }
-        }
-    }
-
-    // Remove from placeholder tracking
-    _ = self.placeholder_idents.remove(fully_qualified_idx);
-}
-
 /// First pass helper: Process associated items and introduce them into scope with qualified names
 /// relative_parent_name is the parent path without the module prefix (null for top-level in module)
 fn processAssociatedItemsFirstPass(
@@ -2408,12 +2333,6 @@ fn canonicalizeStmtDecl(self: *Self, decl: AST.Statement.Decl, mb_last_anno: ?Ty
     }
 }
 
-/// An annotation and it's scope. This struct owns the Scope
-const AnnotationAndScope = struct {
-    anno_idx: Annotation.Idx,
-    scope: *Scope,
-};
-
 const TypeAnnoIdent = struct {
     name: base.Ident.Idx,
     anno_idx: TypeAnno.Idx,
@@ -2908,73 +2827,6 @@ fn importAliased(
     return import_idx;
 }
 
-/// Process import with an alias provided directly as an Ident.Idx (used for auto-imports)
-fn importWithAlias(
-    self: *Self,
-    module_name: Ident.Idx,
-    alias: Ident.Idx,
-    exposed_items_span: CIR.ExposedItem.Span,
-    import_region: Region,
-) std.mem.Allocator.Error!Statement.Idx {
-    const module_name_text = self.env.getIdent(module_name);
-
-    // 1. Get or create Import.Idx for this module (with ident for index-based lookups)
-    const module_import_idx = try self.env.imports.getOrPutWithIdent(
-        self.env.gpa,
-        self.env.common.getStringStore(),
-        module_name_text,
-        module_name,
-    );
-
-    // 2. Add to scope: alias -> module_name mapping
-    try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span);
-
-    // 3. Process type imports from this module
-    try self.processTypeImports(module_name, alias);
-
-    // 4. Introduce exposed items into scope (includes auto-expose for type modules)
-    try self.introduceItemsAliased(exposed_items_span, module_name, alias, import_region, module_import_idx);
-
-    // 5. Store the mapping from module name to Import.Idx
-    try self.import_indices.put(self.env.gpa, module_name_text, module_import_idx);
-
-    // 6. Create CIR import statement
-    const cir_import = Statement{
-        .s_import = .{
-            .module_name_tok = module_name,
-            .qualifier_tok = null,
-            .alias_tok = null,
-            .exposes = exposed_items_span,
-        },
-    };
-
-    const import_idx = try self.env.addStatement(cir_import, import_region);
-    try self.env.store.addScratchStatement(import_idx);
-
-    // 7. Add the module to the current scope so it can be used in qualified lookups
-    const current_scope = self.currentScope();
-    _ = try current_scope.introduceImportedModule(self.env.gpa, module_name_text, module_import_idx);
-
-    // 8. Check that this module actually exists, and if not report an error
-    // Only check if module_envs is provided - when it's null, we don't know what modules
-    // exist yet (e.g., during standalone module canonicalization without full project context)
-    if (self.module_envs) |envs_map| {
-        if (!envs_map.contains(module_name)) {
-            try self.env.pushDiagnostic(Diagnostic{ .module_not_found = .{
-                .module_name = module_name,
-                .region = import_region,
-            } });
-        }
-    }
-
-    // If this import satisfies an exposed type requirement (e.g., platform re-exporting
-    // an imported module), remove it from exposed_type_texts so we don't report
-    // "EXPOSED BUT NOT DEFINED" for re-exported imports.
-    _ = self.exposed_type_texts.remove(module_name_text);
-
-    return import_idx;
-}
-
 /// Process auto-expose import without alias (like `import json.Parser.Config`)
 fn importUnaliased(
     self: *Self,
@@ -3134,40 +2986,6 @@ fn resolveModuleAlias(
         // Extract last part from module name - e.g., "Json" from "json.Json"
         return try self.extractModuleName(module_name);
     }
-}
-
-/// Create a qualified name by combining module and field names (e.g., "json.Json.utf8")
-fn createQualifiedName(
-    self: *Self,
-    module_name: Ident.Idx,
-    field_name: Ident.Idx,
-) Ident.Idx {
-    const module_text = self.env.getIdent(module_name);
-    const field_text = self.env.getIdent(field_name);
-
-    return try self.env.insertQualifiedIdent(module_text, field_text);
-}
-
-/// Create an external declaration for a qualified name
-fn createExternalDeclaration(
-    self: *Self,
-    qualified_name: Ident.Idx,
-    module_name: Ident.Idx,
-    local_name: Ident.Idx,
-    kind: @TypeOf(@as(CIR.ExternalDecl, undefined).kind),
-    type_var: TypeVar,
-    region: Region,
-) std.mem.Allocator.Error!CIR.ExternalDecl.Idx {
-    const external_decl = CIR.ExternalDecl{
-        .qualified_name = qualified_name,
-        .module_name = module_name,
-        .local_name = local_name,
-        .type_var = type_var,
-        .kind = kind,
-        .region = region,
-    };
-
-    return self.env.pushExternalDecl(external_decl);
 }
 
 /// Convert AST exposed items to CIR exposed items
@@ -7495,43 +7313,6 @@ fn parseFracLiteral(token_text: []const u8) !FracLiteralResult {
     };
 }
 
-/// Introduce a new identifier to the current scope, return an
-/// index if
-fn scopeIntroduceIdent(
-    self: *Self,
-    ident_idx: Ident.Idx,
-    pattern_idx: Pattern.Idx,
-    region: Region,
-    comptime T: type,
-) !T {
-    const result = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true);
-
-    switch (result) {
-        .success => {
-            return pattern_idx;
-        },
-        .shadowing_warning => |shadowed_pattern_idx| {
-            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                .ident = ident_idx,
-                .region = region,
-                .original_region = original_region,
-            } });
-            return pattern_idx;
-        },
-        .top_level_var_error => {
-            return self.env.pushMalformed(T, Diagnostic{
-                .invalid_top_level_statement = .{
-                    .stmt = try self.env.insertString("var"),
-                    .region = region,
-                },
-            });
-        },
-        // These only occur for reassignments (is_declaration=false), not declarations
-        .var_across_function_boundary, .var_reassignment_ok => unreachable,
-    }
-}
-
 /// Introduce a var identifier to the current scope with function boundary tracking
 fn scopeIntroduceVar(
     self: *Self,
@@ -7589,43 +7370,6 @@ fn collectTypeVarProblems(ident: Ident.Idx, is_single_use: bool, ast_anno: AST.T
     if (is_single_use != ident.attributes.ignored) {
         const problem_type: TypeVarProblemKind = if (is_single_use) .unused_type_var else .type_var_marked_unused;
         try scratch.append(.{ .ident = ident, .problem = problem_type, .ast_anno = ast_anno });
-    }
-}
-
-fn reportTypeVarProblems(self: *Self, problems: []const TypeVarProblem) std.mem.Allocator.Error!void {
-    for (problems) |problem| {
-        const region = self.getTypeVarRegionFromAST(problem.ast_anno, problem.ident) orelse Region.zero();
-        const name_text = self.env.getIdent(problem.ident);
-
-        switch (problem.problem) {
-            .type_var_starting_with_dollar => {
-                const suggested_name_text = name_text[1..]; // Remove the leading dollar sign
-                const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
-
-                self.env.pushDiagnostic(Diagnostic{ .type_var_starting_with_dollar = .{
-                    .name = problem.ident,
-                    .suggested_name = suggested_ident,
-                    .region = region,
-                } });
-            },
-            .unused_type_var => {
-                self.env.pushDiagnostic(Diagnostic{ .unused_type_var_name = .{
-                    .name = problem.ident,
-                    .suggested_name = problem.ident,
-                    .region = region,
-                } });
-            },
-            .type_var_marked_unused => {
-                const suggested_name_text = name_text[1..]; // Remove the underscore
-                const suggested_ident = self.env.insertIdent(base.Ident.for_text(suggested_name_text), Region.zero());
-
-                self.env.pushDiagnostic(Diagnostic{ .type_var_marked_unused = .{
-                    .name = problem.ident,
-                    .suggested_name = suggested_ident,
-                    .region = region,
-                } });
-            },
-        }
     }
 }
 
@@ -10208,27 +9952,6 @@ pub fn scopeIntroduceInternal(
     return Scope.IntroduceResult{ .success = {} };
 }
 
-/// Introduce a value identifier to scope and report shadowing diagnostics if needed
-fn introduceValue(
-    self: *Self,
-    ident_idx: base.Ident.Idx,
-    pattern_idx: Pattern.Idx,
-    region: Region,
-) std.mem.Allocator.Error!void {
-    switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, ident_idx, pattern_idx, false, true)) {
-        .success => {},
-        .shadowing_warning => |shadowed_pattern_idx| {
-            const original_region = self.env.store.getPatternRegion(shadowed_pattern_idx);
-            try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                .ident = ident_idx,
-                .region = region,
-                .original_region = original_region,
-            } });
-        },
-        .top_level_var_error, .var_across_function_boundary => {},
-    }
-}
-
 /// Check if an identifier is marked as ignored (underscore prefix)
 fn identIsIgnored(ident_idx: base.Ident.Idx) bool {
     return ident_idx.attributes.ignored;
@@ -10474,16 +10197,6 @@ fn updatePlaceholder(
     try scope.idents.put(self.env.gpa, ident_idx, pattern_idx);
 }
 
-fn scopeUpdateTypeDecl(
-    self: *Self,
-    name_ident: Ident.Idx,
-    new_type_decl_stmt: Statement.Idx,
-) std.mem.Allocator.Error!void {
-    const gpa = self.env.gpa;
-    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
-    try current_scope.updateTypeDecl(gpa, name_ident, new_type_decl_stmt);
-}
-
 /// Look up a type declaration by identifier, searching from innermost to outermost scope.
 pub fn scopeLookupTypeDecl(self: *Self, ident_idx: Ident.Idx) ?Statement.Idx {
     // Search from innermost to outermost scope
@@ -10513,19 +10226,6 @@ fn scopeLookupTypeBinding(self: *Self, ident_idx: Ident.Idx) ?TypeBindingLocatio
         const scope = &self.scopes.items[i];
         if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
             return TypeBindingLocation{ .scope_index = i, .binding = binding_ptr };
-        }
-    }
-
-    return null;
-}
-
-fn scopeLookupTypeBindingConst(self: *const Self, ident_idx: Ident.Idx) ?TypeBindingLocationConst {
-    var i = self.scopes.items.len;
-    while (i > 0) {
-        i -= 1;
-        const scope = &self.scopes.items[i];
-        if (scope.type_bindings.getPtr(ident_idx)) |binding_ptr| {
-            return TypeBindingLocationConst{ .scope_index = i, .binding = binding_ptr };
         }
     }
 
@@ -10616,25 +10316,6 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             });
         },
     }
-}
-
-/// Helper function to look up module aliases in parent scopes only
-fn scopeLookupModuleInParentScopes(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
-    // Search from second-innermost to outermost scope (excluding current scope)
-    if (self.scopes.items.len <= 1) return null;
-
-    var i = self.scopes.items.len - 1;
-    while (i > 0) {
-        i -= 1;
-        const scope = &self.scopes.items[i];
-
-        switch (scope.lookupModuleAlias(alias_name)) {
-            .found => |module_info| return module_info,
-            .not_found => continue,
-        }
-    }
-
-    return null;
 }
 
 /// Look up an exposed item across all scopes
@@ -10792,25 +10473,6 @@ fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
     }
     // Identical strings - no replacement needed
     return false;
-}
-
-/// Look up an exposed item in parent scopes (for shadowing detection)
-fn scopeLookupExposedItemInParentScopes(self: *const Self, item_name: Ident.Idx) ?Scope.ExposedItemInfo {
-    // Search from second-innermost to outermost scope (excluding current scope)
-    if (self.scopes.items.len <= 1) return null;
-
-    var i = self.scopes.items.len - 1;
-    while (i > 0) {
-        i -= 1;
-        const scope = &self.scopes.items[i];
-
-        switch (scope.lookupExposedItem(&self.env.idents, item_name)) {
-            .found => |item_info| return item_info,
-            .not_found => continue,
-        }
-    }
-
-    return null;
 }
 
 /// Look up an imported module in the scope hierarchy

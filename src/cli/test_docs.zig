@@ -2,7 +2,6 @@
 const std = @import("std");
 const testing = std.testing;
 const main = @import("main.zig");
-const cli_args = @import("cli_args.zig");
 
 test "roc docs generates nested package documentation" {
     const gpa = testing.allocator;

@@ -1,8 +1,6 @@
 //! Regression tests for specific bug fixes.
 
 const TestEnv = @import("./TestEnv.zig");
-const testing = @import("std").testing;
-const std = @import("std");
 
 test "check - repro - issue 8764" {
     const src =

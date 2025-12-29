@@ -11,12 +11,9 @@
 //!
 //! Each test should pass with correct refcounting (no leaks, no corruption)
 
-const std = @import("std");
 const helpers = @import("helpers.zig");
-const testing = std.testing;
 
 const runExpectStr = helpers.runExpectStr;
-const runExpectI64 = helpers.runExpectI64;
 
 test "list refcount strings - single string in list" {
     // String refcount should increment when added to list

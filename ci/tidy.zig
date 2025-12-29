@@ -18,6 +18,14 @@ const Ast = std.zig.Ast;
 
 const MiB = 1024 * 1024;
 
+/// Binary file extensions that should be skipped entirely (not read into the buffer).
+/// These are compiled artifacts, images, and other non-text files.
+const binary_extensions: []const []const u8 = &.{
+    ".ico", ".png", ".webp", ".jpg", ".jpeg", ".gif", ".bin",
+    ".o", ".a", ".lib", ".dll", ".so", ".dylib", ".wasm",
+    ".rlib", ".rmeta",
+};
+
 const TermColor = struct {
     pub const red = "\x1b[0;31m";
     pub const green = "\x1b[0;32m";
@@ -56,8 +64,12 @@ pub fn main() !void {
             continue;
         }).len;
         if (bytes_read >= file_buffer.len - 1) {
-            std.debug.print("File too long: {s}\n", .{file_path});
-            continue;
+            std.debug.panic(
+                \\File exceeds {d} MiB buffer limit: {s}
+                \\
+                \\If this is a binary file, add its extension to `binary_extensions` in ci/tidy.zig
+                \\to exclude it from tidy checks.
+            , .{ file_buffer.len / MiB, file_path });
         }
         file_buffer[bytes_read] = 0;
 
@@ -202,47 +214,15 @@ fn tidyFile(
 }
 
 fn tidyControlCharacters(file: SourceFile, errors: *Errors) void {
-    // Binary file extensions to skip
-    const binary_file_extensions: []const []const u8 = &.{
-        ".ico",   ".png",   ".webp",  ".jpg",   ".jpeg",  ".gif",   ".bin",
-        ".o",     ".a",     ".lib",   ".dll",   ".so",    ".dylib", ".wasm",
-        ".rlib",  ".rmeta", ".d",     ".false", ".roc",   ".toml",  ".lock",
-        ".yml",   ".yaml",  ".txt",   ".csv",
-    };
-    for (binary_file_extensions) |extension| {
-        if (file.hasExtension(extension)) return;
-    }
-
-    // Skip files/directories that may have different conventions
-    const skip_paths: []const []const u8 = &.{
-        "targets/",        // Platform target files may have binary content
-        "test/snapshots/", // Snapshot files contain code with tabs
-        "crates/",         // Old Rust crate code, not actively maintained
-        ".devcontainer",   // VS Code devcontainer config
-        "design/",         // Design docs may have different formatting
-        "www/",            // Website content
-    };
-    for (skip_paths) |skip_path| {
-        if (std.mem.indexOf(u8, file.path, skip_path) != null) return;
-    }
-
-    const allowed = .{
-        // Windows batch files may have CRLF
-        .@"\r" = file.hasExtension(".bat"),
-    };
+    // Check for carriage returns (CRLF line endings).
+    // Tabs are intentionally allowed everywhere.
+    // Windows batch files are allowed to have CRLF.
+    if (file.hasExtension(".bat")) return;
 
     var remaining = file.text;
-    while (mem.indexOfAny(u8, remaining, "\r")) |index| {
+    while (mem.indexOfScalar(u8, remaining, '\r')) |index| {
         const offset = index + (file.text.len - remaining.len);
-        inline for (comptime std.meta.fieldNames(@TypeOf(allowed))) |field| {
-            if (remaining[index] == field[0]) {
-                if (!@field(allowed, field)) {
-                    errors.addControlCharacter(file, offset, field[0]);
-                }
-                break;
-            }
-        } else unreachable;
-
+        errors.addControlCharacter(file, offset, '\r');
         remaining = remaining[index + 1 ..];
     }
 }
@@ -666,8 +646,12 @@ fn listFilePaths(allocator: Allocator) ![][]const u8 {
 
     // git ls-files -z outputs null-separated paths
     var lines = std.mem.splitScalar(u8, files, 0);
-    while (lines.next()) |line| {
+    outer: while (lines.next()) |line| {
         if (line.len == 0) continue;
+        // Skip binary files entirely - they shouldn't be read into the buffer
+        for (binary_extensions) |ext| {
+            if (std.mem.endsWith(u8, line, ext)) continue :outer;
+        }
         try result.append(allocator, try allocator.dupe(u8, line));
     }
 

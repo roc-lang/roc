@@ -1,7 +1,6 @@
 //! Cross-compilation support and validation for Roc CLI
 //! Handles target validation and capability matrix
 
-const std = @import("std");
 const target_mod = @import("target.zig");
 
 const RocTarget = target_mod.RocTarget;

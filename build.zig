@@ -4,9 +4,6 @@ const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const roc_target = @import("src/target/mod.zig");
 const Dependency = std.Build.Dependency;
-const Import = std.Build.Module.Import;
-const InstallDir = std.Build.InstallDir;
-const LazyPath = std.Build.LazyPath;
 const OptimizeMode = std.builtin.OptimizeMode;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
@@ -2454,8 +2451,6 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-const ModuleTest = modules.ModuleTest;
-
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     const builtin_roc_path = try b.build_root.join(b.allocator, &.{ "src", "build", "roc" });
     var builtin_roc_dir = try std.fs.openDirAbsolute(builtin_roc_path, .{ .iterate = true });
@@ -2473,35 +2468,6 @@ fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     }
 
     return roc_files.toOwnedSlice(b.allocator);
-}
-
-fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) ![]const u8 {
-    var builtins_source = std.ArrayList(u8).empty;
-    errdefer builtins_source.deinit(b.allocator);
-    const writer = builtins_source.writer(b.allocator);
-
-    for (roc_files) |roc_path| {
-        const roc_basename = std.fs.path.basename(roc_path);
-        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-        // Use lowercase with underscore for the identifier
-        const lower_name = try std.ascii.allocLowerString(b.allocator, name_without_ext);
-
-        try writer.print("pub const {s}_bin = @embedFile(\"{s}.bin\");\n", .{
-            lower_name,
-            name_without_ext,
-        });
-
-        // Also embed the source .roc file
-        try writer.print("pub const {s}_source = @embedFile(\"{s}\");\n", .{
-            lower_name,
-            roc_basename,
-        });
-    }
-
-    // Also embed builtin_indices.bin
-    try writer.writeAll("pub const builtin_indices_bin = @embedFile(\"builtin_indices.bin\");\n");
-
-    return builtins_source.toOwnedSlice(b.allocator);
 }
 
 fn add_fuzz_target(

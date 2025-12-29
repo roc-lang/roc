@@ -16,8 +16,6 @@
 //! even after the stack has been reset due to the scope ending.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const testing = std.testing;
 const collections = @import("collections");
 
 /// Error when an alloca is attempted that's too big for the stack
