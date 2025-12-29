@@ -11562,6 +11562,9 @@ fn zeroInitConstAssumeCapacity(self: *Builder, ty: Type) Constant {
             .integer => {
                 var limbs: [std.math.big.int.calcLimbLen(0)]std.math.big.Limb = undefined;
                 const bigint = std.math.big.int.Mutable.init(&limbs, 0);
+                // SAFETY: bigIntConstAssumeCapacity uses a 64-byte stack-fallback allocator internally.
+                // For zero values, calcLimbLen(0) returns minimal limbs that always fit in the stack
+                // buffer, so the fallback to gpa (which could OOM) is never reached.
                 return self.bigIntConstAssumeCapacity(ty, bigint.toConst()) catch unreachable;
             },
             .pointer => return self.nullConstAssumeCapacity(ty),
