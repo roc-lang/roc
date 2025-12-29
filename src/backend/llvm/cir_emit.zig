@@ -140,13 +140,13 @@ pub fn emitExpr(ctx: *CirContext, expr: CIR.Expr) Error!Builder.Value {
         // ========================================
         // Special Expressions
         // ========================================
-        .e_runtime_error => return error.UnsupportedExpression,
-        .e_crash => return error.UnsupportedExpression, // Phase 10
+        .e_runtime_error => |err| try emitRuntimeError(ctx, err.diagnostic),
+        .e_crash => |crash| try emitCrash(ctx, crash.msg),
         .e_dbg => |dbg| try emitDbg(ctx, dbg.expr),
-        .e_expect => return error.UnsupportedExpression, // Phase 10
+        .e_expect => |expect| try emitExpect(ctx, expect.body),
         .e_ellipsis => return error.UnsupportedExpression,
         .e_anno_only => return error.UnsupportedExpression,
-        .e_return => return error.UnsupportedExpression, // Phase 8
+        .e_return => |ret| try emitReturn(ctx, ret.expr),
         .e_type_var_dispatch => return error.UnsupportedExpression,
     };
 }
@@ -368,6 +368,140 @@ fn emitDbg(ctx: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Value {
     // dbg just returns the expression value (side effect is printing)
     const expr = ctx.module_env.store.getExpr(expr_idx);
     return try emitExpr(ctx, expr);
+}
+
+/// Emit a runtime error expression.
+/// These are inserted when the compiler encounters semantic errors.
+/// At runtime, this calls roc_crashed with an error message.
+fn emitRuntimeError(ctx: *CirContext, diagnostic_idx: CIR.Diagnostic.Idx) Error!Builder.Value {
+    _ = diagnostic_idx;
+
+    // Get RocOps pointer from refcount context
+    const roc_ops = ctx.refcount_ctx.roc_ops_ptr orelse {
+        // If no RocOps, just emit unreachable
+        const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+        // Return a dummy value (this code is unreachable)
+        return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
+    };
+
+    // Create error message string constant
+    const msg = "Runtime error";
+    const msg_ptr = ctx.emitter.emitStringConst(msg) catch return error.OutOfMemory;
+    const msg_len = ctx.emitter.emitIntConst(.i64, @intCast(msg.len)) catch return error.OutOfMemory;
+
+    // Call roc_crashed via builtin
+    _ = builtins_mod.emitBuiltinCall(
+        ctx.builtin_ctx,
+        ctx.emitter,
+        "roc_builtins_crash",
+        .void,
+        &.{ .ptr, .i64, .ptr },
+        &.{ msg_ptr, msg_len, roc_ops },
+    ) catch return error.OutOfMemory;
+
+    // Emit unreachable (crash never returns)
+    const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+
+    // Return a dummy value (this code is unreachable)
+    return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
+}
+
+/// Emit a crash expression.
+/// This terminates execution with a user-provided message.
+fn emitCrash(ctx: *CirContext, msg_idx: @import("base").StringLiteral.Idx) Error!Builder.Value {
+    // Get the crash message
+    const string_literal = ctx.module_env.common.string_literals.get(@intFromEnum(msg_idx));
+    const msg = string_literal.resolve(ctx.module_env.common.source);
+
+    // Get RocOps pointer
+    const roc_ops = ctx.refcount_ctx.roc_ops_ptr orelse {
+        const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+        return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
+    };
+
+    // Create message string constant
+    const msg_ptr = ctx.emitter.emitStringConst(msg) catch return error.OutOfMemory;
+    const msg_len = ctx.emitter.emitIntConst(.i64, @intCast(msg.len)) catch return error.OutOfMemory;
+
+    // Call roc_crashed
+    _ = builtins_mod.emitBuiltinCall(
+        ctx.builtin_ctx,
+        ctx.emitter,
+        "roc_builtins_crash",
+        .void,
+        &.{ .ptr, .i64, .ptr },
+        &.{ msg_ptr, msg_len, roc_ops },
+    ) catch return error.OutOfMemory;
+
+    // Emit unreachable
+    const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+
+    return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
+}
+
+/// Emit an expect expression.
+/// Evaluates the body and crashes if it returns false.
+fn emitExpect(ctx: *CirContext, body_idx: CIR.Expr.Idx) Error!Builder.Value {
+    const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+
+    // Evaluate the expectation body (should return bool)
+    const body_expr = ctx.module_env.store.getExpr(body_idx);
+    const condition = try emitExpr(ctx, body_expr);
+
+    // Create blocks for pass and fail cases
+    const pass_block = wip.block(0, "expect.pass") catch return error.OutOfMemory;
+    const fail_block = wip.block(0, "expect.fail") catch return error.OutOfMemory;
+
+    // Branch based on condition
+    _ = wip.brCond(condition, pass_block, fail_block, "") catch return error.OutOfMemory;
+
+    // Emit fail block
+    wip.cursor = .{ .block = fail_block };
+
+    // Get RocOps pointer
+    if (ctx.refcount_ctx.roc_ops_ptr) |roc_ops| {
+        // Create failure message
+        const msg = "Expectation failed";
+        const msg_ptr = ctx.emitter.emitStringConst(msg) catch return error.OutOfMemory;
+        const msg_len = ctx.emitter.emitIntConst(.i64, @intCast(msg.len)) catch return error.OutOfMemory;
+
+        // Call roc_expect_failed
+        _ = builtins_mod.emitBuiltinCall(
+            ctx.builtin_ctx,
+            ctx.emitter,
+            "roc_builtins_expect_failed",
+            .void,
+            &.{ .ptr, .i64, .ptr },
+            &.{ msg_ptr, msg_len, roc_ops },
+        ) catch return error.OutOfMemory;
+    }
+
+    // Emit unreachable in fail block
+    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+
+    // Continue in pass block
+    wip.cursor = .{ .block = pass_block };
+
+    // Return empty record (expect evaluates to {})
+    return ctx.emitter.emitIntConst(.i1, 0) catch return error.OutOfMemory;
+}
+
+/// Emit a return expression.
+/// This returns a value from the enclosing function.
+fn emitReturn(ctx: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Value {
+    // Evaluate the return value
+    const expr = ctx.module_env.store.getExpr(expr_idx);
+    const value = try emitExpr(ctx, expr);
+
+    // Emit return instruction
+    ctx.emitter.emitRet(value) catch return error.OutOfMemory;
+
+    // Return a dummy value (this code is unreachable after return)
+    return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
 }
 
 // ============================================================
