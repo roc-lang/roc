@@ -3234,6 +3234,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     }
                     // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
+                    self.expect(.Comma) catch {};
                     break;
                 } else {
                     // Regular record field
@@ -3271,6 +3272,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     }
                     // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
+                    self.expect(.Comma) catch {};
                     break;
                 } else {
                     // Regular tag in the union
