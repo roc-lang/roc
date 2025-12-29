@@ -196,7 +196,7 @@ pub const Generalizer = struct {
                     // Non-lambda (value restriction) - don't generalize, keep at current rank.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
                 } else {
-                    // Rank unchanged and generalizing - safe to generalize.
+                    // Rank unchanged and it's a lambda - safe to generalize.
                     self.store.setDescRank(resolved.desc_idx, Rank.generalized);
                 }
             }
