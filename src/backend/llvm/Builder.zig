@@ -13558,8 +13558,9 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     try record.ensureUnusedCapacity(self.gpa, 2);
 
                     record.appendAssumeCapacity(attr_gop.index);
+                    // For the first parameter (i=0), use max u32 as sentinel meaning "no previous"
                     record.appendAssumeCapacity(switch (i) {
-                        0 => 0xffffffff,
+                        0 => std.math.maxInt(u32),
                         else => i - 1,
                     });
 
