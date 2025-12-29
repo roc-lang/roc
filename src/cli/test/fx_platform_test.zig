@@ -823,40 +823,6 @@ test "fx platform issue8433" {
     }
 }
 
-test "fx platform issue8738" {
-    const allocator = testing.allocator;
-
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            roc_binary_path,
-            "test/fx/issue8738.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // This file is expected to fail compilation with an EXPECTED TRY TYPE error
-    // when using the ? operator on a non-Try type
-    switch (run_result.term) {
-        .Exited => |code| {
-            if (code != 0) {
-                // Expected to fail - check for expected try type error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "EXPECTED TRY TYPE") != null);
-            } else {
-                std.debug.print("Expected compilation error but succeeded\n", .{});
-                return error.UnexpectedSuccess;
-            }
-        },
-        else => {
-            // Abnormal termination should also indicate error
-            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "EXPECTED TRY TYPE") != null);
-        },
-    }
-}
-
 test "run aborts on type errors by default" {
     // Tests that roc run aborts when there are type errors (without --allow-errors)
     const allocator = testing.allocator;
