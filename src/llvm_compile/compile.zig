@@ -305,7 +305,7 @@ pub fn compileAndExecute(
         .f64 => {
             // Function returns f64
             const EvalFn = *const fn () callconv(.c) f64;
-            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
             // Format the float result
@@ -314,7 +314,7 @@ pub fn compileAndExecute(
         .i128 => {
             // Function returns i128 (signed)
             const EvalFn = *const fn () callconv(.c) i128;
-            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
             // Format the i128 result
@@ -325,7 +325,7 @@ pub fn compileAndExecute(
             // At the LLVM level, i128 and u128 have the same representation,
             // but we interpret the bits as unsigned here
             const EvalFn = *const fn () callconv(.c) u128;
-            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
             // Format the u128 result
@@ -334,7 +334,7 @@ pub fn compileAndExecute(
         .i64 => {
             // Function returns i64 (signed)
             const EvalFn = *const fn () callconv(.c) i64;
-            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
             // Format the integer result
@@ -345,7 +345,7 @@ pub fn compileAndExecute(
             // At the LLVM level, i64 and u64 have the same representation,
             // but we interpret the bits as unsigned here
             const EvalFn = *const fn () callconv(.c) u64;
-            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
             // Format the u64 result
@@ -354,7 +354,7 @@ pub fn compileAndExecute(
         .dec => {
             // Function returns i128 representing a Dec (fixed-point with 18 decimal places)
             const EvalFn = *const fn () callconv(.c) i128;
-            const eval_fn: EvalFn = @ptrFromInt(eval_addr);
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
             // Format the Dec result with proper decimal formatting
