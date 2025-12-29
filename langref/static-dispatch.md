@@ -10,7 +10,7 @@ which uses runtime information to decide which function gets run.
 Roc's only ad hoc polymorphism system is static dispatch, and dynamic dispatch is unsupported
 by design. A major reason for this is that Roc's static dispatch has no runtime overhead; 
 after compilation, it's exactly as if you had called the function directly. (In contrast, 
-it's impossible to avoid runtime overhead in dynamic dispatch, becasue it has to process 
+it's impossible to avoid runtime overhead in dynamic dispatch, because it has to process 
 information at runtime to do the dispatch.) 
 
 ## Methods
