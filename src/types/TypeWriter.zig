@@ -386,10 +386,6 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     _ = try writer.write(")");
                 }
             },
-            .recursion_var => |rec_var| {
-                // Write the recursion var by writing the structure it points to
-                try self.writeVar(writer, rec_var.structure, root_var);
-            },
             .err => {
                 _ = try writer.write("Error");
             },
@@ -734,12 +730,6 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
             try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
             _ = try writer.write("]");
         },
-        .recursion_var => {
-            if (has_tags) _ = try writer.write(", ");
-            _ = try writer.write("..");
-            try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
-            _ = try writer.write("]");
-        },
     }
 }
 
@@ -886,10 +876,6 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         },
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
-        },
-        .recursion_var => |rec_var| {
-            // Count the structure the recursion var points to
-            try self.countVar(search_var, rec_var.structure, count);
         },
         .err => {},
     }

@@ -62,7 +62,7 @@ pub fn isPolymorphic(self: *Self, type_var: types.Var) bool {
     const resolved = self.types_store.resolveVar(type_var);
     return switch (resolved.desc.content) {
         .flex, .rigid => true,
-        .structure, .alias, .recursion_var, .err => false,
+        .structure, .alias, .err => false,
     };
 }
 
@@ -87,7 +87,6 @@ pub fn typeHash(self: *Self, type_var: types.Var) u64 {
         .flex => hasher.update("flex"),
         .rigid => hasher.update("rigid"),
         .alias => hasher.update("alias"),
-        .recursion_var => hasher.update("recursion"),
         .err => hasher.update("err"),
     }
 
@@ -107,7 +106,7 @@ pub fn getTypeName(self: *Self, type_var: types.Var) []const u8 {
             }
         },
         .flex, .rigid => return "a",
-        .alias, .recursion_var, .err => return "Unknown",
+        .alias, .err => return "Unknown",
     }
 }
 

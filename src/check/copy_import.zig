@@ -80,11 +80,6 @@ fn copyContent(
         .rigid => |rigid| Content{ .rigid = try copyRigid(source_store, dest_store, rigid, var_mapping, source_idents, dest_idents, allocator) },
         .alias => |alias| Content{ .alias = try copyAlias(source_store, dest_store, alias, var_mapping, source_idents, dest_idents, allocator) },
         .structure => |flat_type| Content{ .structure = try copyFlatType(source_store, dest_store, flat_type, var_mapping, source_idents, dest_idents, allocator) },
-        .recursion_var => |rec_var| blk: {
-            // Copy the recursion var by copying the structure it points to
-            const copied_structure = try copyVar(source_store, dest_store, rec_var.structure, var_mapping, source_idents, dest_idents, allocator);
-            break :blk Content{ .recursion_var = .{ .structure = copied_structure, .name = rec_var.name } };
-        },
         .err => Content.err,
     };
 }

@@ -24,16 +24,9 @@ pub const SnapshotContent = union(enum) {
     rigid: SnapshotRigid,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
-    recursion_var: SnapshotRecursionVar,
     /// A recursive type reference. Stores the name of the type variable if available.
     recursive: ?Ident.Idx,
     err,
-};
-
-/// A snapshotted recursion variable that points to its recursive structure.
-pub const SnapshotRecursionVar = struct {
-    structure: SnapshotContentIdx,
-    name: ?base.Ident.Idx,
 };
 
 /// A snapshotted flex (unbound) type variable with optional name and constraints.
@@ -262,7 +255,6 @@ pub const Store = struct {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
-                .recursion_var => |rec_var| rec_var.name,
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
@@ -343,11 +335,6 @@ pub const Store = struct {
             .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, type_writer, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, type_writer, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, type_writer, flat_type, root_var) },
-            .recursion_var => |rec_var| blk: {
-                // Snapshot the recursion var by snapshotting the structure it points to
-                const structure_snapshot = try self.deepCopyVarInternal(store, type_writer, rec_var.structure);
-                break :blk SnapshotContent{ .recursion_var = .{ .structure = structure_snapshot, .name = rec_var.name } };
-            },
             .err => SnapshotContent.err,
         };
 
