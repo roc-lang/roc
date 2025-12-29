@@ -1,8 +1,6 @@
 //! Static library version of builtins that provides minimal exports
 //! This is a separate entry point to avoid circular imports with builtins module
 
-const std = @import("std");
-
 // Export key functions that might need compiler-rt symbols
 comptime {
     // Export overflow functions that might need compiler-rt symbols

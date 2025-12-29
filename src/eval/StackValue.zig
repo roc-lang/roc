@@ -9,49 +9,24 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
 const types = @import("types");
-const can = @import("can");
 const builtins = @import("builtins");
-const collections = @import("collections");
 const layout_mod = @import("layout");
 
 // Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 
-const CIR = can.CIR;
-const ModuleEnv = can.ModuleEnv;
 const Ident = base.Ident;
 const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
-const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
-const LayoutTag = layout_mod.LayoutTag;
 const RocDec = builtins.dec.RocDec;
-const SExprTree = base.SExprTree;
 const Closure = layout_mod.Closure;
-const Expr = CIR.Expr;
 
 const StackValue = @This();
 
 // Internal helper functions for memory operations that don't need rt_var
-
-/// Helper for unreachable code paths that provides better error messages in debug mode
-fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builtin.SourceLocation) noreturn {
-    if (comptime builtin.mode == .Debug) {
-        var buf: [512]u8 = undefined;
-        const full_msg = std.fmt.bufPrint(&buf, "Internal error: {s} at {s}:{d}:{d}", .{
-            msg,
-            src.file,
-            src.line,
-            src.column,
-        }) catch msg;
-        if (roc_ops) |ops| {
-            ops.crash(full_msg);
-        }
-    }
-    unreachable;
-}
 
 /// Read the discriminant for a tag union, handling single-tag unions which don't store one.
 fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache: *LayoutStore) usize {
@@ -1136,73 +1111,6 @@ fn storeListElementCount(list: *RocList, elements_refcounted: bool, roc_ops: *Ro
             const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
             ptr[0] = list.length;
         }
-    }
-}
-
-fn copyListValueToPtr(
-    src: StackValue,
-    layout_cache: *LayoutStore,
-    dest_ptr: *anyopaque,
-    dest_layout: Layout,
-    roc_ops: *RocOps,
-) error{ TypeMismatch, NullStackPointer }!void {
-    // Verify dest_ptr alignment before @alignCast (debug builds only for performance)
-    if (comptime builtin.mode == .Debug) {
-        const dest_ptr_int = @intFromPtr(dest_ptr);
-        if (dest_ptr_int % @alignOf(RocList) != 0) {
-            var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] dest alignment error: 0x{x}", .{dest_ptr_int}) catch "[copyListValueToPtr] alignment error";
-            roc_ops.crash(msg);
-        }
-    }
-    var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
-
-    switch (dest_layout.tag) {
-        .list_of_zst => {
-            if (src.layout.tag != .list_of_zst) return error.TypeMismatch;
-            if (src.ptr == null) {
-                dest_list.* = RocList.empty();
-                return;
-            }
-            // Verify src.ptr alignment before @alignCast (debug builds only for performance)
-            if (comptime builtin.mode == .Debug) {
-                const src_ptr_int_zst = @intFromPtr(src.ptr.?);
-                if (src_ptr_int_zst % @alignOf(RocList) != 0) {
-                    var buf: [64]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] src zst alignment error: 0x{x}", .{src_ptr_int_zst}) catch "[copyListValueToPtr] alignment error";
-                    roc_ops.crash(msg);
-                }
-            }
-            const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
-            dest_list.* = src_list;
-            dest_list.incref(1, false);
-            return;
-        },
-        .list => {
-            if (src.ptr == null) {
-                dest_list.* = RocList.empty();
-                return;
-            }
-            if (src.layout.tag != .list) return error.TypeMismatch;
-            // Verify src.ptr alignment before @alignCast (debug builds only for performance)
-            if (comptime builtin.mode == .Debug) {
-                const src_ptr_int_list = @intFromPtr(src.ptr.?);
-                if (src_ptr_int_list % @alignOf(RocList) != 0) {
-                    var buf: [64]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] src list alignment error: 0x{x}", .{src_ptr_int_list}) catch "[copyListValueToPtr] alignment error";
-                    roc_ops.crash(msg);
-                }
-            }
-            const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
-            dest_list.* = src_list;
-
-            const elem_layout = layout_cache.getLayout(dest_layout.data.list);
-            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
-            dest_list.incref(1, elements_refcounted);
-            storeListElementCount(dest_list, elements_refcounted, roc_ops);
-            return;
-        },
-        else => return error.TypeMismatch,
     }
 }
 

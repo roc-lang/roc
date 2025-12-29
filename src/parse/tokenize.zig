@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const collections = @import("collections");
 const tracy = @import("tracy");
 
 const DataSpan = base.DataSpan;
@@ -652,12 +651,8 @@ pub const Cursor = struct {
                         continue;
                     },
                     '.' => {
-                        self.pos += 1;
-                        self.chompIntegerBase10() catch {}; // This is not an issue, have leading `0.`.
-                        tok = .Float;
-                        _ = self.chompExponent() catch {
-                            tok = .MalformedNumberNoExponentDigits;
-                        };
+                        self.pos -= 1; // Go back to the initial 0
+                        tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },

@@ -6,15 +6,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
-
-const sexpr = base.sexpr;
 
 /// When storing optional indices/values where 0 is a valid value, we add this offset
 /// to distinguish "value is 0" from "value is null". This is a common pattern when
@@ -92,11 +89,6 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     });
     return store;
 }
-
-/// Default capacity for scratch buffers, sized generously since they're typically small.
-///
-/// TODO: tune this base on real roc code.
-const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 64);
 
 /// Deinitializes all data owned by the store.
 /// A caller should ensure that they have taken

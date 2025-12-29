@@ -13,16 +13,12 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const collections = @import("collections");
 const reporting = @import("reporting");
 
-const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 pub const Token = tokenize.Token;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const Ident = base.Ident;
 const Allocator = std.mem.Allocator;
 const CommonEnv = base.CommonEnv;
 const tokenize = @import("tokenize.zig");
@@ -229,12 +225,6 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         .start = start_region.start,
         .end = end_region.end,
     };
-}
-
-/// Get the text content of a token for error reporting
-fn getTokenText(self: *AST, token_idx: Token.Idx) []const u8 {
-    const token_region = self.tokens.resolve(@intCast(token_idx));
-    return self.env.source[token_region.start.offset..token_region.end.offset];
 }
 
 /// Convert a parse diagnostic to a Report for rendering

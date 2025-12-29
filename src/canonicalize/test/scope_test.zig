@@ -2,14 +2,12 @@
 
 const std = @import("std");
 const base = @import("base");
-const parse = @import("parse");
 
 const CIR = @import("../CIR.zig");
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");
-const Ident = base.Ident;
-const Region = base.Region;
 const Scope = @import("../Scope.zig");
+const Ident = base.Ident;
 const Pattern = CIR.Pattern;
 const TypeAnno = CIR.TypeAnno;
 

@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const collections = @import("collections");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
 
@@ -23,7 +22,6 @@ const Record = types_mod.Record;
 const TagUnion = types_mod.TagUnion;
 const RecordField = types_mod.RecordField;
 const Tag = types_mod.Tag;
-const Num = types_mod.Num;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;

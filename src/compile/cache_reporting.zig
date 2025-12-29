@@ -10,10 +10,7 @@ const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const Report = reporting.Report;
-const Document = reporting.Document;
-const Severity = reporting.Severity;
 const RenderTarget = reporting.RenderTarget;
-const ReportingConfig = reporting.ReportingConfig;
 
 /// Data size unit for formatting
 pub const DataSizeUnit = enum {

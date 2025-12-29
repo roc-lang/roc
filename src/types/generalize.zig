@@ -38,26 +38,12 @@
 //! - `Generalizer.generalize()` - Generalize all variables at a given rank
 
 const std = @import("std");
-const base = @import("base");
 const builtin = @import("builtin");
-const collections = @import("collections");
 
 const TypesStore = @import("store.zig").Store;
 const Var = @import("types.zig").Var;
 const Content = @import("types.zig").Content;
-const FlatType = @import("types.zig").FlatType;
-const Alias = @import("types.zig").Alias;
-const Func = @import("types.zig").Func;
-const Record = @import("types.zig").Record;
-const TagUnion = @import("types.zig").TagUnion;
-const RecordField = @import("types.zig").RecordField;
-const Tag = @import("types.zig").Tag;
-const Num = @import("types.zig").Num;
-const NominalType = @import("types.zig").NominalType;
-const Tuple = @import("types.zig").Tuple;
 const Rank = @import("types.zig").Rank;
-const StaticDispatchConstraint = @import("types.zig").StaticDispatchConstraint;
-const Ident = base.Ident;
 
 /// Manages the generalization process for type variables.
 ///
@@ -98,8 +84,6 @@ pub const Generalizer = struct {
     tmp_var_pool: VarPool,
     /// Map of which variables we are generalizing this pass
     vars_to_generalized: std.AutoHashMap(Var, void),
-
-    const EscapedVar = struct { var_: Var, rank: Rank };
 
     const Self = @This();
 

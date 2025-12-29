@@ -7,8 +7,7 @@ const PathList = std.ArrayList([]u8);
 const max_file_bytes: usize = 16 * 1024 * 1024;
 
 const test_file_exclusions = [_][]const u8{
-    // TODO Fixing in progress...
-    "src/cli/test_docs.zig",
+    // Add files here that are intentionally not wired into the test suite
 };
 
 const TermColor = struct {

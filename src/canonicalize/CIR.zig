@@ -18,10 +18,8 @@ const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(b
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const RegionInfo = base.RegionInfo;
 const Region = base.Region;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 
 // Re-export these from other modules for convenience

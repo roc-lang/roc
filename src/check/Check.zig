@@ -9,17 +9,13 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
-const builtins = @import("builtins");
 
 const copy_import = @import("copy_import.zig");
 const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
-const snapshot_mod = @import("snapshot.zig");
 
-const ExposedItems = collections.ExposedItems;
 const CIR = can.CIR;
-const CommonEnv = base.CommonEnv;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -33,16 +29,11 @@ const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
-const Num = types_mod.Num;
-const testing = std.testing;
 const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = @import("snapshot.zig").Store;
 const ProblemStore = @import("problem.zig").Store;
-
-const is_freestanding = builtin.os.tag == .freestanding;
 
 /// Deferred numeric literal for compile-time validation
 /// These are collected during type checking and validated during comptime evaluation

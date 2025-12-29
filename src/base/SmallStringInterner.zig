@@ -8,9 +8,7 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const serialization = @import("serialization");
 
-const Region = @import("Region.zig");
 const CompactWriter = collections.CompactWriter;
 
 const SmallStringInterner = @This();
