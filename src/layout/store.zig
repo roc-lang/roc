@@ -1570,7 +1570,7 @@ pub const Store = struct {
                                     });
                                 }
                                 try self.work.pending_containers.append(self.env.gpa, .{
-                                    .var_ = current.var_, // This var will be overwritten anyway
+                                    .var_ = null, // synthetic tuple for multi-arg variant
                                     .container = .{
                                         .tuple = .{
                                             .num_fields = @intCast(args_slice.len),
@@ -1918,7 +1918,7 @@ pub const Store = struct {
                                 }
                                 // Push tuple container on top of the tag union
                                 try self.work.pending_containers.append(self.env.gpa, .{
-                                    .var_ = undefined, // synthetic tuple, var not meaningful
+                                    .var_ = null, // synthetic tuple for multi-arg variant
                                     .container = .{
                                         .tuple = .{
                                             .num_fields = @intCast(next_args_slice.len),
@@ -1942,30 +1942,35 @@ pub const Store = struct {
                 const pending_item = self.work.pending_containers.pop() orelse unreachable;
                 layout_idx = try self.insertLayout(layout);
 
-                // Add the container's layout to our layouts_by_var cache for later use.
-                try self.layouts_by_var.put(self.env.gpa, pending_item.var_, layout_idx);
+                // Only cache and check nominals for containers with a valid var.
+                // Synthetic tuples (for multi-arg tag union variants) have var_=null and
+                // should not be cached or trigger nominal updates.
+                if (pending_item.var_) |container_var| {
+                    // Add the container's layout to our layouts_by_var cache for later use.
+                    try self.layouts_by_var.put(self.env.gpa, container_var, layout_idx);
 
-                // Check if any in-progress nominals need their reserved layouts updated.
-                // This handles the case where a nominal's backing type is a container (e.g., tag union).
-                var nominals_to_remove_container = std.ArrayList(work.NominalKey){};
-                defer nominals_to_remove_container.deinit(self.env.gpa);
+                    // Check if any in-progress nominals need their reserved layouts updated.
+                    // This handles the case where a nominal's backing type is a container (e.g., tag union).
+                    var nominals_to_remove_container = std.ArrayList(work.NominalKey){};
+                    defer nominals_to_remove_container.deinit(self.env.gpa);
 
-                var nominal_iter_container = self.work.in_progress_nominals.iterator();
-                while (nominal_iter_container.next()) |entry| {
-                    const progress = entry.value_ptr.*;
-                    // Check if this nominal's backing type (container) just finished.
-                    if (progress.backing_var == pending_item.var_) {
-                        // The backing type (container) just finished! Update the nominal's placeholder.
-                        if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
-                            self.updateLayout(reserved_idx, layout);
+                    var nominal_iter_container = self.work.in_progress_nominals.iterator();
+                    while (nominal_iter_container.next()) |entry| {
+                        const progress = entry.value_ptr.*;
+                        // Check if this nominal's backing type (container) just finished.
+                        if (progress.backing_var == container_var) {
+                            // The backing type (container) just finished! Update the nominal's placeholder.
+                            if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
+                                self.updateLayout(reserved_idx, layout);
+                            }
+                            try nominals_to_remove_container.append(self.env.gpa, entry.key_ptr.*);
                         }
-                        try nominals_to_remove_container.append(self.env.gpa, entry.key_ptr.*);
                     }
-                }
 
-                // Remove the nominals we updated
-                for (nominals_to_remove_container.items) |key| {
-                    _ = self.work.in_progress_nominals.swapRemove(key);
+                    // Remove the nominals we updated
+                    for (nominals_to_remove_container.items) |key| {
+                        _ = self.work.in_progress_nominals.swapRemove(key);
+                    }
                 }
             }
 
