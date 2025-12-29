@@ -11,9 +11,10 @@ pub const Idx = enum(u32) { _ };
 
 /// An interner for string literals.
 ///
-/// We avoid using the SmallStringInterner for string literals since
-/// they are expected to be almost all unique and also larger, meaning
-/// not worth the equality checking cost for depuplicating.
+/// String literals are deduplicated so that identical strings receive the same Idx.
+/// This enables direct index comparison for equality checking (e.g., in exhaustiveness).
+/// The deduplication uses a linear search through existing strings, which is acceptable
+/// because the number of unique string literals in pattern matching is typically small.
 pub const Store = struct {
     /// An Idx points to the
     /// first byte of the string. The previous
@@ -49,8 +50,15 @@ pub const Store = struct {
 
     /// Insert a new string into a `Store`.
     ///
-    /// Does not deduplicate, as string literals are expected to be large and mostly unique.
+    /// Deduplicates: if an identical string already exists, returns its index.
+    /// This enables direct index comparison for equality checking.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        // Search for an existing identical string
+        if (self.findExisting(string)) |existing_idx| {
+            return existing_idx;
+        }
+
+        // String not found, insert it
         const str_len: u32 = @truncate(string.len);
 
         const str_len_bytes = std.mem.asBytes(&str_len);
@@ -61,6 +69,32 @@ pub const Store = struct {
         _ = try self.buffer.appendSlice(gpa, string);
 
         return @enumFromInt(@as(u32, @intCast(string_content_start)));
+    }
+
+    /// Search for an existing string in the store and return its index if found.
+    fn findExisting(self: *const Store, string: []const u8) ?Idx {
+        const buffer_items = self.buffer.items.items;
+        var pos: usize = 0;
+
+        while (pos + 4 <= buffer_items.len) {
+            // Read the length (4 bytes)
+            const str_len = std.mem.bytesAsValue(u32, buffer_items[pos .. pos + 4]).*;
+            const content_start = pos + 4;
+            const content_end = content_start + str_len;
+
+            if (content_end > buffer_items.len) break;
+
+            // Compare with the target string
+            const existing = buffer_items[content_start..content_end];
+            if (std.mem.eql(u8, existing, string)) {
+                return @enumFromInt(@as(u32, @intCast(content_start)));
+            }
+
+            // Move to next string
+            pos = content_end;
+        }
+
+        return null;
     }
 
     /// Get a string literal's text from this `Store`.

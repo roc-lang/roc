@@ -14,6 +14,8 @@ const copy_import = @import("copy_import.zig");
 const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
+const snapshot_mod = @import("snapshot.zig");
+const exhaustive = @import("exhaustive.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -32,7 +34,8 @@ const Rank = types_mod.Rank;
 const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
-const SnapshotStore = @import("snapshot.zig").Store;
+const SnapshotStore = snapshot_mod.Store;
+const ExtraStringIdx = snapshot_mod.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 /// Deferred numeric literal for compile-time validation
@@ -4530,6 +4533,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Get slice of branches
     const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
 
+    // Track whether we encountered any type errors during pattern checking
+    // If so, we'll skip exhaustiveness checking since the types may be invalid
+    var had_type_error = false;
+
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
     // against.
@@ -4546,6 +4553,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_cond_pattern = .{
             .match_expr = expr_idx,
         } });
+        if (!ptrn_result.isOk()) had_type_error = true;
     }
 
     // Check the first branch's value, then use that at the branch_var
@@ -4573,6 +4581,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .num_patterns = @intCast(branch_ptrn_idxs.len),
                 .problem_pattern_index = @intCast(cur_ptrn_index),
             } });
+            if (!ptrn_result.isOk()) had_type_error = true;
         }
 
         // Then, check the body
@@ -4621,6 +4630,92 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Unify the root expr with the match value
     _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
+
+    // Perform exhaustiveness and redundancy checking
+    // Only do this if there were no type errors - type errors can lead to invalid types
+    // that confuse the exhaustiveness checker
+    // Also skip if the condition type is an error type (can happen with complex inference)
+    const resolved_cond = self.types.resolveVar(cond_var);
+    const cond_is_error = resolved_cond.desc.content == .err;
+
+    if (!had_type_error and !cond_is_error) {
+        const match_region = self.cir.store.regions.get(
+            @enumFromInt(@intFromEnum(expr_idx)),
+        ).*;
+
+        const builtin_idents = exhaustive.BuiltinIdents{
+            .builtin_module = self.cir.idents.builtin_module,
+            .u8_type = self.cir.idents.u8_type,
+            .i8_type = self.cir.idents.i8_type,
+            .u16_type = self.cir.idents.u16_type,
+            .i16_type = self.cir.idents.i16_type,
+            .u32_type = self.cir.idents.u32_type,
+            .i32_type = self.cir.idents.i32_type,
+            .u64_type = self.cir.idents.u64_type,
+            .i64_type = self.cir.idents.i64_type,
+            .u128_type = self.cir.idents.u128_type,
+            .i128_type = self.cir.idents.i128_type,
+            .f32_type = self.cir.idents.f32_type,
+            .f64_type = self.cir.idents.f64_type,
+            .dec_type = self.cir.idents.dec_type,
+        };
+
+        const result = exhaustive.checkMatch(
+            self.cir.gpa,
+            self.types,
+            &self.cir.store,
+            builtin_idents,
+            match.branches,
+            cond_var,
+            match_region,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeError => {
+                // Type error in pattern - exhaustiveness checking can't proceed
+                // This is expected when there are polymorphic types or type mismatches
+                // Don't report exhaustiveness errors in this case
+                return does_fx;
+            },
+        };
+        defer result.deinit(self.cir.gpa);
+
+        // Report non-exhaustive match if any patterns are missing
+        if (!result.is_exhaustive) {
+            const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
+
+            // Format missing patterns and store in snapshot store for lifecycle management
+            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
+            for (result.missing_patterns) |pattern| {
+                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                const idx = try self.snapshots.storeExtraString(formatted);
+                try missing_indices.append(self.cir.gpa, idx);
+            }
+
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
+                .match_expr = expr_idx,
+                .condition_snapshot = condition_snapshot,
+                .missing_patterns = try missing_indices.toOwnedSlice(self.cir.gpa),
+            } });
+        }
+
+        // Report redundant patterns
+        for (result.redundant_indices) |idx| {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .redundant_pattern = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = idx,
+            } });
+        }
+
+        // Report unmatchable patterns (patterns on uninhabited types)
+        for (result.unmatchable_indices) |idx| {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .unmatchable_pattern = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = idx,
+            } });
+        }
+    }
 
     return does_fx;
 }

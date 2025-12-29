@@ -1345,6 +1345,9 @@ test "check type - patterns frac 3" {
 }
 
 test "check type - patterns list" {
+    // The pattern [_a, .. as b] is redundant because [.. as b, _a] already matches
+    // all non-empty lists. Both patterns match lists with 1+ elements, just extracting
+    // different parts (first vs last element).
     const source =
         \\{
         \\  x = ["a", "b", "c"]
@@ -1356,7 +1359,7 @@ test "check type - patterns list" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "List(Str)");
+    try checkTypesExpr(source, .fail, "REDUNDANT PATTERN");
 }
 
 test "check type - patterns record" {

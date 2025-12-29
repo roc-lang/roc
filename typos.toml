@@ -23,3 +23,4 @@ extend-ignore-identifiers-re = [".*_SME_.*"]
 typ = "typ"
 ba = "ba"
 sigfault = "sigfault"
+nd = "nd"
