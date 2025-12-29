@@ -1994,7 +1994,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     defer sibling_env_ptrs.deinit(ctx.gpa);
 
     // Extract sibling imports from the already-parsed app AST
-    const sibling_imports = try extractSiblingImportsFromParseAST(&app_parse_ast, ctx.gpa);
+    const sibling_imports = try compile.module_discovery.extractImportsFromAST(&app_parse_ast, ctx.gpa);
     defer {
         for (sibling_imports) |imp| ctx.gpa.free(imp);
         ctx.gpa.free(sibling_imports);
@@ -2295,77 +2295,6 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
             return false;
         },
     }
-}
-
-/// Extract unqualified sibling module imports from a parsed AST.
-/// Returns module names that:
-/// 1. Have no qualifier (not like "pf.Stdout")
-/// 2. Are uppercase identifiers (module names start with uppercase)
-/// 3. Are not "Builtin" (always available)
-///
-/// For nested modules like "Foo.Bar", returns "Foo.Bar" (the full path).
-/// The caller is responsible for converting to file paths.
-///
-/// Parameters:
-///   parse_ast: The parsed AST to extract imports from
-///   gpa: Allocator for the returned strings
-///
-/// Returns: Slice of imported module names (caller owns memory)
-fn extractSiblingImportsFromParseAST(
-    parse_ast: *const parse.AST,
-    gpa: std.mem.Allocator,
-) ![][]const u8 {
-    var result = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (result.items) |item| gpa.free(item);
-        result.deinit(gpa);
-    }
-
-    // Get the file and its statements
-    const file = parse_ast.store.getFile();
-    const stmt_slice = parse_ast.store.statementSlice(file.statements);
-
-    for (stmt_slice) |stmt_idx| {
-        const stmt = parse_ast.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .import => |import_stmt| {
-                // Skip qualified imports (e.g., "pf.Stdout")
-                // These have a qualifier_tok set
-                if (import_stmt.qualifier_tok != null) continue;
-
-                // Get the module name from the token
-                const module_name_raw = parse_ast.resolve(import_stmt.module_name_tok);
-
-                // Strip leading dot if present (from tokens like .NoSpaceDotUpperIdent)
-                const module_name = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
-                    module_name_raw[1..]
-                else
-                    module_name_raw;
-
-                // Skip "Builtin" - always available
-                if (std.mem.eql(u8, module_name, "Builtin")) continue;
-
-                // Check if it looks like a module name (starts with uppercase)
-                if (module_name.len == 0) continue;
-                if (module_name[0] < 'A' or module_name[0] > 'Z') continue;
-
-                // Check for duplicates
-                var found = false;
-                for (result.items) |existing| {
-                    if (std.mem.eql(u8, existing, module_name)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    try result.append(gpa, try gpa.dupe(u8, module_name));
-                }
-            },
-            else => {},
-        }
-    }
-
-    return result.toOwnedSlice(gpa);
 }
 
 /// Convert a module name to its corresponding file path.

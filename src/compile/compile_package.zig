@@ -963,14 +963,16 @@ pub const PackageEnv = struct {
             builtin_indices,
         );
 
-        // Discover sibling .roc files in the same directory and add them to module_envs
+        // Add imported sibling modules to module_envs (based on actual imports, not directory scan)
         // This prevents MODULE NOT FOUND errors for modules that exist but haven't been loaded yet
-        try module_discovery.discoverSiblingModules(
+        try module_discovery.addImportedModulesToEnvMap(
+            parse_ast,
             root_dir,
             env.module_name,
             env,
             &module_envs_map,
             builtin_module_env,
+            gpa,
         );
 
         // Add additional known modules (e.g., from platform exposes for URL platforms)
