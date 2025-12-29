@@ -379,6 +379,11 @@ pub const SmallDecValue = struct {
         };
     }
 
+    /// Convert to RocDec representation (i128 scaled by 10^18)
+    pub fn toRocDec(self: SmallDecValue) RocDec {
+        return RocDec.fromFraction(self.numerator, self.denominator_power_of_ten);
+    }
+
     test "SmallDecValue.toF64 - basic cases" {
         // Test integer values
         {
