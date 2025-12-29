@@ -1040,7 +1040,7 @@ It has the type:
 
 But the type annotation says it should have the type:
 
-    [Stdoline!(Error), ..[Err(_d), Ok({  }), .._others2]]
+    Try({  }, _d)
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

@@ -331,17 +331,6 @@ pub fn lookupStaticDispatch(
         .alias => |alias| alias.ident.ident_idx,
         // Flex/rigid vars are not concrete - can't look up implementation
         .flex, .rigid => null,
-        .recursion_var => |rec| blk: {
-            // Recursion var - look up the underlying structure
-            const inner = self.types_store.resolveVar(rec.structure);
-            break :blk switch (inner.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .nominal_type => |nom| nom.ident.ident_idx,
-                    else => null,
-                },
-                else => null,
-            };
-        },
         .err => null,
     };
 
@@ -2093,10 +2082,6 @@ fn hashTypeRecursive(
         .alias => |alias| {
             hasher.update("alias");
             hasher.update(std.mem.asBytes(&alias.ident.ident_idx));
-        },
-        .recursion_var => |rec| {
-            hasher.update("recursion");
-            self.hashTypeRecursive(hasher, rec.structure, seen);
         },
         .err => hasher.update("err"),
     }
