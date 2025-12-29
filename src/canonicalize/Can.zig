@@ -98,6 +98,8 @@ scratch_captures: base.Scratch(Pattern.Idx),
 scratch_bound_vars: base.Scratch(Pattern.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
+/// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
+closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
 loop_depth: u32 = 0,
 
@@ -3764,6 +3766,7 @@ pub fn canonicalizeExpr(
                                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                                     .module_idx = import_idx,
                                                     .target_node_idx = target_node_idx,
+                                                    .ident_idx = type_qualified_idx,
                                                     .region = region,
                                                 } }, region);
 
@@ -3932,6 +3935,7 @@ pub fn canonicalizeExpr(
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = import_idx,
                                 .target_node_idx = target_node_idx,
+                                .ident_idx = ident,
                                 .region = region,
                             } }, region);
                             return CanonicalizedExpr{
@@ -3993,6 +3997,7 @@ pub fn canonicalizeExpr(
                                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                     .module_idx = import_idx,
                                     .target_node_idx = target_node_idx,
+                                    .ident_idx = exposed_info.original_name,
                                     .region = region,
                                 } }, region);
                                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
@@ -4666,11 +4671,17 @@ pub fn canonicalizeExpr(
                 break :blk try self.env.store.capturesSpanFrom(scratch_start);
             };
 
+            // Generate a unique tag name for this closure
+            // Note: We don't have context about what variable this is assigned to,
+            // so we use null for the hint. The tag name will be "Closure_N".
+            const tag_name = try self.generateClosureTagName(null);
+
             // Now, create the closure that captures the environment
             const closure_expr = Expr{
                 .e_closure = .{
                     .lambda_idx = lambda_idx,
                     .captures = capture_info,
+                    .tag_name = tag_name,
                 },
             };
             // The type of the closure is the same as the type of the pure lambda
@@ -10924,6 +10935,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
                             const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                                 .module_idx = auto_import_idx,
                                 .target_node_idx = method_node_idx,
+                                .ident_idx = qualified_method_name,
                                 .region = region,
                             } }, region);
 
@@ -10980,6 +10992,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
             const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                 .module_idx = import_idx,
                 .target_node_idx = target_node_idx,
+                .ident_idx = method_name,
                 .region = region,
             } }, region);
 
@@ -11098,6 +11111,7 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
+        .ident_idx = field_name,
         .region = region,
     } }, region);
     return expr_idx;
@@ -11241,6 +11255,40 @@ fn resolveIdentOrFallback(self: *Self, token: Token.Idx) std.mem.Allocator.Error
 /// compilation instead of stopping. This supports the compiler's "inform don't block" approach.
 fn createUnknownIdent(self: *Self) std.mem.Allocator.Error!Ident.Idx {
     return try self.env.insertIdent(base.Ident.for_text("unknown"));
+}
+
+/// Generate a unique tag name for a closure.
+///
+/// This generates names like "#1_addX", "#2_addX" when a hint is provided,
+/// or "#1", "#2" when no hint is available. The `#` prefix is used because
+/// it's reserved for comments in Roc source code, so these names cannot
+/// collide with user-defined tags. RocEmitter transforms `#` to `C` when
+/// printing, so `#1_foo` becomes `C1_foo` in emitted code.
+fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
+    self.closure_counter += 1;
+
+    // If we have a hint (e.g., from the variable name), use it with counter for uniqueness
+    if (hint) |h| {
+        const hint_name = self.env.getIdent(h);
+        // Use # prefix which can't appear in user code (reserved for comments)
+        // Format: #N_hint where N is the counter
+        const tag_name = try std.fmt.allocPrint(
+            self.env.gpa,
+            "#{d}_{s}",
+            .{ self.closure_counter, hint_name },
+        );
+        defer self.env.gpa.free(tag_name);
+        return try self.env.insertIdent(base.Ident.for_text(tag_name));
+    }
+
+    // Otherwise generate a numeric name
+    const tag_name = try std.fmt.allocPrint(
+        self.env.gpa,
+        "#{d}",
+        .{self.closure_counter},
+    );
+    defer self.env.gpa.free(tag_name);
+    return try self.env.insertIdent(base.Ident.for_text(tag_name));
 }
 
 const MainFunctionStatus = enum { valid, invalid, not_found };

@@ -30,6 +30,15 @@ output: std.ArrayList(u8),
 /// Current indentation level
 indent_level: u32,
 
+/// Names currently in scope (to detect shadowing)
+names_in_scope: std.StringHashMap(void),
+
+/// Renames for captures that would shadow (pattern_idx -> renamed string)
+capture_renames: std.AutoHashMap(PatternMod.Pattern.Idx, []const u8),
+
+/// Counter for generating unique names
+rename_counter: u32,
+
 /// Initialize a new Emitter
 pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
     return .{
@@ -37,12 +46,22 @@ pub fn init(allocator: std.mem.Allocator, module_env: *const ModuleEnv) Self {
         .module_env = module_env,
         .output = std.ArrayList(u8).empty,
         .indent_level = 0,
+        .names_in_scope = std.StringHashMap(void).init(allocator),
+        .capture_renames = std.AutoHashMap(PatternMod.Pattern.Idx, []const u8).init(allocator),
+        .rename_counter = 0,
     };
 }
 
 /// Free resources used by the emitter
 pub fn deinit(self: *Self) void {
     self.output.deinit(self.allocator);
+    self.names_in_scope.deinit();
+    // Free the allocated rename strings
+    var iter = self.capture_renames.valueIterator();
+    while (iter.next()) |rename| {
+        self.allocator.free(rename.*);
+    }
+    self.capture_renames.deinit();
 }
 
 /// Get the emitted Roc source code
@@ -54,6 +73,14 @@ pub fn getOutput(self: *const Self) []const u8 {
 pub fn reset(self: *Self) void {
     self.output.clearRetainingCapacity();
     self.indent_level = 0;
+    self.names_in_scope.clearRetainingCapacity();
+    // Free the allocated rename strings
+    var iter = self.capture_renames.valueIterator();
+    while (iter.next()) |rename| {
+        self.allocator.free(rename.*);
+    }
+    self.capture_renames.clearRetainingCapacity();
+    self.rename_counter = 0;
 }
 
 /// Emit an expression as Roc source code
@@ -66,6 +93,63 @@ pub fn emitExpr(self: *Self, expr_idx: Expr.Idx) !void {
 pub fn emitPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
     const pattern = self.module_env.store.getPattern(pattern_idx);
     try self.emitPatternValue(pattern);
+}
+
+/// Emit a pattern, checking for shadowing and generating unique names
+fn emitPatternWithShadowCheck(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
+    const pattern = self.module_env.store.getPattern(pattern_idx);
+
+    // Only handle assign patterns for shadowing (other patterns don't introduce names)
+    if (pattern == .assign) {
+        const name = self.module_env.getIdent(pattern.assign.ident);
+
+        if (self.names_in_scope.contains(name)) {
+            // Generate a unique name
+            const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ name, self.rename_counter });
+            self.rename_counter += 1;
+
+            // Store the rename mapping
+            try self.capture_renames.put(pattern_idx, unique_name);
+            try self.names_in_scope.put(unique_name, {});
+            try self.emitIdent(unique_name);
+        } else {
+            try self.names_in_scope.put(name, {});
+            try self.emitIdent(name);
+        }
+    } else {
+        // For other pattern types, just emit normally
+        try self.emitPatternValue(pattern);
+    }
+}
+
+/// Emit a binop operand, wrapping in parens only if needed for precedence
+fn emitBinopOperand(self: *Self, expr_idx: Expr.Idx, outer_op: Expr.Binop.Op) !void {
+    const expr = self.module_env.store.getExpr(expr_idx);
+    if (expr == .e_binop) {
+        const inner_op = expr.e_binop.op;
+        // Only add parens if inner op has lower precedence than outer op
+        if (binopPrecedence(inner_op) < binopPrecedence(outer_op)) {
+            try self.write("(");
+            try self.emitExprValue(expr);
+            try self.write(")");
+        } else {
+            try self.emitExprValue(expr);
+        }
+    } else {
+        try self.emitExprValue(expr);
+    }
+}
+
+/// Returns precedence level for a binary operator (higher = binds tighter)
+fn binopPrecedence(op: Expr.Binop.Op) u8 {
+    return switch (op) {
+        .@"or" => 1,
+        .@"and" => 2,
+        .eq, .ne => 3,
+        .lt, .gt, .le, .ge => 4,
+        .add, .sub => 5,
+        .mul, .div, .div_trunc, .rem => 6,
+    };
 }
 
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
@@ -121,12 +205,18 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             }
         },
         .e_lookup_local => |lookup| {
-            const pattern = self.module_env.store.getPattern(lookup.pattern_idx);
-            try self.emitPatternValue(pattern);
+            // Check if this lookup refers to a renamed capture
+            if (self.capture_renames.get(lookup.pattern_idx)) |renamed| {
+                try self.emitIdent(renamed);
+            } else {
+                const pattern = self.module_env.store.getPattern(lookup.pattern_idx);
+                try self.emitPatternValue(pattern);
+            }
         },
-        .e_lookup_external => {
-            // For external lookups, emit the qualified name
-            try self.write("<external>");
+        .e_lookup_external => |ext| {
+            // Get the identifier name from the ident_idx
+            const ident_text = self.module_env.getIdent(ext.ident_idx);
+            try self.emitIdent(ident_text);
         },
         .e_list => |list| {
             try self.write("[");
@@ -154,12 +244,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             for (branch_indices, 0..) |branch_idx, i| {
                 const branch = self.module_env.store.getIfBranch(branch_idx);
                 if (i > 0) {
-                    try self.write(" else if ");
+                    try self.write(" else if (");
                 } else {
-                    try self.write("if ");
+                    try self.write("if (");
                 }
                 try self.emitExpr(branch.cond);
-                try self.write(" ");
+                try self.write(") ");
                 try self.emitExpr(branch.body);
             }
             try self.write(" else ");
@@ -176,21 +266,39 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.write(")");
         },
         .e_record => |record| {
-            try self.write("{");
+            try self.write("{ ");
             const field_indices = self.module_env.store.sliceRecordFields(record.fields);
             for (field_indices, 0..) |field_idx, i| {
                 const field = self.module_env.store.getRecordField(field_idx);
                 if (i > 0) try self.write(", ");
                 const name = self.module_env.getIdent(field.name);
-                try self.writer().print("{s}: ", .{name});
-                try self.emitExpr(field.value);
+
+                // Check if we can use shorthand syntax { x, y } instead of { x: x, y: y }
+                // NOTE: Only use shorthand for records with multiple fields!
+                // Single-field { x } would be parsed as a block, not a record shorthand.
+                const field_value = self.module_env.store.getExpr(field.value);
+                const use_shorthand = if (field_indices.len > 1 and field_value == .e_lookup_local) blk: {
+                    const lookup_pattern = self.module_env.store.getPattern(field_value.e_lookup_local.pattern_idx);
+                    if (lookup_pattern == .assign) {
+                        const lookup_name = self.module_env.getIdent(lookup_pattern.assign.ident);
+                        break :blk std.mem.eql(u8, name, lookup_name);
+                    }
+                    break :blk false;
+                } else false;
+
+                if (use_shorthand) {
+                    try self.write(name);
+                } else {
+                    try self.writer().print("{s}: ", .{name});
+                    try self.emitExpr(field.value);
+                }
             }
             if (record.ext) |ext_idx| {
                 if (field_indices.len > 0) try self.write(", ");
                 try self.write("..");
                 try self.emitExpr(ext_idx);
             }
-            try self.write("}");
+            try self.write(" }");
         },
         .e_empty_record => {
             try self.write("{}");
@@ -218,7 +326,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
-            try self.write(name);
+            try self.emitTagName(name);
             const args = self.module_env.store.sliceExpr(tag.args);
             if (args.len > 0) {
                 try self.write("(");
@@ -231,11 +339,58 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         },
         .e_zero_argument_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
-            try self.write(name);
+            try self.emitTagName(name);
         },
         .e_closure => |closure| {
-            // Emit the underlying lambda
-            try self.emitExpr(closure.lambda_idx);
+            // Emit closure as a lambda with non-top-level captures as leading arguments
+            // e.g., |y| x + y with capture x becomes |x, y| x + y (if x is local)
+            // but top-level captures are not lifted (they're always in scope)
+            // Handle shadowing by generating unique names for captures
+            const lambda = self.module_env.store.getExpr(closure.lambda_idx);
+            std.debug.assert(lambda == .e_lambda);
+
+            try self.write("|");
+
+            // First emit non-top-level captures as arguments, renaming if they would shadow
+            const captures = self.module_env.store.sliceCaptures(closure.captures);
+            var emitted_captures: u32 = 0;
+            for (captures) |capture_idx| {
+                const capture = self.module_env.store.getCapture(capture_idx);
+
+                // Skip top-level captures - they're always in scope
+                if (self.isTopLevelPattern(capture.pattern_idx)) continue;
+
+                if (emitted_captures > 0) try self.write(", ");
+                emitted_captures += 1;
+
+                const capture_name = self.module_env.getIdent(capture.name);
+
+                // Check if this name would shadow an existing name
+                if (self.names_in_scope.contains(capture_name)) {
+                    // Generate a unique name
+                    const unique_name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ capture_name, self.rename_counter });
+                    self.rename_counter += 1;
+
+                    // Store the rename mapping
+                    try self.capture_renames.put(capture.pattern_idx, unique_name);
+                    try self.names_in_scope.put(unique_name, {});
+                    try self.write(unique_name);
+                } else {
+                    // No shadowing, use original name
+                    try self.names_in_scope.put(capture_name, {});
+                    try self.write(capture_name);
+                }
+            }
+
+            // Then emit the lambda's own arguments (also check for shadowing)
+            const args = self.module_env.store.slicePatterns(lambda.e_lambda.args);
+            for (args, 0..) |arg_idx, i| {
+                if (emitted_captures > 0 or i > 0) try self.write(", ");
+                try self.emitPatternWithShadowCheck(arg_idx);
+            }
+
+            try self.write("| ");
+            try self.emitExpr(lambda.e_lambda.body);
         },
         .e_lambda => |lambda| {
             try self.write("|");
@@ -248,13 +403,12 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             try self.emitExpr(lambda.body);
         },
         .e_binop => |binop| {
-            try self.write("(");
-            try self.emitExpr(binop.lhs);
+            // Wrap nested binops in parens only when precedence requires it
+            try self.emitBinopOperand(binop.lhs, binop.op);
             try self.write(" ");
             try self.write(binopToStr(binop.op));
             try self.write(" ");
-            try self.emitExpr(binop.rhs);
-            try self.write(")");
+            try self.emitBinopOperand(binop.rhs, binop.op);
         },
         .e_unary_minus => |unary| {
             try self.write("-");
@@ -327,7 +481,7 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 }
                 try self.write(" => ");
                 try self.emitExpr(branch.value);
-                try self.write(",\n");
+                try self.write("\n");
             }
             self.indent_level -= 1;
             try self.emitIndent();
@@ -367,7 +521,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
     switch (pattern) {
         .assign => |ident| {
             const name = self.module_env.getIdent(ident.ident);
-            try self.write(name);
+            try self.emitIdent(name);
         },
         .underscore => {
             try self.write("_");
@@ -381,7 +535,7 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
         },
         .applied_tag => |tag| {
             const name = self.module_env.getIdent(tag.name);
-            try self.write(name);
+            try self.emitTagName(name);
             const args = self.module_env.store.slicePatterns(tag.args);
             if (args.len > 0) {
                 try self.write("(");
@@ -393,38 +547,43 @@ fn emitPatternValue(self: *Self, pattern: Pattern) EmitError!void {
             }
         },
         .record_destructure => |record| {
-            try self.write("{");
             const destruct_indices = self.module_env.store.sliceRecordDestructs(record.destructs);
-            for (destruct_indices, 0..) |destruct_idx, i| {
-                const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
-                if (i > 0) try self.write(", ");
-                const name = self.module_env.getIdent(destruct.label);
-                try self.write(name);
-                switch (destruct.kind) {
-                    .Required => |pat_idx| {
-                        // Check if the pattern is just an assign with same name
-                        const inner_pat = self.module_env.store.getPattern(pat_idx);
-                        switch (inner_pat) {
-                            .assign => |inner_assign| {
-                                const inner_name = self.module_env.getIdent(inner_assign.ident);
-                                if (!std.mem.eql(u8, name, inner_name)) {
+            // Empty record destructure should be {}
+            if (destruct_indices.len == 0) {
+                try self.write("{}");
+            } else {
+                try self.write("{ ");
+                for (destruct_indices, 0..) |destruct_idx, i| {
+                    const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
+                    if (i > 0) try self.write(", ");
+                    const name = self.module_env.getIdent(destruct.label);
+                    try self.write(name);
+                    switch (destruct.kind) {
+                        .Required => |pat_idx| {
+                            // Check if the pattern is just an assign with same name
+                            const inner_pat = self.module_env.store.getPattern(pat_idx);
+                            switch (inner_pat) {
+                                .assign => |inner_assign| {
+                                    const inner_name = self.module_env.getIdent(inner_assign.ident);
+                                    if (!std.mem.eql(u8, name, inner_name)) {
+                                        try self.write(": ");
+                                        try self.emitPattern(pat_idx);
+                                    }
+                                },
+                                else => {
                                     try self.write(": ");
                                     try self.emitPattern(pat_idx);
-                                }
-                            },
-                            else => {
-                                try self.write(": ");
-                                try self.emitPattern(pat_idx);
-                            },
-                        }
-                    },
-                    .SubPattern => |pat_idx| {
-                        try self.write(": ");
-                        try self.emitPattern(pat_idx);
-                    },
+                                },
+                            }
+                        },
+                        .SubPattern => |pat_idx| {
+                            try self.write(": ");
+                            try self.emitPattern(pat_idx);
+                        },
+                    }
                 }
+                try self.write(" }");
             }
-            try self.write("}");
         },
         .tuple => |t| {
             try self.write("(");
@@ -505,11 +664,15 @@ fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
     const stmt = self.module_env.store.getStatement(stmt_idx);
     switch (stmt) {
         .s_decl => |decl| {
+            // Add the declared name to scope
+            try self.addPatternToScope(decl.pattern);
             try self.emitPattern(decl.pattern);
             try self.write(" = ");
             try self.emitExpr(decl.expr);
         },
         .s_decl_gen => |decl| {
+            // Add the declared name to scope
+            try self.addPatternToScope(decl.pattern);
             try self.emitPattern(decl.pattern);
             try self.write(" = ");
             try self.emitExpr(decl.expr);
@@ -521,6 +684,28 @@ fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
     }
 }
 
+fn addPatternToScope(self: *Self, pattern_idx: CIR.Pattern.Idx) !void {
+    const pattern = self.module_env.store.getPattern(pattern_idx);
+    if (pattern == .assign) {
+        const name = self.module_env.getIdent(pattern.assign.ident);
+        try self.names_in_scope.put(name, {});
+    }
+    // For other pattern types (destructuring, etc.), we could recursively add names
+    // but for now just handling simple assigns
+}
+
+/// Check if a pattern belongs to a top-level definition
+fn isTopLevelPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) bool {
+    const defs = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn emitIntValue(self: *Self, value: CIR.IntValue) !void {
     var buf: [64]u8 = undefined;
     const str = try value.bufPrint(&buf);
@@ -529,12 +714,42 @@ fn emitIntValue(self: *Self, value: CIR.IntValue) !void {
 
 fn emitIndent(self: *Self) !void {
     for (0..self.indent_level) |_| {
-        try self.write("    ");
+        try self.write("\t");
     }
 }
 
 fn write(self: *Self, str: []const u8) !void {
     try self.output.appendSlice(self.allocator, str);
+}
+
+/// Emit a tag name, transforming compiler-generated `#` prefix to `C`.
+/// This handles closure tag names like "#1_foo" which become "C1_foo" in output.
+/// The `#` prefix is used internally because it's reserved for comments in Roc
+/// source code, ensuring no collision with user-defined tag names.
+fn emitTagName(self: *Self, name: []const u8) !void {
+    if (name.len > 0 and name[0] == '#') {
+        // Compiler-generated tag: replace # with C (uppercase for tags)
+        try self.output.append(self.allocator, 'C');
+        try self.output.appendSlice(self.allocator, name[1..]);
+    } else {
+        // Regular user tag: emit as-is
+        try self.output.appendSlice(self.allocator, name);
+    }
+}
+
+/// Emit an identifier, transforming compiler-generated `#` prefix to `c`.
+/// This handles lifted function names like "#1_foo" which become "c1_foo" in output.
+/// The `#` prefix is used internally because it's reserved for comments in Roc
+/// source code, ensuring no collision with user-defined identifiers.
+fn emitIdent(self: *Self, name: []const u8) !void {
+    if (name.len > 0 and name[0] == '#') {
+        // Compiler-generated ident: replace # with c (lowercase for functions)
+        try self.output.append(self.allocator, 'c');
+        try self.output.appendSlice(self.allocator, name[1..]);
+    } else {
+        // Regular user identifier: emit as-is
+        try self.output.appendSlice(self.allocator, name);
+    }
 }
 
 fn writer(self: *Self) std.ArrayList(u8).Writer {

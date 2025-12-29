@@ -435,7 +435,11 @@ pub const Store = struct {
             needs_inst = self.needsInstantiation(ret);
         }
 
-        return Content{ .structure = .{ .fn_pure = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+        return Content{ .structure = .{ .fn_pure = .{
+            .args = args_range,
+            .ret = ret,
+            .needs_instantiation = needs_inst,
+        } } };
     }
 
     // Make an effectful function data type (as opposed to a pure or unbound function)
@@ -457,7 +461,11 @@ pub const Store = struct {
             needs_inst = self.needsInstantiation(ret);
         }
 
-        return Content{ .structure = .{ .fn_effectful = .{ .args = args_range, .ret = ret, .needs_instantiation = needs_inst } } };
+        return Content{ .structure = .{ .fn_effectful = .{
+            .args = args_range,
+            .ret = ret,
+            .needs_instantiation = needs_inst,
+        } } };
     }
 
     // Helper to check if a type variable needs instantiation
@@ -986,8 +994,8 @@ pub const Store = struct {
         const vars = try VarSafeList.deserializeFrom(vars_buffer, allocator);
         offset += vars_size;
 
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT);
-        const static_dispatch_constraints_buffer = @as([]align(SERIALIZATION_ALIGNMENT) const u8, @alignCast(buffer[offset .. offset + static_dispatch_constraints_size]));
+        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
+        const static_dispatch_constraints_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + static_dispatch_constraints_size]));
         const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
         offset += static_dispatch_constraints_size;
 
