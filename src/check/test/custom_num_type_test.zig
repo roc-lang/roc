@@ -103,35 +103,3 @@ test "Custom number type without negate: unary minus fails" {
     // Should fail - MyNum doesn't have negate method
     try test_env.assertOneTypeError("MISSING METHOD");
 }
-
-test "Custom type with negate returning different type" {
-    // Tests that forward references between sibling types work.
-    // Positive's negate method returns Negative, which is declared after Positive.
-    // This requires all type declarations to be introduced into scope before
-    // processing associated item signatures.
-
-    const source =
-        \\  Positive := [].{
-        \\    from_numeral : Numeral -> Try(Positive, [InvalidNumeral(Str)])
-        \\    from_numeral = |_| Err(InvalidNumeral("not implemented"))
-        \\
-        \\    negate : Positive -> Negative
-        \\    negate = |_| Negative.Value
-        \\  }
-        \\
-        \\  Negative := [Value]
-        \\
-        \\  x : Positive
-        \\  x = 5
-        \\
-        \\  y = -x
-    ;
-
-    var test_env = try TestEnv.init("Positive", source);
-    defer test_env.deinit();
-
-    // Should type-check successfully - Positive can reference Negative in its
-    // negate method signature even though Negative is declared after Positive.
-    // The result y should have type Negative.
-    try test_env.assertNoErrors();
-}

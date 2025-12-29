@@ -57,12 +57,19 @@ test "let-polymorphism with function composition" {
         \\    compose = |f, g| |x| f(g(x))
         \\    double = |x| x * 2
         \\    add_one = |x| x + 1
-        \\    num_compose = compose(double, add_one)
-        \\    result1 = num_compose(5)
-        \\    { result1 }
+        \\    compose(double, add_one)
         \\}
     ;
-    try typeCheck(source, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    try typeCheck(
+        source,
+        \\a -> a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\    a.times : a, a -> a,
+        \\  ]
+        ,
+    );
 }
 
 test "polymorphic empty list" {
@@ -257,6 +264,7 @@ test "polymorphic pipe function" {
         \\{ num_result: a, str_result: b }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.times : a, a -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,

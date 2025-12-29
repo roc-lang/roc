@@ -7103,9 +7103,13 @@ pub const Interpreter = struct {
             }
         }
 
-        // Note: Tags are already sorted alphabetically in runtime_types.
-        // translateTypeVar flattens tag union extensions and sorts tags before storing,
-        // so no sorting is needed here. See the translateTypeVar function.
+        // Sort tags alphabetically to ensure consistent discriminant indices.
+        // While translateTypeVar sorts tags before storing, different translations
+        // of the same source type may produce different runtime type vars, and
+        // rendering may use a different type var than was used during value creation.
+        // Sorting here ensures both paths see tags in the same alphabetical order.
+        const sort_ident_store = self.runtime_layout_store.env.common.getIdentStore();
+        std.mem.sort(types.Tag, list.items, sort_ident_store, comptime types.Tag.sortByNameAsc);
     }
 
     /// Find the index of a tag in a runtime tag union by translating the source tag name ident.
@@ -7276,17 +7280,30 @@ pub const Interpreter = struct {
                         // union in memory is sized for the largest variant. When extracting a
                         // specific variant's payload, we need the correct layout for that variant.
                         //
-                        // Check if the arg var has a rigid substitution (from polymorphic method
-                        // instantiation). If so, use the substituted type's layout.
+                        // The arg_var contains the actual type of the payload (e.g., Item).
+                        // We should try to compute its layout directly rather than using
+                        // the field_value.layout which is the raw payload union layout.
+                        //
+                        // This is critical for opaque types returned from polymorphic functions
+                        // where the field layout might not match the expected tag union layout
+                        // of the opaque type's backing.
                         const arg_var = arg_vars[0];
                         const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                        const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                // Use the substituted concrete type's layout
-                                break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                        const effective_layout = blk: {
+                            // First try: if arg is a rigid with a substitution, use substituted type's layout
+                            if (arg_resolved.desc.content == .rigid) {
+                                if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                }
                             }
+                            // Second try: compute layout directly from arg_var
+                            // This handles concrete types like opaque Item returned from polymorphic functions
+                            if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                                break :blk computed_layout;
+                            } else |_| {}
+                            // Fallback to field_value.layout
                             break :blk field_value.layout;
-                        } else field_value.layout;
+                        };
 
                         payload_value = StackValue{
                             .layout = effective_layout,
@@ -7384,12 +7401,21 @@ pub const Interpreter = struct {
                     const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                    const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
-                        if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                            break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                    const effective_layout = blk: {
+                        // First try: if arg is a rigid with a substitution, use substituted type's layout
+                        if (arg_resolved.desc.content == .rigid) {
+                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
+                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
+                            }
                         }
+                        // Second try: compute layout directly from arg_var
+                        // This handles concrete types like opaque Item returned from polymorphic functions
+                        if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                            break :blk computed_layout;
+                        } else |_| {}
+                        // Fallback to variant_layout
                         break :blk variant_layout;
-                    } else variant_layout;
+                    };
 
                     payload_value = StackValue{
                         .layout = effective_layout,
@@ -8955,7 +8981,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9017,7 +9042,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9479,20 +9503,6 @@ pub const Interpreter = struct {
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .recursion_var => |rec_var| {
-                    // Translate the structure variable that the recursion var points to
-                    const rt_structure = try self.translateTypeVar(module, rec_var.structure);
-                    // Translate the recursion var's name (if present) from source module's ident store
-                    const rt_name: ?base_pkg.Ident.Idx = if (rec_var.name) |name| blk_name: {
-                        const source_name_str = module.getIdent(name);
-                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
-                    } else null;
-                    const content: types.Content = .{ .recursion_var = .{
-                        .structure = rt_structure,
-                        .name = rt_name,
-                    } };
-                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
@@ -11849,9 +11859,9 @@ pub const Interpreter = struct {
                     const content_tag = @tagName(resolved.desc.content);
                     const struct_tag = if (resolved.desc.content == .structure) @tagName(resolved.desc.content.structure) else "n/a";
                     const tag_name_str = self.env.getIdent(tag.name);
-                    // Also show what the ct_var resolves to for debugging
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_resolved = self.env.types.resolveVar(ct_var);
+                    // Also show what the compile-time type resolves to for debugging
+                    const ct_var_for_debug = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_resolved = self.env.types.resolveVar(ct_var_for_debug);
                     const ct_content_tag = @tagName(ct_resolved.desc.content);
                     const has_expected = expected_rt_var != null;
                     const msg = std.fmt.allocPrint(self.allocator, "e_tag: expected tag_union but got rt={s}:{s} ct={s} has_expected={} for tag `{s}`", .{ content_tag, struct_tag, ct_content_tag, has_expected, tag_name_str }) catch "e_tag: expected tag_union structure type";
@@ -11870,8 +11880,8 @@ pub const Interpreter = struct {
                 // This handles open unions where the expected type doesn't include all tags.
                 if (tag_index_opt == null and expected_rt_var != null) {
                     // Fall back to compile-time type
-                    const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var);
+                    const ct_var_fallback = can.ModuleEnv.varFrom(expr_idx);
+                    const ct_rt_var = try self.translateTypeVar(self.env, ct_var_fallback);
 
                     // Clear and rebuild tag list from compile-time type
                     tag_list.clearRetainingCapacity();
@@ -14808,18 +14818,12 @@ pub const Interpreter = struct {
 
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
 
-                        // Write discriminant
                         const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                        switch (tu_data.discriminant_size) {
-                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
-                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => {},
-                        }
 
-                        // Write payload at offset 0
+                        // Write payload at offset 0 FIRST, before writing the discriminant.
+                        // This is crucial because the payload may be larger than the discriminant
+                        // offset (e.g., when wrapping an opaque type in a Result), and copying
+                        // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
                             try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
@@ -14844,6 +14848,17 @@ pub const Interpreter = struct {
                             for (values, 0..) |val, idx| {
                                 try tup_acc.setElement(idx, val, roc_ops);
                             }
+                        }
+
+                        // Write discriminant AFTER the payload, so it doesn't get overwritten
+                        // by a payload that extends past the discriminant offset.
+                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                        switch (tu_data.discriminant_size) {
+                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
+                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
+                            else => {},
                         }
 
                         for (values) |val| {
@@ -15453,6 +15468,7 @@ pub const Interpreter = struct {
                     // Push cleanup continuation, then evaluate body
                     const cleanup_saved_rigid_subst = saved_rigid_subst;
                     saved_rigid_subst = null;
+
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
                         .saved_bindings_len = saved_bindings_len,

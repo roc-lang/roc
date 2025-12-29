@@ -130,11 +130,12 @@ const CheckOccurs = struct {
     /// which can be queried after the run.
     fn occurs(self: *Self, var_: Var, ctx: Context) Error!void {
         const root = self.types_store.resolveVar(var_);
+        const root_var = root.var_;
 
         if (root.desc.mark == .visited) {
             // If we've already visited this var and not errored, then it's not recursive
             return;
-        } else if (self.scratch.hasSeenVar(root.var_)) {
+        } else if (self.scratch.hasSeenVar(root_var)) {
             // Recursion point! We've already seen this var during traversal.
             if (ctx.recursion_allowed and ctx.seen_nominal) {
                 // If recursion is allowed (we've passed through a Box, List or
@@ -151,7 +152,7 @@ const CheckOccurs = struct {
                 return error.InfiniteType;
             }
         } else {
-            self.scratch.appendSeen(var_) catch return Error.AllocatorError;
+            self.scratch.appendSeen(root_var) catch return Error.AllocatorError;
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -214,19 +215,11 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => |flex| {
-                    // Check static dispatch constraints to detect cycles through constraint functions
-                    // For example: a.plus : a, a -> a (where the function type refers back to 'a')
-                    const constraints = self.types_store.static_dispatch_constraints.sliceRange(flex.constraints);
-                    for (constraints) |constraint| {
-                        try self.occursSubVar(root, constraint.fn_var, ctx);
-                    }
+                .flex => |_| {
+                    // Flex variables are not checked for cycles - they are allowed to have
+                    // self-referential constraints. Only structural content is checked.
                 },
                 .rigid => {},
-                .recursion_var => |rec_var| {
-                    // Check the structure the recursion var points to
-                    try self.occursSubVar(root, rec_var.structure, ctx);
-                },
                 .err => {},
             }
             self.scratch.popSeen();

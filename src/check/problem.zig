@@ -279,7 +279,10 @@ pub const UnmatchablePattern = struct {
 pub const InvalidBoolBinop = struct {
     binop_expr: CIR.Expr.Idx,
     problem_side: enum { lhs, rhs },
-    binop: enum { @"and", @"or" },
+    binop: BoolBinop,
+
+    /// Bool binop
+    pub const BoolBinop = enum { @"and", @"or" };
 };
 
 // static dispatch //
@@ -2445,8 +2448,6 @@ pub const ReportBuilder = struct {
             },
             // Aliases: check the underlying type
             .alias => |alias| self.snapshotSupportsEquality(alias.backing),
-            // Recursion vars: assume they support equality
-            .recursion_var => true,
             // Other types (flex, rigid, recursive, err) assumed to support equality
             else => true,
         };
