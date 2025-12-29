@@ -497,7 +497,7 @@ pub const Type = enum(u32) {
             .double, .i64, .x86_mmx => 64,
             .x86_fp80, .i80 => 80,
             .fp128, .ppc_fp128, .i128 => 128,
-            .ptr, .@"ptr addrspace(4)" => @panic("TODO: query data layout"),
+            .ptr, .@"ptr addrspace(4)" => unreachable, // pointers don't have scalar bits; use ptrtoint/addrspacecast instead
             _ => {
                 const item = builder.type_items.items[@intFromEnum(self)];
                 return switch (item.tag) {
@@ -506,7 +506,7 @@ pub const Type = enum(u32) {
                     .vararg_function,
                     => unreachable,
                     .integer => @intCast(item.data),
-                    .pointer => @panic("TODO: query data layout"),
+                    .pointer => unreachable, // pointers don't have scalar bits; use ptrtoint/addrspacecast instead
                     .target => unreachable,
                     .vector,
                     .scalable_vector,
@@ -671,9 +671,11 @@ pub const Type = enum(u32) {
     }
 
     pub fn targetLayoutType(self: Type, builder: *const Builder) Type {
+        // Roc doesn't use LLVM target extension types. If this is called, it indicates
+        // a bug - either we're reading bitcode with target types, or creating them incorrectly.
         _ = self;
         _ = builder;
-        @panic("TODO: implement targetLayoutType");
+        unreachable;
     }
 
     pub fn isSized(self: Type, builder: *const Builder) Allocator.Error!bool {
@@ -1359,7 +1361,7 @@ pub const Attribute = union(Kind) {
         byref = 69,
         preallocated = 65,
         inalloca = 38,
-        sret = 29, // TODO: ?
+        sret = 29,
         elementtype = 77,
         @"align" = 1,
         @"noalias" = 9,
