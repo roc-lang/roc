@@ -102,6 +102,14 @@ malformed_import_count: u32 = 0,
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
 loop_depth: u32 = 0,
+/// Flag to indicate we're currently processing alias type declarations (Phase 1.7)
+/// During this phase, references to other alias placeholders should be rejected
+/// as forward references are not allowed between aliases.
+processing_alias_declarations: bool = false,
+/// The name of the alias currently being defined (if any).
+/// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check),
+/// while still rejecting forward references to other aliases (reported as UNDECLARED TYPE).
+current_alias_name: ?Ident.Idx = null,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -410,9 +418,72 @@ fn processTypeDeclFirstPass(
     relative_parent_name: ?Ident.Idx,
     defer_associated_blocks: bool,
 ) std.mem.Allocator.Error!void {
-    // Canonicalize the type declaration header first
-    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+    // First, try to get the type name from the AST to check if it was already introduced
+    // in Phase 1.5.8 (for forward reference support). If so, we can reuse the existing
+    // header and skip re-canonicalization to avoid duplicate diagnostics.
+    const ast_header_node = self.parse_ir.store.nodes.get(@enumFromInt(@intFromEnum(type_decl.header)));
+    if (ast_header_node.tag == .malformed) {
+        // If the AST header is malformed and this is a top-level type (parent_name == null),
+        // introduceTypeNameOnly already processed it in Phase 1.5.8 and produced the diagnostic.
+        // Skip this type to avoid duplicate diagnostics.
+        // For nested types (parent_name != null), we still need to process and produce the diagnostic.
+        if (parent_name == null) {
+            return;
+        }
+    }
+    {
+        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch null;
+        if (ast_header) |hdr| {
+            if (self.parse_ir.tokens.resolveIdentifier(hdr.name)) |name_ident| {
+                // Build qualified name to check if already introduced
+                const check_qualified_name = if (parent_name) |parent_idx| blk: {
+                    const parent_text = self.env.getIdent(parent_idx);
+                    const type_text = self.env.getIdent(name_ident);
+                    break :blk try self.env.insertQualifiedIdent(parent_text, type_text);
+                } else name_ident;
+
+                // Check if already introduced as a placeholder
+                if (self.scopeLookupTypeDecl(check_qualified_name)) |existing_stmt_idx| {
+                    const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
+                    const existing_header_idx = switch (existing_stmt) {
+                        .s_alias_decl => |alias| if (alias.anno == .placeholder) alias.header else null,
+                        .s_nominal_decl => |nominal| if (nominal.anno == .placeholder) nominal.header else null,
+                        else => null,
+                    };
+
+                    if (existing_header_idx) |header_idx| {
+                        // Found an existing placeholder - reuse it without re-canonicalizing
+                        const type_header = self.env.store.getTypeHeader(header_idx);
+
+                        // Compute relative_name
+                        const relative_name_idx: Ident.Idx = if (relative_parent_name) |rel_parent_idx| rn_blk: {
+                            const rel_parent_text = self.env.getIdent(rel_parent_idx);
+                            const type_relative = self.env.getIdent(type_header.relative_name);
+                            break :rn_blk try self.env.insertQualifiedIdent(rel_parent_text, type_relative);
+                        } else type_header.relative_name;
+
+                        // Process annotation and update the placeholder
+                        return try self.processTypeDeclFirstPassWithExisting(
+                            type_decl,
+                            existing_stmt_idx,
+                            header_idx,
+                            check_qualified_name,
+                            relative_name_idx,
+                            type_header,
+                            region,
+                            defer_associated_blocks,
+                            parent_name,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Type was not already introduced - proceed with full canonicalization
+    const header_idx = try self.canonicalizeTypeHeader(type_decl.header, type_decl.kind);
 
     // Check if the header is malformed before trying to use it
     const node = self.env.store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
@@ -452,8 +523,7 @@ fn processTypeDeclFirstPass(
         break :blk try self.env.addTypeHeader(qualified_header, region);
     } else header_idx;
 
-    // Check if this type was already introduced in Phase 1.5.8 (for forward reference support)
-    // If so, reuse the existing statement index instead of creating a new one
+    // Check if this type was already introduced (handles redeclaration case)
     const type_decl_stmt_idx = if (self.scopeLookupTypeDecl(qualified_name_idx)) |existing_stmt_idx| blk: {
         // Type was already introduced - check if it's a placeholder (anno = 0) or a real declaration
         const existing_stmt = self.env.store.getStatement(existing_stmt_idx);
@@ -540,6 +610,13 @@ fn processTypeDeclFirstPass(
         // Introduce type parameters from the header into the scope
         try self.introduceTypeParametersFromHeader(final_header_idx);
 
+        // For alias types, track the name so self-references can pass through
+        // (to be caught as RECURSIVE ALIAS in Check), while forward refs are rejected.
+        if (type_decl.kind == .alias) {
+            self.current_alias_name = qualified_name_idx;
+        }
+        defer self.current_alias_name = null;
+
         // Now canonicalize the type annotation with type parameters and type name in scope
         break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
     };
@@ -595,6 +672,100 @@ fn processTypeDeclFirstPass(
     // This eliminates the need for a separate third pass
     // Unless defer_associated_blocks is true (when called from processAssociatedItemsFirstPass
     // to handle sibling type forward references)
+    if (!defer_associated_blocks) {
+        if (type_decl.associated) |assoc| {
+            try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc, false);
+        }
+    }
+}
+
+/// Helper for processTypeDeclFirstPass when we found an existing placeholder.
+/// This avoids re-canonicalizing the header which would produce duplicate diagnostics.
+fn processTypeDeclFirstPassWithExisting(
+    self: *Self,
+    type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+    type_decl_stmt_idx: Statement.Idx,
+    header_idx: CIR.TypeHeader.Idx,
+    qualified_name_idx: Ident.Idx,
+    relative_name_idx: Ident.Idx,
+    type_header: CIR.TypeHeader,
+    region: base.Region,
+    defer_associated_blocks: bool,
+    parent_name: ?Ident.Idx,
+) std.mem.Allocator.Error!void {
+    // For nested types, also add an unqualified alias so child scopes can find it
+    if (parent_name != null) {
+        const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+        try current_scope.introduceTypeAlias(self.env.gpa, type_header.name, type_decl_stmt_idx);
+    }
+
+    // Process type parameters and annotation in a separate scope
+    const anno_idx = blk: {
+        // Enter a new scope for type parameters
+        const type_var_scope = self.scopeEnterTypeVar();
+        defer self.scopeExitTypeVar(type_var_scope);
+
+        // Introduce type parameters from the header into the scope
+        try self.introduceTypeParametersFromHeader(header_idx);
+
+        // For alias types, track the name so self-references can pass through
+        // (to be caught as RECURSIVE ALIAS in Check), while forward refs are rejected.
+        if (type_decl.kind == .alias) {
+            self.current_alias_name = qualified_name_idx;
+        }
+        defer self.current_alias_name = null;
+
+        // Now canonicalize the type annotation with type parameters and type name in scope
+        break :blk try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno);
+    };
+
+    // Canonicalize where clauses if present
+    if (type_decl.where) |_| {
+        try self.env.pushDiagnostic(Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
+            .region = region,
+        } });
+    }
+
+    // Create the real CIR type declaration statement with the canonicalized annotation
+    const type_decl_stmt = blk: {
+        switch (type_decl.kind) {
+            .alias => {
+                break :blk Statement{
+                    .s_alias_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                    },
+                };
+            },
+            .nominal, .@"opaque" => {
+                break :blk Statement{
+                    .s_nominal_decl = .{
+                        .header = header_idx,
+                        .anno = anno_idx,
+                        .is_opaque = type_decl.kind == .@"opaque",
+                    },
+                };
+            },
+        }
+    };
+
+    // Update the placeholder statement with the real annotation
+    try self.env.store.setStatementNode(type_decl_stmt_idx, type_decl_stmt);
+    try self.env.store.addScratchStatement(type_decl_stmt_idx);
+
+    // For type modules, associate the node index with the exposed type
+    if (self.env.module_kind == .type_module) {
+        if (qualified_name_idx == self.env.module_name_idx) {
+            const node_idx_u16 = @as(u16, @intCast(@intFromEnum(type_decl_stmt_idx)));
+            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u16);
+        }
+    }
+
+    // Remove from exposed_type_texts since the type is now fully defined
+    const type_text = self.env.getIdent(type_header.name);
+    _ = self.exposed_type_texts.remove(type_text);
+
+    // Process associated items
     if (!defer_associated_blocks) {
         if (type_decl.associated) |assoc| {
             try self.processAssociatedBlock(qualified_name_idx, relative_name_idx, type_header.relative_name, assoc, false);
@@ -1786,17 +1957,16 @@ pub fn canonicalizeFile(
         else => {},
     }
 
-    // Phase 1.5.8: Introduce type names for NOMINAL types WITHOUT associated blocks
+    // Phase 1.5.8: Introduce type names for types WITHOUT associated blocks
     // This allows associated blocks (processed in Phase 1.6) to reference sibling types
-    // that are declared without associated blocks (e.g., Positive's negate -> Negative)
-    // We only introduce the name here; full processing happens in Phase 1.7
-    // Note: We only do this for nominals, not aliases, because aliases may reference
-    // nested types that are only introduced in Phase 1.6
+    // that are declared without associated blocks (e.g., Positive's negate -> Negative,
+    // or a type alias like NodeKind used in an associated item's type annotation).
+    // We only introduce the name here; full processing happens in Phase 1.7.
     for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = self.parse_ir.store.getStatement(stmt_id);
         if (stmt == .type_decl) {
             const type_decl = stmt.type_decl;
-            if (type_decl.associated == null and (type_decl.kind == .nominal or type_decl.kind == .@"opaque")) {
+            if (type_decl.associated == null) {
                 try self.introduceTypeNameOnly(type_decl);
             }
         }
@@ -1838,17 +2008,22 @@ pub fn canonicalizeFile(
 
     // Phase 1.7: Process type declarations WITHOUT associated blocks
     // These can now reference nested types that were introduced in Phase 1.6
-    for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
-        const stmt = self.parse_ir.store.getStatement(stmt_id);
-        switch (stmt) {
-            .type_decl => |type_decl| {
-                if (type_decl.associated == null) {
-                    try self.processTypeDeclFirstPass(type_decl, null, null, false); // no associated block to defer
-                }
-            },
-            else => {
-                // Skip non-type-declaration statements
-            },
+    // Set the flag so forward references between aliases are rejected
+    {
+        self.processing_alias_declarations = true;
+        defer self.processing_alias_declarations = false;
+        for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
+            const stmt = self.parse_ir.store.getStatement(stmt_id);
+            switch (stmt) {
+                .type_decl => |type_decl| {
+                    if (type_decl.associated == null) {
+                        try self.processTypeDeclFirstPass(type_decl, null, null, false); // no associated block to defer
+                    }
+                },
+                else => {
+                    // Skip non-type-declaration statements
+                },
+            }
         }
     }
 
@@ -7682,10 +7857,36 @@ fn canonicalizeTypeAnnoBasicType(
                         .name = type_name_ident,
                         .base = .{ .local = .{ .decl_idx = stmt } },
                     } }, region),
-                    .local_alias => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
-                        .name = type_name_ident,
-                        .base = .{ .local = .{ .decl_idx = stmt } },
-                    } }, region),
+                    .local_alias => |stmt| blk: {
+                        // Check if this is an alias placeholder (introduced but not yet processed)
+                        // Forward references between aliases are not allowed, but associated blocks
+                        // CAN reference alias placeholders (they'll be processed later in Phase 1.7).
+                        // Only reject if we're currently processing alias declarations (Phase 1.7).
+                        // EXCEPTION: Self-references are allowed so they can be caught as RECURSIVE ALIAS in Check.
+                        if (self.processing_alias_declarations) {
+                            const alias_stmt = self.env.store.getStatement(stmt);
+                            if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == .placeholder) {
+                                // Check if this is a self-reference (same type name as current alias)
+                                const is_self_reference = if (self.current_alias_name) |current_name|
+                                    current_name == type_name_ident
+                                else
+                                    false;
+
+                                if (!is_self_reference) {
+                                    // This alias is a placeholder and not a self-reference - forward ref error
+                                    break :blk try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .undeclared_type = .{
+                                        .name = type_name_ident,
+                                        .region = region,
+                                    } });
+                                }
+                                // Self-references pass through to be caught as RECURSIVE ALIAS in Check
+                            }
+                        }
+                        break :blk try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .local = .{ .decl_idx = stmt } },
+                        } }, region);
+                    },
                     .associated_nominal => |stmt| try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                         .name = type_name_ident,
                         .base = .{ .local = .{ .decl_idx = stmt } },
@@ -10108,7 +10309,10 @@ pub fn introduceType(
         }
     }
 
-    const result = try current_scope.introduceTypeDecl(gpa, name_ident, type_decl_stmt, null);
+    // Determine if this is an alias or nominal type based on the statement
+    const stmt = self.env.store.getStatement(type_decl_stmt);
+    const is_alias = stmt == .s_alias_decl;
+    const result = try current_scope.introduceTypeDeclWithKind(gpa, name_ident, type_decl_stmt, is_alias, null);
 
     switch (result) {
         .success => {
