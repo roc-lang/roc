@@ -159,7 +159,7 @@ const Errors = struct {
 
     pub fn addFileDead(errors: *Errors, file: []const u8) void {
         errors.emit(
-            "{s}: error: file never imported\n",
+            "{s}: error: src/ file never imported in src/ or test/\n",
             .{file},
         );
     }
@@ -530,7 +530,19 @@ const DeadFilesDetector = struct {
 
     fn visit(detector: *DeadFilesDetector, file: SourceFile) Allocator.Error!void {
         assert(file.hasExtension(".zig"));
-        (try detector.fileState(file.path)).definition_count += 1;
+
+        // Only track src/ files as needing to be imported somewhere
+        const is_src_file = std.mem.startsWith(u8, file.path, "src/");
+        if (is_src_file) {
+            (try detector.fileState(file.path)).definition_count += 1;
+        }
+
+        // Only scan src/, test/, and build files for imports
+        const should_scan = is_src_file or
+            std.mem.startsWith(u8, file.path, "test/") or
+            std.mem.eql(u8, file.path, "build.zig") or
+            std.mem.startsWith(u8, file.path, "ci/");
+        if (!should_scan) return;
 
         var rest: []const u8 = file.text;
         for (0..1024) |_| {
@@ -576,41 +588,15 @@ const DeadFilesDetector = struct {
     }
 
     fn isEntryPoint(file: FileName) bool {
+        // Entry points in src/ that are invoked directly (not via @import)
         const entry_points: []const []const u8 = &.{
-            // Build system entry points
-            "build.zig",
-            "modules.zig",
-            "glibc_stub.zig",
-            // Main entry points
-            "main.zig",
-            // CI scripts
-            "zig_lints.zig",
-            "check_test_wiring.zig",
-            "tidy.zig",
-            // Test files (often imported dynamically)
-            "test.zig",
-            // Host files for platforms
-            "host.zig",
-            // Benchmark and fuzzing entry points
-            "benchmark-dec.zig",
-            "fuzz_sort.zig",
-            "fuzz-canonicalize.zig",
-            "fuzz-parse.zig",
-            "fuzz-repro.zig",
-            "fuzz-tokenize.zig",
-            // WASM-related entry points
-            "wasm_linking_host_imports.zig",
-            "wasm_linking_test_host.zig",
-            "static_lib.zig",
-            // CLI and tool entry points
-            "cross_compilation.zig",
-            "fx_platform_test.zig",
-            "roc_subcommands.zig",
-            "test_docs.zig",
-            "watch.zig",
-            "serialization_size_check.zig",
-            // Tracy profiler
-            "tracy.zig",
+            "main.zig", // CLI, playground_wasm, interpreter_shim, etc.
+            "static_lib.zig", // Builtins static library
+            "tracy.zig", // Profiler module (added via b.addModule)
+            "fuzz_sort.zig", // Fuzzing entry point
+            "watch.zig", // File watcher entry point
+            "fx_platform_test.zig", // FX platform tests
+            "roc_subcommands.zig", // CLI subcommand tests
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;
