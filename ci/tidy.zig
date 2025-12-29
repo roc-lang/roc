@@ -309,6 +309,10 @@ fn tidyTypeFunctions(file: SourceFile, errors: *Errors) void {
         // Not all `fn ` tokens are functions, some may be `callback_fn` for example.
         // Functions appear at the beginning of a line or after a whitespace.
         if (prefix.len > 0 and prefix[prefix.len - 1] != ' ') continue;
+
+        // Skip extern fn declarations - these are FFI bindings that match external API names
+        if (std.mem.indexOf(u8, prefix, "extern") != null) continue;
+
         const result2 = cut(suffix, "(") orelse continue;
         const function_name = result2[0];
         if (function_name.len == 0) continue; // E.g: `*const fn (*anyopaque) void`.
