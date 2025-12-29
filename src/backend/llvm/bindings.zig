@@ -489,6 +489,8 @@ pub fn compileBitcodeToObject(
     defer context.dispose();
 
     // Parse bitcode into module
+    // SAFETY: module is an out-param that parseBitcodeInContext2 writes to before returning.
+    // On success, it will contain a valid pointer; on failure, we return early.
     var module: *Module = undefined;
     if (context.parseBitcodeInContext2(mem_buf, &module).toBool()) {
         return "Failed to parse bitcode";
@@ -496,6 +498,8 @@ pub fn compileBitcodeToObject(
     defer module.dispose();
 
     // Get target from triple
+    // SAFETY: target and error_message are out-params that getFromTriple writes to.
+    // On success, target is valid; on failure, error_message is valid and we return it.
     var target: *Target = undefined;
     var error_message: [*:0]const u8 = undefined;
     if (Target.getFromTriple(target_triple, &target, &error_message).toBool()) {
@@ -557,6 +561,8 @@ pub fn compileBitcodeToObject(
     };
 
     // Emit object file
+    // SAFETY: emit_error is an out-param that emitToFile writes to on failure.
+    // On success (returns false), we don't use emit_error; on failure, it's valid.
     var emit_error: [*:0]const u8 = undefined;
     if (target_machine.emitToFile(module, &emit_error, &emit_options)) {
         return emit_error;
