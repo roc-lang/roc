@@ -24,6 +24,7 @@ const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = eval.BuiltinTypes;
 const BuiltinModules = eval.BuiltinModules;
+const module_discovery = @import("module_discovery.zig");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -964,41 +965,13 @@ pub const PackageEnv = struct {
 
         // Discover sibling .roc files in the same directory and add them to module_envs
         // This prevents MODULE NOT FOUND errors for modules that exist but haven't been loaded yet
-        var dir = std.fs.cwd().openDir(root_dir, .{ .iterate = true }) catch {
-            // If we can't open the directory, just proceed without sibling discovery
-            var czer = try Can.init(env, parse_ast, &module_envs_map);
-            try czer.canonicalizeFile();
-            czer.deinit();
-            return;
-        };
-        defer dir.close();
-
-        var dir_iter = dir.iterate();
-        while (dir_iter.next() catch null) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.name, ".roc")) continue;
-
-            // Skip "main.roc" and the current module
-            if (std.mem.eql(u8, entry.name, "main.roc")) continue;
-
-            // Extract module name without .roc extension
-            const module_name = entry.name[0 .. entry.name.len - 4];
-
-            // Skip the current module to avoid TYPE REDECLARED errors when a type module
-            // defines a type with the same name as the module (e.g., Simple.roc with type Simple)
-            if (std.mem.eql(u8, module_name, env.module_name)) continue;
-
-            // Add to module_envs with a placeholder env (just to pass the "contains" check)
-            // We use builtin_module_env as a placeholder - the actual env will be loaded later
-            const module_ident = try env.insertIdent(base.Ident.for_text(module_name));
-            // For user modules, the qualified name is just the module name itself
-            // Use env (not builtin_module_env) since it's mutable
-            const qualified_ident = try env.insertIdent(base.Ident.for_text(module_name));
-            // Only add if not already present
-            if (!module_envs_map.contains(module_ident)) {
-                try module_envs_map.put(module_ident, .{ .env = builtin_module_env, .qualified_type_ident = qualified_ident });
-            }
-        }
+        try module_discovery.discoverSiblingModules(
+            root_dir,
+            env.module_name,
+            env,
+            &module_envs_map,
+            builtin_module_env,
+        );
 
         // Add additional known modules (e.g., from platform exposes for URL platforms)
         // Use the resolver to get the ACTUAL module env if available
