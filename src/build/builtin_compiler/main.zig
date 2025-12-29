@@ -27,7 +27,6 @@ var stderr_buffer: [4096]u8 = undefined;
 var stderr_writer: std.fs.File.Writer = undefined;
 var stderr_initialized = false;
 
-
 fn flushStderr() void {
     if (stderr_initialized) {
         stderr_writer.interface.flush() catch {};
