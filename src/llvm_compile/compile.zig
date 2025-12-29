@@ -16,9 +16,9 @@
 //! Zig's LLVM builder and call it from Zig code, both sides use the same ABI.
 //!
 //! Platform-specific i128 representations (<2 x i64> on Windows, [2 x i64] on
-//! macOS ARM64) would only be relevant when calling into *separately compiled*
-//! Zig builtins. When that support is added, appropriate ABI conversion helpers
-//! will need to be implemented.
+//! macOS ARM64) are handled by the I128Arg type and associated helper functions
+//! (normalizeI128Return, prepareI128Arg, etc.). These helpers should be used
+//! when calling into separately compiled Zig builtins that use i128/u128 types.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -121,6 +121,77 @@ fn formatDec(allocator: Allocator, num: i128) Allocator.Error![]const u8 {
 
     try out.appendSlice(digits[0..end]);
     return try out.toOwnedSlice();
+}
+
+// Platform-specific i128 ABI Handling
+//
+// When calling into separately compiled Zig builtins (e.g., Dec operations),
+// the i128 type may be represented differently depending on the platform:
+//
+//   - Windows:     <2 x i64> vector type (MSVC doesn't support native i128)
+//   - macOS ARM64: [2 x i64] array type (ARM64 ABI convention)
+//   - Other:       Native i128 type
+//
+// These helpers handle the conversion between platform-specific representations
+// and native i128/u128 types. They are used when:
+//   1. Calling a builtin function that returns i128 (normalize return value)
+//   2. Passing i128 arguments to a builtin function (convert to expected ABI)
+//
+// Note: For JIT-compiled code where we generate and call functions using
+// Zig's LLVM builder, the ABI is already consistent. These helpers are only
+// needed when interfacing with separately compiled Zig bitcode.
+
+/// Represents an i128 value in the platform-specific ABI format.
+/// On most platforms this is just i128, but Windows uses a 2xi64 vector
+/// and macOS ARM64 uses a 2xi64 array.
+pub const I128Arg = switch (builtin.os.tag) {
+    .windows => extern struct { lo: u64, hi: u64 },
+    .macos => if (builtin.cpu.arch == .aarch64)
+        extern struct { lo: u64, hi: u64 }
+    else
+        i128,
+    else => i128,
+};
+
+/// Convert a platform-specific i128 representation to native i128.
+/// Used when receiving i128 return values from separately compiled Zig builtins.
+pub fn normalizeI128Return(arg: I128Arg) i128 {
+    return switch (builtin.os.tag) {
+        .windows => @as(i128, arg.hi) << 64 | @as(i128, arg.lo),
+        .macos => if (builtin.cpu.arch == .aarch64)
+            @as(i128, arg.hi) << 64 | @as(i128, arg.lo)
+        else
+            arg,
+        else => arg,
+    };
+}
+
+/// Convert a native i128 to the platform-specific representation.
+/// Used when passing i128 arguments to separately compiled Zig builtins.
+pub fn prepareI128Arg(value: i128) I128Arg {
+    return switch (builtin.os.tag) {
+        .windows => .{
+            .lo = @truncate(@as(u128, @bitCast(value))),
+            .hi = @truncate(@as(u128, @bitCast(value)) >> 64),
+        },
+        .macos => if (builtin.cpu.arch == .aarch64) .{
+            .lo = @truncate(@as(u128, @bitCast(value))),
+            .hi = @truncate(@as(u128, @bitCast(value)) >> 64),
+        } else value,
+        else => value,
+    };
+}
+
+/// Convert a platform-specific u128 representation to native u128.
+/// Used when receiving u128 return values from separately compiled Zig builtins.
+pub fn normalizeU128Return(arg: I128Arg) u128 {
+    return @bitCast(normalizeI128Return(arg));
+}
+
+/// Convert a native u128 to the platform-specific representation.
+/// Used when passing u128 arguments to separately compiled Zig builtins.
+pub fn prepareU128Arg(value: u128) I128Arg {
+    return prepareI128Arg(@bitCast(value));
 }
 
 /// Errors that can occur during LLVM JIT compilation and execution.

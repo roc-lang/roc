@@ -901,15 +901,18 @@ fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
     errdefer out.deinit();
 
-    var num = dec.num;
-    if (num < 0) {
+    const is_negative = dec.num < 0;
+    // Use @abs which handles i128 min correctly by returning u128
+    // (negating i128 min directly would overflow)
+    const abs_value: u128 = @abs(dec.num);
+
+    if (is_negative) {
         try out.append('-');
-        num = -num;
     }
 
-    const one = RocDec.one_point_zero_i128;
-    const integer_part = @divTrunc(num, one);
-    const fractional_part = @rem(num, one);
+    const one: u128 = @intCast(RocDec.one_point_zero_i128);
+    const integer_part = @divTrunc(abs_value, one);
+    const fractional_part = @rem(abs_value, one);
 
     try std.fmt.format(out.writer(), "{d}", .{integer_part});
 
