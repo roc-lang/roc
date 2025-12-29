@@ -8001,15 +8001,20 @@ pub const Interpreter = struct {
                     break :blk vars[1];
                 };
 
-                // Get element layout from the actual list layout, not from the type system.
-                // The list's runtime layout may differ from the type system's expectation
-                // due to numeric literal defaulting.
-                const elem_layout = if (list_layout.tag == .list)
+                // Get element layout from the actual list layout for memory access.
+                // The list's runtime layout may differ from the type system's expectation.
+                const physical_elem_layout = if (list_layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_layout.data.list)
                 else
                     Layout.zst(); // list_of_zst has zero-sized elements
 
-                var accessor = try value.asList(&self.runtime_layout_store, elem_layout, roc_ops);
+                // Get type-based layout for element extraction.
+                // This is important for recursive opaque types where the physical layout is 'tuple'
+                // but we need 'tag_union' layout for proper pattern matching.
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch physical_elem_layout;
+
+                // Use physical layout for memory access (size/stride)
+                var accessor = try value.asList(&self.runtime_layout_store, physical_elem_layout, roc_ops);
                 const total_len = accessor.len();
                 const non_rest_patterns = self.env.store.slicePatterns(list_pat.patterns);
 
@@ -8021,7 +8026,13 @@ pub const Interpreter = struct {
 
                     var idx: usize = 0;
                     while (idx < prefix_len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary.
+                        // This handles recursive opaque types where the physical layout is 'tuple'
+                        // but we need 'tag_union' for proper pattern matching.
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8034,7 +8045,11 @@ pub const Interpreter = struct {
                     while (suffix_idx < suffix_len) : (suffix_idx += 1) {
                         const suffix_pattern_idx = non_rest_patterns[prefix_len + suffix_idx];
                         const element_idx = total_len - suffix_len + suffix_idx;
-                        const elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8045,7 +8060,7 @@ pub const Interpreter = struct {
 
                     if (rest_info.pattern) |rest_pat_idx| {
                         const rest_len = total_len - prefix_len - suffix_len;
-                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
+                        const rest_value = try self.makeListSliceValue(list_layout, physical_elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
                         if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
@@ -8059,7 +8074,11 @@ pub const Interpreter = struct {
                     if (total_len != non_rest_patterns.len) return false;
                     var idx: usize = 0;
                     while (idx < non_rest_patterns.len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -17260,11 +17279,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                const elem_layout = if (list_value.layout.tag == .list)
+                var elem_layout = if (list_value.layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_value.layout.data.list)
                 else
                     layout.Layout.zst(); // list_of_zst has zero-sized elements
-                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
 
                 // Get the RocList header
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
@@ -17290,6 +17308,41 @@ pub const Interpreter = struct {
                     // Fall back to the pattern's translated type
                     break :blk fl_in.patt_rt_var;
                 };
+
+                // For recursive opaque types, the list's physical layout might have element layout
+                // as 'tuple' but the actual data is stored with 'tag_union' layout. We need to
+                // compute the type-based layout and use the larger size for correct iteration.
+                // Use elem_rt_var (which was already resolved from the list's type) rather than
+                // fl_in.patt_rt_var (which might be a flex variable that causes infinite loops).
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch elem_layout;
+
+                // For 'box' layouts (recursive types), unwrap to get the actual backing layout
+                const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
+                    const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
+                    if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
+                        // Need to resolve the nominal type to get its backing layout
+                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
+                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                            const nom = resolved.desc.content.structure.nominal_type;
+                            const backing = self.runtime_types.getNominalBackingVar(nom);
+                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
+                            break :blk backing_layout;
+                        }
+                    }
+                    break :blk inner;
+                } else type_based_elem_layout;
+
+                // Use the larger of the two layouts for element size to handle cases where
+                // the physical layout doesn't match the type-based layout
+                const stored_elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const type_based_size = self.runtime_layout_store.layoutSize(effective_elem_layout);
+                const elem_size: usize = @intCast(@max(stored_elem_size, type_based_size));
+
+                // Override elem_layout if physical is tuple but type-based is tag_union
+                // This ensures proper discriminant extraction during pattern matching
+                if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
+                    elem_layout = effective_elem_layout;
+                }
 
                 // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
