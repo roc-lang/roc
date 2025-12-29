@@ -3,13 +3,10 @@
 const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
-const types = @import("types");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
 
 const Ident = base.Ident;
-const TypeVar = types.Var;
-const Content = types.Content;
 
 test "record literal uses record_unbound" {
     const gpa = std.testing.allocator;
@@ -200,9 +197,6 @@ test "record_unbound with multiple fields" {
         else => return error.ExpectedRecord,
     }
 }
-
-const CIR = @import("../CIR.zig");
-const Pattern = CIR.Pattern;
 
 test "record pattern destructuring" {
     const gpa = std.testing.allocator;

@@ -11,17 +11,13 @@ const ModuleEnv = @import("ModuleEnv.zig");
 const Node = @import("Node.zig");
 const CIR = @import("CIR.zig");
 
-const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
-
 const Allocator = std.mem.Allocator;
 const CompactWriter = collections.CompactWriter;
 const SafeList = collections.SafeList;
 const RocDec = builtins.dec.RocDec;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
-const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
-const PackedDataSpan = base.PackedDataSpan;
 const FunctionArgs = base.FunctionArgs;
 
 /// When storing optional indices/values where 0 is a valid value, we add this offset
@@ -405,6 +401,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_lookup_external = .{
                 .module_idx = @enumFromInt(node.data_1),
                 .target_node_idx = @intCast(node.data_2),
+                .ident_idx = @bitCast(node.data_3),
                 .region = store.getRegionAt(node_idx),
             } };
         },
@@ -568,11 +565,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const lambda_idx = extra_data[0];
             const capture_start = extra_data[1];
             const capture_len = extra_data[2];
+            const tag_name: base.Ident.Idx = @bitCast(extra_data[3]);
 
             return CIR.Expr{
                 .e_closure = .{
                     .lambda_idx = @enumFromInt(lambda_idx),
                     .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
+                    .tag_name = tag_name,
                 },
             };
         },
@@ -867,6 +866,59 @@ pub fn replaceExprWithZeroArgumentTag(
         .data_1 = @intCast(extra_data_start),
         .data_2 = 0,
         .data_3 = 0,
+    });
+}
+
+/// Replaces an existing expression with an e_tuple expression in-place.
+/// This is used for constant folding tuples during compile-time evaluation.
+/// The elem_indices slice contains the indices of the tuple element expressions.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithTuple(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    elem_indices: []const CIR.Expr.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store element indices in extra_data
+    const extra_data_start = store.extra_data.len();
+    for (elem_indices) |elem_idx| {
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(elem_idx));
+    }
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_tuple,
+        .data_1 = @intCast(extra_data_start),
+        .data_2 = @intCast(elem_indices.len),
+        .data_3 = 0,
+    });
+}
+
+/// Replaces an existing expression with an e_tag expression in-place.
+/// This is used for constant folding tag unions with payloads during compile-time evaluation.
+/// The arg_indices slice contains the indices of the tag argument expressions.
+/// Note: This modifies only the CIR node and should only be called after type-checking
+/// is complete. Type information is stored separately and remains unchanged.
+pub fn replaceExprWithTag(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    name: Ident.Idx,
+    arg_indices: []const CIR.Expr.Idx,
+) !void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+
+    // Store argument indices in extra_data
+    const extra_data_start = store.extra_data.len();
+    for (arg_indices) |arg_idx| {
+        _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
+    }
+
+    store.nodes.set(node_idx, .{
+        .tag = .expr_tag,
+        .data_1 = @bitCast(name),
+        .data_2 = @intCast(extra_data_start),
+        .data_3 = @intCast(arg_indices.len),
     });
 }
 
@@ -1560,10 +1612,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @intFromEnum(local.pattern_idx);
         },
         .e_lookup_external => |e| {
-            // For external lookups, store the module index and target node index
+            // For external lookups, store the module index, target node index, and ident
             node.tag = .expr_external_lookup;
             node.data_1 = @intFromEnum(e.module_idx);
             node.data_2 = e.target_node_idx;
+            node.data_3 = @bitCast(e.ident_idx);
         },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
@@ -1834,6 +1887,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
             _ = try store.extra_data.append(store.gpa, e.captures.span.start);
             _ = try store.extra_data.append(store.gpa, e.captures.span.len);
+            _ = try store.extra_data.append(store.gpa, @bitCast(e.tag_name));
 
             node.data_1 = @intCast(extra_data_start);
         },

@@ -250,6 +250,7 @@ test "NodeStore round trip - Expressions" {
         .e_lookup_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
             .target_node_idx = rand.random().int(u16),
+            .ident_idx = rand_ident_idx(),
             .region = rand_region(),
         },
     });
@@ -329,6 +330,7 @@ test "NodeStore round trip - Expressions" {
         .e_closure = .{
             .lambda_idx = rand_idx(CIR.Expr.Idx),
             .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
+            .tag_name = rand_ident_idx(),
         },
     });
     try expressions.append(gpa, CIR.Expr{

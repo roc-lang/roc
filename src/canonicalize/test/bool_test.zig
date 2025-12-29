@@ -1,11 +1,5 @@
 //! Tests for canonicalizing boolean expressions
 const std = @import("std");
-const base = @import("base");
-const types = @import("types");
-const parse = @import("parse");
-const CIR = @import("../CIR.zig");
-const Can = @import("../Can.zig");
-const ModuleEnv = @import("../ModuleEnv.zig");
 
 const testing = std.testing;
 

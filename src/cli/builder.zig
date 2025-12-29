@@ -119,26 +119,13 @@ const ZigLLVMEmitOptions = extern struct {
 // LLVM Code Generation Optimization Levels
 const LLVMCodeGenLevelNone: c_int = 0;
 const LLVMCodeGenLevelLess: c_int = 1;
-const LLVMCodeGenLevelDefault: c_int = 2;
 const LLVMCodeGenLevelAggressive: c_int = 3;
 
 // LLVM Relocation Models
 const LLVMRelocDefault: c_int = 0;
-const LLVMRelocStatic: c_int = 1;
-const LLVMRelocPIC: c_int = 2;
-const LLVMRelocDynamicNoPic: c_int = 3;
-const LLVMRelocROPI: c_int = 4;
-const LLVMRelocRWPI: c_int = 5;
-const LLVMRelocROPI_RWPI: c_int = 6;
 
 // LLVM Code Models
 const LLVMCodeModelDefault: c_int = 0;
-const LLVMCodeModelJITDefault: c_int = 1;
-const LLVMCodeModelTiny: c_int = 2;
-const LLVMCodeModelSmall: c_int = 3;
-const LLVMCodeModelKernel: c_int = 4;
-const LLVMCodeModelMedium: c_int = 5;
-const LLVMCodeModelLarge: c_int = 6;
 
 // External C functions from zig_llvm.cpp and LLVM C API - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {

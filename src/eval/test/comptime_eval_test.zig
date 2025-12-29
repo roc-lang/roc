@@ -6,10 +6,7 @@ const types = @import("types");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-
-const helpers = @import("helpers.zig");
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");

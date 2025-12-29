@@ -47,7 +47,6 @@ const unbundle = @import("unbundle");
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
-const builtins = @import("builtins");
 const lsp = @import("lsp");
 const compiled_builtins = @import("compiled_builtins");
 const builtin_loading = eval.builtin_loading;
@@ -93,16 +92,7 @@ const BuildEnv = compile.BuildEnv;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
-const tokenize = parse.tokenize;
 const TestRunner = eval.TestRunner;
-const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
-const TestOpsEnv = eval.TestOpsEnv;
 const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 
@@ -238,9 +228,7 @@ const windows = if (is_windows) struct {
     const HANDLE = *anyopaque;
     const DWORD = u32;
     const BOOL = c_int;
-    const LPVOID = ?*anyopaque;
     const LPCWSTR = [*:0]const u16;
-    const SIZE_T = usize;
     const STARTUPINFOW = extern struct {
         cb: DWORD,
         lpReserved: ?LPCWSTR,
@@ -1398,8 +1386,11 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
     writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
+        // Get the actual .txt file path for error reporting
+        const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
+        const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
         return ctx.fail(.{ .file_write_failed = .{
-            .path = exe_path,
+            .path = fd_file_path,
             .err = err,
         } });
     };
@@ -1703,8 +1694,9 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         exposed_modules.items,
         plat_dir,
     ) catch |err| {
-        if (err == error.CyclicDependency) {
-            std.log.err("Circular dependency detected in platform modules", .{});
+        switch (err) {
+            error.CyclicDependency => std.log.err("Circular dependency detected in platform modules", .{}),
+            else => {},
         }
         return err;
     };
@@ -3085,8 +3077,9 @@ fn compileAndSerializeModulesForEmbedding(
         exposed_modules.items,
         plat_dir,
     ) catch |err| {
-        if (err == error.CyclicDependency) {
-            std.log.err("Circular dependency detected in platform modules", .{});
+        switch (err) {
+            error.CyclicDependency => std.log.err("Circular dependency detected in platform modules", .{}),
+            else => {},
         }
         return err;
     };
@@ -4057,9 +4050,12 @@ pub fn rocBundle(ctx: *CliContext, args: cli_args.BundleArgs) !void {
         null, // path_prefix parameter - null means no stripping
         &error_ctx,
     ) catch |err| {
-        if (err == error.InvalidPath) {
-            try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
-            try stderr.print("Path: {s}\n", .{error_ctx.path});
+        switch (err) {
+            error.InvalidPath => {
+                try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
+                try stderr.print("Path: {s}\n", .{error_ctx.path});
+            },
+            else => {},
         }
         return err;
     };
@@ -4672,12 +4668,6 @@ const CopiedFile = struct {
     name: []const u8,
     original: []const u8,
     category: []const u8,
-};
-
-/// Information about a test (expect statement) to be evaluated
-const ExpectTest = struct {
-    expr_idx: can.CIR.Expr.Idx,
-    region: base.Region,
 };
 
 fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
@@ -5506,10 +5496,9 @@ fn handleConnection(ctx: *CliContext, connection: std.net.Server.Connection, doc
 
     // Try to open and serve the file
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            try sendResponse(connection.stream, "404 Not Found", "text/plain", "File Not Found");
-        } else {
-            try sendResponse(connection.stream, "500 Internal Server Error", "text/plain", "Internal Server Error");
+        switch (err) {
+            error.FileNotFound => try sendResponse(connection.stream, "404 Not Found", "text/plain", "File Not Found"),
+            else => try sendResponse(connection.stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
         }
         return;
     };

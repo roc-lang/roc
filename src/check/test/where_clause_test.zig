@@ -7,10 +7,7 @@
 //! - Constraint satisfaction
 //! - Error cases
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
-
-const testing = std.testing;
 
 // Basic where clause tests
 

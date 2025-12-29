@@ -7,8 +7,6 @@
 const std = @import("std");
 
 const GT = Ordering.GT;
-const LT = Ordering.LT;
-const EQ = Ordering.EQ;
 const utils = @import("utils.zig");
 const Ordering = utils.Ordering;
 const RocOps = @import("host_abi.zig").RocOps;
@@ -979,27 +977,6 @@ fn quadsort_direct(
 
         roc_ops.dealloc(swap, alignment);
     }
-}
-
-fn quadsort_stack_swap(
-    array: [*]u8,
-    len: usize,
-    cmp: CompareFn,
-    cmp_data: Opaque,
-    comptime data_is_owned: bool,
-    inc_n_context: ?*anyopaque,
-    inc_n_data: IncN,
-    element_width: usize,
-    copy: CopyFn,
-    comptime indirect: bool,
-) void {
-    // Use a 512 element on stack swap buffer.
-    var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 512]u8 align(BufferAlign) = undefined;
-    const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
-
-    const block_len = quad_merge(array, len, swap, 512, 32, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
-
-    rotate_merge(array, len, swap, 512, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_context, inc_n_data, indirect);
 }
 
 // Inplace Rotate Merge
