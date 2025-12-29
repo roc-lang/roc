@@ -4691,7 +4691,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // For matches desugared from `?` operator, verify the condition is a valid Try type
     // (has exactly Ok and Err tags, no other concrete tags). Otherwise report an error.
-    if (match.is_try_suffix and !self.isValidTryType(cond_var)) {
+    // If we detect an invalid try, skip exhaustiveness checking since the desugared match
+    // only handles Ok/Err branches and would report a confusing NON-EXHAUSTIVE MATCH error.
+    const has_invalid_try = match.is_try_suffix and !self.isValidTryType(cond_var);
+    if (has_invalid_try) {
         const cond_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
         _ = try self.problems.appendProblem(self.cir.gpa, .{ .type_mismatch = .{
             .types = .{
@@ -4715,10 +4718,11 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Only do this if there were no type errors - type errors can lead to invalid types
     // that confuse the exhaustiveness checker
     // Also skip if the condition type is an error type (can happen with complex inference)
+    // Also skip if we already reported an invalid try operator error
     const resolved_cond = self.types.resolveVar(cond_var);
     const cond_is_error = resolved_cond.desc.content == .err;
 
-    if (!had_type_error and !cond_is_error) {
+    if (!had_type_error and !cond_is_error and !has_invalid_try) {
         const match_region = self.cir.store.regions.get(
             @enumFromInt(@intFromEnum(expr_idx)),
         ).*;
