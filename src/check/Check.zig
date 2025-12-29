@@ -4066,8 +4066,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
-                    // Local declarations inside functions use standard let-polymorphism
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+                    // Only generalize if this is a lambda expression (value restriction)
+                    const should_generalize = self.isLambdaExpr(decl_stmt.expr);
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
@@ -4129,8 +4130,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
-                    // Local declarations inside functions use standard let-polymorphism
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+                    // Only generalize if this is a lambda expression (value restriction)
+                    const should_generalize = self.isLambdaExpr(decl_stmt.expr);
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
@@ -5785,7 +5787,11 @@ fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstrai
     const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
     std.debug.assert(mb_resolved_func != null);
     const resolved_func = mb_resolved_func.?;
-    try self.unifyWith(resolved_func.ret, .err, env);
+    // Use unify instead of unifyWith because the constraint's return type may be at a
+    // different rank than the current env (e.g., from a local declaration that wasn't
+    // generalized due to the value restriction).
+    const err_var = try self.freshFromContent(.err, env, self.getRegionAt(resolved_func.ret));
+    _ = try self.unify(resolved_func.ret, err_var, env);
 }
 
 /// Report a constraint validation error
