@@ -131,11 +131,11 @@ pub fn emitExpr(ctx: *CirContext, expr: CIR.Expr) Error!Builder.Value {
         .e_block => |block| try emitBlock(ctx, block.stmts, block.final_expr)
 
         // ========================================
-        // Functions (defer to Phase 7)
+        // Functions
         // ========================================
-        .e_call => return error.UnsupportedExpression, // Phase 7
-        .e_lambda => return error.UnsupportedExpression, // Phase 7
-        .e_closure => return error.UnsupportedExpression, // Phase 7
+        .e_call => |call| try emitCall(ctx, call.func, call.args),
+        .e_lambda => |lambda| try emitLambda(ctx, lambda),
+        .e_closure => |closure| try emitClosure(ctx, closure)
 
         // ========================================
         // Special Expressions
@@ -499,6 +499,141 @@ fn emitMatch(ctx: *CirContext, match_expr: CIR.Expr.Match) Error!Builder.Value {
     // TODO: Pattern matching requires Phase 9
     // For now, return unsupported
     return error.UnsupportedExpression;
+}
+
+// ============================================================
+// Function Emission
+// ============================================================
+
+/// Emit a function call expression.
+///
+/// Handles both direct calls (function reference) and indirect calls (closure).
+fn emitCall(
+    ctx: *CirContext,
+    func_idx: CIR.Expr.Idx,
+    args: CIR.Expr.Span,
+) Error!Builder.Value {
+    // Evaluate the function expression to get the callee
+    const func_expr = ctx.module_env.store.getExpr(func_idx);
+    const callee = try emitExpr(ctx, func_expr);
+
+    // Evaluate all arguments
+    var arg_values = std.ArrayList(Builder.Value).init(ctx.allocator);
+    defer arg_values.deinit();
+
+    var iter = ctx.module_env.store.exprs.iterate(args);
+    while (iter.next()) |arg_expr| {
+        const arg_val = try emitExpr(ctx, arg_expr.*);
+        arg_values.append(arg_val) catch return error.OutOfMemory;
+    }
+
+    // For now, assume the function is a pointer and we need to call it
+    // This is a simplified version - real implementation needs type info
+    // to construct the proper function type
+
+    // Get the function type from the callee
+    // For now, create a simple function type based on arg count
+    var param_types = std.ArrayList(Builder.Type).init(ctx.allocator);
+    defer param_types.deinit();
+
+    for (0..arg_values.items.len) |_| {
+        param_types.append(.i64) catch return error.OutOfMemory; // TODO: Get actual types
+    }
+
+    const fn_type = ctx.emitter.createFunctionType(.i64, param_types.items) catch return error.OutOfMemory;
+
+    // Emit the call
+    return ctx.emitter.emitCall(fn_type, callee, arg_values.items) catch return error.OutOfMemory;
+}
+
+/// Emit a lambda expression (pure function without captures).
+///
+/// Creates a new LLVM function and returns a pointer to it.
+fn emitLambda(ctx: *CirContext, lambda: CIR.Expr.Lambda) Error!Builder.Value {
+    const builder = ctx.emitter.builder;
+
+    // Create a unique name for this lambda
+    // TODO: Use proper naming based on module and location
+    const lambda_name = "roc_lambda";
+
+    // Build parameter types from the lambda's parameter patterns
+    var param_types = std.ArrayList(Builder.Type).init(ctx.allocator);
+    defer param_types.deinit();
+
+    var param_iter = ctx.module_env.store.patterns.iterate(lambda.params);
+    while (param_iter.next()) |_| {
+        // TODO: Get actual type from layout
+        param_types.append(.i64) catch return error.OutOfMemory;
+    }
+
+    // Create function type (TODO: Get return type from lambda)
+    const fn_type = ctx.emitter.createFunctionType(.i64, param_types.items) catch return error.OutOfMemory;
+
+    // Add the function to the module
+    const fn_idx = ctx.emitter.addFunction(lambda_name, fn_type) catch return error.OutOfMemory;
+
+    // Save current WIP function (we'll restore it after)
+    const saved_wip = ctx.emitter.wip_function;
+
+    // Begin building the lambda body
+    ctx.emitter.beginFunction(fn_idx) catch return error.OutOfMemory;
+
+    // Push a scope for the lambda body
+    ctx.emitter.pushScope() catch return error.OutOfMemory;
+
+    // Bind parameters to their names
+    var param_idx: usize = 0;
+    param_iter = ctx.module_env.store.patterns.iterate(lambda.params);
+    while (param_iter.next()) |param_pattern| {
+        switch (param_pattern.*) {
+            .assign => |assign| {
+                const name = ctx.module_env.getIdent(assign.ident);
+                const wip = ctx.emitter.wip_function.?;
+                const param_val = wip.arg(@intCast(param_idx));
+                const scoped = emit.ScopedValue.simple(param_val, .i64);
+                ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
+            },
+            else => {
+                // Complex patterns need Phase 9
+            },
+        }
+        param_idx += 1;
+    }
+
+    // Emit the lambda body
+    const body_expr = ctx.module_env.store.getExpr(lambda.body);
+    const result = try emitExpr(ctx, body_expr);
+
+    // Return the result
+    ctx.emitter.emitRet(result) catch return error.OutOfMemory;
+
+    // Pop scope and finish function
+    ctx.emitter.popScope();
+    ctx.emitter.endFunction() catch return error.OutOfMemory;
+
+    // Restore the previous WIP function
+    ctx.emitter.wip_function = saved_wip;
+
+    // Return a pointer to the function
+    return fn_idx.toValue(builder);
+}
+
+/// Emit a closure expression (lambda with captured variables).
+///
+/// Creates a closure struct containing the function pointer and captured environment.
+fn emitClosure(ctx: *CirContext, closure: CIR.Expr.Closure) Error!Builder.Value {
+    // First, emit the underlying lambda
+    const fn_value = try emitLambda(ctx, closure.lambda);
+
+    // If there are no captures, just return the function pointer
+    const captures = closure.captures;
+    if (captures.count == 0) {
+        return fn_value;
+    }
+
+    // TODO: Create closure struct with captures
+    // For now, just return the function (ignoring captures)
+    return fn_value;
 }
 
 /// Emit a block expression.
