@@ -142,28 +142,91 @@ pub const BuiltinContext = struct {
 /// Platform-specific i128 handling for builtin calls.
 /// Different platforms use different representations for i128 in the C ABI.
 pub const I128Abi = struct {
+    /// ABI representation type for i128 values
+    pub const AbiType = enum {
+        /// i128 is passed natively
+        native,
+        /// Windows: i128 is passed as <2 x i64> vector
+        windows_vector,
+        /// macOS ARM64: i128 is passed as [2 x i64] array
+        macos_arm64_array,
+    };
+
+    /// Determine the ABI type for the current target
+    pub const abi_type: AbiType = switch (builtin.os.tag) {
+        .windows => .windows_vector,
+        .macos => if (builtin.cpu.arch == .aarch64) .macos_arm64_array else .native,
+        else => .native,
+    };
+
     /// On Windows, i128 is passed as a <2 x i64> vector
     /// On macOS ARM64, i128 is passed as a [2 x i64] array
     /// On other platforms, i128 is passed natively
-    pub const needs_conversion = switch (builtin.os.tag) {
-        .windows => true,
-        .macos => builtin.cpu.arch == .aarch64,
-        else => false,
-    };
+    pub const needs_conversion = abi_type != .native;
 
     /// Get the LLVM type to use for i128 in function signatures
     pub fn paramType(builder: *Builder) Error!Builder.Type {
-        if (needs_conversion) {
-            // Use [2 x i64] representation
-            return builder.arrayType(2, .i64) catch return error.OutOfMemory;
-        } else {
-            return .i128;
-        }
+        return switch (abi_type) {
+            .native => .i128,
+            .windows_vector => builder.vectorType(.normal, 2, .i64) catch return error.OutOfMemory,
+            .macos_arm64_array => builder.arrayType(2, .i64) catch return error.OutOfMemory,
+        };
     }
 
     /// Get the LLVM type for i128 return values
     pub fn returnType(builder: *Builder) Error!Builder.Type {
         return paramType(builder);
+    }
+
+    /// Convert an i128 value to the platform-specific ABI representation.
+    /// On Windows: bitcast to <2 x i64>
+    /// On macOS ARM64: bitcast to [2 x i64]
+    /// On other platforms: return as-is
+    pub fn toAbiType(emitter: *emit.LlvmEmitter, value: Builder.Value) Error!Builder.Value {
+        if (!needs_conversion) {
+            return value;
+        }
+
+        // Get the platform-specific type
+        const target_type = try paramType(emitter.builder);
+
+        // Bitcast i128 to the target type
+        const wip = emitter.wip_function orelse return error.OutOfMemory;
+        return wip.cast(.bitcast, value, target_type, "") catch return error.OutOfMemory;
+    }
+
+    /// Convert a platform-specific ABI value back to i128.
+    /// On Windows: bitcast from <2 x i64> to i128
+    /// On macOS ARM64: bitcast from [2 x i64] to i128
+    /// On other platforms: return as-is
+    pub fn fromAbiType(emitter: *emit.LlvmEmitter, value: Builder.Value) Error!Builder.Value {
+        if (!needs_conversion) {
+            return value;
+        }
+
+        // Bitcast back to i128
+        const wip = emitter.wip_function orelse return error.OutOfMemory;
+        return wip.cast(.bitcast, value, .i128, "") catch return error.OutOfMemory;
+    }
+
+    /// Call a builtin function that returns i128, handling ABI conversion.
+    /// This declares the function with the platform-specific return type and
+    /// converts the result back to i128.
+    pub fn callI128Builtin(
+        ctx: *BuiltinContext,
+        emitter: *emit.LlvmEmitter,
+        name: []const u8,
+        param_types: []const Builder.Type,
+        args: []const Builder.Value,
+    ) Error!Builder.Value {
+        // Get the ABI return type
+        const ret_type = try returnType(emitter.builder);
+
+        // Call the builtin with the ABI return type
+        const result = try emitBuiltinCall(ctx, emitter, name, ret_type, param_types, args);
+
+        // Convert back to i128 if necessary
+        return fromAbiType(emitter, result);
     }
 };
 

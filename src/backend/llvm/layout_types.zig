@@ -251,9 +251,14 @@ pub fn getLayoutSize(store: *const Store, layout_val: Layout, ptr_size: u32) u32
 
 /// Get the size of a scalar type
 fn getScalarSize(layout_val: Layout) u32 {
+    return getScalarSizeWithPtrSize(layout_val, 8);
+}
+
+/// Get the size of a scalar type with explicit pointer size
+pub fn getScalarSizeWithPtrSize(layout_val: Layout, ptr_size: u32) u32 {
     return switch (layout_val.data.scalar.tag) {
-        .opaque_ptr => 8, // Pointer size (assume 64-bit)
-        .str => 16, // { ptr, len }
+        .opaque_ptr => ptr_size,
+        .str => ptr_size * 2, // { ptr, len }
         .int => switch (layout_val.data.scalar.data.int) {
             .u8, .i8 => 1,
             .u16, .i16 => 2,
@@ -268,3 +273,42 @@ fn getScalarSize(layout_val: Layout) u32 {
         },
     };
 }
+
+/// Platform-specific configuration for LLVM code generation
+pub const PlatformConfig = struct {
+    /// Pointer size in bytes (4 for 32-bit, 8 for 64-bit)
+    ptr_size: u32,
+    /// Pointer size in bits (32 or 64)
+    ptr_bits: u16,
+    /// Whether i128 needs ABI conversion (Windows, macOS ARM64)
+    i128_needs_conversion: bool,
+
+    /// Create config for the current compile-time target
+    pub fn native() PlatformConfig {
+        const builtin = @import("builtin");
+        return fromTarget(builtin.target);
+    }
+
+    /// Create config from a std.Target
+    pub fn fromTarget(t: std.Target) PlatformConfig {
+        const ptr_bits = t.ptrBitWidth();
+        const ptr_size: u32 = @intCast(ptr_bits / 8);
+
+        const i128_needs_conversion = switch (t.os.tag) {
+            .windows => true,
+            .macos => t.cpu.arch == .aarch64,
+            else => false,
+        };
+
+        return .{
+            .ptr_size = ptr_size,
+            .ptr_bits = ptr_bits,
+            .i128_needs_conversion = i128_needs_conversion,
+        };
+    }
+
+    /// Get the LLVM integer type for pointer-sized integers
+    pub fn ptrIntType(self: PlatformConfig) Builder.Type {
+        return if (self.ptr_bits == 32) .i32 else .i64;
+    }
+};
