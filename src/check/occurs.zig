@@ -221,10 +221,6 @@ const CheckOccurs = struct {
                     // This matches the Rust compiler behavior (see subs.rs occurs function).
                 },
                 .rigid => {},
-                .recursion_var => |rec_var| {
-                    // Check the structure the recursion var points to
-                    try self.occursSubVar(root, rec_var.structure, ctx);
-                },
                 .err => {},
             }
             self.scratch.popSeen();

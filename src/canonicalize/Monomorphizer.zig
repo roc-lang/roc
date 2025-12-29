@@ -1993,7 +1993,7 @@ pub fn isPolymorphic(self: *Self, type_var: types.Var) bool {
     const resolved = self.types_store.resolveVar(type_var);
     return switch (resolved.desc.content) {
         .flex, .rigid => true,
-        .structure, .alias, .recursion_var, .err => false,
+        .structure, .alias, .err => false,
     };
 }
 
@@ -2121,7 +2121,6 @@ pub fn getTypeName(self: *Self, type_var: types.Var) []const u8 {
         },
         .flex, .rigid => return "a",
         .alias => |alias| return self.module_env.getIdent(alias.ident.ident_idx),
-        .recursion_var => return "Rec",
         .err => return "Err",
     }
 }

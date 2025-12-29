@@ -22,9 +22,23 @@ addThreeTwice : I64 -> I64
 addThreeTwice = |n| applyTwice(|x| x + 3, n)
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - lambda_currying_constraint.md:3:21:3:26
++ - :0:0:0:0
 # PROBLEMS
-NIL
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**lambda_currying_constraint.md:3:21:3:26:**
+```roc
+makeAdder = |x| |y| x + y
+```
+                    ^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    a
+
+**Hint:** The **+** operator requires the type to have a **plus** method. Did you forget to specify it in the type annotation?
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,
@@ -201,7 +215,7 @@ NO CHANGE
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "a -> (a -> a)"))
+		(expr (type "Error -> (Error -> Error)"))
 		(expr (type "I64 -> I64"))
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "I64 -> I64"))))

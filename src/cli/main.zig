@@ -1676,14 +1676,20 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Module count = 1 (app) + number of platform modules
-    const total_module_count: u32 = 1 + @as(u32, @intCast(exposed_modules.items.len));
-    header_ptr.module_count = total_module_count;
+    // Module count = 1 (app) + number of platform modules + number of sibling modules
+    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling
+    // imports AFTER parsing the app (to avoid parsing twice). The actual count is set later.
+    const platform_module_count: u32 = @intCast(exposed_modules.items.len);
+    const max_sibling_modules: u32 = 64; // Reasonable max for sibling modules
+    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules;
 
-    // Allocate array for module env offsets
-    const module_env_offsets_ptr = try shm_allocator.alloc(u64, total_module_count);
+    // Allocate array for module env offsets (over-allocated, actual count set later)
+    const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
     const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
     header_ptr.module_envs_offset = module_envs_offset_location;
+
+    // Track actual sibling count (discovered after app parsing)
+    var actual_sibling_count: u32 = 0;
 
     // Compile platform sibling modules FIRST (Stdout, Stderr, Stdin, etc.)
     // This must happen before platform main.roc so that when main.roc is canonicalized,
@@ -1981,6 +1987,106 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(resolved_ident, auto_type);
     }
 
+    // Compile sibling .roc files BEFORE app canonicalization.
+    // This ensures that when the app references `Hello.say`, the sibling module is fully
+    // compiled and its exports are available for lookup.
+    //
+    // LAZY LOADING: We extract imports from the already-parsed app_parse_ast to avoid
+    // parsing the app file twice. Only sibling modules that are actually imported are compiled.
+    var sibling_env_ptrs = std.ArrayList(*ModuleEnv).empty;
+    defer sibling_env_ptrs.deinit(ctx.gpa);
+
+    // Extract sibling imports from the already-parsed app AST
+    const sibling_imports = try compile.module_discovery.extractImportsFromAST(&app_parse_ast, ctx.gpa);
+    defer {
+        for (sibling_imports) |imp| ctx.gpa.free(imp);
+        ctx.gpa.free(sibling_imports);
+    }
+
+    // Filter to only imports that have corresponding files and aren't the app itself
+    var sibling_names = std.ArrayList([]const u8).empty;
+    defer sibling_names.deinit(ctx.gpa);
+    // Note: we don't free the strings in sibling_names since they point to sibling_imports
+
+    // Use app_basename already defined at line 1874
+    const app_name_no_ext = if (std.mem.endsWith(u8, app_basename, ".roc"))
+        app_basename[0 .. app_basename.len - 4]
+    else
+        app_basename;
+
+    for (sibling_imports) |import_name| {
+        // Skip self-import and "main"
+        if (std.mem.eql(u8, import_name, app_name_no_ext)) continue;
+        if (std.mem.eql(u8, import_name, "main")) continue;
+
+        // Check if file exists
+        if (try moduleNameToFilePath(import_name, app_dir, ctx.gpa)) |path| {
+            ctx.gpa.free(path); // Just checking existence
+            try sibling_names.append(ctx.gpa, import_name); // Points to sibling_imports memory
+        }
+    }
+
+    if (sibling_names.items.len > 0) {
+        // Sort sibling modules by dependency order
+        const sorted_siblings = try sortPlatformModulesByDependency(ctx, sibling_names.items, app_dir);
+        defer ctx.gpa.free(sorted_siblings);
+
+        // Compile each sibling module in dependency order
+        for (sorted_siblings, 0..) |sibling_name, i| {
+            // Handle nested modules: "Foo.Bar" -> "Foo/Bar.roc"
+            const sibling_path = try moduleNameToFilePath(sibling_name, app_dir, ctx.gpa) orelse {
+                // File doesn't exist - this shouldn't happen since we checked earlier
+                std.log.warn("Sibling module file not found: {s}", .{sibling_name});
+                continue;
+            };
+            defer ctx.gpa.free(sibling_path);
+
+            // Pass previously compiled siblings for transitive imports
+            const prev_siblings = sibling_env_ptrs.items[0..i];
+            const sibling_env = try compileModuleToSharedMemory(
+                ctx,
+                sibling_path,
+                sibling_name,
+                shm_allocator,
+                &builtin_modules,
+                prev_siblings,
+            );
+            try sibling_env_ptrs.append(ctx.gpa, sibling_env);
+
+            // Store sibling offset at index [platform_module_count + i]
+            const sibling_offset_idx = platform_module_count + @as(u32, @intCast(i));
+            module_env_offsets_ptr[sibling_offset_idx] = @intFromPtr(sibling_env) - @intFromPtr(shm.base_ptr);
+
+            // Add to app's module_envs_map with real sibling env
+            const sibling_ident = try app_env.insertIdent(base.Ident.for_text(sibling_name));
+
+            // Check if this module is a "type module" (defines a type with the same name)
+            const type_ident_in_module = sibling_env.common.findIdent(sibling_name);
+            const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
+                sibling_env.getExposedNodeIndexById(ident)
+            else
+                null;
+
+            if (type_node_idx) |node_idx| {
+                try app_module_envs_map.put(sibling_ident, .{
+                    .env = sibling_env,
+                    .statement_idx = @enumFromInt(node_idx),
+                    .qualified_type_ident = sibling_ident,
+                });
+            } else {
+                try app_module_envs_map.put(sibling_ident, .{
+                    .env = sibling_env,
+                    .qualified_type_ident = sibling_ident,
+                });
+            }
+        }
+        actual_sibling_count = @intCast(sorted_siblings.len);
+    }
+
+    // Set the actual module count now that we know how many siblings were compiled
+    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count;
+    header_ptr.module_count = total_module_count;
+
     var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
     defer app_canonicalizer.deinit();
 
@@ -2040,6 +2146,10 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     try app_imported_envs.append(ctx.gpa, builtin_modules.builtin_module.env);
     for (platform_env_ptrs) |penv| {
         try app_imported_envs.append(ctx.gpa, penv);
+    }
+    // Add sibling modules for type checking
+    for (sibling_env_ptrs.items) |senv| {
+        try app_imported_envs.append(ctx.gpa, senv);
     }
 
     // Resolve imports - map each import to its index in app_imported_envs
@@ -2188,6 +2298,48 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
             return false;
         },
     }
+}
+
+/// Convert a module name to its corresponding file path.
+/// Supports nested modules: "Foo.Bar" -> "Foo/Bar.roc"
+///
+/// Parameters:
+///   module_name: The module name (e.g., "Hello" or "Foo.Bar")
+///   base_dir: The directory containing the modules
+///   gpa: Allocator for the returned path
+///
+/// Returns: The file path (caller owns memory), or null if file doesn't exist
+fn moduleNameToFilePath(
+    module_name: []const u8,
+    base_dir: []const u8,
+    gpa: std.mem.Allocator,
+) !?[]const u8 {
+    // Replace dots with path separators for nested modules
+    // "Foo.Bar" -> "Foo/Bar"
+    var path_parts = std.ArrayList(u8).empty;
+    defer path_parts.deinit(gpa);
+
+    for (module_name) |ch| {
+        if (ch == '.') {
+            try path_parts.append(gpa, std.fs.path.sep);
+        } else {
+            try path_parts.append(gpa, ch);
+        }
+    }
+    try path_parts.appendSlice(gpa, ".roc");
+
+    const relative_path = try path_parts.toOwnedSlice(gpa);
+    defer gpa.free(relative_path);
+
+    const full_path = try std.fs.path.join(gpa, &.{ base_dir, relative_path });
+
+    // Check if file exists
+    std.fs.cwd().access(full_path, .{}) catch {
+        gpa.free(full_path);
+        return null;
+    };
+
+    return full_path;
 }
 
 /// Extract the names of local modules that a given module file imports.

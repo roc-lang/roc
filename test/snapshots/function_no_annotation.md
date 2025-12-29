@@ -152,13 +152,13 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a, a -> a"))
+		(patt (type "a, a -> a where [a.times : a, a -> a]"))
 		(patt (type "_arg -> Error"))
-		(patt (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.times : a, a -> a]"))
 		(patt (type "Error")))
 	(expressions
-		(expr (type "a, a -> a"))
+		(expr (type "a, a -> a where [a.times : a, a -> a]"))
 		(expr (type "_arg -> Error"))
-		(expr (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> Error where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.times : a, a -> a]"))
 		(expr (type "Error"))))
 ~~~
