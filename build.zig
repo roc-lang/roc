@@ -1803,6 +1803,10 @@ pub fn build(b: *std.Build) void {
         target.result.abi == builtin.target.abi;
     build_options.addOption(bool, "target_is_native", target_is_native);
 
+    // Path to bundled Darwin sysroot with libSystem.tbd stub
+    const darwin_sysroot = b.path("src/cli/darwin").getPath(b);
+    build_options.addOption([]const u8, "darwin_sysroot", darwin_sysroot);
+
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
