@@ -671,11 +671,10 @@ pub const Type = enum(u32) {
     }
 
     pub fn targetLayoutType(self: Type, builder: *const Builder) Type {
-        // Roc doesn't use LLVM target extension types. If this is called, it indicates
-        // a bug - either we're reading bitcode with target types, or creating them incorrectly.
         _ = self;
         _ = builder;
-        unreachable;
+        @panic("targetLayoutType called - Roc does not use LLVM target extension types. " ++
+            "This indicates a bug: either reading bitcode with target types, or creating them incorrectly.");
     }
 
     pub fn isSized(self: Type, builder: *const Builder) Allocator.Error!bool {
