@@ -1993,7 +1993,7 @@ pub fn isPolymorphic(self: *Self, type_var: types.Var) bool {
     const resolved = self.types_store.resolveVar(type_var);
     return switch (resolved.desc.content) {
         .flex, .rigid => true,
-        .structure, .alias, .recursion_var, .err => false,
+        .structure, .alias, .err => false,
     };
 }
 

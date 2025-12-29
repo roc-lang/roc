@@ -220,10 +220,6 @@ const CheckOccurs = struct {
                     // self-referential constraints. Only structural content is checked.
                 },
                 .rigid => {},
-                .recursion_var => |rec_var| {
-                    // Check the structure the recursion var points to
-                    try self.occursSubVar(root, rec_var.structure, ctx);
-                },
                 .err => {},
             }
             self.scratch.popSeen();

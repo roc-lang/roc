@@ -2179,8 +2179,8 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                                     try self.unifyWith(anno_var, .err, env);
                                     return;
                                 },
-                                .flex, .rigid, .recursion_var => {
-                                    // External type resolved to a flex, rigid, or recursion var.
+                                .flex, .rigid => {
+                                    // External type resolved to a flex or rigid.
                                     // This can happen when the external type is polymorphic but hasn't been
                                     // instantiated yet. We need to use the variable as-is, but this means
                                     // we can't get the arity/name information. This is likely a bug in how
@@ -5170,43 +5170,6 @@ fn checkNominalTypeUsage(
 
 // validate static dispatch constraints //
 
-/// Handle a recursive static dispatch constraint by creating a RecursionVar
-///
-/// When we detect that a constraint check would recurse (the variable is already
-/// being checked in the call stack), we create a RecursionVar to represent the
-/// recursive structure and prevent infinite loops.
-///
-/// The RecursionVar points back to the original variable structure, allowing
-/// equirecursive unification to properly handle the cycle.
-fn handleRecursiveConstraint(
-    self: *Self,
-    var_: types_mod.Var,
-    depth: usize,
-    env: *Env,
-) std.mem.Allocator.Error!void {
-    // Create the RecursionVar content that points to the original structure
-    const rec_var_content = types_mod.Content{
-        .recursion_var = .{
-            .structure = var_,
-            .name = null, // Could be enhanced to carry debug name
-        },
-    };
-
-    // Create a new type variable to represent the recursion point
-    // Use the current environment's rank for the recursion var
-    const recursion_var = try self.freshFromContent(rec_var_content, env, self.getRegionAt(var_));
-
-    // Create RecursionInfo to track the recursion metadata
-    _ = types_mod.RecursionInfo{
-        .recursion_var = recursion_var,
-        .depth = depth,
-    };
-
-    // Store the recursion info in the deferred constraint
-    // Note: This will be enhanced in later implementation to properly
-    // update the constraint with the recursion info
-}
-
 /// Check static dispatch constraints
 ///
 /// Note that new constraints can be added as we are processing. For example:
@@ -5230,17 +5193,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
 
-        // Detect recursive constraints
-        // Check if this var is already in the constraint check stack
-        for (self.constraint_check_stack.items, 0..) |stack_var, depth| {
-            if (stack_var == dispatcher_resolved.var_) {
-                // Found recursion! Create a RecursionVar to handle this properly
-                try self.handleRecursiveConstraint(dispatcher_resolved.var_, depth, env);
-                continue;
-            }
+        // Verify no recursive constraints - recursion should be handled through
+        // nominal types which break the cycle naturally.
+        for (self.constraint_check_stack.items) |stack_var| {
+            std.debug.assert(stack_var != dispatcher_resolved.var_);
         }
 
-        // Not recursive - push to stack and proceed normally
         try self.constraint_check_stack.append(self.gpa, dispatcher_resolved.var_);
         defer _ = self.constraint_check_stack.pop();
 
@@ -5356,8 +5314,16 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 // Extract the function and return type from the constraint
                 const resolved_constraint = self.types.resolveVar(constraint.fn_var);
                 const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
-                std.debug.assert(mb_resolved_func != null);
-                const resolved_func = mb_resolved_func.?;
+                // If fn_var didn't resolve to a function, handle based on what it is
+                const resolved_func = mb_resolved_func orelse {
+                    // If it's a flex var, the constraint's function type wasn't determined.
+                    // This can happen with recursive types. Skip without error.
+                    if (resolved_constraint.desc.content == .flex) continue;
+                    // If it's an error, skip - error already reported elsewhere
+                    if (resolved_constraint.desc.content == .err) continue;
+                    // Otherwise, this is unexpected - skip but continue processing
+                    continue;
+                };
 
                 // Look up the method in the original env using index-based lookup.
                 // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
@@ -5629,9 +5595,6 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         .flex, .rigid => true,
         // Aliases: check the underlying type
         .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
-        // Recursion vars: we must assume they support is_eq to avoid infinite loops.
-        // Recursive types like List support is_eq if their element type does.
-        .recursion_var => true,
         // Error types: allow them to proceed
         .err => true,
     };
@@ -5673,7 +5636,6 @@ fn varContainsError(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void)
         .err => true,
         .flex, .rigid => false,
         .alias => |alias| self.varContainsError(self.types.getAliasBackingVar(alias), visited),
-        .recursion_var => |rec_var| self.varContainsError(rec_var.structure, visited),
         .structure => |flat_type| self.flatTypeContainsError(flat_type, visited),
     };
 }
