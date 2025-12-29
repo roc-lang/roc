@@ -12,8 +12,7 @@ ok_or = |try, fallback|
     }
 
 do_something = || {
-    # This should error: ok_or returns [Exit I32] which is not a Try type
-    # (it has Exit tag instead of Ok/Err tag)
+    # This should error: ok_or returns [Exit I32] which is not an Err type
     _x = ok_or(Err(""), Exit(5))?
     Ok({})
 }

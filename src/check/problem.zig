@@ -1344,19 +1344,6 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("_", .type_variable);
         try report.document.addText(".");
         try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("Tip: If you're using the ");
-        try report.document.addAnnotated("?", .keyword);
-        try report.document.addText(" operator, make sure the expression returns a ");
-        try report.document.addAnnotated("Try", .type_variable);
-        try report.document.addText(" type");
-        try report.document.addLineBreak();
-        try report.document.addText("(i.e., has ");
-        try report.document.addAnnotated("Ok", .type_variable);
-        try report.document.addText(" and ");
-        try report.document.addAnnotated("Err", .type_variable);
-        try report.document.addText(" tags).");
 
         return report;
     }
