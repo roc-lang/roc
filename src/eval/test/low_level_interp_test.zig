@@ -2911,6 +2911,8 @@ test "e_low_level_lambda - I64.mod_by with zero result" {
 // variable in polymorphic contexts, leading to the wrong layout being used
 // for the return value (should be empty record {}).
 test "issue 8750: dbg in polymorphic debug function with List.len" {
+    std.debug.print("Ignore the dbg prints to stderr below, they are expected.\n", .{});
+
     const src =
         \\debug = |v| {
         \\    dbg v
