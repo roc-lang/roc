@@ -4491,7 +4491,67 @@ fn checkIfElseExpr(
 
 // match //
 
-/// Check the types for an if-else expr
+/// Check if a type variable represents a valid Try type for the `?` operator.
+/// A valid Try type must have exactly Ok and Err tags (with possible flex extension).
+/// Returns false if it has any other concrete tags, as those wouldn't be handled.
+fn isValidTryType(self: *Self, var_: Var) bool {
+    var current_var = var_;
+    var iterations: u32 = 0;
+    const max_iterations: u32 = 100;
+    var has_ok = false;
+    var has_err = false;
+    const ok_ident = self.cir.idents.ok;
+    const err_ident = self.cir.idents.err;
+
+    while (iterations < max_iterations) : (iterations += 1) {
+        const resolved = self.types.resolveVar(current_var);
+        switch (resolved.desc.content) {
+            .flex => {
+                // Open extension is fine - we just need Ok and Err
+                return has_ok and has_err;
+            },
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        // Check tags in this union
+                        const tags_slice = self.types.getTagsSlice(tag_union.tags);
+                        for (tags_slice.items(.name)) |tag_name| {
+                            if (tag_name == ok_ident) {
+                                has_ok = true;
+                            } else if (tag_name == err_ident) {
+                                has_err = true;
+                            } else {
+                                // Found a tag that's neither Ok nor Err
+                                // This is not a valid Try type for `?`
+                                return false;
+                            }
+                        }
+                        // Follow the extension chain for more tags
+                        current_var = tag_union.ext;
+                    },
+                    .empty_tag_union => return has_ok and has_err,
+                    .nominal_type => |nominal| {
+                        // Follow nominal backing var
+                        current_var = self.types.getNominalBackingVar(nominal);
+                    },
+                    else => return false, // Not a tag union
+                }
+            },
+            .alias => |alias| {
+                // Follow alias backing var
+                current_var = self.types.getAliasBackingVar(alias);
+            },
+            .err => {
+                // If the type is an error type, don't report additional errors
+                return true;
+            },
+            else => return false,
+        }
+    }
+    return has_ok and has_err;
+}
+
+/// Check the types for a match expr
 fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Expr.Match) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -4593,6 +4653,25 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             // Then stop type checking for this branch
             break;
         }
+    }
+
+    // For matches desugared from `?` operator, verify the condition is a valid Try type
+    // (has exactly Ok and Err tags, no other concrete tags). Otherwise report an error.
+    if (match.is_try_suffix and !self.isValidTryType(cond_var)) {
+        const cond_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
+        _ = try self.problems.appendProblem(self.cir.gpa, .{ .type_mismatch = .{
+            .types = .{
+                .expected_var = cond_var,
+                .expected_snapshot = cond_snapshot,
+                .actual_var = cond_var,
+                .actual_snapshot = cond_snapshot,
+                .from_annotation = false,
+                .constraint_origin_var = null,
+            },
+            .detail = .{ .invalid_try_operator = .{
+                .expr = match.cond,
+            } },
+        } });
     }
 
     // Unify the root expr with the match value

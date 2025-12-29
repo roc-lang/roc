@@ -277,6 +277,7 @@ fn generateDispatchMatch(
             .cond = closure_var_expr,
             .branches = branches_span,
             .exhaustive = exhaustive_var,
+            .is_try_suffix = false,
         },
     }, base.Region.zero());
 }
@@ -747,6 +748,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) !Expr.Idx {
                     .cond = new_cond,
                     .branches = match.branches,
                     .exhaustive = match.exhaustive,
+                    .is_try_suffix = match.is_try_suffix,
                 },
             }, base.Region.zero());
         },
