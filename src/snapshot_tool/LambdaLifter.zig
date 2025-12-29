@@ -223,42 +223,6 @@ fn buildSimpleCapturesPattern(self: *Self) !CIR.Pattern.Idx {
     );
 }
 
-/// Build a record destructure pattern for the captures.
-///
-/// Creates a pattern like `{ x, y, z }` that binds each capture name.
-fn buildCapturesPattern(
-    self: *Self,
-    captures: []const CIR.Expr.Capture.Idx,
-) !CIR.Pattern.Idx {
-    const record_destruct_start = self.module_env.store.scratchRecordDestructTop();
-
-    for (captures) |capture_idx| {
-        const capture = self.module_env.store.getCapture(capture_idx);
-
-        // Create an assign pattern for this capture binding
-        const assign_pattern = try self.module_env.store.addPattern(
-            Pattern{ .assign = .{ .ident = capture.name } },
-            base.Region.zero(),
-        );
-
-        // Create the record destruct for this field
-        const destruct = Pattern.RecordDestruct{
-            .label = capture.name,
-            .ident = capture.name,
-            .kind = .{ .Required = assign_pattern },
-        };
-        const destruct_idx = try self.module_env.store.addRecordDestruct(destruct, base.Region.zero());
-        try self.module_env.store.addScratchRecordDestruct(destruct_idx);
-    }
-
-    const destructs_span = try self.module_env.store.recordDestructSpanFrom(record_destruct_start);
-
-    return try self.module_env.store.addPattern(
-        Pattern{ .record_destructure = .{ .destructs = destructs_span } },
-        base.Region.zero(),
-    );
-}
-
 /// Build the capture replacements map.
 ///
 /// For each captured variable, create a record field access expression
