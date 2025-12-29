@@ -463,7 +463,7 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
 }
 
 /// Check if a variable contains an infinite type after solving a definition.
-/// This catches cases like `f = |x| f([x])` which creates `a = List a`.
+/// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
 /// Similar to Rust's check_for_infinite_type called after LetCon.
 fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
@@ -482,7 +482,7 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
             try self.types.setVarContent(var_, .err);
         },
         .infinite => {
-            // Infinite type (like `a = List a`)
+            // Infinite type (like `a = List(a)`)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
             _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
                 .var_ = var_,
@@ -1589,7 +1589,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         _ = try self.unify(def_var, ptrn_var, env);
 
         // After solving the definition, check for infinite types.
-        // This catches cases like `f = |x| f([x])` which creates `a = List a`.
+        // This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
         // Similar to Rust's check_for_infinite_type called after LetCon.
         try self.checkForInfiniteType(def_var);
     }
