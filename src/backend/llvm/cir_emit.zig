@@ -124,11 +124,11 @@ pub fn emitExpr(ctx: *CirContext, expr: CIR.Expr) Error!Builder.Value {
         .e_dot_access => |access| try emitDotAccess(ctx, access),
 
         // ========================================
-        // Control Flow (defer to Phase 6)
+        // Control Flow
         // ========================================
-        .e_if => return error.UnsupportedExpression, // Phase 6
-        .e_match => return error.UnsupportedExpression, // Phase 6
-        .e_block => return error.UnsupportedExpression, // Phase 8
+        .e_if => |if_expr| try emitIf(ctx, if_expr.branches, if_expr.final_else),
+        .e_match => |match_expr| try emitMatch(ctx, match_expr),
+        .e_block => |block| try emitBlock(ctx, block.stmts, block.final_expr)
 
         // ========================================
         // Functions (defer to Phase 7)
@@ -368,4 +368,200 @@ fn emitDbg(ctx: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Value {
     // dbg just returns the expression value (side effect is printing)
     const expr = ctx.module_env.store.getExpr(expr_idx);
     return try emitExpr(ctx, expr);
+}
+
+// ============================================================
+// Control Flow Emission
+// ============================================================
+
+/// Emit an if expression with multiple branches and a final else.
+///
+/// LLVM structure:
+/// ```
+///   entry:
+///     %cond1 = <evaluate first condition>
+///     br i1 %cond1, label %then1, label %check2
+///   then1:
+///     %val1 = <evaluate first branch body>
+///     br label %merge
+///   check2:
+///     %cond2 = <evaluate second condition>
+///     br i1 %cond2, label %then2, label %else
+///   then2:
+///     %val2 = <evaluate second branch body>
+///     br label %merge
+///   else:
+///     %else_val = <evaluate else body>
+///     br label %merge
+///   merge:
+///     %result = phi [%val1, %then1], [%val2, %then2], [%else_val, %else]
+/// ```
+fn emitIf(
+    ctx: *CirContext,
+    branches: CIR.Expr.IfBranch.Span,
+    final_else_idx: CIR.Expr.Idx,
+) Error!Builder.Value {
+    const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
+    const builder = ctx.emitter.builder;
+
+    // Create the merge block where all branches converge
+    const merge_block = wip.block(0, "if.merge") catch return error.OutOfMemory;
+
+    // Track incoming values for the phi node
+    var phi_incoming = std.ArrayList(struct { value: Builder.Value, block: Builder.WipFunction.Block.Index }).init(ctx.allocator);
+    defer phi_incoming.deinit();
+
+    // Get branch count from span
+    const branch_count = branches.count;
+    var branch_idx: u32 = 0;
+
+    // Process each if/elif branch
+    var iter = ctx.module_env.store.if_branches.iterate(branches);
+    while (iter.next()) |branch| {
+        const is_last = branch_idx == branch_count - 1;
+
+        // Create blocks for this branch
+        const then_block = wip.block(0, "if.then") catch return error.OutOfMemory;
+        const next_block = if (is_last)
+            merge_block
+        else
+            wip.block(0, "if.elif") catch return error.OutOfMemory;
+
+        // Evaluate condition
+        const cond_expr = ctx.module_env.store.getExpr(branch.condition);
+        const cond_val = try emitExpr(ctx, cond_expr);
+
+        // Branch based on condition
+        _ = wip.brCond(cond_val, then_block, next_block, "") catch return error.OutOfMemory;
+
+        // Emit then block
+        wip.cursor = .{ .block = then_block };
+        const body_expr = ctx.module_env.store.getExpr(branch.body);
+        const body_val = try emitExpr(ctx, body_expr);
+
+        // Record value for phi node
+        phi_incoming.append(.{ .value = body_val, .block = then_block }) catch return error.OutOfMemory;
+
+        // Jump to merge
+        _ = wip.br(merge_block, "") catch return error.OutOfMemory;
+
+        // Position at next check block (or merge if last)
+        if (!is_last) {
+            wip.cursor = .{ .block = next_block };
+        }
+
+        branch_idx += 1;
+    }
+
+    // Emit else block (we're positioned at the last check block or merge)
+    // If there were no branches, we need to handle that case
+    if (branch_count == 0) {
+        // No branches, just emit the else
+        const else_expr = ctx.module_env.store.getExpr(final_else_idx);
+        return try emitExpr(ctx, else_expr);
+    }
+
+    // Create else block
+    const else_block = wip.block(0, "if.else") catch return error.OutOfMemory;
+    wip.cursor = .{ .block = else_block };
+
+    const else_expr = ctx.module_env.store.getExpr(final_else_idx);
+    const else_val = try emitExpr(ctx, else_expr);
+
+    phi_incoming.append(.{ .value = else_val, .block = else_block }) catch return error.OutOfMemory;
+
+    _ = wip.br(merge_block, "") catch return error.OutOfMemory;
+
+    // Position at merge block and create phi node
+    wip.cursor = .{ .block = merge_block };
+
+    // Determine result type from the first value
+    const result_type = phi_incoming.items[0].value.typeOf(wip.function, builder);
+
+    // Create phi node
+    const phi = wip.phi(result_type, "") catch return error.OutOfMemory;
+
+    // Add incoming values
+    for (phi_incoming.items) |incoming| {
+        wip.addPhiArg(phi, incoming.block, incoming.value) catch return error.OutOfMemory;
+    }
+
+    return phi;
+}
+
+/// Emit a match expression.
+///
+/// Match expressions compile to a series of conditional checks and branches,
+/// similar to if expressions but with pattern matching logic.
+fn emitMatch(ctx: *CirContext, match_expr: CIR.Expr.Match) Error!Builder.Value {
+    _ = ctx;
+    _ = match_expr;
+    // TODO: Pattern matching requires Phase 9
+    // For now, return unsupported
+    return error.UnsupportedExpression;
+}
+
+/// Emit a block expression.
+///
+/// Blocks execute statements sequentially, then evaluate to the final expression.
+fn emitBlock(
+    ctx: *CirContext,
+    stmts: CIR.Statement.Span,
+    final_expr_idx: CIR.Expr.Idx,
+) Error!Builder.Value {
+    // Push a new scope for the block
+    ctx.emitter.pushScope() catch return error.OutOfMemory;
+    defer ctx.emitter.popScope();
+
+    // Execute each statement
+    var iter = ctx.module_env.store.statements.iterate(stmts);
+    while (iter.next()) |stmt| {
+        try emitStatement(ctx, stmt.*);
+    }
+
+    // Evaluate and return the final expression
+    const final_expr = ctx.module_env.store.getExpr(final_expr_idx);
+    return try emitExpr(ctx, final_expr);
+}
+
+/// Emit a statement (helper for block emission)
+fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
+    switch (stmt) {
+        .s_decl => |decl| {
+            // Let binding: evaluate value and bind to pattern
+            const value_expr = ctx.module_env.store.getExpr(decl.body);
+            const value = try emitExpr(ctx, value_expr);
+
+            // Get the pattern to extract the variable name
+            const pattern = ctx.module_env.store.getPattern(decl.pattern);
+
+            switch (pattern) {
+                .assign => |assign| {
+                    const name = ctx.module_env.getIdent(assign.ident);
+                    const scoped = emit.ScopedValue.simple(value, .i64); // TODO: Get proper type
+                    ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
+                },
+                else => {
+                    // Complex patterns need Phase 9
+                    return error.UnsupportedExpression;
+                },
+            }
+        },
+
+        .s_expr => |expr_stmt| {
+            // Expression statement: evaluate for side effects
+            const expr = ctx.module_env.store.getExpr(expr_stmt.expr);
+            _ = try emitExpr(ctx, expr);
+        },
+
+        .s_return => |ret| {
+            // Return statement: emit return instruction
+            const value_expr = ctx.module_env.store.getExpr(ret.value);
+            const value = try emitExpr(ctx, value_expr);
+            ctx.emitter.emitRet(value) catch return error.OutOfMemory;
+        },
+
+        // TODO: Implement other statement types
+        else => return error.UnsupportedExpression,
+    };
 }
