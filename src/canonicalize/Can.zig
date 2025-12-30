@@ -3145,10 +3145,11 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 
         // Canonicalize the type annotation for this entrypoint
         //
-        // IMPORTANT: We set the context here to be type_decl_anno so we
-        // correctly get errors if the annotation tries to introduce a rigid var
-        // that's not  in scope
-        var type_anno_ctx = TypeAnnoCtx.init(.type_decl_anno);
+        // We use inline_anno context here to allow open tag union extensions
+        // (like `..others` in `[Exit(I32), ..others]`) to introduce new type
+        // variables. Type variables from the for-clause (e.g., `model` in
+        // `[Model : model]`) are already in scope from the processing above.
+        var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
         const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
         // Store the required type in the module env
