@@ -393,100 +393,54 @@ pub fn compileAndExecute(
         return error.SymbolNotFound;
     }
 
-    // Call the function and format the result based on the return type.
+    // Call the function and format the result.
     //
-    // On Windows x64, we use pointer-based returns for ALL types.
-    // This matches the Rust REPL's approach (see run_jit_function! macro in
-    // crates/compiler/gen_llvm/src/run_roc.rs) and avoids all calling convention
-    // issues between LLVM-generated code and Zig callers.
+    // Following Roc's host ABI (see src/builtins/host_abi.zig), all functions
+    // exposed to the host return void and write their result to a pointer.
+    // This makes the ABI simple and platform-independent on all targets.
     //
-    // On other platforms, direct return works fine.
-    const use_out_ptr = builtin.os.tag == .windows and builtin.cpu.arch == .x86_64;
-
-    if (use_out_ptr) {
-        // Windows x64: void roc_eval(<type>* out_ptr)
-        return switch (result_type) {
-            .i64 => {
-                const EvalFn = *const fn (*i64) callconv(.c) void;
-                const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-                var result: i64 = undefined;
-                eval_fn(&result);
-                return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-            },
-            .u64 => {
-                const EvalFn = *const fn (*u64) callconv(.c) void;
-                const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-                var result: u64 = undefined;
-                eval_fn(&result);
-                return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-            },
-            .i128 => {
-                const EvalFn = *const fn (*i128) callconv(.c) void;
-                const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-                var result: i128 = undefined;
-                eval_fn(&result);
-                return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-            },
-            .u128 => {
-                const EvalFn = *const fn (*i128) callconv(.c) void;
-                const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-                var result: i128 = undefined;
-                eval_fn(&result);
-                return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
-            },
-            .f64 => {
-                const EvalFn = *const fn (*f64) callconv(.c) void;
-                const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-                var result: f64 = undefined;
-                eval_fn(&result);
-                return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-            },
-            .dec => {
-                const EvalFn = *const fn (*i128) callconv(.c) void;
-                const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-                var result: i128 = undefined;
-                eval_fn(&result);
-                return formatDec(allocator, result) catch return error.OutOfMemory;
-            },
-        };
-    }
-
-    // Non-Windows: direct return
+    // Function signature: void roc_eval(<type>* out_ptr)
     switch (result_type) {
-        .f64 => {
-            const EvalFn = *const fn () callconv(.c) f64;
-            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-        },
-        .i128 => {
-            const EvalFn = *const fn () callconv(.c) i128;
-            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-        },
-        .u128 => {
-            const EvalFn = *const fn () callconv(.c) u128;
-            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-        },
         .i64 => {
-            const EvalFn = *const fn () callconv(.c) i64;
+            const EvalFn = *const fn (*i64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
+            var result: i64 = undefined;
+            eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .u64 => {
-            const EvalFn = *const fn () callconv(.c) u64;
+            const EvalFn = *const fn (*u64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
+            var result: u64 = undefined;
+            eval_fn(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
+        .i128 => {
+            const EvalFn = *const fn (*i128) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: i128 = undefined;
+            eval_fn(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
+        .u128 => {
+            const EvalFn = *const fn (*i128) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: i128 = undefined;
+            eval_fn(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
+        },
+        .f64 => {
+            const EvalFn = *const fn (*f64) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: f64 = undefined;
+            eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .dec => {
-            const EvalFn = *const fn () callconv(.c) i128;
+            const EvalFn = *const fn (*i128) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
+            var result: i128 = undefined;
+            eval_fn(&result);
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
     }

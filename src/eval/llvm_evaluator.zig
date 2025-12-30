@@ -396,23 +396,15 @@ pub const LlvmEvaluator = struct {
         };
     }
 
-    /// Emit an eval function that returns the computed value.
-    /// For JIT execution, this avoids printf complexity and vararg ABI issues.
+    /// Emit an eval function that writes the computed value to a pointer.
     ///
-    /// The function signature depends on the platform:
-    /// - On Windows x64: void roc_eval(<type>* out_ptr)
-    ///   Windows x64 ABI has complex calling convention issues. The Rust REPL
-    ///   always uses pointer-based returns (see run_jit_function! macro in
-    ///   crates/compiler/gen_llvm/src/run_roc.rs). We do the same on Windows
-    ///   to avoid ABI mismatches between LLVM-generated code and Zig callers.
-    /// - On other platforms: <type> roc_eval()
-    ///   Direct return works fine on Linux, macOS, etc.
+    /// Following Roc's host ABI (see src/builtins/host_abi.zig), all functions
+    /// exposed to the host return void and write their result to a pointer.
+    /// This makes the ABI simple and platform-independent: "return pointer, done."
+    ///
+    /// Function signature: void roc_eval(<type>* out_ptr)
     fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
-        // On Windows x64, use pointer-based returns for ALL types.
-        // This matches the Rust REPL's approach and avoids all calling convention issues.
-        const use_out_ptr = builtin.os.tag == .windows and builtin.cpu.arch == .x86_64;
-
-        // Determine the value type to store/return
+        // Determine the value type to store
         const final_type: LlvmBuilder.Type = switch (result_type) {
             .i64, .u64 => .i64,
             .i128, .u128, .dec => .i128,
@@ -426,65 +418,47 @@ pub const LlvmEvaluator = struct {
             .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
         };
 
-        if (use_out_ptr) {
-            // Windows x64: void roc_eval(<type>* out_ptr)
-            const ptr_type = try builder.ptrType(.default);
-            const eval_type = try builder.fnType(.void, &.{ptr_type}, .normal);
-            const eval_name = try builder.strtabString("roc_eval");
-            const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
-            eval_fn.setLinkage(.external, builder);
+        // All platforms: void roc_eval(<type>* out_ptr)
+        // This follows Roc's host ABI where all exposed functions return void
+        // and write their result to a pointer argument.
+        const ptr_type = try builder.ptrType(.default);
+        const eval_type = try builder.fnType(.void, &.{ptr_type}, .normal);
+        const eval_name = if (builtin.os.tag == .macos)
+            try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
+        else
+            try builder.strtabString("roc_eval");
+        const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
+        eval_fn.setLinkage(.external, builder);
 
-            // Build function body
-            var wip = try LlvmBuilder.WipFunction.init(builder, .{
-                .function = eval_fn,
-                .strip = false,
-            });
-            defer wip.deinit();
+        // Build function body
+        var wip = try LlvmBuilder.WipFunction.init(builder, .{
+            .function = eval_fn,
+            .strip = false,
+        });
+        defer wip.deinit();
 
-            const entry_block = try wip.block(1, "entry"); // 1 arg
-            wip.cursor = .{ .block = entry_block };
+        const entry_block = try wip.block(0, "entry"); // entry block has 0 incoming branches
+        wip.cursor = .{ .block = entry_block };
 
-            // Get the pointer argument
-            const out_ptr = wip.arg(0);
+        // Get the pointer argument
+        const out_ptr = wip.arg(0);
 
-            // Convert value if needed and store through pointer
-            const store_value = if (value_type == final_type)
-                value.toValue()
-            else
-                try wip.conv(signedness, value.toValue(), final_type, "");
+        // Convert value if needed and store through pointer
+        const store_value = if (value_type == final_type)
+            value.toValue()
+        else
+            try wip.conv(signedness, value.toValue(), final_type, "");
 
-            _ = try wip.store(.default, store_value, out_ptr);
-            _ = try wip.retVoid();
-            try wip.finish();
-        } else {
-            // Non-Windows: direct return
-            const eval_type = try builder.fnType(final_type, &.{}, .normal);
-            const eval_name = if (builtin.os.tag == .macos)
-                try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
-            else
-                try builder.strtabString("roc_eval");
-            const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
-            eval_fn.setLinkage(.external, builder);
-
-            // Build eval function body
-            var wip = try LlvmBuilder.WipFunction.init(builder, .{
-                .function = eval_fn,
-                .strip = false,
-            });
-            defer wip.deinit();
-
-            const entry_block = try wip.block(0, "entry");
-            wip.cursor = .{ .block = entry_block };
-
-            // Convert the value to the return type if needed
-            const return_value = if (value_type == final_type)
-                value.toValue()
-            else
-                try wip.conv(signedness, value.toValue(), final_type, "");
-
-            _ = try wip.ret(return_value);
-            try wip.finish();
-        }
+        // Use natural alignment for the stored type
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
+            .i64 => 8,
+            .i128 => 16,
+            .double => 8,
+            else => 0, // default
+        });
+        _ = try wip.store(.normal, store_value, out_ptr, alignment);
+        _ = try wip.retVoid();
+        try wip.finish();
     }
 };
 
