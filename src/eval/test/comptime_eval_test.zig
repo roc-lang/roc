@@ -1822,3 +1822,766 @@ test "comptime eval - modulo by zero produces error" {
 // Note: "division by zero does not halt other defs" test is skipped because
 // the interpreter state after an eval error may not allow continuing evaluation
 // of subsequent definitions that share the same evaluation context.
+
+test "comptime eval - recursive nominal: simple IntList Nil" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Nil
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: IntList with one element" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Cons(42, IntList.Nil)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: IntList with two elements" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Cons(1, IntList.Cons(2, IntList.Nil))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: IntList with three elements" {
+    const src =
+        \\IntList := [Nil, Cons(I64, IntList)]
+        \\
+        \\x = IntList.Cons(1, IntList.Cons(2, IntList.Cons(3, IntList.Nil)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: binary tree Leaf" {
+    const src =
+        \\Tree := [Leaf, Node(Tree, I64, Tree)]
+        \\
+        \\x = Tree.Leaf
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: binary tree single node" {
+    const src =
+        \\Tree := [Leaf, Node(Tree, I64, Tree)]
+        \\
+        \\x = Tree.Node(Tree.Leaf, 42, Tree.Leaf)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: binary tree two levels" {
+    const src =
+        \\Tree := [Leaf, Node(Tree, I64, Tree)]
+        \\
+        \\x = Tree.Node(
+        \\    Tree.Node(Tree.Leaf, 1, Tree.Leaf),
+        \\    2,
+        \\    Tree.Node(Tree.Leaf, 3, Tree.Leaf)
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: option type None" {
+    const src =
+        \\Maybe := [None, Some(I64)]
+        \\
+        \\x = Maybe.None
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: option type Some" {
+    const src =
+        \\Maybe := [None, Some(I64)]
+        \\
+        \\x = Maybe.Some(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: nested option" {
+    const src =
+        \\MaybeInt := [None, Some(I64)]
+        \\MaybeMaybe := [Nothing, Just(MaybeInt)]
+        \\
+        \\x = MaybeMaybe.Just(MaybeInt.Some(42))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: simple expression tree" {
+    const src =
+        \\Expr := [Num(I64), Add(Expr, Expr)]
+        \\
+        \\x = Expr.Num(5)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: expression tree Add" {
+    const src =
+        \\Expr := [Num(I64), Add(Expr, Expr)]
+        \\
+        \\x = Expr.Add(Expr.Num(2), Expr.Num(3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: expression tree nested Add" {
+    const src =
+        \\Expr := [Num(I64), Add(Expr, Expr)]
+        \\
+        \\x = Expr.Add(
+        \\    Expr.Add(Expr.Num(1), Expr.Num(2)),
+        \\    Expr.Num(3)
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: peano zero" {
+    const src =
+        \\Nat := [Zero, Succ(Nat)]
+        \\
+        \\x = Nat.Zero
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: peano one" {
+    const src =
+        \\Nat := [Zero, Succ(Nat)]
+        \\
+        \\x = Nat.Succ(Nat.Zero)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: peano three" {
+    const src =
+        \\Nat := [Zero, Succ(Nat)]
+        \\
+        \\x = Nat.Succ(Nat.Succ(Nat.Succ(Nat.Zero)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON null" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Null
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON bool" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Bool(True)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON number" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Number(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: JSON empty array" {
+    const src =
+        \\Json := [Null, Bool(Bool), Number(I64), Array(List(Json))]
+        \\
+        \\x = Json.Array([])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: simple DOM Text" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Text("hello")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: DOM Element empty" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Element("div", [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: DOM Element with text child" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Element("p", [Node.Text("hello")])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: DOM nested elements" {
+    const src =
+        \\Node := [Text(Str), Element(Str, List(Node))]
+        \\
+        \\x = Node.Element("div", [
+        \\    Node.Element("span", [Node.Text("Hello")]),
+        \\    Node.Element("p", [Node.Text("World"), Node.Text("!")])
+        \\])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: result type Ok" {
+    const src =
+        \\Result := [Ok(I64), Err(Str)]
+        \\
+        \\x = Result.Ok(42)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: result type Err" {
+    const src =
+        \\Result := [Ok(I64), Err(Str)]
+        \\
+        \\x = Result.Err("something went wrong")
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: multiple lists" {
+    const src =
+        \\IntList := [INil, ICons(I64, IntList)]
+        \\StrList := [SNil, SCons(Str, StrList)]
+        \\
+        \\x = IntList.ICons(1, IntList.INil)
+        \\y = StrList.SCons("hello", StrList.SNil)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: rose tree" {
+    const src =
+        \\Rose := [Rose(I64, List(Rose))]
+        \\
+        \\x = Rose.Rose(1, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: rose tree with children" {
+    const src =
+        \\Rose := [Rose(I64, List(Rose))]
+        \\
+        \\x = Rose.Rose(1, [Rose.Rose(2, []), Rose.Rose(3, [])])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: stack empty" {
+    const src =
+        \\Stack := [Empty, Push(I64, Stack)]
+        \\
+        \\x = Stack.Empty
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: stack with items" {
+    const src =
+        \\Stack := [Empty, Push(I64, Stack)]
+        \\
+        \\x = Stack.Push(3, Stack.Push(2, Stack.Push(1, Stack.Empty)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: queue" {
+    const src =
+        \\Queue := [Empty, Node(I64, Queue)]
+        \\
+        \\x = Queue.Node(1, Queue.Node(2, Queue.Empty))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: arithmetic expr" {
+    const src =
+        \\Arith := [Lit(I64), Add(Arith, Arith), Mul(Arith, Arith), Neg(Arith)]
+        \\
+        \\x = Arith.Mul(
+        \\    Arith.Add(Arith.Lit(2), Arith.Lit(3)),
+        \\    Arith.Neg(Arith.Lit(4))
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: logic expr" {
+    const src =
+        \\Logic := [True, False, And(Logic, Logic), Or(Logic, Logic), Not(Logic)]
+        \\
+        \\x = Logic.And(Logic.Or(Logic.True, Logic.False), Logic.Not(Logic.False))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: simple singly-linked" {
+    const src =
+        \\Linked := [End, Link(I64, Linked)]
+        \\
+        \\x = Linked.Link(1, Linked.Link(2, Linked.End))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: chain of 5" {
+    const src =
+        \\Chain := [End, Link(I64, Chain)]
+        \\
+        \\x = Chain.Link(1, Chain.Link(2, Chain.Link(3, Chain.Link(4, Chain.Link(5, Chain.End)))))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: three-way tree" {
+    const src =
+        \\Tri := [Tip, Branch(Tri, Tri, Tri)]
+        \\
+        \\x = Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: three-way tree nested" {
+    const src =
+        \\Tri := [Tip, Branch(Tri, Tri, Tri)]
+        \\
+        \\x = Tri.Branch(
+        \\    Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip),
+        \\    Tri.Tip,
+        \\    Tri.Branch(Tri.Tip, Tri.Tip, Tri.Tip)
+        \\)
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: stream thunk" {
+    const src =
+        \\Stream := [Done, More(I64, Stream)]
+        \\
+        \\x = Stream.More(1, Stream.More(2, Stream.Done))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: difference list" {
+    const src =
+        \\DList := [Empty, Single(I64), Append(DList, DList)]
+        \\
+        \\x = DList.Append(DList.Single(1), DList.Append(DList.Single(2), DList.Single(3)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: rope" {
+    const src =
+        \\Rope := [Leaf(Str), Concat(Rope, Rope)]
+        \\
+        \\x = Rope.Concat(Rope.Leaf("hello"), Rope.Concat(Rope.Leaf(" "), Rope.Leaf("world")))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: finger" {
+    const src =
+        \\Finger := [Zero, One(I64), Two(I64, I64), Deep(Finger, List(I64), Finger)]
+        \\
+        \\x = Finger.Deep(Finger.One(1), [2, 3], Finger.One(4))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: trie node" {
+    const src =
+        \\Trie := [Empty, Leaf(I64), Branch(List(Trie))]
+        \\
+        \\x = Trie.Branch([Trie.Leaf(1), Trie.Empty, Trie.Leaf(2)])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: zipper" {
+    const src =
+        \\Tree := [Empty, Node(Tree, I64, Tree)]
+        \\Crumb := [LeftCrumb(I64, Tree), RightCrumb(Tree, I64)]
+        \\
+        \\focus = Tree.Node(Tree.Empty, 5, Tree.Empty)
+        \\trail = [Crumb.LeftCrumb(10, Tree.Empty)]
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: menu" {
+    const src =
+        \\Menu := [Item(Str), SubMenu(Str, List(Menu))]
+        \\
+        \\x = Menu.SubMenu("File", [Menu.Item("New"), Menu.Item("Open"), Menu.SubMenu("Recent", [])])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: filesystem" {
+    const src =
+        \\FS := [File(Str), Dir(Str, List(FS))]
+        \\
+        \\x = FS.Dir("root", [
+        \\    FS.File("readme.txt"),
+        \\    FS.Dir("src", [FS.File("main.roc")])
+        \\])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: org chart" {
+    const src =
+        \\Org := [Employee(Str), Manager(Str, List(Org))]
+        \\
+        \\x = Org.Manager("CEO", [
+        \\    Org.Manager("CTO", [Org.Employee("Dev1"), Org.Employee("Dev2")]),
+        \\    Org.Employee("CFO")
+        \\])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: path segments" {
+    const src =
+        \\Path := [Root, Segment(Str, Path)]
+        \\
+        \\x = Path.Segment("home", Path.Segment("user", Path.Segment("docs", Path.Root)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: command chain" {
+    const src =
+        \\Cmd := [Done, Step(Str, Cmd)]
+        \\
+        \\x = Cmd.Step("init", Cmd.Step("build", Cmd.Step("test", Cmd.Done)))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}

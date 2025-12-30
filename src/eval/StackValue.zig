@@ -56,11 +56,20 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
 /// Read the discriminant for a tag union, handling single-tag unions which don't store one.
 fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache: *LayoutStore) usize {
     std.debug.assert(layout.tag == .tag_union);
-    const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
+    const tu_idx = layout.data.tag_union.idx;
+    const tu_data = layout_cache.getTagUnionData(tu_idx);
     const variants = layout_cache.getTagUnionVariants(tu_data);
     // Single-tag unions don't have discriminants, so don't try to read one.
     if (variants.len == 1) return 0;
-    const discriminant = tu_data.readDiscriminant(base_ptr);
+    // Use dynamic discriminant offset computation to handle recursive types correctly
+    const disc_offset = layout_cache.getTagUnionDiscriminantOffset(tu_idx);
+    const disc_ptr = base_ptr + disc_offset;
+    const discriminant: u32 = switch (tu_data.discriminant_size) {
+        1 => disc_ptr[0],
+        2 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8),
+        4 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24),
+        else => 0, // discriminant_size is always 1, 2, or 4
+    };
     std.debug.assert(discriminant < variants.len);
     return discriminant;
 }

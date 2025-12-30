@@ -1877,7 +1877,9 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
@@ -1888,8 +1890,8 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write discriminant at discriminant_offset
-                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
+                            // Write discriminant at discriminant_offset (dynamically computed)
+                            const disc_ptr = ptr_u8 + disc_offset;
                             const disc_value: u32 = @intCast(ok_index orelse 0);
                             switch (tu_data.discriminant_size) {
                                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
@@ -2099,7 +2101,9 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info for Err case
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
@@ -2110,8 +2114,8 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write outer discriminant (Err) at discriminant_offset
-                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
+                            // Write outer discriminant (Err) at discriminant_offset (dynamically computed)
+                            const disc_ptr = ptr_u8 + disc_offset;
                             const disc_value: u32 = @intCast(err_index orelse 1);
                             switch (tu_data.discriminant_size) {
                                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
@@ -2126,10 +2130,12 @@ pub const Interpreter = struct {
 
                             // BadUtf8 is a tag_union with record { problem, index } as its payload
                             if (err_variant_layout.tag == .tag_union) {
-                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(err_variant_layout.data.tag_union.idx);
+                                const inner_tu_idx = err_variant_layout.data.tag_union.idx;
+                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(inner_tu_idx);
+                                const inner_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(inner_tu_idx);
 
                                 // Write inner discriminant (BadUtf8 is index 0)
-                                const inner_disc_ptr = ptr_u8 + inner_tu_data.discriminant_offset;
+                                const inner_disc_ptr = ptr_u8 + inner_disc_offset;
                                 switch (inner_tu_data.discriminant_size) {
                                     1 => @as(*u8, @ptrCast(inner_disc_ptr)).* = 0,
                                     2 => @as(*u16, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
@@ -4596,11 +4602,13 @@ pub const Interpreter = struct {
                 } else if (result_layout.tag == .tag_union) {
                     // Tag union layout: payload at offset 0, discriminant at discriminant_offset
                     var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                    const tu_idx = result_layout.data.tag_union.idx;
+                    const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                    const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-                    // Write tag discriminant at discriminant_offset
+                    // Write tag discriminant at discriminant_offset (dynamically computed)
                     const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                    const disc_ptr = base_ptr + disc_offset;
                     const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
                     switch (tu_data.discriminant_size) {
                         1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
@@ -4611,7 +4619,7 @@ pub const Interpreter = struct {
                     }
 
                     // Clear payload area (at offset 0)
-                    const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+                    const payload_size = disc_offset; // Payload spans from 0 to discriminant_offset
                     if (payload_size > 0) {
                         @memset(base_ptr[0..payload_size], 0);
                     }
@@ -5308,11 +5316,13 @@ pub const Interpreter = struct {
         } else if (result_layout.tag == .tag_union) {
             // Tag union layout: payload at offset 0, discriminant at discriminant_offset
             const dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-            // Write tag discriminant at discriminant_offset
+            // Write tag discriminant at discriminant_offset (dynamically computed)
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
             const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
             switch (tu_data.discriminant_size) {
                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
@@ -5323,7 +5333,7 @@ pub const Interpreter = struct {
             }
 
             // Clear payload area (at offset 0)
-            const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+            const payload_size = disc_offset; // Payload spans from 0 to discriminant_offset
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -5913,10 +5923,12 @@ pub const Interpreter = struct {
             return dest;
         } else if (result_layout.tag == .tag_union) {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
 
             // Write discriminant
             switch (tu_data.discriminant_size) {
@@ -5928,7 +5940,7 @@ pub const Interpreter = struct {
             }
 
             // Clear and write payload
-            const payload_size = tu_data.discriminant_offset;
+            const payload_size = disc_offset;
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -6030,9 +6042,10 @@ pub const Interpreter = struct {
             return (bool_byte != 0) == equals;
         } else if (value.layout.tag == .tag_union) {
             // Tag union Bool: read discriminant at the correct offset
-            const tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+            const tu_idx = value.layout.data.tag_union.idx;
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
             const bool_byte = disc_ptr[0];
             // Debug removed
             // discriminant 1 = True, discriminant 0 = False
@@ -8778,6 +8791,102 @@ pub const Interpreter = struct {
         );
     }
 
+    /// Find the index of a Box layout that points to a specific tag_union within a layout tree.
+    /// Returns the index of the Box layout if found, or null if not found.
+    /// This preserves the exact index from the layout store to avoid creating duplicates.
+    fn findBoxIdxForTagUnion(self: *Interpreter, lay_idx: layout.Idx, target_tu_idx: layout.TagUnionIdx) ?layout.Idx {
+        const lay = self.runtime_layout_store.getLayout(lay_idx);
+        switch (lay.tag) {
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
+                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                    return lay_idx; // Return the index, not the layout
+                }
+                // Don't recurse into a different tag_union
+                if (inner_layout.tag == .tag_union) {
+                    return null;
+                }
+                return self.findBoxIdxForTagUnion(lay.data.box, target_tu_idx);
+            },
+            .tuple => {
+                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
+                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
+                        return box_idx;
+                    }
+                }
+                return null;
+            },
+            .record => {
+                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
+                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
+                        return box_idx;
+                    }
+                }
+                return null;
+            },
+            .list => {
+                return self.findBoxIdxForTagUnion(lay.data.list, target_tu_idx);
+            },
+            else => return null,
+        }
+    }
+
+    /// Check if a layout contains a Box that points to a specific tag_union.
+    /// This is used to detect recursive types - a tag_union is recursive if one of its
+    /// variant payloads contains a Box pointing back to the same tag_union.
+    fn layoutContainsBoxOfTagUnion(self: *Interpreter, lay: layout.Layout, target_tu_idx: layout.TagUnionIdx) bool {
+        switch (lay.tag) {
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
+                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                    return true;
+                }
+                // Don't recurse into tag_unions (we're looking for Box(target), not nested tag_unions)
+                if (inner_layout.tag == .tag_union) {
+                    return false;
+                }
+                return self.layoutContainsBoxOfTagUnion(inner_layout, target_tu_idx);
+            },
+            .tuple => {
+                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
+                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .record => {
+                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
+                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .list => {
+                const elem_layout = self.runtime_layout_store.getLayout(lay.data.list);
+                return self.layoutContainsBoxOfTagUnion(elem_layout, target_tu_idx);
+            },
+            // Don't recurse into tag_unions - we're looking for Box(target) directly
+            // in the current payload, not inside nested tag_unions
+            else => return false,
+        }
+    }
+
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         const trace = tracy.trace(@src());
@@ -8787,21 +8896,21 @@ pub const Interpreter = struct {
 
         // Apply rigid variable substitution if this is a rigid variable
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
+        // Use a counter to detect infinite loops from cyclic substitutions
         var count: u32 = 0;
         while (resolved.desc.content == .rigid) {
             const rigid_name = resolved.desc.content.rigid.name;
             // First check rigid_subst (by type variable)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 count += 1;
-                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
+                if (count >= 1000) return error.Crash; // Cyclic rigid substitution
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
                 // Fall back to rigid_name_subst (by string index) - used for for-clause type mappings
                 // Also add this to rigid_subst for faster future lookups
                 self.rigid_subst.put(resolved.var_, substituted_var) catch {};
                 count += 1;
-                std.debug.assert(count < 1000);
+                if (count >= 1000) return error.Crash; // Cyclic rigid substitution
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -13021,10 +13130,12 @@ pub const Interpreter = struct {
             return dest;
         } else if (layout_val.tag == .tag_union) {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            // Write discriminant at discriminant_offset
-            const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+            // Write discriminant at discriminant_offset (dynamically computed)
+            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
             switch (tu_data.discriminant_size) {
                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_index),
                 2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
@@ -14264,12 +14375,86 @@ pub const Interpreter = struct {
                             values[i] = value_stack.pop() orelse return error.Crash;
                         }
 
-                        // Use the actual layout from the first evaluated element
+                        // Check if we need to auto-box elements for recursive types
+                        // This happens when the expected element type is Box (from placeholder resolution)
+                        // but actual evaluated values are not boxed.
                         const actual_elem_layout = values[0].layout;
 
-                        // Create the list layout with the correct element layout
-                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                        // Try to get the expected element layout to check for Box.
+                        // If elem_rt_var is a rigid var with cyclic substitution, fall back to
+                        // checking the actual layout for recursiveness.
+                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch |err| switch (err) {
+                            error.Crash => null,
+                            else => return err,
+                        };
+
+                        // Check if the element type is a recursive nominal that needs boxing.
+                        // We check if the actual element layout is a tag_union that contains
+                        // a variant with a payload containing a Box pointing to this same tag_union.
+                        // This indicates a recursive type that needs element boxing.
+                        var need_auto_box = if (expected_elem_layout_opt) |expected_elem_layout|
+                            expected_elem_layout.tag == .box and
+                                actual_elem_layout.tag != .box and actual_elem_layout.tag != .box_of_zst
+                        else
+                            false;
+
+                        // If not already detected as needing boxing, check if the actual layout
+                        // is a recursive tag_union (contains a Box pointing back to itself)
+                        if (!need_auto_box and actual_elem_layout.tag == .tag_union) {
+                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            // Check if any variant's payload contains a Box that points to a tag_union
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    need_auto_box = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Determine the element layout index for the list
+                        var list_elem_layout = actual_elem_layout;
+                        var list_elem_idx: layout.Idx = undefined;
+
+                        if (need_auto_box) {
+                            // Find the existing Box layout INDEX from the tag union's variant payloads.
+                            // We must use the exact same index to avoid layout mismatches when
+                            // the list is copied into variant payloads later.
+                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                            // Look through variants for one with a Box(this_tag_union)
+                            var found_box_idx: ?layout.Idx = null;
+                            var search_idx: usize = 0;
+                            while (search_idx < variants.len) : (search_idx += 1) {
+                                const variant = variants.get(search_idx);
+                                if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                    found_box_idx = box_idx;
+                                    break;
+                                }
+                            }
+
+                            if (found_box_idx) |box_idx| {
+                                list_elem_idx = box_idx;
+                                list_elem_layout = self.runtime_layout_store.getLayout(box_idx);
+                            } else {
+                                // Fallback: create a new Box layout
+                                const actual_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
+                                list_elem_layout = Layout.box(actual_elem_idx);
+                                list_elem_idx = try self.runtime_layout_store.insertLayout(list_elem_layout);
+                            }
+                        } else {
+                            // No boxing needed - use the actual element layout
+                            list_elem_idx = try self.runtime_layout_store.insertLayout(list_elem_layout);
+                        }
+
+                        // Create the list layout with the correct element layout index
+                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = list_elem_idx } };
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
@@ -14283,10 +14468,10 @@ pub const Interpreter = struct {
                         }
 
                         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                        const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                        const elem_alignment = list_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
-                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
-                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(actual_elem_layout);
+                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(list_elem_layout));
+                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(list_elem_layout);
 
                         var runtime_list = RocList.allocateExact(
                             elem_alignment_u32,
@@ -14298,9 +14483,30 @@ pub const Interpreter = struct {
 
                         if (elem_size > 0) {
                             if (runtime_list.bytes) |buffer| {
-                                for (values, 0..) |val, idx| {
-                                    const dest_ptr = buffer + idx * elem_size;
-                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                if (need_auto_box) {
+                                    // Auto-box each element before storing in the list
+                                    // list_elem_layout is Box(actual_elem_layout), so get the inner type
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(list_elem_layout.data.box);
+                                    const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                    const target_usize = self.runtime_layout_store.targetUsize();
+                                    const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                    for (values, 0..) |val, idx| {
+                                        const dest_ptr = buffer + idx * elem_size;
+                                        // Allocate heap memory with refcount for the boxed value
+                                        const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                        if (inner_elem_size > 0 and val.ptr != null) {
+                                            try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                        }
+                                        // Write box pointer to list element location
+                                        const slot: *usize = @ptrCast(@alignCast(dest_ptr));
+                                        slot.* = @intFromPtr(data_ptr);
+                                    }
+                                } else {
+                                    for (values, 0..) |val, idx| {
+                                        const dest_ptr = buffer + idx * elem_size;
+                                        try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    }
                                 }
                             }
                         }
@@ -14776,7 +14982,9 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     } else if (tc.layout_type == 2) {
                         // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-                        const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                        const tu_idx = layout_val.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         // Check for layout mismatch - if the expected payload is smaller than actual
                         // we need to use a properly-sized tuple layout to avoid corruption.
@@ -14784,7 +14992,7 @@ pub const Interpreter = struct {
                         // is a disconnected flex var that defaults to ZST layout.
                         if (total_count == 1) {
                             const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
-                            const expected_payload_size = tu_data.discriminant_offset; // payload is before discriminant
+                            const expected_payload_size = disc_offset; // payload is before discriminant
                             // Apply fix when expected payload is very small but actual is larger
                             const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
                             if (needs_fix) {
@@ -14842,33 +15050,118 @@ pub const Interpreter = struct {
                         // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            // Get expected payload layout from the variant
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                            // Check if we need to auto-box: expected is Box but actual isn't
+                            if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
+                                // Auto-box the value for recursive types
+                                const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                                const target_usize = self.runtime_layout_store.targetUsize();
+                                const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+
+                                const data_ptr = builtins.utils.allocateWithRefcount(elem_size, elem_align, false, roc_ops);
+                                if (elem_size > 0 and values[0].ptr != null) {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                }
+
+                                // Write box pointer to payload location
+                                const slot: *usize = @ptrCast(@alignCast(payload_ptr));
+                                slot.* = @intFromPtr(data_ptr);
+                            } else {
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            }
                         } else {
                             // Multiple args - create tuple payload at offset 0
-                            var elem_layouts = try self.allocator.alloc(Layout, total_count);
-                            defer self.allocator.free(elem_layouts);
-                            var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
-                            defer self.allocator.free(elem_rt_vars);
-                            for (values, 0..) |val, idx| {
-                                elem_layouts[idx] = val.layout;
-                                elem_rt_vars[idx] = val.rt_var;
-                            }
-                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                            // Create tuple type from element types
-                            const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
-                            const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
-                            const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
-                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
-                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
-                            for (values, 0..) |val, idx| {
-                                try tup_acc.setElement(idx, val, roc_ops);
+                            // Get expected payload layout from the variant to handle auto-boxing
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                            // If expected payload is a tuple, we need to check each field for auto-boxing
+                            if (expected_payload_layout.tag == .tuple) {
+                                const expected_tuple_data = self.runtime_layout_store.getTupleData(expected_payload_layout.data.tuple.idx);
+                                const expected_fields = self.runtime_layout_store.tuple_fields.sliceRange(expected_tuple_data.getFields());
+
+                                // Create tuple with expected layouts for proper sizing
+                                // We must use the ORIGINAL index from expected_fields, not the sorted index
+                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                                defer self.allocator.free(elem_layouts);
+                                var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
+                                defer self.allocator.free(elem_rt_vars);
+                                // Initialize with actual value layouts first
+                                for (values, 0..) |val, idx| {
+                                    elem_layouts[idx] = val.layout;
+                                    elem_rt_vars[idx] = val.rt_var;
+                                }
+                                // Override with expected layouts using original indices
+                                for (0..expected_fields.len) |sorted_idx| {
+                                    const field = expected_fields.get(sorted_idx);
+                                    const orig_idx = field.index;
+                                    if (orig_idx < total_count) {
+                                        elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
+                                    }
+                                }
+                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                                const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
+                                const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
+                                const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
+                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
+                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+
+                                // Set each element, auto-boxing if needed
+                                // Use elem_layouts which we already populated with correct original indices
+                                for (values, 0..) |val, idx| {
+                                    const expected_elem_layout = elem_layouts[idx];
+                                    // Check if we need to auto-box
+                                    if (expected_elem_layout.tag == .box and val.layout.tag != .box and val.layout.tag != .box_of_zst) {
+                                        // Auto-box the value
+                                        const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
+                                        const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                        const target_usize = self.runtime_layout_store.targetUsize();
+                                        const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                        const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                        if (inner_elem_size > 0 and val.ptr != null) {
+                                            try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                        }
+
+                                        // Write box pointer to element location
+                                        const elem_ptr = try tup_acc.getElementPtr(idx);
+                                        const slot: *usize = @ptrCast(@alignCast(elem_ptr));
+                                        slot.* = @intFromPtr(data_ptr);
+                                    } else {
+                                        try tup_acc.setElement(idx, val, roc_ops);
+                                    }
+                                }
+                            } else {
+                                // Fallback: use actual value layouts
+                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                                defer self.allocator.free(elem_layouts);
+                                var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
+                                defer self.allocator.free(elem_rt_vars);
+                                for (values, 0..) |val, idx| {
+                                    elem_layouts[idx] = val.layout;
+                                    elem_rt_vars[idx] = val.rt_var;
+                                }
+                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                                const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
+                                const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
+                                const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
+                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
+                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                for (values, 0..) |val, idx| {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
                             }
                         }
 
                         // Write discriminant AFTER the payload, so it doesn't get overwritten
                         // by a payload that extends past the discriminant offset.
-                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                        const disc_ptr = base_ptr + disc_offset;
                         switch (tu_data.discriminant_size) {
                             1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
                             2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
@@ -17617,10 +17910,11 @@ pub const Interpreter = struct {
                         break :blk discriminant == 2; // LT
                     } else if (cmp_result.layout.tag == .tag_union) {
                         // Get discriminant from tag_union layout
-                        const tu_data = self.runtime_layout_store.getTagUnionData(cmp_result.layout.data.tag_union.idx);
+                        const tu_idx = cmp_result.layout.data.tag_union.idx;
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
                         if (cmp_result.ptr) |ptr| {
                             const base_ptr: [*]u8 = @ptrCast(ptr);
-                            const discriminant_ptr = base_ptr + tu_data.discriminant_offset;
+                            const discriminant_ptr = base_ptr + disc_offset;
                             const discriminant: u8 = discriminant_ptr[0];
                             // Tag order is alphabetical: EQ=0, GT=1, LT=2
                             break :blk discriminant == 2; // LT

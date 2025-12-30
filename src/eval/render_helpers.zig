@@ -475,10 +475,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .tag_union) {
                 // Tag union with new proper layout: payload at offset 0, discriminant at discriminant_offset
-                const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+                const tu_idx = value.layout.data.tag_union.idx;
+                const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+                const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
                 if (value.ptr) |ptr| {
                     const base_ptr: [*]u8 = @ptrCast(ptr);
-                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
+                    const disc_ptr = base_ptr + disc_offset;
                     // Read discriminant based on its size
                     const discriminant: usize = switch (tu_data.discriminant_size) {
                         1 => @as(*const u8, @ptrCast(disc_ptr)).*,
@@ -867,12 +869,14 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     }
     if (value.layout.tag == .tag_union) {
         // Layout-only fallback for tag_union: show discriminant and raw payload
-        const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+        const tu_idx = value.layout.data.tag_union.idx;
+        const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+        const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
         var out = std.array_list.AlignedManaged(u8, null).init(gpa);
         errdefer out.deinit();
         if (value.ptr) |ptr| {
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
             const discriminant: usize = switch (tu_data.discriminant_size) {
                 1 => @as(*const u8, @ptrCast(disc_ptr)).*,
                 2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,

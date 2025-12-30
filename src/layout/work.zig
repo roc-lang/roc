@@ -47,7 +47,7 @@ pub const Work = struct {
         backing_var: types.Var,
     };
 
-    pub const PendingContainerItem = struct { var_: types.Var, container: PendingContainer };
+    pub const PendingContainerItem = struct { var_: ?types.Var, container: PendingContainer };
 
     /// Tuple field for layout work - similar to RecordField but with index instead of name.
     /// We need to explicitly record the index because zero-sized tuple fields might have
