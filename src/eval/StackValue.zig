@@ -1012,7 +1012,8 @@ pub const TagUnionAccessor = struct {
     /// Read the discriminant (tag index) from the tag union
     pub fn getDiscriminant(self: TagUnionAccessor) usize {
         const base_ptr: [*]const u8 = @ptrCast(self.base_value.ptr.?);
-        return self.tu_data.readDiscriminant(base_ptr);
+        // Use dynamic offset computation to handle recursive types correctly
+        return readTagUnionDiscriminant(self.base_value.layout, base_ptr, self.layout_cache);
     }
 
     /// Get the layout for a specific variant by discriminant
@@ -1470,10 +1471,11 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
     // Handle tag unions by reading discriminant and incref'ing only the active variant's payload
     if (self.layout.tag == .tag_union) {
         if (self.ptr == null) return;
-        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
+        // Use dynamic offset computation to handle recursive types correctly
+        const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
 
+        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
         std.debug.assert(discriminant < variants.len);
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);

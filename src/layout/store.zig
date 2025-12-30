@@ -1239,7 +1239,24 @@ pub const Store = struct {
             // Check cache at every iteration - critical for recursive types
             // where the inner reference may resolve to the same var as the outer type
             if (self.layouts_by_var.get(current.var_)) |cached_idx| {
-                layout_idx = cached_idx;
+                // For recursive nominal types used as elements in List or Box containers,
+                // we need to use the boxed layout, not the raw cached layout.
+                // But for tag union and record fields, we use the raw layout - the type
+                // system says it's Node, not Box(Node).
+                if (self.work.pending_containers.len > 0) {
+                    const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                    if (pending_item.container == .list or pending_item.container == .box) {
+                        if (self.recursive_boxed_layouts.get(current.var_)) |boxed_idx| {
+                            layout_idx = boxed_idx;
+                        } else {
+                            layout_idx = cached_idx;
+                        }
+                    } else {
+                        layout_idx = cached_idx;
+                    }
+                } else {
+                    layout_idx = cached_idx;
+                }
                 skip_layout_computation = true;
             } else if (self.work.in_progress_vars.contains(current.var_)) {
                 // Cycle detection: this var is already being processed.
@@ -1873,6 +1890,16 @@ pub const Store = struct {
                         // Update the cache so direct lookups get the actual layout
                         try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
                         try nominals_to_remove.append(self.env.gpa, entry.key_ptr.*);
+
+                        // CRITICAL: If there are pending containers (List, Box, etc.), update layout_idx
+                        // to use the boxed layout. Container elements need boxed layouts for recursive
+                        // types to have fixed size. The boxed layout was stored in recursive_boxed_layouts.
+                        if (self.work.pending_containers.len > 0) {
+                            if (self.recursive_boxed_layouts.get(progress.nominal_var)) |boxed_layout_idx| {
+                                // Use the boxed layout for pending containers
+                                layout_idx = boxed_layout_idx;
+                            }
+                        }
                     }
                 }
 
@@ -2042,6 +2069,16 @@ pub const Store = struct {
                             // Update the cache so direct lookups get the actual layout
                             try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
                             try nominals_to_remove_container.append(self.env.gpa, entry.key_ptr.*);
+
+                            // CRITICAL: If there are more pending containers, update layout_idx
+                            // to use the boxed layout. Container elements need boxed layouts for
+                            // recursive types to have fixed size.
+                            if (self.work.pending_containers.len > 0) {
+                                if (self.recursive_boxed_layouts.get(progress.nominal_var)) |boxed_layout_idx| {
+                                    // Use the boxed layout for pending containers
+                                    layout_idx = boxed_layout_idx;
+                                }
+                            }
                         }
                     }
 

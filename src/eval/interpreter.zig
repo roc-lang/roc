@@ -7134,6 +7134,14 @@ pub const Interpreter = struct {
                     const arg_var = arg_vars[0];
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
                     const effective_layout = blk: {
+                        // CRITICAL: If the actual variant layout is a Box, use it.
+                        // This handles recursive types where List elements are boxed,
+                        // but the type system says the element type is the unboxed type.
+                        // The actual memory layout (variant_layout) is authoritative.
+                        if (variant_layout.tag == .box) {
+                            break :blk variant_layout;
+                        }
+
                         // First try: if arg is a rigid with a substitution, use substituted type's layout
                         if (arg_resolved.desc.content == .rigid) {
                             if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
@@ -7169,6 +7177,43 @@ pub const Interpreter = struct {
                 }
 
                 return .{ .index = tag_index, .payload = payload_value };
+            },
+            .box => {
+                // Auto-unbox for recursive types: the value is boxed but we need to extract
+                // the tag union inside. This happens when list elements are boxed for recursive types.
+                const elem_idx = value.layout.data.box;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
+
+                // Get the element rt_var from the Box type's type argument
+                const elem_rt_var = blk: {
+                    const box_resolved = self.runtime_types.resolveVar(value.rt_var);
+                    if (box_resolved.desc.content == .structure) {
+                        const flat = box_resolved.desc.content.structure;
+                        if (flat == .nominal_type) {
+                            const nom = flat.nominal_type;
+                            const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
+                            if (type_args.len > 0) {
+                                break :blk type_args[0];
+                            }
+                        }
+                    }
+                    // Fallback to union_rt_var
+                    break :blk union_rt_var;
+                };
+
+                // Get pointer to heap data from the box
+                const box_ptr: *const usize = @ptrCast(@alignCast(value.ptr.?));
+                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+
+                // Create an unboxed value and recursively extract tag
+                const unboxed = StackValue{
+                    .layout = elem_layout,
+                    .ptr = data_ptr,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+
+                return self.extractTagValue(unboxed, elem_rt_var);
             },
             else => return error.TypeMismatch,
         }
@@ -14860,6 +14905,21 @@ pub const Interpreter = struct {
                                 // Write box pointer to payload location
                                 const slot: *usize = @ptrCast(@alignCast(payload_ptr));
                                 slot.* = @intFromPtr(data_ptr);
+                            } else if (values[0].layout.tag == .box and expected_payload_layout.tag != .box) {
+                                // Auto-unbox: actual is boxed but expected is unboxed.
+                                // This happens when List elements are boxed (for recursive types),
+                                // but wrapped in a tag union (like Try) whose type says unboxed.
+                                // Dereference the box and copy the inner data.
+                                const inner_layout = self.runtime_layout_store.getLayout(values[0].layout.data.box);
+                                const box_ptr: *const usize = @ptrCast(@alignCast(values[0].ptr.?));
+                                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+                                const inner_value = StackValue{
+                                    .layout = inner_layout,
+                                    .ptr = data_ptr,
+                                    .is_initialized = true,
+                                    .rt_var = values[0].rt_var,
+                                };
+                                try inner_value.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             } else {
                                 try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             }
