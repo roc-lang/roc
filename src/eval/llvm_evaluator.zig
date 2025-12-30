@@ -29,6 +29,45 @@ const Can = can.Can;
 const Check = check.Check;
 const builtin_loading = eval_mod.builtin_loading;
 
+/// Get the LLVM target triple for the current platform.
+/// This is needed so LLVM knows to use the correct calling conventions
+/// (e.g., Windows x64 ABI for i128/f64 returns).
+fn getLlvmTriple() []const u8 {
+    // Construct LLVM triple from Zig builtin values
+    const arch = switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        .x86 => "i686",
+        .arm => "arm",
+        .wasm32 => "wasm32",
+        else => "unknown",
+    };
+
+    const vendor_os = switch (builtin.os.tag) {
+        .windows => "-pc-windows",
+        .macos => "-apple-darwin",
+        .linux => "-unknown-linux",
+        .freebsd => "-unknown-freebsd",
+        .ios => "-apple-ios",
+        else => "-unknown-unknown",
+    };
+
+    const abi = switch (builtin.os.tag) {
+        .windows => switch (builtin.abi) {
+            .gnu => "-gnu",
+            else => "-msvc",
+        },
+        .linux => switch (builtin.abi) {
+            .musl, .musleabi, .musleabihf => "-musl",
+            .gnu, .gnueabi, .gnueabihf => "-gnu",
+            else => "-gnu",
+        },
+        else => "",
+    };
+
+    return arch ++ vendor_os ++ abi;
+}
+
 /// LLVM-based evaluator for Roc expressions
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
@@ -127,11 +166,13 @@ pub const LlvmEvaluator = struct {
     /// Returns the bitcode and whether it's a float type (for printf formatting)
     /// The caller is responsible for freeing the bitcode via result.deinit()
     pub fn generateBitcode(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!BitcodeResult {
-        // Create LLVM Builder
+        // Create LLVM Builder with target triple so LLVM uses correct calling conventions.
+        // Without the triple, LLVM may not use Windows x64 ABI for i128/f64 returns.
         var builder = LlvmBuilder.init(.{
             .allocator = self.allocator,
             .name = "roc_repl_eval",
             .target = &builtin.target,
+            .triple = getLlvmTriple(),
         }) catch return error.OutOfMemory;
         defer builder.deinit();
 
