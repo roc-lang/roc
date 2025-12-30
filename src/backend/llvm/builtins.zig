@@ -270,9 +270,7 @@ pub fn emitBuiltinCall(
     ) catch return error.OutOfMemory;
 }
 
-// ============================================================
 // High-level helpers for common builtin patterns
-// ============================================================
 
 /// Emit an incref call for a refcounted value.
 /// ptr: Pointer to the data (refcount is at ptr - sizeof(isize))

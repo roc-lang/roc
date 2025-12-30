@@ -656,9 +656,7 @@ pub const LlvmEmitter = struct {
         return self.wip_function;
     }
 
-    // ============================================================
     // Scope Management
-    // ============================================================
 
     /// Push a new scope onto the scope stack
     pub fn pushScope(self: *LlvmEmitter) Error!void {

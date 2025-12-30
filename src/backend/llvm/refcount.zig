@@ -114,14 +114,14 @@ pub fn emitIncref(
             // Records: incref each refcounted field
             const record_layout = layout_val.data.record;
             const record_data = store.getRecord(record_layout.idx);
-            try emitRecordIncref(ctx, emitter, store, value, record_data, amount, roc_ops);
+            try emitRecordIncref(ctx, emitter, store, value, record_data, amount);
         },
 
         .tuple => {
             // Tuples: same as records
             const tuple_layout = layout_val.data.tuple;
             const tuple_data = store.getTuple(tuple_layout.idx);
-            try emitTupleIncref(ctx, emitter, store, value, tuple_data, amount, roc_ops);
+            try emitTupleIncref(ctx, emitter, store, value, tuple_data, amount);
         },
 
         .tag_union => {
@@ -189,13 +189,13 @@ pub fn emitDecref(
         .record => {
             const record_layout = layout_val.data.record;
             const record_data = store.getRecord(record_layout.idx);
-            try emitRecordDecref(ctx, emitter, store, value, record_data, roc_ops);
+            try emitRecordDecref(ctx, emitter, store, value, record_data);
         },
 
         .tuple => {
             const tuple_layout = layout_val.data.tuple;
             const tuple_data = store.getTuple(tuple_layout.idx);
-            try emitTupleDecref(ctx, emitter, store, value, tuple_data, roc_ops);
+            try emitTupleDecref(ctx, emitter, store, value, tuple_data);
         },
 
         .tag_union => {
@@ -214,9 +214,7 @@ pub fn emitDecref(
     }
 }
 
-// ============================================================
 // Type-specific refcount helpers
-// ============================================================
 
 fn emitStrIncref(
     ctx: *RefcountContext,
@@ -347,10 +345,7 @@ fn emitRecordIncref(
     record_ptr: Builder.Value,
     record_data: layout_mod.RecordData,
     amount: i64,
-    roc_ops: Builder.Value,
 ) Error!void {
-    _ = roc_ops;
-
     // Iterate through fields and incref any refcounted ones
     const fields_range = record_data.getFields();
     var field_idx: u32 = 0;
@@ -377,10 +372,7 @@ fn emitRecordDecref(
     store: *const Store,
     record_ptr: Builder.Value,
     record_data: layout_mod.RecordData,
-    roc_ops: Builder.Value,
 ) Error!void {
-    _ = roc_ops;
-
     const fields_range = record_data.getFields();
     var field_idx: u32 = 0;
     var iter = store.record_fields.iterate(fields_range);
@@ -406,10 +398,7 @@ fn emitTupleIncref(
     tuple_ptr: Builder.Value,
     tuple_data: layout_mod.TupleData,
     amount: i64,
-    roc_ops: Builder.Value,
 ) Error!void {
-    _ = roc_ops;
-
     const fields_range = tuple_data.getFields();
     var field_idx: u32 = 0;
     var iter = store.tuple_fields.iterate(fields_range);
@@ -434,10 +423,7 @@ fn emitTupleDecref(
     store: *const Store,
     tuple_ptr: Builder.Value,
     tuple_data: layout_mod.TupleData,
-    roc_ops: Builder.Value,
 ) Error!void {
-    _ = roc_ops;
-
     const fields_range = tuple_data.getFields();
     var field_idx: u32 = 0;
     var iter = store.tuple_fields.iterate(fields_range);

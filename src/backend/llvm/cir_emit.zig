@@ -124,70 +124,52 @@ pub const CirContext = struct {
 /// Returns the LLVM value representing the expression's result.
 pub fn emitExpr(ctx: *CirContext, expr: CIR.Expr) Error!Builder.Value {
     return switch (expr) {
-        // ========================================
         // Numeric Literals
-        // ========================================
         .e_num => |num| try emitNumber(ctx, num.value, num.kind),
         .e_frac_f32 => |frac| try emitFloat32(ctx, frac.value),
         .e_frac_f64 => |frac| try emitFloat64(ctx, frac.value),
         .e_dec => |dec| try emitDec(ctx, dec.value.num),
         .e_dec_small => |dec| try emitDecSmall(ctx, dec.value),
 
-        // ========================================
         // String Literals
-        // ========================================
         .e_str_segment => |seg| try emitStrSegment(ctx, seg.literal),
         .e_str => |str_expr| try emitStr(ctx, str_expr.span),
 
-        // ========================================
         // Collections
-        // ========================================
         .e_list => |list| try emitList(ctx, list.elems),
         .e_empty_list => try emitEmptyList(ctx),
         .e_tuple => |tuple| try emitTuple(ctx, tuple.elems),
         .e_record => |record| try emitRecord(ctx, record.fields, record.ext),
         .e_empty_record => try emitEmptyRecord(ctx),
 
-        // ========================================
         // Variables
-        // ========================================
         .e_lookup_local => |lookup| try emitLocalLookup(ctx, lookup.pattern_idx),
         .e_lookup_external => |lookup| try emitExternalLookup(ctx, lookup),
         .e_lookup_required => return error.UnsupportedExpression, // Platform-specific
 
-        // ========================================
         // Tags
-        // ========================================
         .e_tag => |tag| try emitTag(ctx, tag.name, tag.args),
         .e_zero_argument_tag => |tag| try emitZeroArgTag(ctx, tag.name),
         .e_nominal => return error.UnsupportedExpression, // TODO
         .e_nominal_external => return error.UnsupportedExpression, // TODO
 
-        // ========================================
         // Operations
-        // ========================================
         .e_binop => |binop| try emitBinop(ctx, binop),
         .e_unary_minus => |unary| try emitUnaryMinus(ctx, unary),
         .e_unary_not => |unary| try emitUnaryNot(ctx, unary),
         .e_dot_access => |access| try emitDotAccess(ctx, access),
 
-        // ========================================
         // Control Flow
-        // ========================================
         .e_if => |if_expr| try emitIf(ctx, if_expr.branches, if_expr.final_else),
         .e_match => |match_expr| try emitMatch(ctx, match_expr),
-        .e_block => |block| try emitBlock(ctx, block.stmts, block.final_expr)
+        .e_block => |block| try emitBlock(ctx, block.stmts, block.final_expr),
 
-        // ========================================
         // Functions
-        // ========================================
         .e_call => |call| try emitCall(ctx, call.func, call.args),
         .e_lambda => |lambda| try emitLambda(ctx, lambda),
-        .e_closure => |closure| try emitClosure(ctx, closure)
+        .e_closure => |closure| try emitClosure(ctx, closure),
 
-        // ========================================
         // Special Expressions
-        // ========================================
         .e_runtime_error => |err| try emitRuntimeError(ctx, err.diagnostic),
         .e_crash => |crash| try emitCrash(ctx, crash.msg),
         .e_dbg => |dbg| try emitDbg(ctx, dbg.expr),
@@ -199,9 +181,7 @@ pub fn emitExpr(ctx: *CirContext, expr: CIR.Expr) Error!Builder.Value {
     };
 }
 
-// ============================================================
 // Numeric Literal Emission
-// ============================================================
 
 fn emitNumber(ctx: *CirContext, value: CIR.IntValue, kind: CIR.NumKind) Error!Builder.Value {
     const int_value = value.toI128();
@@ -245,9 +225,7 @@ fn emitDecSmall(ctx: *CirContext, value: CIR.SmallDecValue) Error!Builder.Value 
     return ctx.emitter.emitIntConst(.i128, scaled_value) catch return error.OutOfMemory;
 }
 
-// ============================================================
 // String Emission
-// ============================================================
 
 fn emitStrSegment(ctx: *CirContext, literal_idx: @import("base").StringLiteral.Idx) Error!Builder.Value {
     // Get the string literal from the module env
@@ -260,53 +238,39 @@ fn emitStrSegment(ctx: *CirContext, literal_idx: @import("base").StringLiteral.I
     return ctx.emitter.emitStringConst(str_bytes) catch return error.OutOfMemory;
 }
 
-fn emitStr(ctx: *CirContext, span: CIR.Expr.Span) Error!Builder.Value {
-    // A string may be made of multiple segments (for interpolation)
-    // For now, handle single-segment strings
-    _ = ctx;
-    _ = span;
-    return error.UnsupportedExpression; // TODO: String interpolation
+fn emitStr(_: *CirContext, _: CIR.Expr.Span) Error!Builder.Value {
+    // TODO: String interpolation
+    return error.UnsupportedExpression;
 }
 
-// ============================================================
 // Collection Emission
-// ============================================================
 
-fn emitList(ctx: *CirContext, elems: CIR.Expr.Span) Error!Builder.Value {
-    _ = ctx;
-    _ = elems;
+fn emitList(_: *CirContext, _: CIR.Expr.Span) Error!Builder.Value {
     // TODO: Allocate list, populate elements, return RocList struct
     return error.UnsupportedExpression;
 }
 
-fn emitEmptyList(ctx: *CirContext) Error!Builder.Value {
-    // Empty list is { null, 0, 0 }
-    _ = ctx;
-    return error.UnsupportedExpression; // TODO
+fn emitEmptyList(_: *CirContext) Error!Builder.Value {
+    // TODO: Empty list is { null, 0, 0 }
+    return error.UnsupportedExpression;
 }
 
-fn emitTuple(ctx: *CirContext, elems: CIR.Expr.Span) Error!Builder.Value {
-    _ = ctx;
-    _ = elems;
-    return error.UnsupportedExpression; // TODO
+fn emitTuple(_: *CirContext, _: CIR.Expr.Span) Error!Builder.Value {
+    // TODO: Tuple emission
+    return error.UnsupportedExpression;
 }
 
-fn emitRecord(ctx: *CirContext, fields: CIR.RecordField.Span, ext: ?CIR.Expr.Idx) Error!Builder.Value {
-    _ = ctx;
-    _ = fields;
-    _ = ext;
-    return error.UnsupportedExpression; // TODO
+fn emitRecord(_: *CirContext, _: CIR.RecordField.Span, _: ?CIR.Expr.Idx) Error!Builder.Value {
+    // TODO: Record emission
+    return error.UnsupportedExpression;
 }
 
-fn emitEmptyRecord(ctx: *CirContext) Error!Builder.Value {
-    // Empty record is represented as an empty struct or unit
-    _ = ctx;
-    return error.UnsupportedExpression; // TODO
+fn emitEmptyRecord(_: *CirContext) Error!Builder.Value {
+    // TODO: Empty record is represented as an empty struct or unit
+    return error.UnsupportedExpression;
 }
 
-// ============================================================
 // Variable Emission
-// ============================================================
 
 fn emitLocalLookup(ctx: *CirContext, pattern_idx: CIR.Pattern.Idx) Error!Builder.Value {
     // Look up the pattern to get the variable name
@@ -339,35 +303,24 @@ fn emitLocalLookup(ctx: *CirContext, pattern_idx: CIR.Pattern.Idx) Error!Builder
     return error.VariableNotFound;
 }
 
-fn emitExternalLookup(ctx: *CirContext, lookup: anytype) Error!Builder.Value {
-    _ = ctx;
-    _ = lookup;
+fn emitExternalLookup(_: *CirContext, _: anytype) Error!Builder.Value {
     // TODO: Look up in imported module
     return error.UnsupportedExpression;
 }
 
-// ============================================================
 // Tag Emission
-// ============================================================
 
-fn emitTag(ctx: *CirContext, name: @import("base").Ident.Idx, args: CIR.Expr.Span) Error!Builder.Value {
-    _ = ctx;
-    _ = name;
-    _ = args;
+fn emitTag(_: *CirContext, _: @import("base").Ident.Idx, _: CIR.Expr.Span) Error!Builder.Value {
     // TODO: Create tag union value
     return error.UnsupportedExpression;
 }
 
-fn emitZeroArgTag(ctx: *CirContext, name: @import("base").Ident.Idx) Error!Builder.Value {
-    _ = ctx;
-    _ = name;
+fn emitZeroArgTag(_: *CirContext, _: @import("base").Ident.Idx) Error!Builder.Value {
     // TODO: Create zero-arg tag (just discriminant, no payload)
     return error.UnsupportedExpression;
 }
 
-// ============================================================
 // Operation Emission
-// ============================================================
 
 fn emitBinop(ctx: *CirContext, binop: CIR.Expr.Binop) Error!Builder.Value {
     // Get the left and right expressions
@@ -461,16 +414,12 @@ fn emitUnaryNot(ctx: *CirContext, unary: CIR.Expr.UnaryNot) Error!Builder.Value 
     return ctx.emitter.emitXor(val, true_val) catch return error.OutOfMemory;
 }
 
-fn emitDotAccess(ctx: *CirContext, access: anytype) Error!Builder.Value {
-    _ = ctx;
-    _ = access;
+fn emitDotAccess(_: *CirContext, _: anytype) Error!Builder.Value {
     // TODO: Field access via GEP
     return error.UnsupportedExpression;
 }
 
-// ============================================================
 // Special Expression Emission
-// ============================================================
 
 fn emitDbg(ctx: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Value {
     // dbg just returns the expression value (side effect is printing)
@@ -623,9 +572,7 @@ fn emitReturn(ctx: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Value {
     return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
 }
 
-// ============================================================
 // Control Flow Emission
-// ============================================================
 
 /// Emit an if expression with multiple branches and a final else.
 ///
@@ -860,60 +807,33 @@ fn emitPatternCheck(
     pattern: CIR.Pattern,
 ) Error!Builder.Value {
     return switch (pattern) {
-        .assign => {
-            // Assign always matches
-            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
-        },
-
-        .underscore => {
-            // Wildcard always matches
-            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
-        },
-
-        .num => |num| {
+        .assign => ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory,
+        .underscore => ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory,
+        .num => |num| blk: {
             // Compare with numeric literal using subject's type
             const subject_type = try ctx.getExprLlvmType(subject_expr_idx);
             const lit_val = try emitNumber(ctx, num.value, subject_type);
-            ctx.emitter.emitICmpEq(subject_val, lit_val) catch return error.OutOfMemory
+            break :blk ctx.emitter.emitICmpEq(subject_val, lit_val) catch return error.OutOfMemory;
         },
-
-        .str_literal => |str| {
-            // String comparison - TODO: needs string comparison builtin
-            _ = str;
+        .str_literal => {
+            // TODO: String comparison needs string comparison builtin
             return error.UnsupportedExpression;
         },
-
-        .applied_tag => |tag| {
-            // Check if discriminant matches
-            // TODO: Extract discriminant and compare
-            _ = tag;
+        .applied_tag => {
+            // TODO: Check if discriminant matches (extract and compare)
             return error.UnsupportedExpression;
         },
-
-        .record_destructure => {
-            // Records always match (fields are extracted in binding)
-            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
-        },
-
-        .tuple => {
-            // Tuples always match (elements are extracted in binding)
-            ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory
-        },
-
-        .list => |list_pattern| {
-            // List patterns need length check
-            // TODO: Check list length
-            _ = list_pattern;
+        .record_destructure => ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory,
+        .tuple => ctx.emitter.emitBoolConst(true) catch return error.OutOfMemory,
+        .list => {
+            // TODO: List patterns need length check
             return error.UnsupportedExpression;
         },
-
         else => return error.UnsupportedExpression,
     };
 }
 
-// ============================================================
 // Function Emission
-// ============================================================
 
 /// Emit a function call expression.
 ///
@@ -1282,9 +1202,8 @@ fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
             return error.UnsupportedExpression;
         },
 
-        .s_crash => |crash| {
-            // Crash statement: Phase 10
-            _ = crash;
+        .s_crash => {
+            // TODO: Crash statement
             return error.UnsupportedExpression;
         },
 
@@ -1293,15 +1212,10 @@ fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
             const expr = ctx.module_env.store.getExpr(dbg.expr);
             _ = try emitExpr(ctx, expr);
         },
-
-        .s_expect => {
-            // Expect statement: Phase 10
-            return error.UnsupportedExpression;
-        },
-
+        .s_expect => return error.UnsupportedExpression,
         // For/while loops, type declarations, imports, etc. are not handled here
         else => return error.UnsupportedExpression,
-    };
+    }
 }
 
 /// Bind a pattern to a value in the current scope
