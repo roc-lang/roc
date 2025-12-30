@@ -197,10 +197,6 @@ fn tidyFile(
 ) Allocator.Error!void {
     // Skip legacy crates/ directory entirely - it's scheduled for deletion
     if (std.mem.startsWith(u8, file.path, "crates/")) return;
-    // Skip LLVM backend directories - work in progress (port-llvm branch)
-    if (std.mem.startsWith(u8, file.path, "src/backend/llvm/")) return;
-    if (std.mem.startsWith(u8, file.path, "src/llvm_compile/")) return;
-    if (std.mem.startsWith(u8, file.path, "src/snapshot_tool/")) return;
 
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
@@ -535,11 +531,6 @@ const DeadFilesDetector = struct {
     fn visit(detector: *DeadFilesDetector, file: SourceFile) Allocator.Error!void {
         assert(file.hasExtension(".zig"));
 
-        // Skip LLVM backend directories - work in progress (port-llvm branch)
-        if (std.mem.startsWith(u8, file.path, "src/backend/llvm/")) return;
-        if (std.mem.startsWith(u8, file.path, "src/llvm_compile/")) return;
-        if (std.mem.startsWith(u8, file.path, "src/snapshot_tool/")) return;
-
         // Only track src/ files as needing to be imported somewhere
         const is_src_file = std.mem.startsWith(u8, file.path, "src/");
         if (is_src_file) {
@@ -606,8 +597,6 @@ const DeadFilesDetector = struct {
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
             "roc_subcommands.zig", // CLI subcommand tests
-            "BitcodeReader.zig", // LLVM bitcode reader (port-llvm)
-            "codegen.zig", // LLVM codegen (port-llvm)
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;

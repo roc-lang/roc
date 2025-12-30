@@ -1,6 +1,6 @@
 //! LLVM bitcode writer for serializing IR to bitcode format.
 
-const std = @import("../../std.zig");
+const std = @import("std");
 
 /// Represents an abbreviation operand used in LLVM bitcode encoding.
 pub const AbbrevOp = union(enum) {

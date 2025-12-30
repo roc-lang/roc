@@ -13,7 +13,7 @@
 //! Roc-specific modules (CIR, types, etc.). Higher-level integration
 //! with Roc's IR is done in src/eval/llvm_evaluator.zig.
 
-const std = @import("../../std.zig");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Builder = @import("Builder.zig");
 

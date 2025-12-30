@@ -1226,7 +1226,7 @@ pub const PackageEnv = struct {
         return null;
     }
 
-    fn moduleNameFromPath(path: []const u8) []const u8 {
+    pub fn moduleNameFromPath(path: []const u8) []const u8 {
         const base_name = std.fs.path.basename(path);
         if (std.mem.lastIndexOfScalar(u8, base_name, '.')) |dot| return base_name[0..dot];
         return base_name;

@@ -11,12 +11,11 @@
 //!
 //! This module bridges the Roc compiler frontend with the LLVM backend.
 
-const std = @import("../../std.zig");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Builder = @import("Builder.zig");
 const emit = @import("emit.zig");
 const bindings = @import("bindings.zig");
-const bitcode_writer = @import("bitcode_writer.zig");
 const target = @import("../../target/mod.zig");
 
 /// Outcome of code generation including path to object file or error details.

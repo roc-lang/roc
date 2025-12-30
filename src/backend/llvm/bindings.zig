@@ -11,8 +11,6 @@
 //!
 //! Adapted from the Zig compiler's LLVM bindings.
 
-const std = @import("std");
-
 /// Do not compare directly to .True, use toBool() instead.
 pub const Bool = enum(c_int) {
     False,

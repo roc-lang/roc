@@ -2,7 +2,7 @@
 
 const BitcodeReader = @This();
 
-const std = @import("../../std.zig");
+const std = @import("std");
 const assert = std.debug.assert;
 
 allocator: std.mem.Allocator,
@@ -503,11 +503,6 @@ const Abbrev = struct {
             for (store.abbrevs.items) |abbrev| allocator.free(abbrev.operands);
             store.abbrevs.deinit(allocator);
             store.* = undefined;
-        }
-
-        fn addAbbrev(store: *Store, allocator: std.mem.Allocator, abbrev: Abbrev) !void {
-            try store.ensureUnusedCapacity(allocator, 1);
-            store.addAbbrevAssumeCapacity(abbrev);
         }
 
         fn addAbbrevAssumeCapacity(store: *Store, allocator: std.mem.Allocator, abbrev: Abbrev) !void {

@@ -1,6 +1,6 @@
 //! LLVM IR data structures and types.
 
-const std = @import("../../std.zig");
+const std = @import("std");
 const Builder = @import("Builder.zig");
 const bitcode_writer = @import("bitcode_writer.zig");
 
@@ -13,7 +13,6 @@ const ValueAbbrev = AbbrevOp{ .vbr = 6 };
 const ValueArrayAbbrev = AbbrevOp{ .array_vbr = 6 };
 
 const ConstantAbbrev = AbbrevOp{ .vbr = 6 };
-const ConstantArrayAbbrev = AbbrevOp{ .array_vbr = 6 };
 
 const MetadataAbbrev = AbbrevOp{ .vbr = 16 };
 const MetadataArrayAbbrev = AbbrevOp{ .array_vbr = 16 };

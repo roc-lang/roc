@@ -1,6 +1,6 @@
 //! LLVM IR builder for constructing LLVM modules, functions, and instructions.
 
-const std = @import("../../std.zig");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const bitcode_writer = @import("bitcode_writer.zig");
@@ -1751,13 +1751,6 @@ pub const FunctionAttributes = enum(u32) {
 
         fn getMap(self: *Wip, index: usize) ?*Map {
             return if (index >= self.maps.items.len) null else &self.maps.items[index];
-        }
-
-        fn ensureTotalLength(self: *Wip, new_len: usize) Allocator.Error!void {
-            try self.maps.appendNTimes(
-                .{},
-                std.math.sub(usize, new_len, self.maps.items.len) catch return,
-            );
         }
     };
 
